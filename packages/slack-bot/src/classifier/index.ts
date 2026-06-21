@@ -7,8 +7,13 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
-import type { ConfidenceLevel } from "@open-inspect/shared";
-import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./repos";
+import {
+  getAvailableRepos,
+  buildRepoDescriptions,
+  getReposByChannel,
+  getRoutingRules,
+} from "./repos";
+import { matchRoutingRules, type ConfidenceLevel } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
@@ -186,6 +191,58 @@ export class RepoClassifier {
   }
 
   /**
+   * Match the message against the workspace's Slack routing rules.
+   *
+   * Returns a high-confidence result when exactly one accessible target matches,
+   * a clarification result when several distinct targets match (so the user
+   * picks rather than the bot guessing), or `null` when no rule applies — in
+   * which case the caller falls through to channel association and the LLM.
+   *
+   * Rules whose target is not in the accessible repo list are skipped, so a
+   * stale rule never routes to an inaccessible repository.
+   */
+  private async classifyByRoutingRules(
+    message: string,
+    repos: RepoConfig[],
+    traceId?: string
+  ): Promise<ClassificationResult | null> {
+    const matched = matchRoutingRules(message, await getRoutingRules(this.env, traceId));
+    if (matched.length === 0) return null;
+
+    const targets = new Map<string, { repo: RepoConfig; keyword: string }>();
+    for (const rule of matched) {
+      const repo = repos.find(
+        (r) => r.fullName.toLowerCase() === rule.target || r.id.toLowerCase() === rule.target
+      );
+      if (repo && !targets.has(repo.id)) {
+        targets.set(repo.id, { repo, keyword: rule.keyword });
+      }
+    }
+
+    const resolved = [...targets.values()];
+    if (resolved.length === 0) return null;
+
+    if (resolved.length === 1) {
+      const { repo, keyword } = resolved[0];
+      log.info("classifier.routing_rule_match", { trace_id: traceId, repo_id: repo.id, keyword });
+      return {
+        repo,
+        confidence: "high",
+        reasoning: `Matched routing rule "${keyword}" → ${repo.fullName}`,
+        needsClarification: false,
+      };
+    }
+
+    return {
+      repo: null,
+      confidence: "medium",
+      reasoning: "Multiple routing rules matched; asking which repository to use.",
+      alternatives: resolved.map((t) => t.repo),
+      needsClarification: true,
+    };
+  }
+
+  /**
    * Classify which repository a message refers to.
    */
   async classify(
@@ -214,6 +271,14 @@ export class RepoClassifier {
         reasoning: "Only one repository is available.",
         needsClarification: false,
       };
+    }
+
+    // Deterministic routing rules (explicit keyword → repo) take precedence over
+    // channel association and LLM inference, but never override an active thread
+    // (handled before classify is called).
+    const routed = await this.classifyByRoutingRules(message, repos, traceId);
+    if (routed) {
+      return routed;
     }
 
     // Check for channel-specific repos first
@@ -301,7 +366,9 @@ export class RepoClassifier {
         confidence: "low",
         reasoning:
           "Could not classify repository from structured model output. Please select a repository.",
-        alternatives: repos.slice(0, 5),
+        // No basis to suggest specific repos on a classification failure; the
+        // picker lets the user search the full list.
+        alternatives: undefined,
         needsClarification: true,
       };
     }

@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
+import {
+  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+  DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+} from "@open-inspect/shared";
 import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
 
@@ -581,11 +585,90 @@ describe("Integration settings API", () => {
       const body = await res.json<{
         config: {
           tunnelPorts: number[];
+          maxConcurrentChildSessions: number;
+          maxTotalChildSessions: number;
+          cpuCores: number | null;
+          memoryMib: number | null;
           enabledRepos: string[] | null;
         };
       }>();
       expect(body.config.tunnelPorts).toEqual([]);
+      expect(body.config.maxConcurrentChildSessions).toBe(DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS);
+      expect(body.config.maxTotalChildSessions).toBe(DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
+      // Unset resource reservations resolve to null → provider default applies.
+      expect(body.config.cpuCores).toBeNull();
+      expect(body.config.memoryMib).toBeNull();
       expect(body.config.enabledRepos).toBeNull();
+    });
+
+    it("GET /integration-settings/sandbox/resolved returns configured cpuCores and memoryMib", async () => {
+      const headers = await authHeaders();
+
+      const putRes = await SELF.fetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { cpuCores: 2, memoryMib: 4096 },
+          },
+        }),
+      });
+      expect(putRes.status).toBe(200);
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/resolved/testowner/testrepo",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          cpuCores: number | null;
+          memoryMib: number | null;
+        };
+      }>();
+      expect(body.config.cpuCores).toBe(2);
+      expect(body.config.memoryMib).toBe(4096);
+    });
+
+    it("GET /integration-settings/sandbox/resolved preserves null repo resource overrides", async () => {
+      const headers = await authHeaders();
+
+      const putGlobalRes = await SELF.fetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { cpuCores: 2, memoryMib: 4096 },
+          },
+        }),
+      });
+      expect(putGlobalRes.status).toBe(200);
+
+      const putRepoRes = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/repos/testowner/testrepo",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({
+            settings: { cpuCores: null, memoryMib: null },
+          }),
+        }
+      );
+      expect(putRepoRes.status).toBe(200);
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/resolved/testowner/testrepo",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          cpuCores: number | null;
+          memoryMib: number | null;
+        };
+      }>();
+      expect(body.config.cpuCores).toBeNull();
+      expect(body.config.memoryMib).toBeNull();
     });
   });
 

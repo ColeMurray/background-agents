@@ -5,7 +5,7 @@
  * tunnel URL generation, and error handling for create/resume/stop flows.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared";
 import { DaytonaSandboxProvider, type DaytonaProviderConfig } from "./daytona-provider";
 import { SandboxProviderError } from "../provider";
@@ -76,8 +76,6 @@ const defaultProviderConfig: DaytonaProviderConfig = {
   codeServerPasswordSecret: "test-secret-key",
 };
 
-const defaultGetCloneToken = vi.fn(async () => "ghs_test_clone_token");
-
 const baseCreateConfig: CreateSandboxConfig = {
   sessionId: "session-123",
   sandboxId: "sandbox-456",
@@ -104,21 +102,13 @@ const baseStopConfig: StopConfig = {
 // ==================== Tests ====================
 
 describe("DaytonaSandboxProvider", () => {
-  beforeEach(() => {
-    defaultGetCloneToken.mockResolvedValue("ghs_test_clone_token");
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   describe("capabilities", () => {
     it("reports correct capabilities", () => {
-      const provider = new DaytonaSandboxProvider(
-        createMockClient(),
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(createMockClient(), defaultProviderConfig);
       expect(provider.name).toBe("daytona");
       expect(provider.capabilities).toEqual({
         supportsSnapshots: false,
@@ -133,11 +123,7 @@ describe("DaytonaSandboxProvider", () => {
   describe("createSandbox", () => {
     it("happy path: creates sandbox with env vars, labels, and tunnel URLs", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.createSandbox(baseCreateConfig);
 
@@ -155,13 +141,9 @@ describe("DaytonaSandboxProvider", () => {
       expect(createCall.public).toBe(false);
     });
 
-    it("assembles env vars correctly for GitHub", async () => {
+    it("assembles env vars correctly for GitHub, without embedding any token", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox(baseCreateConfig);
 
@@ -176,9 +158,10 @@ describe("DaytonaSandboxProvider", () => {
       expect(envVars.REPO_NAME).toBe("testrepo");
       expect(envVars.VCS_HOST).toBe("github.com");
       expect(envVars.VCS_CLONE_USERNAME).toBe("x-access-token");
-      expect(envVars.VCS_CLONE_TOKEN).toBe("ghs_test_clone_token");
-      expect(envVars.GITHUB_APP_TOKEN).toBe("ghs_test_clone_token");
-      expect(envVars.GITHUB_TOKEN).toBe("ghs_test_clone_token");
+      // Git authenticates via the sandbox credential helper, not env vars.
+      expect(envVars.VCS_CLONE_TOKEN).toBeUndefined();
+      expect(envVars.GITHUB_APP_TOKEN).toBeUndefined();
+      expect(envVars.GITHUB_TOKEN).toBeUndefined();
 
       const sessionConfig = JSON.parse(envVars.SESSION_CONFIG);
       expect(sessionConfig).toEqual({
@@ -192,35 +175,23 @@ describe("DaytonaSandboxProvider", () => {
 
     it("assembles env vars correctly for GitLab", async () => {
       const client = createMockClient();
-      const getCloneToken = vi.fn(async () => "glpat-test-token");
-      const provider = new DaytonaSandboxProvider(
-        client,
-        {
-          scmProvider: "gitlab",
-          gitlabAccessToken: "glpat-test-token",
-          codeServerPasswordSecret: "secret",
-        },
-        getCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, {
+        scmProvider: "gitlab",
+        gitlabAccessToken: "glpat-test-token",
+        codeServerPasswordSecret: "secret",
+      });
 
       await provider.createSandbox(baseCreateConfig);
 
       const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       expect(envVars.VCS_HOST).toBe("gitlab.com");
       expect(envVars.VCS_CLONE_USERNAME).toBe("oauth2");
-      expect(envVars.VCS_CLONE_TOKEN).toBe("glpat-test-token");
-      // GitLab should NOT set GITHUB_APP_TOKEN or GITHUB_TOKEN
-      expect(envVars.GITHUB_APP_TOKEN).toBeUndefined();
-      expect(envVars.GITHUB_TOKEN).toBeUndefined();
+      expect(envVars.VCS_CLONE_TOKEN).toBeUndefined();
     });
 
     it("includes branch in SESSION_CONFIG when provided", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox({ ...baseCreateConfig, branch: "feature/test" });
 
@@ -229,13 +200,25 @@ describe("DaytonaSandboxProvider", () => {
       expect(sessionConfig.branch).toBe("feature/test");
     });
 
+    it("includes mcp_servers in SESSION_CONFIG when provided", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await provider.createSandbox({
+        ...baseCreateConfig,
+        mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+      });
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      const sessionConfig = JSON.parse(envVars.SESSION_CONFIG);
+      expect(sessionConfig.mcp_servers).toEqual([
+        { id: "mcp-1", name: "Tool", type: "local", enabled: true },
+      ]);
+    });
+
     it("includes user env vars (repo secrets) with system vars taking precedence", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox({
         ...baseCreateConfig,
@@ -250,11 +233,7 @@ describe("DaytonaSandboxProvider", () => {
 
     it("builds labels correctly", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox(baseCreateConfig);
 
@@ -269,11 +248,7 @@ describe("DaytonaSandboxProvider", () => {
 
     it("passes target to create params when set", async () => {
       const client = createMockClient({}, { target: "us-east-1" });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox(baseCreateConfig);
 
@@ -283,11 +258,7 @@ describe("DaytonaSandboxProvider", () => {
 
     it("omits target from create params when not set", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox(baseCreateConfig);
 
@@ -295,25 +266,21 @@ describe("DaytonaSandboxProvider", () => {
       expect(createCall.target).toBeUndefined();
     });
 
-    it("handles null clone token gracefully", async () => {
+    it("never embeds a token in the sandbox environment", async () => {
       const client = createMockClient();
-      const getCloneToken = vi.fn(async () => null);
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig, getCloneToken);
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox(baseCreateConfig);
 
       const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       expect(envVars.VCS_CLONE_TOKEN).toBeUndefined();
       expect(envVars.GITHUB_APP_TOKEN).toBeUndefined();
+      expect(envVars.GITHUB_TOKEN).toBeUndefined();
     });
 
     it("sets AGENT_SLACK_NOTIFY_ENABLED=true when agentSlackNotifyEnabled is on", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox({ ...baseCreateConfig, agentSlackNotifyEnabled: true });
 
@@ -323,11 +290,7 @@ describe("DaytonaSandboxProvider", () => {
 
     it("omits AGENT_SLACK_NOTIFY_ENABLED when disabled (absent key, not 'false')", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox(baseCreateConfig);
 
@@ -337,11 +300,7 @@ describe("DaytonaSandboxProvider", () => {
 
     it("omits AGENT_SLACK_NOTIFY_ENABLED when explicitly false", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox({ ...baseCreateConfig, agentSlackNotifyEnabled: false });
 
@@ -355,11 +314,7 @@ describe("DaytonaSandboxProvider", () => {
           throw new DaytonaApiError("quota exceeded", 422);
         },
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       try {
         await provider.createSandbox(baseCreateConfig);
@@ -376,11 +331,7 @@ describe("DaytonaSandboxProvider", () => {
           throw new DaytonaApiError("bad gateway", 502);
         },
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       try {
         await provider.createSandbox(baseCreateConfig);
@@ -395,11 +346,7 @@ describe("DaytonaSandboxProvider", () => {
   describe("code-server password derivation", () => {
     it("derives deterministic password via HMAC", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox({
         ...baseCreateConfig,
@@ -414,11 +361,7 @@ describe("DaytonaSandboxProvider", () => {
 
     it("does not set CODE_SERVER_PASSWORD when disabled", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.createSandbox(baseCreateConfig);
 
@@ -432,11 +375,7 @@ describe("DaytonaSandboxProvider", () => {
       const client = createMockClient({
         getSandbox: async () => ({ id: "daytona-sandbox-id", state: "stopped" }),
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.resumeSandbox(baseResumeConfig);
 
@@ -451,11 +390,7 @@ describe("DaytonaSandboxProvider", () => {
           throw new DaytonaNotFoundError("not found");
         },
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.resumeSandbox(baseResumeConfig);
 
@@ -471,11 +406,7 @@ describe("DaytonaSandboxProvider", () => {
           recoverable: true,
         }),
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.resumeSandbox(baseResumeConfig);
 
@@ -491,11 +422,7 @@ describe("DaytonaSandboxProvider", () => {
           recoverable: true,
         }),
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.resumeSandbox(baseResumeConfig);
 
@@ -510,11 +437,7 @@ describe("DaytonaSandboxProvider", () => {
           recoverable: false,
         }),
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       await provider.resumeSandbox(baseResumeConfig);
 
@@ -526,11 +449,7 @@ describe("DaytonaSandboxProvider", () => {
       const client = createMockClient({
         getSandbox: async () => ({ id: "daytona-sandbox-id", state: "started" }),
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.resumeSandbox(baseResumeConfig);
 
@@ -546,11 +465,7 @@ describe("DaytonaSandboxProvider", () => {
           throw new Error("tunnel service down");
         },
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.resumeSandbox({
         ...baseResumeConfig,
@@ -565,11 +480,7 @@ describe("DaytonaSandboxProvider", () => {
   describe("stopSandbox", () => {
     it("happy path: stops sandbox", async () => {
       const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.stopSandbox(baseStopConfig);
 
@@ -583,11 +494,7 @@ describe("DaytonaSandboxProvider", () => {
           throw new DaytonaNotFoundError("not found");
         },
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.stopSandbox(baseStopConfig);
 
@@ -600,11 +507,7 @@ describe("DaytonaSandboxProvider", () => {
           throw new DaytonaApiError("service unavailable", 503);
         },
       });
-      const provider = new DaytonaSandboxProvider(
-        client,
-        defaultProviderConfig,
-        defaultGetCloneToken
-      );
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       try {
         await provider.stopSandbox(baseStopConfig);

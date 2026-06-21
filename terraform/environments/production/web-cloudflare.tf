@@ -21,6 +21,7 @@ resource "null_resource" "web_app_cloudflare_build" {
       NEXT_PUBLIC_APP_NAME         = var.app_name
       NEXT_PUBLIC_APP_SHORT_NAME   = var.app_short_name
       NEXT_PUBLIC_APP_ICON_URL     = var.app_icon_url
+      NEXT_PUBLIC_GOOGLE_ENABLED   = tostring(local.google_enabled)
     }
   }
 }
@@ -33,6 +34,7 @@ resource "null_resource" "web_app_cloudflare_secrets" {
   triggers = {
     secrets_hash = sha256(join(",", [
       var.github_client_secret,
+      var.google_client_secret,
       var.nextauth_secret,
       var.internal_callback_secret,
     ]))
@@ -47,6 +49,7 @@ resource "null_resource" "web_app_cloudflare_secrets" {
       CLOUDFLARE_ACCOUNT_ID    = var.cloudflare_account_id
       WORKER_NAME              = "open-inspect-web-${local.name_suffix}"
       GITHUB_CLIENT_SECRET     = var.github_client_secret
+      GOOGLE_CLIENT_SECRET     = var.google_client_secret
       NEXTAUTH_SECRET          = var.nextauth_secret
       INTERNAL_CALLBACK_SECRET = var.internal_callback_secret
     }
@@ -68,6 +71,7 @@ resource "local_file" "web_app_wrangler_production" {
 
     [vars]
     GITHUB_CLIENT_ID = "${var.github_client_id}"
+    GOOGLE_CLIENT_ID = "${var.google_client_id}"
     NEXTAUTH_URL = "${local.web_app_url}"
     CONTROL_PLANE_URL = "${local.control_plane_url}"
     NEXT_PUBLIC_WS_URL = "${local.ws_url}"
@@ -75,8 +79,10 @@ resource "local_file" "web_app_wrangler_production" {
     NEXT_PUBLIC_APP_NAME = "${var.app_name}"
     NEXT_PUBLIC_APP_SHORT_NAME = "${var.app_short_name}"
     NEXT_PUBLIC_APP_ICON_URL = "${var.app_icon_url}"
+    NEXT_PUBLIC_GOOGLE_ENABLED = "${tostring(local.google_enabled)}"
     ALLOWED_USERS = "${var.allowed_users}"
     ALLOWED_EMAIL_DOMAINS = "${var.allowed_email_domains}"
+    ALLOWED_EMAILS = "${var.allowed_emails}"
     ALLOWED_GITHUB_ORGS = "${var.allowed_github_orgs}"
     UNSAFE_ALLOW_ALL_USERS = "${tostring(var.unsafe_allow_all_users)}"
 

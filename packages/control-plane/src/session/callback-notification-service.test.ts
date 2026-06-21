@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Logger } from "../logger";
 import {
   CallbackNotificationService,
@@ -291,6 +291,202 @@ describe("CallbackNotificationService", () => {
 
       const fetchMock = (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    describe("dedup by callId", () => {
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it("fires once per callId even when events arrive past the throttle window", async () => {
+        // Anthropic emits running+completed for the same tool. OpenAI's
+        // Responses API may report only completed. Either way, one activity.
+        vi.useFakeTimers();
+        const start = 1_700_000_000_000;
+        vi.setSystemTime(start);
+
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ channel: "C123" }),
+          source: "slack",
+        });
+        const fetchMock = vi.mocked(
+          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+        );
+        fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-abc",
+          status: "running",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // Advance well past the 3s throttle so the second call is throttle-eligible
+        vi.setSystemTime(start + 5_000);
+
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-abc",
+          status: "completed",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("fires once per distinct callId across many tool calls", async () => {
+        vi.useFakeTimers();
+        let now = 1_700_000_000_000;
+        vi.setSystemTime(now);
+
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ channel: "C123" }),
+          source: "slack",
+        });
+        const fetchMock = vi.mocked(
+          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+        );
+        fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+        for (let i = 0; i < 3; i++) {
+          // Each tool emits running then completed; only running should fire
+          await harness.service.notifyToolCall("msg-1", {
+            type: "tool_call",
+            tool: "bash",
+            callId: `call-${i}`,
+            status: "running",
+          });
+          await harness.service.notifyToolCall("msg-1", {
+            type: "tool_call",
+            tool: "bash",
+            callId: `call-${i}`,
+            status: "completed",
+          });
+          now += 3_001;
+          vi.setSystemTime(now);
+        }
+
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      });
+
+      it("evicts the oldest callId (FIFO) once the cap is exceeded", async () => {
+        vi.useFakeTimers();
+        let now = 1_700_000_000_000;
+        vi.setSystemTime(now);
+
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ channel: "C123" }),
+          source: "slack",
+        });
+        const fetchMock = vi.mocked(
+          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+        );
+        fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+        // Cap is 500. Fire 501 distinct callIds; the first one ("call-0")
+        // should be evicted when "call-500" is admitted.
+        for (let i = 0; i <= 500; i++) {
+          await harness.service.notifyToolCall("msg-1", {
+            type: "tool_call",
+            tool: "bash",
+            callId: `call-${i}`,
+            status: "running",
+          });
+          now += 3_001;
+          vi.setSystemTime(now);
+        }
+        expect(fetchMock).toHaveBeenCalledTimes(501);
+
+        // call-0 was evicted, so a re-fire is treated as a fresh tool call
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-0",
+          status: "running",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(502);
+
+        // call-1 is still in the set (it became the new oldest), so it dedupes
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-1",
+          status: "running",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(502);
+      });
+
+      it("falls back to throttle-only behavior when callId is missing", async () => {
+        vi.useFakeTimers();
+        const start = 1_700_000_000_000;
+        vi.setSystemTime(start);
+
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ channel: "C123" }),
+          source: "slack",
+        });
+        const fetchMock = vi.mocked(
+          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+        );
+        fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+        await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // No callId on either event — second event past throttle should fire
+        vi.setSystemTime(start + 5_000);
+        await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "read" });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
+
+      it("retries on a later event when the first delivery for a callId fails", async () => {
+        // markCallIdNotified runs only on response.ok, so a transient failure
+        // (e.g. network error or non-2xx) on Anthropic's "running" event must
+        // not prevent the subsequent "completed" event from re-delivering.
+        vi.useFakeTimers();
+        const start = 1_700_000_000_000;
+        vi.setSystemTime(start);
+
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ channel: "C123" }),
+          source: "slack",
+        });
+        const fetchMock = vi.mocked(
+          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+        );
+        fetchMock
+          .mockRejectedValueOnce(new Error("network"))
+          .mockResolvedValue(new Response("ok", { status: 200 }));
+
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-retry",
+          status: "running",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // Advance past the throttle window so the retry is eligible.
+        vi.setSystemTime(start + 5_000);
+
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-retry",
+          status: "completed",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        // Third event for the same callId after a successful delivery should dedupe.
+        vi.setSystemTime(start + 10_000);
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-retry",
+          status: "completed",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
     });
   });
 

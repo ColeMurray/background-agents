@@ -62,13 +62,35 @@ variable "modal_token_secret" {
 }
 
 variable "modal_workspace" {
-  description = "Modal workspace name (used in endpoint URLs)"
+  description = "Modal workspace name"
   type        = string
   default     = ""
 
   validation {
     condition     = var.sandbox_provider != "modal" || length(var.modal_workspace) > 0
     error_message = "modal_workspace must be set when sandbox_provider = 'modal'."
+  }
+}
+
+variable "modal_environment" {
+  description = "Modal environment name used by the Modal CLI"
+  type        = string
+  default     = "main"
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
+    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
+  }
+}
+
+variable "modal_environment_web_suffix" {
+  description = "Modal environment web suffix used in endpoint URLs. Use lowercase letters, digits, and dashes, or leave empty for the environment with no web suffix."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
+    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes when sandbox_provider = 'modal'."
   }
 }
 
@@ -85,6 +107,33 @@ variable "github_client_secret" {
   description = "GitHub OAuth App client secret"
   type        = string
   sensitive   = true
+}
+
+# =============================================================================
+# Google OAuth Credentials (Optional — enables "Sign in with Google")
+# =============================================================================
+# Set both google_client_id and google_client_secret to enable Google login for
+# non-developer users (PMs, support agents). Leave both empty for GitHub-only
+# deployments, which stay byte-unchanged. A Google session authenticates the user
+# but carries no SCM credentials; git operations continue to use the shared
+# GitHub App installation, and PRs fall back to the App bot.
+
+variable "google_client_id" {
+  description = "Google OAuth 2.0 client ID. Set together with google_client_secret to enable Google login; leave both empty to keep the deployment GitHub-only."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (var.google_client_id == "") == (var.google_client_secret == "")
+    error_message = "google_client_id and google_client_secret must be set together (both non-empty) or both left empty. Setting only one silently disables Google login."
+  }
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth 2.0 client secret. Required together with google_client_id."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 # =============================================================================
@@ -294,6 +343,59 @@ variable "daytona_target" {
   default     = ""
 }
 
+variable "vercel_sandbox_token" {
+  description = "Vercel API token for the Vercel Sandbox API"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "vercel" || length(var.vercel_sandbox_token) > 0
+    error_message = "vercel_sandbox_token must be set when sandbox_provider = 'vercel'."
+  }
+}
+
+variable "vercel_sandbox_project_id" {
+  description = "Vercel project ID used to scope Sandbox API calls"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "vercel" || length(var.vercel_sandbox_project_id) > 0
+    error_message = "vercel_sandbox_project_id must be set when sandbox_provider = 'vercel'."
+  }
+}
+
+variable "vercel_sandbox_team_id" {
+  description = "Optional Vercel team ID used to scope Sandbox API calls"
+  type        = string
+  default     = ""
+}
+
+variable "vercel_sandbox_api_base_url" {
+  description = "Optional Vercel Sandbox API base URL override"
+  type        = string
+  default     = ""
+}
+
+variable "vercel_base_snapshot_id" {
+  description = "Optional manual Vercel Sandbox snapshot ID containing the Open-Inspect base runtime. When set, Terraform skips managed Vercel base snapshot builds."
+  type        = string
+  default     = ""
+}
+
+variable "vercel_sandbox_runtime" {
+  description = "Vercel Sandbox runtime identifier"
+  type        = string
+  default     = "node24"
+}
+
+variable "vercel_snapshot_expiration_ms" {
+  description = "Vercel Sandbox snapshot expiration in milliseconds; 0 means no expiration"
+  type        = number
+  default     = 0
+}
+
 variable "nextauth_secret" {
   description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
   type        = string
@@ -305,13 +407,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal' or 'daytona'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', or 'vercel'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal' or 'daytona'."
+    condition     = contains(["modal", "daytona", "vercel"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', or 'vercel'."
   }
 }
 
@@ -344,7 +446,7 @@ variable "app_short_name" {
 }
 
 variable "app_icon_url" {
-  description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in icon."
+  description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in favicon and default in-app icon."
   type        = string
   default     = ""
 }
@@ -404,27 +506,35 @@ variable "r2_media_bucket_name" {
 # =============================================================================
 # Access Control
 # =============================================================================
+# Four allowlists gate sign-in; a user is admitted if they match ANY configured
+# allowlist. Leave them all empty only with unsafe_allow_all_users = true.
 
 variable "allowed_users" {
-  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when another allowlist (allowed_email_domains, allowed_emails, allowed_github_orgs) is set or unsafe_allow_all_users is true."
   type        = string
   default     = ""
 }
 
 variable "allowed_email_domains" {
-  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Matches any provider's verified email. Leave empty only when another allowlist (allowed_users, allowed_emails, allowed_github_orgs) is set or unsafe_allow_all_users is true."
+  type        = string
+  default     = ""
+}
+
+variable "allowed_emails" {
+  description = "Comma-separated list of exact email addresses allowed to sign in, matched case-insensitively against any provider's verified email. Use this for individual users on shared domains (e.g. one person@gmail.com) where allowed_email_domains would be too broad. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
   type        = string
   default     = ""
 }
 
 variable "allowed_github_orgs" {
-  description = "Comma-separated list of GitHub organization logins whose active members are allowed to sign in. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  description = "Comma-separated list of GitHub organization logins whose active members are allowed to sign in. The signing-in user's OAuth token is checked against GitHub's membership API at sign-in (read:org is requested only when this is set) and requires GitHub App Organization permissions: Members read-only. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
   type        = string
   default     = ""
 }
 
 variable "unsafe_allow_all_users" {
-  description = "Bypass Terraform's access-control safety check and allow any authenticated GitHub user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
+  description = "Bypass Terraform's access-control safety check and allow any authenticated user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
   type        = bool
   default     = false
 }

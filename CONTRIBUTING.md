@@ -45,12 +45,14 @@ npm test
 
 ## Project Structure
 
-| Package                  | Description                          |
-| ------------------------ | ------------------------------------ |
-| `packages/control-plane` | Cloudflare Workers + Durable Objects |
-| `packages/web`           | Next.js web application              |
-| `packages/modal-infra`   | Modal sandbox infrastructure         |
-| `packages/shared`        | Shared types and utilities           |
+| Package                    | Description                          |
+| -------------------------- | ------------------------------------ |
+| `packages/control-plane`   | Cloudflare Workers + Durable Objects |
+| `packages/web`             | Next.js web application              |
+| `packages/sandbox-runtime` | Shared in-sandbox agent runtime      |
+| `packages/modal-infra`     | Modal sandbox infrastructure         |
+| `packages/daytona-infra`   | Daytona snapshot infrastructure      |
+| `packages/shared`          | Shared types and utilities           |
 
 ## Making Changes
 

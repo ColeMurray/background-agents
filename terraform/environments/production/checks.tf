@@ -21,9 +21,10 @@ resource "terraform_data" "access_control_gate" {
         var.unsafe_allow_all_users ||
         length([for item in split(",", var.allowed_users) : trimspace(item) if trimspace(item) != ""]) > 0 ||
         length([for item in split(",", var.allowed_email_domains) : trimspace(item) if trimspace(item) != ""]) > 0 ||
+        length([for item in split(",", var.allowed_emails) : trimspace(item) if trimspace(item) != ""]) > 0 ||
         length([for item in split(",", var.allowed_github_orgs) : trimspace(item) if trimspace(item) != ""]) > 0
       )
-      error_message = "At least one access control allowlist must be configured. Set allowed_users, allowed_email_domains, or allowed_github_orgs, or set unsafe_allow_all_users = true to explicitly allow all authenticated GitHub users."
+      error_message = "At least one access control allowlist must be configured. Set allowed_users, allowed_email_domains, allowed_emails, or allowed_github_orgs, or set unsafe_allow_all_users = true to explicitly allow all authenticated users."
     }
   }
 }

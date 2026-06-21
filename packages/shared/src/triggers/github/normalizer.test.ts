@@ -132,6 +132,7 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.repoOwner).toBe("acme-org");
       expect(event!.repoName).toBe("my-app");
       expect(event!.branch).toBe("feature/my-feature");
+      expect(event!.targetBranch).toBe("main");
       expect(event!.labels).toEqual(["enhancement", "review-needed"]);
       expect(event!.actor).toBe("dev-user");
       expect(event!.triggerKey).toBe("pr:42:opened:abc1234def5678");
@@ -145,7 +146,12 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.contextBlock).toContain("pull_request.opened");
       expect(event!.contextBlock).toContain("acme-org/my-app");
       expect(event!.contextBlock).toContain("PR #42");
-      expect(event!.meta).toMatchObject({ prNumber: 42, sha: "abc1234def5678", action: "opened" });
+      expect(event!.meta).toMatchObject({
+        prNumber: 42,
+        sha: "abc1234def5678",
+        action: "opened",
+        targetBranch: "main",
+      });
     });
   });
 
@@ -228,9 +234,14 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.triggerKey).toBe("pr_review_comment:5555");
       expect(event!.concurrencyKey).toBe("pr:42");
       expect(event!.branch).toBe("feature/my-feature");
+      expect(event!.targetBranch).toBe("main");
       expect(event!.actor).toBe("dev-user");
       expect(event!.contextBlock).toContain("pull_request_review_comment.created");
-      expect(event!.meta).toMatchObject({ commentId: 5555, prNumber: 42 });
+      expect(event!.meta).toMatchObject({
+        commentId: 5555,
+        prNumber: 42,
+        targetBranch: "main",
+      });
     });
   });
 
@@ -245,6 +256,7 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.triggerKey).toBe("check_suite:77777");
       expect(event!.concurrencyKey).toBe("check_suite:77777");
       expect(event!.branch).toBe("feature/my-feature");
+      expect(event!.targetBranch).toBeUndefined();
       expect(event!.contextBlock).toContain("check_suite.completed");
       expect(event!.contextBlock).toContain("failure");
       expect(event!.meta).toMatchObject({ checkSuiteId: 77777, conclusion: "failure" });
@@ -373,6 +385,80 @@ describe("normalizeGitHubEvent", () => {
         issue: { title: "Bug", body: "text", user: { login: "user" }, labels: [] },
       };
       expect(normalizeGitHubEvent("issues", payload)).toBeNull();
+    });
+
+    it("returns null for pull_request with a non-array labels field", () => {
+      const payload = {
+        action: "opened",
+        repository: repo,
+        sender,
+        pull_request: { ...basePR, labels: "not-an-array" },
+      };
+      expect(normalizeGitHubEvent("pull_request", payload)).toBeNull();
+    });
+
+    it("returns null for check_suite with a non-numeric pull request number", () => {
+      const payload = {
+        action: "completed",
+        repository: repo,
+        sender,
+        check_suite: {
+          id: 77777,
+          head_branch: "main",
+          head_sha: "abc123",
+          conclusion: "success",
+          pull_requests: [{ number: "42" }],
+        },
+      };
+      expect(normalizeGitHubEvent("check_suite", payload)).toBeNull();
+    });
+  });
+
+  // GitHub models `body`/`merged` as `T | null`; an empty PR/issue description
+  // arrives as `body: null`. These must normalize, not be dropped as malformed.
+  describe("nullable GitHub fields (empty descriptions)", () => {
+    it("normalizes a pull_request whose body is null", () => {
+      const payload = {
+        action: "opened",
+        repository: repo,
+        sender,
+        pull_request: { ...basePR, body: null },
+      };
+
+      const event = normalizeGitHubEvent("pull_request", payload);
+
+      expect(event).not.toBeNull();
+      expect(event!.eventType).toBe("pull_request.opened");
+      expect(event!.contextBlock).not.toContain("Description:");
+    });
+
+    it("normalizes a closed pull_request whose merged is null", () => {
+      const payload = {
+        action: "closed",
+        repository: repo,
+        sender,
+        pull_request: { ...basePR, merged: null },
+      };
+
+      const event = normalizeGitHubEvent("pull_request", payload);
+
+      expect(event).not.toBeNull();
+      expect(event!.contextBlock).toContain("Status: Closed (not merged)");
+    });
+
+    it("normalizes an issue whose body is null", () => {
+      const payload = {
+        action: "opened",
+        repository: repo,
+        sender,
+        issue: { ...issuesOpenedPayload.issue, body: null },
+      };
+
+      const event = normalizeGitHubEvent("issues", payload);
+
+      expect(event).not.toBeNull();
+      expect(event!.eventType).toBe("issues.opened");
+      expect(event!.contextBlock).not.toContain("Description:");
     });
   });
 });

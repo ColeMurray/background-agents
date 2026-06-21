@@ -61,13 +61,13 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.6",
     "@types/react-dom": "^19.0.3",
-    "@vitest/coverage-v8": "^4.0.17",
+    "@vitest/coverage-v8": "^4.1.0",
     "autoprefixer": "^10.4.20",
     "jsdom": "^28.1.0",
-    "postcss": "^8.5.13",
+    "postcss": "^8.5.15",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
-    "vitest": "^4.0.17",
+    "vitest": "^4.1.0",
     "wrangler": "^4.65.0"
   }
 }

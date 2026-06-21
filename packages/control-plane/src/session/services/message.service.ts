@@ -1,7 +1,8 @@
-import type { ArtifactRow, EventRow, MessageRow } from "../types";
-import type { ArtifactResponse } from "../../types";
+import type { ArtifactRow, MessageRow } from "../types";
+import type { ArtifactResponse, ListEventsResponse } from "../../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
+import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
 
 export interface EnqueuePromptRequest {
   content: string;
@@ -24,12 +25,7 @@ export interface EnqueuePromptRequest {
   scmTokenExpiresAt?: number;
 }
 
-export interface ListEventsRequest {
-  cursor: string | null;
-  limit: number;
-  type: string | null;
-  messageId: string | null;
-}
+export type ListEventsRequest = SessionEventListRequest;
 
 export interface ListMessagesRequest {
   cursor: string | null;
@@ -47,7 +43,11 @@ interface MessageServiceDeps {
 }
 
 export class MessageService {
-  constructor(private readonly deps: MessageServiceDeps) {}
+  private readonly eventStream: SessionEventStream;
+
+  constructor(private readonly deps: MessageServiceDeps) {
+    this.eventStream = new SessionEventStream(deps.repository);
+  }
 
   enqueuePrompt(request: EnqueuePromptRequest): Promise<{ messageId: string; status: "queued" }> {
     return this.deps.messageQueue.enqueuePromptFromApi(request);
@@ -58,25 +58,8 @@ export class MessageService {
     return { status: "stopping" };
   }
 
-  listEvents(request: ListEventsRequest): {
-    events: EventRow[];
-    cursor: string | undefined;
-    hasMore: boolean;
-  } {
-    const events = this.deps.repository.listEvents({
-      cursor: request.cursor,
-      limit: request.limit,
-      type: request.type,
-      messageId: request.messageId,
-    });
-    const hasMore = events.length > request.limit;
-    if (hasMore) events.pop();
-
-    return {
-      events,
-      cursor: events.length > 0 ? events[events.length - 1].created_at.toString() : undefined,
-      hasMore,
-    };
+  listEvents(request: ListEventsRequest): ListEventsResponse {
+    return this.eventStream.listEvents(request);
   }
 
   listArtifacts(): {

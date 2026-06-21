@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { type MutableRefObject, useCallback, useEffect, useRef, useState } from "react";
 import { mutate } from "swr";
-import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
   ParticipantPresence,
@@ -21,6 +21,13 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
 const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
 
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 30000;
+const PROMPT_SUBSCRIPTION_RETRY_DELAY_MS = 500;
+const HISTORY_PAGE_SIZE = 200;
+const PING_INTERVAL_MS = 30000;
+
 interface Message {
   id: string;
   authorId: string;
@@ -33,6 +40,19 @@ interface Message {
 type SessionState = SharedSessionState;
 type Participant = ParticipantPresence;
 type WsMessage = ServerMessage;
+type AssistantTokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type PendingAssistantText = Pick<
+  AssistantTokenEvent,
+  "content" | "messageId" | "sandboxId" | "timestamp"
+>;
+
+const CLEARED_SANDBOX_ACCESS_STATE = {
+  codeServerUrl: undefined,
+  codeServerPassword: undefined,
+  tunnelUrls: undefined,
+  ttydUrl: undefined,
+  ttydToken: undefined,
+} satisfies Partial<SessionState>;
 
 interface UseSessionSocketReturn {
   connected: boolean;
@@ -57,46 +77,62 @@ interface UseSessionSocketReturn {
 }
 
 /**
- * Collapse a batch of events by folding streaming token events into their
- * final form (only the last accumulated token before execution_complete is kept).
- * Mutates pendingTextRef to track in-flight tokens across calls.
+ * Token events contain cumulative text. Replay should show one final token per
+ * message, independent of tied storage ordering between token and completion.
  */
-function collapseTokenEvents(
-  events: SandboxEvent[],
-  pendingTextRef: React.MutableRefObject<{
-    content: string;
-    messageId: string;
-    sandboxId: string;
-    timestamp: number;
-  } | null>
-): SandboxEvent[] {
-  const result: SandboxEvent[] = [];
-  for (const evt of events) {
-    if (evt.type === "token" && evt.content && evt.messageId) {
-      pendingTextRef.current = {
-        content: evt.content,
-        messageId: evt.messageId,
-        sandboxId: evt.sandboxId,
-        timestamp: evt.timestamp,
-      };
-    } else if (evt.type === "execution_complete") {
-      if (pendingTextRef.current) {
-        const pending = pendingTextRef.current;
-        pendingTextRef.current = null;
-        result.push({
-          type: "token",
-          content: pending.content,
-          messageId: pending.messageId,
-          sandboxId: pending.sandboxId,
-          timestamp: pending.timestamp,
-        });
-      }
-      result.push(evt);
-    } else {
-      result.push(evt);
+function collapseReplayTokenEvents(events: SandboxEvent[]): SandboxEvent[] {
+  const tokenByMessageId = new Map<string, AssistantTokenEvent>();
+
+  for (const event of events) {
+    if (isRenderableTokenEvent(event)) {
+      tokenByMessageId.set(event.messageId, event);
     }
   }
+
+  if (tokenByMessageId.size === 0) {
+    return events;
+  }
+
+  const result: SandboxEvent[] = [];
+  const emittedTokenMessageIds = new Set<string>();
+
+  for (const evt of events) {
+    if (isRenderableTokenEvent(evt)) {
+      continue;
+    }
+
+    if (evt.type === "execution_complete") {
+      const token = tokenByMessageId.get(evt.messageId);
+      if (token && !emittedTokenMessageIds.has(evt.messageId)) {
+        result.push(token);
+        emittedTokenMessageIds.add(evt.messageId);
+      }
+    }
+
+    result.push(evt);
+  }
+
+  for (const [messageId, token] of tokenByMessageId) {
+    if (!emittedTokenMessageIds.has(messageId)) {
+      result.push(token);
+    }
+  }
+
   return result;
+}
+
+function isRenderableTokenEvent(event: SandboxEvent): event is AssistantTokenEvent {
+  return event.type === "token" && Boolean(event.content) && Boolean(event.messageId);
+}
+
+function takePendingTokenEvent(
+  pendingTextRef: MutableRefObject<PendingAssistantText | null>
+): AssistantTokenEvent | null {
+  const pending = pendingTextRef.current;
+  if (!pending) return null;
+
+  pendingTextRef.current = null;
+  return { type: "token", ...pending };
 }
 
 function parseWsMessage(raw: unknown): WsMessage | null {
@@ -197,12 +233,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const wsTokenRef = useRef<string | null>(null);
   // Accumulates text during streaming, displayed only on completion to avoid duplicate display.
   // Stores only the latest token since token events contain the full accumulated text (not incremental).
-  const pendingTextRef = useRef<{
-    content: string;
-    messageId: string;
-    sandboxId: string;
-    timestamp: number;
-  } | null>(null);
+  const pendingTextRef = useRef<PendingAssistantText | null>(null);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [replaying, setReplaying] = useState(true);
@@ -241,21 +272,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       };
     } else if (event.type === "execution_complete") {
       // On completion: Add final text to events using the token's original timestamp
-      if (pendingTextRef.current) {
-        const pending = pendingTextRef.current;
-        pendingTextRef.current = null;
-        setEvents((prev) => [
-          ...prev,
-          {
-            type: "token",
-            content: pending.content,
-            messageId: pending.messageId,
-            sandboxId: pending.sandboxId,
-            timestamp: pending.timestamp,
-          },
-        ]);
-      }
-      setEvents((prev) => [...prev, event]);
+      const pending = takePendingTokenEvent(pendingTextRef);
+      setEvents((prev) => (pending ? [...prev, pending, event] : [...prev, event]));
     } else {
       // Other events (tool_call, user_message, git_sync, etc.) - add normally
       setEvents((prev) => [...prev, event]);
@@ -308,9 +326,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
           // Process batched replay events in a single state update
           setEvents(
-            data.replay
-              ? collapseTokenEvents(data.replay.events.map(toUiSandboxEvent), pendingTextRef)
-              : []
+            data.replay ? collapseReplayTokenEvents(data.replay.events.map(toUiSandboxEvent)) : []
           );
           setHasMoreHistory(data.replay?.hasMore ?? false);
           cursorRef.current = data.replay?.cursor ?? null;
@@ -377,31 +393,26 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
               ? {
                   ...prev,
                   sandboxStatus: "spawning",
-                  codeServerUrl: undefined,
-                  codeServerPassword: undefined,
-                  tunnelUrls: undefined,
-                  ttydUrl: undefined,
-                  ttydToken: undefined,
+                  ...CLEARED_SANDBOX_ACCESS_STATE,
                 }
               : null
           );
           break;
 
         case "sandbox_status": {
-          const isTerminal =
-            data.status === "stale" || data.status === "stopped" || data.status === "failed";
+          const isReplacementStart = data.status === "spawning";
+          const shouldClearAccessState =
+            isReplacementStart ||
+            data.status === "stale" ||
+            data.status === "stopped" ||
+            data.status === "failed";
           setSessionState((prev) =>
             prev
               ? {
                   ...prev,
                   sandboxStatus: data.status,
-                  ...(isTerminal && {
-                    codeServerUrl: undefined,
-                    codeServerPassword: undefined,
-                    tunnelUrls: undefined,
-                    ttydUrl: undefined,
-                    ttydToken: undefined,
-                  }),
+                  ...(shouldClearAccessState && CLEARED_SANDBOX_ACCESS_STATE),
+                  ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
                 }
               : null
           );
@@ -422,6 +433,10 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "tunnel_urls":
           setSessionState((prev) => (prev ? { ...prev, tunnelUrls: data.urls } : null));
+          break;
+
+        case "sandbox_dashboard_url":
+          setSessionState((prev) => (prev ? { ...prev, sandboxDashboardUrl: data.url } : null));
           break;
 
         case "sandbox_ready":
@@ -450,19 +465,20 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "session_title":
           if (data.title) {
             setSessionState((prev) => (prev ? { ...prev, title: data.title! } : null));
+            mutate(isUnarchivedSessionListKey);
           }
           break;
 
         case "session_status":
           setSessionState((prev) => (prev ? { ...prev, status: data.status } : null));
           // Revalidate session list so status change is reflected in sidebar
-          mutate(SIDEBAR_SESSIONS_KEY);
+          mutate(isUnarchivedSessionListKey);
           break;
 
         case "child_session_update":
           // Child session spawned or changed status — revalidate child list and sidebar
           mutate(`/api/sessions/${sessionId}/children`);
-          mutate(SIDEBAR_SESSIONS_KEY);
+          mutate(isUnarchivedSessionListKey);
           break;
 
         case "processing_status":
@@ -471,7 +487,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "sandbox_error":
           console.error("Sandbox error:", data.error);
-          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
+          setSessionState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sandboxStatus: "failed",
+                  ...CLEARED_SANDBOX_ACCESS_STATE,
+                }
+              : null
+          );
           break;
 
         case "pong":
@@ -614,8 +638,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
       // Only reconnect if mounted and not a clean close
       if (mountedRef.current && !event.wasClean) {
-        if (reconnectAttempts.current < 5) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+        if (reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(
+            RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts.current),
+            MAX_RECONNECT_DELAY_MS
+          );
           reconnectAttempts.current++;
           console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`);
 
@@ -626,7 +653,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           }, delay);
         } else {
           // Exhausted reconnection attempts
-          console.error("WebSocket reconnection failed after 5 attempts");
+          console.error(`WebSocket reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
           setConnectionError("Connection lost. Please check your network and try reconnecting.");
         }
       }
@@ -646,7 +673,10 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     if (!subscribedRef.current) {
       console.error("Not subscribed yet, waiting...");
       // Retry after a short delay
-      setTimeout(() => sendPrompt(content, model, reasoningEffort), 500);
+      setTimeout(
+        () => sendPrompt(content, model, reasoningEffort),
+        PROMPT_SUBSCRIPTION_RETRY_DELAY_MS
+      );
       return;
     }
 
@@ -679,19 +709,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       return;
     }
     // Preserve partial content when stopping
-    if (pendingTextRef.current) {
-      const pending = pendingTextRef.current;
-      pendingTextRef.current = null;
-      setEvents((prev) => [
-        ...prev,
-        {
-          type: "token",
-          content: pending.content,
-          messageId: pending.messageId,
-          sandboxId: pending.sandboxId,
-          timestamp: pending.timestamp,
-        },
-      ]);
+    const pending = takePendingTokenEvent(pendingTextRef);
+    if (pending) {
+      setEvents((prev) => [...prev, pending]);
     }
     wsRef.current.send(JSON.stringify({ type: "stop" }));
   }, []);
@@ -711,7 +731,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       JSON.stringify({
         type: "fetch_history",
         cursor: cursorRef.current,
-        limit: 200,
+        limit: HISTORY_PAGE_SIZE,
       })
     );
   }, [hasMoreHistory, loadingHistory]);
@@ -747,13 +767,13 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     };
   }, [connect]);
 
-  // Ping every 30 seconds to keep connection alive
+  // Ping periodically to keep connection alive.
   useEffect(() => {
     const pingInterval = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "ping" }));
       }
-    }, 30000);
+    }, PING_INTERVAL_MS);
 
     return () => clearInterval(pingInterval);
   }, []);

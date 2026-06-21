@@ -3,6 +3,7 @@ import {
   isGitHubAppConfigured,
   getGitHubAppConfig,
   getCachedInstallationToken,
+  getCachedInstallationTokenWithExpiry,
   INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
   INSTALLATION_TOKEN_MIN_REMAINING_MS,
 } from "./github-app";
@@ -151,6 +152,64 @@ describe("github-app utilities", () => {
 
       expect(token).toBe("token-from-kv");
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getCachedInstallationTokenWithExpiry", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("returns the cached token + expiresAtEpochMs from a KV hit", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const cacheStore = new FakeCacheStore();
+
+      const config = {
+        appId: `app-with-expiry-${Date.now()}`,
+        privateKey: "-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----",
+        installationId: "installation-with-expiry",
+      };
+
+      const expiresAtEpochMs =
+        Date.now() + INSTALLATION_TOKEN_CACHE_MAX_AGE_MS + INSTALLATION_TOKEN_MIN_REMAINING_MS;
+      await cacheStore.put(
+        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        JSON.stringify({
+          token: "tok-with-expiry",
+          expiresAtEpochMs,
+          cachedAtEpochMs: Date.now(),
+        })
+      );
+
+      const result = await getCachedInstallationTokenWithExpiry(config, { cacheStore });
+
+      expect(result).toEqual({ token: "tok-with-expiry", expiresAtEpochMs });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("matches getCachedInstallationToken on the .token field", async () => {
+      const cacheStore = new FakeCacheStore();
+
+      const config = {
+        appId: `app-parity-${Date.now()}`,
+        privateKey: "-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----",
+        installationId: "installation-parity",
+      };
+
+      await cacheStore.put(
+        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        JSON.stringify({
+          token: "shared-token",
+          expiresAtEpochMs:
+            Date.now() + INSTALLATION_TOKEN_CACHE_MAX_AGE_MS + INSTALLATION_TOKEN_MIN_REMAINING_MS,
+          cachedAtEpochMs: Date.now(),
+        })
+      );
+
+      const plain = await getCachedInstallationToken(config, { cacheStore });
+      const withExpiry = await getCachedInstallationTokenWithExpiry(config, { cacheStore });
+
+      expect(withExpiry.token).toBe(plain);
     });
   });
 });

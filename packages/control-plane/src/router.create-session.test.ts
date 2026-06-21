@@ -49,6 +49,22 @@ describe("handleCreateSession D1 ordering", () => {
     );
   }
 
+  async function invalidCreateSessionRequest(body: string): Promise<Response> {
+    const token = await generateInternalToken(secret);
+
+    return handleRequest(
+      new Request("https://test.local/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body,
+      }),
+      createEnv(vi.fn()) as never
+    );
+  }
+
   function createEnv(initFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
     const statement = {
       bind: vi.fn(() => statement),
@@ -75,7 +91,9 @@ describe("handleCreateSession D1 ordering", () => {
 
   it("does not initialize the SessionDO when D1 session index creation fails", async () => {
     const create = vi.fn().mockRejectedValue(new Error("D1 unavailable"));
-    vi.mocked(SessionIndexStore).mockImplementation(() => ({ create }) as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
 
     const initFetch = vi.fn(async () => Response.json({ status: "created" }));
     const response = await createSessionRequest(createEnv(initFetch));
@@ -85,9 +103,27 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed create-session JSON before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest("{");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-object create-session JSON before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest("null");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "JSON body must be an object" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
   it("creates the D1 session index before initializing the SessionDO", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(SessionIndexStore).mockImplementation(() => ({ create }) as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
 
     const initFetch = vi.fn(async (request: Request) => {
       expect(new URL(request.url).pathname).toBe(SessionInternalPaths.init);

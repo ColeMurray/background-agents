@@ -18,10 +18,12 @@ import type {
   BuildGitPushSpecConfig,
   GitPushSpec,
   GitPushAuthContext,
+  CredentialHelperAuth,
 } from "../types";
 import { SourceControlProviderError } from "../errors";
 import {
   getCachedInstallationToken,
+  getCachedInstallationTokenWithExpiry,
   getInstallationRepository,
   listInstallationRepositories,
   listRepositoryBranches,
@@ -221,6 +223,9 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       if (!repo) {
         return null;
       }
+      if (repo.archived) {
+        return null;
+      }
       return {
         repoId: repo.id,
         repoOwner: config.owner.toLowerCase(),
@@ -252,7 +257,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         cacheStore: this.cacheStore,
         userAgent: this.userAgent,
       });
-      return result.repos;
+      return result.repos.filter((repo) => !repo.archived);
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list repositories: ${error instanceof Error ? error.message : String(error)}`,
@@ -311,6 +316,36 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       throw SourceControlProviderError.fromFetchError(
         `Failed to generate GitHub App token: ${error instanceof Error ? error.message : String(error)}`,
         error
+      );
+    }
+  }
+
+  async generateCredentialHelperAuth(): Promise<CredentialHelperAuth> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot generate credential helper auth",
+        "permanent"
+      );
+    }
+
+    try {
+      const { token, expiresAtEpochMs } = await getCachedInstallationTokenWithExpiry(
+        this.appConfig,
+        {
+          cacheStore: this.cacheStore,
+          userAgent: this.userAgent,
+        }
+      );
+      return {
+        username: "x-access-token",
+        password: token,
+        expiresAtEpochMs,
+      };
+    } catch (error) {
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to generate GitHub credential helper auth: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
       );
     }
   }

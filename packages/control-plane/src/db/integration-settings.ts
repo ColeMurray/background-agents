@@ -3,16 +3,19 @@ import {
   isValidReasoningEffort,
   INTEGRATION_DEFINITIONS,
   DEFAULT_MENTIONS_POLICY,
+  MAX_SLACK_ROUTING_RULES,
+  MAX_SLACK_ROUTING_KEYWORD_LENGTH,
+  normalizeRoutingRules,
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
-  type SandboxSettings,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
-  MAX_TUNNEL_PORTS,
+  type SlackRoutingRule,
 } from "@open-inspect/shared";
+import { normalizeSandboxSettings } from "../sandbox/settings";
 
 type SettingsLevel = "global" | "repo";
 
@@ -43,7 +46,8 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    return JSON.parse(row.settings) as IntegrationSettingsMap[K]["global"];
+    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["global"];
+    return this.normalizeStoredGlobalSettings(integrationId, settings);
   }
 
   async setGlobal<K extends IntegrationId>(
@@ -102,7 +106,8 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    return JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
   async setRepoSettings<K extends IntegrationId>(
@@ -142,7 +147,10 @@ export class IntegrationSettingsStore {
 
     return results.map((row) => ({
       repo: row.repo,
-      settings: JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"],
+      settings: this.normalizeStoredRepoSettings(
+        integrationId,
+        JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"]
+      ),
     }));
   }
 
@@ -172,9 +180,35 @@ export class IntegrationSettingsStore {
       }
     }
 
-    return { enabledRepos, settings } as ResolvedIntegrationConfig<
+    const resolvedSettings =
+      integrationId === "sandbox"
+        ? normalizeSandboxSettings(settings, { invalid: "omit" })
+        : settings;
+
+    return { enabledRepos, settings: resolvedSettings } as ResolvedIntegrationConfig<
       NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
     >;
+  }
+
+  private normalizeStoredGlobalSettings<K extends IntegrationId>(
+    integrationId: K,
+    settings: IntegrationSettingsMap[K]["global"]
+  ): IntegrationSettingsMap[K]["global"] {
+    if (integrationId !== "sandbox" || !settings.defaults) return settings;
+    return {
+      ...settings,
+      defaults: normalizeSandboxSettings(settings.defaults, { invalid: "omit" }),
+    } as IntegrationSettingsMap[K]["global"];
+  }
+
+  private normalizeStoredRepoSettings<K extends IntegrationId>(
+    integrationId: K,
+    settings: IntegrationSettingsMap[K]["repo"]
+  ): IntegrationSettingsMap[K]["repo"] {
+    if (integrationId !== "sandbox") return settings;
+    return normalizeSandboxSettings(settings, {
+      invalid: "omit",
+    }) as IntegrationSettingsMap[K]["repo"];
   }
 
   private validateAndNormalizeSettings<K extends IntegrationId>(
@@ -197,9 +231,10 @@ export class IntegrationSettingsStore {
     }
 
     if (integrationId === "sandbox") {
-      return this.validateSandboxSettings(
-        settings as SandboxSettings
-      ) as IntegrationSettingsMap[K]["repo"];
+      return normalizeSandboxSettings(settings, {
+        invalid: "throw",
+        createError: (message) => new IntegrationSettingsValidationError(message),
+      }) as IntegrationSettingsMap[K]["repo"];
     }
 
     if (integrationId === "slack") {
@@ -310,39 +345,13 @@ export class IntegrationSettingsStore {
     }
   }
 
-  private validateSandboxSettings(settings: SandboxSettings): SandboxSettings {
-    if (settings.terminalEnabled !== undefined && typeof settings.terminalEnabled !== "boolean") {
-      throw new IntegrationSettingsValidationError("terminalEnabled must be a boolean");
-    }
-    if (settings.tunnelPorts !== undefined) {
-      if (!Array.isArray(settings.tunnelPorts)) {
-        throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");
-      }
-      const dedupedPorts = [...new Set(settings.tunnelPorts)];
-      if (dedupedPorts.length > MAX_TUNNEL_PORTS) {
-        throw new IntegrationSettingsValidationError(
-          `tunnelPorts must have ${MAX_TUNNEL_PORTS} or fewer entries`
-        );
-      }
-      for (const port of dedupedPorts) {
-        if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
-          throw new IntegrationSettingsValidationError(
-            `Invalid port number: ${port}. Must be an integer between 1 and 65535`
-          );
-        }
-      }
-      return { ...settings, tunnelPorts: dedupedPorts };
-    }
-    return settings;
-  }
-
   private validateSlackSettings(
     settings: SlackGlobalSettings,
     level: SettingsLevel
   ): SlackGlobalSettings {
     const allowedKeys =
       level === "global"
-        ? new Set(["agentNotificationsEnabled", "mentionsPolicy"])
+        ? new Set(["agentNotificationsEnabled", "mentionsPolicy", "routingRules"])
         : new Set(["agentNotificationsEnabled"]);
 
     for (const key of Object.keys(settings)) {
@@ -367,7 +376,48 @@ export class IntegrationSettingsStore {
       );
     }
 
+    // Routing rules are workspace-wide (the allowedKeys gate above already
+    // rejects them at the per-repo level). Validate structure here; normalize
+    // for storage. Target existence is not checked (the repo list isn't
+    // available at this layer) — the bot skips stale targets at match time.
+    if (settings.routingRules !== undefined) {
+      return { ...settings, routingRules: this.validateRoutingRules(settings.routingRules) };
+    }
+
     return settings;
+  }
+
+  private validateRoutingRules(rules: unknown): SlackRoutingRule[] {
+    if (!Array.isArray(rules)) {
+      throw new IntegrationSettingsValidationError("routingRules must be an array");
+    }
+    if (rules.length > MAX_SLACK_ROUTING_RULES) {
+      throw new IntegrationSettingsValidationError(
+        `routingRules cannot exceed ${MAX_SLACK_ROUTING_RULES} entries`
+      );
+    }
+    for (const rule of rules) {
+      if (typeof rule !== "object" || rule === null) {
+        throw new IntegrationSettingsValidationError("each routing rule must be an object");
+      }
+      const { keyword, target } = rule as { keyword?: unknown; target?: unknown };
+      if (typeof keyword !== "string" || keyword.trim() === "") {
+        throw new IntegrationSettingsValidationError(
+          "routing rule keyword must be a non-empty string"
+        );
+      }
+      if (keyword.trim().length > MAX_SLACK_ROUTING_KEYWORD_LENGTH) {
+        throw new IntegrationSettingsValidationError(
+          `routing rule keyword must be ${MAX_SLACK_ROUTING_KEYWORD_LENGTH} characters or fewer`
+        );
+      }
+      if (typeof target !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(target.trim())) {
+        throw new IntegrationSettingsValidationError(
+          "routing rule target must be a repository in owner/name form"
+        );
+      }
+    }
+    return normalizeRoutingRules(rules as SlackRoutingRule[]);
   }
 }
 

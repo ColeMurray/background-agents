@@ -14,6 +14,16 @@ variable "worker_name" {
   type        = string
 }
 
+variable "worker_subdomain" {
+  description = "Cloudflare account workers.dev subdomain label, e.g. 'myaccount' (without '.workers.dev'). worker_url resolves to <worker_name>.<worker_subdomain>.workers.dev."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$", var.worker_subdomain))
+    error_message = "worker_subdomain must be a single workers.dev subdomain label (e.g. 'myaccount'): lowercase alphanumeric and hyphens only, no dots — do not include '.workers.dev'."
+  }
+}
+
 variable "script_path" {
   description = "Path to the bundled JavaScript worker script file"
   type        = string

@@ -14,7 +14,8 @@ export default tool({
   },
   async execute(args) {
     try {
-      const response = await bridgeFetch(`/children/${args.taskId}/cancel`, {
+      const encodedTaskId = encodeURIComponent(args.taskId);
+      const response = await bridgeFetch(`/children/${encodedTaskId}/cancel`, {
         method: "POST",
       });
 

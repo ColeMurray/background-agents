@@ -6,7 +6,7 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-} from "../utils/models";
+} from "@open-inspect/shared";
 import type {
   ClientInfo,
   Env,

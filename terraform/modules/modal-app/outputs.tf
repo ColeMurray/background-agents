@@ -10,10 +10,10 @@ output "deploy_id" {
 
 output "api_health_url" {
   description = "URL of the health check endpoint"
-  value       = "https://${var.workspace}--${var.app_name}-api-health.modal.run"
+  value       = "https://${local.modal_workspace_slug}--${var.app_name}-api-health.modal.run"
 }
 
 output "api_create_sandbox_url" {
   description = "URL of the create sandbox endpoint"
-  value       = "https://${var.workspace}--${var.app_name}-api-create-sandbox.modal.run"
+  value       = "https://${local.modal_workspace_slug}--${var.app_name}-api-create-sandbox.modal.run"
 }

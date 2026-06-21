@@ -22,15 +22,56 @@ from pathlib import Path
 
 import httpx
 
-from .constants import CODE_SERVER_PORT, TTYD_PORT, TTYD_PROXY_PORT
+from .constants import (
+    CODE_SERVER_PORT,
+    CODE_SERVER_PORT_ENV_VAR,
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    TTYD_PORT,
+    TTYD_PROXY_PORT,
+    TTYD_PROXY_PORT_ENV_VAR,
+    TUNNEL_ENV_FILE_PATH,
+)
 from .log_config import configure_logging, get_logger
+from .repo_image_callback import RepoImageBuildCallback
 
 configure_logging()
+
+
+def _port_from_env(env_var: str, default: int) -> int:
+    """Read an integer port from the environment, falling back to ``default``."""
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    try:
+        port = int(raw)
+    except ValueError:
+        return default
+    return port if 1 <= port <= 65535 else default
 
 
 AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
     "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
 }
+
+# Wrapper installed at /usr/local/bin/gh (ahead of the real /usr/bin/gh in
+# PATH). The git credential helper can't authenticate the GitHub CLI — gh
+# reads GH_TOKEN/GITHUB_TOKEN from the environment, not git's protocol. This
+# thin delegator asks the credential helper's `gh-token` action whether a
+# fresh token is needed (the precedence logic lives there, in Python). If it
+# prints one we export it as GH_TOKEN; otherwise gh runs with its own env.
+GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
+GH_WRAPPER_BODY = (
+    "#!/bin/sh\n"
+    f'REAL_GH="{GH_WRAPPER_REAL_PATH}"\n'
+    # stderr is left attached so the helper's diagnostic surfaces when a
+    # refresh fails — otherwise the user just sees an opaque gh 401.
+    "token=$(python3 -m sandbox_runtime.credentials.git_credential_helper gh-token || true)\n"
+    'if [ -n "$token" ]; then\n'
+    # export (not `env GH_TOKEN=… exec`) so the token never lands in argv.
+    '  export GH_TOKEN="$token"\n'
+    "fi\n"
+    'exec "$REAL_GH" "$@"\n'
+)
 
 
 class SandboxSupervisor:
@@ -54,6 +95,8 @@ class SandboxSupervisor:
     START_SCRIPT_PATH = ".openinspect/start.sh"
     DEFAULT_SETUP_TIMEOUT_SECONDS = 300
     DEFAULT_START_TIMEOUT_SECONDS = 120
+    DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS = 30
+    TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.2
     CLONE_DEPTH_COMMITS = 100
     SIDECAR_TIMEOUT_SECONDS = 5
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
@@ -76,10 +119,10 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.vcs_host = os.environ.get("VCS_HOST", "github.com")
-        self.vcs_clone_username = os.environ.get("VCS_CLONE_USERNAME", "x-access-token")
-        self.vcs_clone_token = os.environ.get("VCS_CLONE_TOKEN") or os.environ.get(
-            "GITHUB_APP_TOKEN", ""
-        )
+        # Note: VCS credentials are no longer captured at sandbox start. Git
+        # operations authenticate per-call via the system-wide credential
+        # helper (`/usr/local/bin/oi-git-credentials`), which fetches fresh
+        # tokens from the control plane.
 
         # Parse session config if provided
         session_config_json = os.environ.get("SESSION_CONFIG", "{}")
@@ -104,35 +147,37 @@ class SandboxSupervisor:
         """The branch to clone/fetch — defaults to 'main'."""
         return self.session_config.get("branch") or "main"
 
-    def _build_repo_url(self, authenticated: bool = True) -> str:
-        """Build the HTTPS URL for the repository, optionally with clone credentials."""
-        if authenticated and self.vcs_clone_token:
-            return f"https://{self.vcs_clone_username}:{self.vcs_clone_token}@{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
+    def _build_repo_url(self) -> str:
+        """Build the plain HTTPS URL for the repository.
+
+        Authentication is supplied per-request by the system git credential
+        helper, so the remote URL itself never carries a secret.
+        """
         return f"https://{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
 
     def _redact_git_stderr(self, stderr_text: str) -> str:
-        """Redact credential-bearing URLs from git stderr."""
-        redacted_stderr = stderr_text
-        if self.vcs_clone_token:
-            redacted_stderr = redacted_stderr.replace(
-                self._build_repo_url(),
-                self._build_repo_url(authenticated=False),
-            )
-            redacted_stderr = redacted_stderr.replace(self.vcs_clone_token, "***")
+        """Redact credential-bearing URLs from git stderr.
 
-        return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", redacted_stderr)
+        The credential helper means our own remotes are token-free, but git
+        may surface upstream URLs (e.g. from submodules or HTTP redirects)
+        that still embed credentials.
+        """
+        return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", stderr_text)
 
     # ------------------------------------------------------------------
     # Git primitives
     # ------------------------------------------------------------------
 
     async def _clone_repo(self) -> bool:
-        """Shallow-clone the repository."""
+        """Shallow-clone the repository.
+
+        The remote URL is unauthenticated — the system-wide git credential
+        helper supplies short-lived credentials per request.
+        """
         self.log.info(
             "git.clone_start",
             repo_owner=self.repo_owner,
             repo_name=self.repo_name,
-            authenticated=bool(self.vcs_clone_token),
         )
 
         result = await asyncio.create_subprocess_exec(
@@ -160,27 +205,125 @@ class SandboxSupervisor:
         self.log.info("git.clone_complete", repo_path=str(self.repo_path))
         return True
 
-    async def _ensure_remote_auth(self) -> None:
-        """Set the remote URL with auth credentials if a clone token is available."""
-        if not self.vcs_clone_token:
-            return
+    async def _ensure_credential_helper_configured(self) -> None:
+        """Make sure git knows about our credential helper, even on old images.
+
+        New base images install the helper system-wide
+        (``git config --system credential.helper /usr/local/bin/oi-git-credentials``),
+        but a sandbox booting from a snapshot or repo image built *before*
+        this migration won't have that config. We re-apply the equivalent at
+        the global level on every boot so the flow is robust regardless of
+        image age.
+
+        Writing the shim itself is also idempotent: each boot ensures the
+        script is present at ``/usr/local/bin/oi-git-credentials`` and
+        executable, so old images that lack it get patched in place.
+
+        Failures here are logged but not fatal — if git already has the
+        helper configured (the common case on new images), this is a no-op.
+        """
+        shim_path = Path("/usr/local/bin/oi-git-credentials")
+        shim_body = (
+            '#!/bin/sh\nexec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\n'
+        )
+        shim_available = False
+        try:
+            if shim_path.exists() and shim_path.read_text() == shim_body:
+                shim_available = True
+            else:
+                shim_path.write_text(shim_body)
+                shim_path.chmod(0o755)
+                shim_available = True
+        except OSError as e:
+            # /usr/local/bin not writable in some sandboxed runs; the system
+            # config baked into the image is the primary path anyway.
+            self.log.warn("credential_helper.shim_write_failed", error=str(e))
+
+        # credential.useHttpPath makes git include the repo path in helper
+        # requests. The helper currently authorizes by host to preserve
+        # installation-wide token behavior, but keeping the path available
+        # preserves Git LFS behavior and leaves room for provider-specific
+        # policy later.
+        configs = [("credential.useHttpPath", "true")]
+        if shim_available:
+            configs.insert(0, ("credential.helper", str(shim_path)))
+
+        for key, value in configs:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "config",
+                "--global",
+                "--replace-all",
+                key,
+                value,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                self.log.warn(
+                    "credential_helper.config_failed",
+                    config_key=key,
+                    exit_code=proc.returncode,
+                    stderr=stderr.decode(errors="replace"),
+                )
+
+        self._install_gh_wrapper()
+
+    def _install_gh_wrapper(self) -> None:
+        """Install the gh CLI wrapper at /usr/local/bin/gh.
+
+        See ``GH_WRAPPER_BODY`` for the wrapper's behaviour. Installed at boot
+        (rather than baked into the image) so it also patches snapshots and
+        repo images built before this migration.
+        """
+        wrapper_path = Path("/usr/local/bin/gh")
+        try:
+            # Only install if the real gh exists and we're not about to shadow
+            # ourselves (defensive against a previous wrapper at /usr/bin/gh).
+            if Path(GH_WRAPPER_REAL_PATH).exists() and (
+                not wrapper_path.exists() or wrapper_path.read_text() != GH_WRAPPER_BODY
+            ):
+                wrapper_path.write_text(GH_WRAPPER_BODY)
+                wrapper_path.chmod(0o755)
+        except OSError as e:
+            self.log.debug("gh_wrapper.install_failed", error=str(e))
+
+    async def _ensure_plain_origin(self) -> bool:
+        """Rewrite the `origin` remote to a credential-free HTTPS URL.
+
+        Older workspaces/images (from before the credential-helper migration)
+        may embed a GitHub App installation token in the `origin` URL. Modal
+        snapshot restores receive a fresh fallback token, but long-running
+        sandboxes and Daytona persistent resumes can outlive embedded tokens.
+        Normalizing `origin` keeps git fetches routed through the helper.
+
+        Returns False on failure — callers must short-circuit, since a
+        credentialed URL can produce an opaque 401 from upstream rather than
+        routing through the helper.
+
+        Idempotent — safe to call on every boot.
+        """
+        expected_url = self._build_repo_url()
         proc = await asyncio.create_subprocess_exec(
             "git",
             "remote",
             "set-url",
             "origin",
-            self._build_repo_url(),
+            expected_url,
             cwd=self.repo_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            self.log.warn(
+            self.log.error(
                 "git.set_url_failed",
                 exit_code=proc.returncode,
                 stderr=self._redact_git_stderr(stderr.decode()),
             )
+            return False
+        return True
 
     async def _fetch_branch(self, branch: str) -> bool:
         """Fetch a branch with an explicit refspec.
@@ -245,7 +388,8 @@ class SandboxSupervisor:
             return False
 
         try:
-            await self._ensure_remote_auth()
+            if not await self._ensure_plain_origin():
+                return False
             branch = self.base_branch
             if not await self._fetch_branch(branch):
                 return False
@@ -285,7 +429,6 @@ class SandboxSupervisor:
             repo_owner=self.repo_owner,
             repo_name=self.repo_name,
             repo_path=str(self.repo_path),
-            has_clone_token=bool(self.vcs_clone_token),
         )
 
         if not self.repo_path.exists():
@@ -328,20 +471,98 @@ class SandboxSupervisor:
                     continue
                 shutil.copy(tool_file, tool_dest / tool_file.name)
 
-        # Copy pre-built deps (package.json, package-lock.json, node_modules)
-        # from the image staging directory.  This gives OpenCode a lockfile
-        # that matches the declared dependencies so Npm.install() finds
-        # everything in sync and skips arborist reify() entirely.
-        deps_cache = Path("/app/opencode-deps")
+        # Copy pre-built deps (package.json, package-lock.json, node_modules) from the image
+        # staging directory so OpenCode's Npm.install() finds the tree in sync and skips the
+        # arborist reify() that would otherwise block the first request.
+        staged_at = time.monotonic()
+        self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
+        self.log.info(
+            "opencode.repo_deps_staged",
+            dir=str(opencode_dir),
+            duration_ms=round((time.monotonic() - staged_at) * 1000),
+        )
+
+    @staticmethod
+    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> None:
+        """Copy the pre-staged OpenCode plugin deps into dest_dir.
+
+        Copies package.json, package-lock.json and node_modules from the image staging
+        directory (base.py's /app/opencode-deps) into dest_dir, per file and only when the
+        destination is absent. This gives OpenCode a lockfile that matches node_modules so
+        Npm.install() finds @opencode-ai/plugin in sync and skips the arborist reify() that
+        would otherwise block the first request.
+        """
         for name in ("package.json", "package-lock.json"):
             src = deps_cache / name
-            dest = opencode_dir / name
+            dest = dest_dir / name
             if src.exists() and not dest.exists():
                 shutil.copy2(src, dest)
         cached_modules = deps_cache / "node_modules"
-        local_modules = opencode_dir / "node_modules"
+        local_modules = dest_dir / "node_modules"
         if cached_modules.is_dir() and not local_modules.exists():
             shutil.copytree(cached_modules, local_modules, symlinks=True)
+
+    @staticmethod
+    def _resolve_opencode_global_config_dir() -> Path:
+        """Resolve OpenCode's global config directory the way OpenCode does.
+
+        OpenCode (via xdg-basedir) uses OPENCODE_CONFIG_DIR when set, otherwise
+        $XDG_CONFIG_HOME/opencode, otherwise ~/.config/opencode.
+        """
+        override = os.environ.get("OPENCODE_CONFIG_DIR")
+        if override:
+            return Path(override)
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".config"
+        return base / "opencode"
+
+    def _seed_global_opencode_deps(self) -> None:
+        """Fallback seed of OpenCode's global config dir with the staged plugin tree.
+
+        OpenCode bootstraps every directory in its config search path and forks
+        ``npm install @opencode-ai/plugin`` for each. The global config dir is created empty and
+        is never seeded by _install_tools (which only covers the repo's .opencode/), so with a
+        plugin configured the first POST /session would block on an arborist reify() of it.
+
+        The image bakes this tree into the global dir at build time (base.py), so this is
+        normally a no-op (we skip when node_modules already exists); it stays as a fallback for
+        environments where the baked dir is absent (e.g. a different HOME).
+        """
+        deps_cache = Path("/app/opencode-deps")
+        if not deps_cache.is_dir():
+            return
+        config_dir = self._resolve_opencode_global_config_dir()
+        # Only seed a pristine dir — never mix our modules into a user's manifest. The image
+        # bakes this tree in (base.py), so node_modules is normally already present and we skip.
+        nm_exists = (config_dir / "node_modules").exists()
+        if nm_exists or (config_dir / "package.json").exists():
+            self.log.info(
+                "opencode.global_deps_skip",
+                config_dir=str(config_dir),
+                reason="already_present" if nm_exists else "foreign_manifest",
+            )
+            return
+        seeded_at = time.monotonic()
+        config_dir.mkdir(parents=True, exist_ok=True)
+        self._stage_opencode_deps(deps_cache, config_dir)
+        self.log.info(
+            "opencode.global_deps_seeded",
+            config_dir=str(config_dir),
+            duration_ms=round((time.monotonic() - seeded_at) * 1000),
+        )
+
+    def _prepare_opencode_filesystem(self, workdir: Path) -> None:
+        """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.
+
+        The global seed is best-effort (degrades to a slower reify); the rest fail fast.
+        """
+        self._install_tools(workdir)
+        try:
+            self._seed_global_opencode_deps()
+        except Exception as e:
+            self.log.warn("opencode.global_deps_seed_failed", exc=e)
+        self._install_skills(workdir)
+        self._install_bin_scripts()
 
     def _install_bin_scripts(self) -> None:
         """Install standalone CLI scripts into /usr/local/bin.
@@ -438,10 +659,11 @@ class SandboxSupervisor:
         if self.repo_path.exists() and (self.repo_path / ".git").exists():
             workdir = self.repo_path
 
+        code_server_port = _port_from_env(CODE_SERVER_PORT_ENV_VAR, CODE_SERVER_PORT)
         self.code_server_process = await asyncio.create_subprocess_exec(
             "code-server",
             "--bind-addr",
-            f"0.0.0.0:{CODE_SERVER_PORT}",
+            f"0.0.0.0:{code_server_port}",
             "--auth",
             "password",
             "--disable-telemetry",
@@ -453,7 +675,7 @@ class SandboxSupervisor:
         )
 
         asyncio.create_task(self._forward_code_server_logs())
-        self.log.info("code_server.started", port=CODE_SERVER_PORT)
+        self.log.info("code_server.started", port=code_server_port)
 
     async def _forward_code_server_logs(self) -> None:
         """Forward code-server stdout to supervisor stdout."""
@@ -583,7 +805,7 @@ class SandboxSupervisor:
         cmd = [
             "ttyd",
             "--port",
-            str(TTYD_PORT),
+            str(TTYD_PORT),  # localhost-only internal port; fixed (never exposed)
             "--interface",
             "127.0.0.1",  # localhost only — proxy is the only external gateway
             "--writable",
@@ -610,7 +832,10 @@ class SandboxSupervisor:
 
         cmd = ["bun", "run", "/app/sandbox_runtime/ttyd_proxy/server.ts"]
 
-        self.log.info("ttyd_proxy.starting", port=TTYD_PROXY_PORT)
+        self.log.info(
+            "ttyd_proxy.starting",
+            port=_port_from_env(TTYD_PROXY_PORT_ENV_VAR, TTYD_PROXY_PORT),
+        )
 
         self.ttyd_proxy_process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -687,9 +912,7 @@ class SandboxSupervisor:
         if self.repo_path.exists() and (self.repo_path / ".git").exists():
             workdir = self.repo_path
 
-        self._install_tools(workdir)
-        self._install_skills(workdir)
-        self._install_bin_scripts()
+        self._prepare_opencode_filesystem(workdir)
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"
@@ -990,7 +1213,7 @@ class SandboxSupervisor:
 
     async def _report_fatal_error(self, message: str) -> None:
         """Report a fatal error to the control plane."""
-        self.log.error("supervisor.fatal", message=message)
+        self.log.error("supervisor.fatal", error_message=message)
 
         if not self.control_plane_url:
             return
@@ -1146,6 +1369,79 @@ class SandboxSupervisor:
             default_timeout_seconds=self.DEFAULT_START_TIMEOUT_SECONDS,
         )
 
+    def _expected_tunnel_ports(self) -> list[int]:
+        """Parse EXPECTED_TUNNEL_PORTS env var into a list of port ints."""
+        raw = os.environ.get(EXPECTED_TUNNEL_PORTS_ENV_VAR, "")
+        if not raw:
+            return []
+        ports: list[int] = []
+        for piece in raw.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            try:
+                ports.append(int(piece))
+            except ValueError:
+                self.log.warn("tunnel.expected_ports_parse_failed", value=piece, raw=raw)
+        return ports
+
+    def _clear_stale_tunnel_env_file(self) -> None:
+        """Remove any pre-existing tunnel env file inherited from a snapshot."""
+        path = Path(TUNNEL_ENV_FILE_PATH)
+        try:
+            path.unlink(missing_ok=True)
+            self.log.info("tunnel.stale_file_cleared", path=str(path))
+        except Exception as e:
+            self.log.warn("tunnel.stale_file_clear_failed", path=str(path), exc=e)
+
+    async def _wait_for_tunnel_env_file(self, expected_ports: list[int]) -> bool:
+        """Block until TUNNEL_ENV_FILE_PATH contains entries for all expected ports.
+
+        On timeout, log and return False so start.sh proceeds with degraded data
+        rather than hanging on a Modal-side outage.
+        """
+        if not expected_ports:
+            return True
+
+        timeout_seconds_raw = os.environ.get("TUNNEL_WAIT_TIMEOUT_SECONDS")
+        try:
+            timeout_seconds = (
+                float(timeout_seconds_raw)
+                if timeout_seconds_raw
+                else self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+            )
+        except ValueError:
+            timeout_seconds = self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+
+        path = Path(TUNNEL_ENV_FILE_PATH)
+        expected_prefixes = [f"TUNNEL_{p}=" for p in expected_ports]
+        start_time = time.time()
+        deadline = start_time + timeout_seconds
+
+        while time.time() < deadline:
+            if path.exists():
+                try:
+                    lines = path.read_text().splitlines()
+                    if all(any(ln.startswith(pfx) for ln in lines) for pfx in expected_prefixes):
+                        self.log.info(
+                            "tunnel.env_file_ready",
+                            path=str(path),
+                            ports=expected_ports,
+                            wait_ms=int((time.time() - start_time) * 1000),
+                        )
+                        return True
+                except Exception as e:
+                    self.log.warn("tunnel.env_file_read_failed", path=str(path), exc=e)
+            await asyncio.sleep(self.TUNNEL_WAIT_POLL_INTERVAL_SECONDS)
+
+        self.log.warn(
+            "tunnel.env_file_wait_timeout",
+            path=str(path),
+            ports=expected_ports,
+            timeout_seconds=timeout_seconds,
+        )
+        return False
+
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
@@ -1180,6 +1476,16 @@ class SandboxSupervisor:
         elif from_repo_image:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
+        repo_image_callback = (
+            RepoImageBuildCallback.from_env(self.log) if image_build_mode else None
+        )
+
+        # Clear stale tunnel file on every restore: a snapshot taken with
+        # tunnels configured retains the previous session's URLs even if this
+        # session has no tunnel ports.
+        expected_tunnel_ports = self._expected_tunnel_ports()
+        if restored_from_snapshot or expected_tunnel_ports:
+            self._clear_stale_tunnel_env_file()
 
         # Set up signal handlers
         loop = asyncio.get_event_loop()
@@ -1187,12 +1493,22 @@ class SandboxSupervisor:
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
 
         git_sync_success = False
+        head_sha = ""
         opencode_ready = False
         try:
+            # Phase 0: Make sure the git credential helper is configured
+            # before any git operation. New images do this in /etc/gitconfig,
+            # but snapshots/repo-images built before this migration won't.
+            await self._ensure_credential_helper_configured()
+
             # Phase 1: Git sync
             if restored_from_snapshot:
-                await self._update_existing_repo()  # best-effort
-                git_sync_success = True
+                git_sync_success = await self._update_existing_repo()
+                if not git_sync_success:
+                    self.log.warn(
+                        "git.snapshot_resync_failed",
+                        reason="origin rewrite or fetch failed; repo may be stale",
+                    )
             elif from_repo_image:
                 git_sync_success = await self._update_existing_repo()
             else:
@@ -1210,9 +1526,11 @@ class SandboxSupervisor:
                 if image_build_mode and not setup_success:
                     raise RuntimeError("setup hook failed in build mode")
 
-            # Phase 3: Run runtime start hook for all non-build boots.
+            # Phase 3: Run runtime start hook for all non-build boots. Wait for
+            # tunnel URLs first so dev servers booted by start.sh see fresh data.
             start_success: bool | None = None
             if self.boot_mode != "build":
+                await self._wait_for_tunnel_env_file(expected_tunnel_ports)
                 start_success = await self.run_start_script()
                 if not start_success:
                     raise RuntimeError("start hook failed")
@@ -1225,6 +1543,13 @@ class SandboxSupervisor:
             if image_build_mode:
                 duration_ms = int((time.time() - startup_start) * 1000)
                 self.log.info("image_build.complete", duration_ms=duration_ms)
+                if repo_image_callback:
+                    reported = await repo_image_callback.report_success(
+                        base_sha=head_sha,
+                        build_duration_seconds=time.time() - startup_start,
+                    )
+                    if not reported:
+                        raise RuntimeError("repo image build-complete callback failed")
                 await self.shutdown_event.wait()
                 return
 
@@ -1240,7 +1565,8 @@ class SandboxSupervisor:
 
             if self.ttyd_process is not None:
                 ttyd_ready = await self._wait_for_port(
-                    TTYD_PORT, timeout_seconds=self.SIDECAR_TIMEOUT_SECONDS
+                    TTYD_PORT,
+                    timeout_seconds=self.SIDECAR_TIMEOUT_SECONDS,
                 )
                 if ttyd_ready:
                     try:
@@ -1277,6 +1603,8 @@ class SandboxSupervisor:
 
         except Exception as e:
             self.log.error("supervisor.error", exc=e)
+            if image_build_mode and repo_image_callback:
+                await repo_image_callback.report_failure(str(e))
             await self._report_fatal_error(str(e))
 
         finally:

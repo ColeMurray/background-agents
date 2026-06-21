@@ -20,7 +20,7 @@ Use TodoWrite to create a checklist tracking these phases:
 1. Initial setup questions
 2. Repository setup
 3. Credential collection (Cloudflare, Vercel, Modal, Anthropic)
-4. GitHub App creation
+4. GitHub App creation (+ Google OAuth if enabled)
 5. Slack App creation (if enabled)
 6. Security secrets generation
 7. Terraform configuration
@@ -141,6 +141,34 @@ After receiving the .pem path, convert to PKCS#8:
 openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in {pem_path} -out /tmp/github-app-key-pkcs8.pem
 cat /tmp/github-app-key-pkcs8.pem
 ```
+
+## Phase 4b: Google OAuth Setup (If Enabled)
+
+Only if the user wants Google login for non-developer users (PMs, support agents). Skip for
+GitHub-only deployments — leave `google_client_id` and `google_client_secret` empty.
+
+Guide user:
+
+1. https://console.cloud.google.com/apis/credentials → "Create Credentials" → "OAuth client ID"
+2. **Application type**: Web application
+3. **Authorized redirect URI**:
+   `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/google` (or your
+   `*.workers.dev` web URL if `web_platform = "cloudflare"`)
+   - **CRITICAL**: Must match deployed web URL exactly!
+4. OAuth consent screen: request only `openid`, `email`, `profile` scopes (non-sensitive — no Google
+   verification review required)
+5. Note **Client ID** and **Client Secret**
+
+Then in `terraform.tfvars`:
+
+- Set `google_client_id` and `google_client_secret` (both required together; leave both empty to
+  disable)
+- Add at least one entry to `allowed_emails` (exact addresses, e.g. `pm@gmail.com`) or
+  `allowed_email_domains`. Prefer `allowed_emails` for shared domains like gmail.com.
+
+Terraform derives `NEXT_PUBLIC_GOOGLE_ENABLED` automatically when both Google credentials are set,
+which reveals the "Sign in with Google" button. Google users get the same flat access; their PRs
+fall back to the App bot unless the same verified email is also a linked GitHub identity.
 
 ## Phase 5: Slack App Setup (If Enabled)
 

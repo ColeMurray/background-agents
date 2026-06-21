@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
-import { initNamedSession, openClientWs, collectMessages, seedEvents, queryDO } from "./helpers";
+import {
+  initNamedSession,
+  openClientWs,
+  collectMessages,
+  seedEvents,
+  queryDO,
+  waitForSandboxStatus,
+} from "./helpers";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("upgrade returns 101 with webSocket", async () => {
@@ -29,6 +36,60 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(state.repoOwner).toBe("acme");
 
     ws.close();
+  });
+
+  it("subscribe hydrates dashboard URL when provider object id exists", async () => {
+    const dashboardUrl =
+      "https://modal.com/apps/test-workspace/main/deployed/open-inspect?activeTab=sandboxes&sandboxId=provider-obj-123";
+    const cases = [
+      {
+        status: "connecting",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
+      },
+      {
+        status: "spawning",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
+      },
+      { status: "spawning", providerObjectId: null, expectedDashboardUrl: null },
+      { status: "stale", providerObjectId: "provider-obj-123", expectedDashboardUrl: dashboardUrl },
+      {
+        status: "stopped",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
+      },
+      {
+        status: "failed",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const name = `ws-client-dashboard-url-${testCase.status}-${testCase.providerObjectId ? "with-id" : "without-id"}-${Date.now()}-${index}`;
+      const { stub } = await initNamedSession(name);
+      // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env)
+      // before forcing each status, otherwise it can race and overwrite the row.
+      await waitForSandboxStatus(stub, "failed");
+      await queryDO(
+        stub,
+        `UPDATE sandbox
+           SET status = ?, modal_object_id = ?
+         WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+        testCase.status,
+        testCase.providerObjectId
+      );
+
+      const { ws, messages } = await openClientWs(name, { subscribe: true });
+      const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
+      const state = subscribed.state as Record<string, unknown>;
+
+      expect(state.sandboxStatus).toBe(testCase.status);
+      expect(state.sandboxDashboardUrl).toBe(testCase.expectedDashboardUrl);
+
+      ws.close();
+    }
   });
 
   it("subscribe with invalid token closes socket 4001", async () => {

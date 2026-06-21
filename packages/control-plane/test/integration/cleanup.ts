@@ -1,8 +1,8 @@
 import { env } from "cloudflare:test";
 
 /**
- * Clears all D1 tables. Call in beforeEach to isolate tests when
- * isolatedStorage is disabled (see vitest.integration.config.ts).
+ * Clears all D1 tables. Integration tests share a single D1 instance, so call
+ * this in beforeEach/afterEach to isolate state between tests.
  */
 export async function cleanD1Tables(): Promise<void> {
   await env.DB.exec(

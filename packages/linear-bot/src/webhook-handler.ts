@@ -19,6 +19,7 @@ import {
   getRepoSuggestions,
 } from "./utils/linear-client";
 import { buildInternalAuthHeaders } from "./utils/internal";
+import { splitRepoFullName } from "./utils/repo";
 import { classifyRepo } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { getLinearConfig } from "./utils/integration-config";
@@ -297,7 +298,7 @@ async function handleFollowUp(
 
   if (promptRes.ok) {
     await emitAgentActivity(client, agentSessionId, {
-      type: "response",
+      type: "thought",
       body: `Follow-up sent to existing session.\n\n[View session](${env.WEB_APP_URL}/session/${existingSession.sessionId})`,
     });
   } else {
@@ -400,7 +401,9 @@ async function handleNewSession(
       const suggestions = await getRepoSuggestions(client, issue.id, agentSessionId, candidates);
       const topSuggestion = suggestions.find((s) => s.confidence >= 0.7);
       if (topSuggestion) {
-        const [owner, name] = topSuggestion.repositoryFullName.split("/");
+        // Split on the last slash — GitLab nested-group paths
+        // ("group/subgroup/project") carry slashes in the owner.
+        const { owner, name } = splitRepoFullName(topSuggestion.repositoryFullName);
         repoOwner = owner;
         repoName = name;
         repoFullName = topSuggestion.repositoryFullName;
@@ -644,7 +647,7 @@ async function handleNewSession(
   }
 
   await emitAgentActivity(client, agentSessionId, {
-    type: "response",
+    type: "thought",
     body: `Working on \`${repoFullName}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 

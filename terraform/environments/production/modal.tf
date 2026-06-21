@@ -4,16 +4,17 @@
 
 # Calculate hash of Modal source files for change detection
 # Uses sha256sum (Linux) or shasum (macOS) for cross-platform compatibility
-# Includes .py, .js, and .ts files (sandbox plugins and tools)
+# Includes .py/.js/.ts under src/ AND modal-infra's pyproject.toml + uv.lock, so
+# dependency-only changes (e.g. a modal version bump) also trigger a redeploy.
 data "external" "modal_source_hash" {
   count = local.use_modal_backend ? 1 : 0
 
   program = ["bash", "-c", <<-EOF
     cd ${var.project_root}
     if command -v sha256sum &> /dev/null; then
-      hash=$(find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
+      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec sha256sum {} \; ; sha256sum packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock ) | sha256sum | cut -d' ' -f1)
     else
-      hash=$(find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec shasum -a 256 {} \; | shasum -a 256 | cut -d' ' -f1)
+      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec shasum -a 256 {} \; ; shasum -a 256 packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock ) | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"
   EOF
@@ -27,11 +28,13 @@ module "modal_app" {
   modal_token_id     = var.modal_token_id
   modal_token_secret = var.modal_token_secret
 
-  app_name      = "open-inspect"
-  workspace     = var.modal_workspace
-  deploy_path   = "${var.project_root}/packages/modal-infra"
-  deploy_module = "deploy"
-  source_hash   = data.external.modal_source_hash[0].result.hash
+  app_name                     = "open-inspect"
+  workspace                    = var.modal_workspace
+  modal_environment            = var.modal_environment
+  modal_environment_web_suffix = var.modal_environment_web_suffix
+  deploy_path                  = "${var.project_root}/packages/modal-infra"
+  deploy_module                = "deploy"
+  source_hash                  = data.external.modal_source_hash[0].result.hash
 
   secrets = [
     {

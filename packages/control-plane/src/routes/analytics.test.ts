@@ -16,7 +16,9 @@ vi.mock("../db/analytics-store", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    AnalyticsStore: vi.fn().mockImplementation(() => mockStore),
+    AnalyticsStore: vi.fn().mockImplementation(function () {
+      return mockStore;
+    }),
   };
 });
 

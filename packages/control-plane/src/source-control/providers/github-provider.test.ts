@@ -1,19 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GitHubSourceControlProvider } from "./github-provider";
 import { SourceControlProviderError } from "../errors";
 
 // Mock the upstream GitHub App auth functions
 vi.mock("../../auth/github-app", () => ({
   getCachedInstallationToken: vi.fn(),
+  getCachedInstallationTokenWithExpiry: vi.fn(),
   getInstallationRepository: vi.fn(),
   listInstallationRepositories: vi.fn(),
   fetchWithTimeout: vi.fn(),
 }));
 
-import { getInstallationRepository, listInstallationRepositories } from "../../auth/github-app";
+import {
+  getCachedInstallationTokenWithExpiry,
+  getInstallationRepository,
+  listInstallationRepositories,
+} from "../../auth/github-app";
 
 const mockGetInstallationRepository = vi.mocked(getInstallationRepository);
 const mockListInstallationRepositories = vi.mocked(listInstallationRepositories);
+const mockGetCachedInstallationTokenWithExpiry = vi.mocked(getCachedInstallationTokenWithExpiry);
 
 const fakeAppConfig = {
   appId: "123",
@@ -22,6 +28,10 @@ const fakeAppConfig = {
 };
 
 describe("GitHubSourceControlProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   describe("checkRepositoryAccess", () => {
     it("throws permanent error with no httpStatus when appConfig is missing", async () => {
       const provider = new GitHubSourceControlProvider();
@@ -75,6 +85,24 @@ describe("GitHubSourceControlProvider", () => {
       expect((err as SourceControlProviderError).errorType).toBe("permanent");
       expect((err as SourceControlProviderError).httpStatus).toBe(401);
     });
+
+    it("returns null for archived repositories", async () => {
+      mockGetInstallationRepository.mockResolvedValueOnce({
+        id: 1,
+        owner: "acme",
+        name: "web",
+        fullName: "acme/web",
+        description: null,
+        private: true,
+        archived: true,
+        defaultBranch: "main",
+      });
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const result = await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+
+      expect(result).toBeNull();
+    });
   });
 
   describe("listRepositories", () => {
@@ -121,6 +149,39 @@ describe("GitHubSourceControlProvider", () => {
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).errorType).toBe("permanent");
       expect((err as SourceControlProviderError).httpStatus).toBe(401);
+    });
+
+    it("excludes archived repositories", async () => {
+      mockListInstallationRepositories.mockResolvedValueOnce({
+        repos: [
+          {
+            id: 1,
+            owner: "acme",
+            name: "active",
+            fullName: "acme/active",
+            description: null,
+            private: true,
+            archived: false,
+            defaultBranch: "main",
+          },
+          {
+            id: 2,
+            owner: "acme",
+            name: "archived",
+            fullName: "acme/archived",
+            description: null,
+            private: true,
+            archived: true,
+            defaultBranch: "main",
+          },
+        ],
+        timing: { tokenGenerationMs: 0, pages: [], totalPages: 0, totalRepos: 2 },
+      });
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const repos = await provider.listRepositories();
+
+      expect(repos.map((repo) => repo.fullName)).toEqual(["acme/active"]);
     });
   });
 
@@ -225,6 +286,63 @@ describe("GitHubSourceControlProvider", () => {
         "web",
         expect.objectContaining({ userAgent: "Open-Inspect" })
       );
+    });
+  });
+
+  describe("generateCredentialHelperAuth", () => {
+    it("throws a permanent error when the App is not configured", async () => {
+      const provider = new GitHubSourceControlProvider();
+      const err = await provider.generateCredentialHelperAuth().catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as SourceControlProviderError).message).toMatch(/not configured/i);
+    });
+
+    it("forwards a fresh installation token with its expiry and x-access-token username", async () => {
+      const expiresAtEpochMs = Date.now() + 60 * 60 * 1000;
+      mockGetCachedInstallationTokenWithExpiry.mockResolvedValueOnce({
+        token: "ghs_fresh",
+        expiresAtEpochMs,
+      });
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const auth = await provider.generateCredentialHelperAuth();
+
+      expect(auth).toEqual({
+        username: "x-access-token",
+        password: "ghs_fresh",
+        expiresAtEpochMs,
+      });
+      expect(mockGetCachedInstallationTokenWithExpiry).toHaveBeenCalledWith(
+        fakeAppConfig,
+        expect.objectContaining({ userAgent: expect.any(String) })
+      );
+    });
+
+    it("wraps upstream errors as SourceControlProviderError", async () => {
+      mockGetCachedInstallationTokenWithExpiry.mockRejectedValueOnce(new Error("GitHub 500"));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const err = await provider.generateCredentialHelperAuth().catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toContain("GitHub 500");
+    });
+
+    it("classifies an upstream 5xx (with .status) as transient", async () => {
+      const httpError = Object.assign(new Error("Failed to get installation token: 500 down"), {
+        status: 500,
+      });
+      mockGetCachedInstallationTokenWithExpiry.mockRejectedValueOnce(httpError);
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const err = await provider.generateCredentialHelperAuth().catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      // Transient → the service maps this to 502, not 500.
+      expect((err as SourceControlProviderError).errorType).toBe("transient");
+      expect((err as SourceControlProviderError).httpStatus).toBe(500);
     });
   });
 });

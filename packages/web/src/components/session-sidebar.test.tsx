@@ -6,7 +6,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
 import { MOBILE_LONG_PRESS_MS, SessionSidebar } from "./session-sidebar";
-import { buildSessionsPageKey, SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import {
+  buildSessionsPageKey,
+  CURRENT_USER_CREATED_BY,
+  SIDEBAR_SESSIONS_KEY,
+} from "@/lib/session-list";
 
 expect.extend(matchers);
 
@@ -184,6 +188,147 @@ describe("SessionSidebar", () => {
         buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })
       );
     });
+  });
+
+  it("filters sessions to the current user when Mine is selected", async () => {
+    const mineKey = buildSessionsPageKey({
+      excludeStatus: "archived",
+      createdBy: [CURRENT_USER_CREATED_BY],
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === SIDEBAR_SESSIONS_KEY) {
+        return jsonResponse({ sessions: [createSession(1)], hasMore: false });
+      }
+
+      if (url === mineKey) {
+        return jsonResponse({
+          sessions: [createSession(2, { title: "Mine only" })],
+          hasMore: false,
+        });
+      }
+
+      throw new Error(`Unexpected fetch for ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          fetcher: async (url: string) => {
+            const response = await fetch(url);
+            return response.json();
+          },
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Mine"));
+
+    expect(await screen.findByText("Mine only")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(mineKey);
+    });
+    expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+  });
+
+  it("ignores stale load-more results after the creator filter changes", async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
+    const allNextPageKey = buildSessionsPageKey({ excludeStatus: "archived", offset: 50 });
+    const mineKey = buildSessionsPageKey({
+      excludeStatus: "archived",
+      createdBy: [CURRENT_USER_CREATED_BY],
+    });
+    let resolveAllNextPage!: (response: Response) => void;
+    const allNextPage = new Promise<Response>((resolve) => {
+      resolveAllNextPage = resolve;
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === SIDEBAR_SESSIONS_KEY) {
+        return jsonResponse({ sessions: firstPage, hasMore: true });
+      }
+
+      if (url === allNextPageKey) {
+        return allNextPage;
+      }
+
+      if (url === mineKey) {
+        return jsonResponse({
+          sessions: [createSession(99, { title: "Mine only" })],
+          hasMore: false,
+        });
+      }
+
+      throw new Error(`Unexpected fetch for ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          fetcher: async (url: string) => {
+            const response = await fetch(url);
+            return response.json();
+          },
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    const scrollContainer = container.querySelector(".overflow-y-auto") as HTMLDivElement;
+    Object.defineProperty(scrollContainer, "scrollHeight", {
+      configurable: true,
+      value: 2000,
+    });
+    Object.defineProperty(scrollContainer, "clientHeight", {
+      configurable: true,
+      value: 400,
+    });
+    Object.defineProperty(scrollContainer, "scrollTop", {
+      configurable: true,
+      value: 1705,
+    });
+
+    fireEvent.scroll(scrollContainer);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey);
+    });
+
+    fireEvent.click(screen.getByText("Mine"));
+    expect(await screen.findByText("Mine only")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveAllNextPage(
+        jsonResponse({
+          sessions: [createSession(51, { title: "Stale page" })],
+          hasMore: false,
+        })
+      );
+      await allNextPage;
+    });
+
+    expect(screen.queryByText("Stale page")).not.toBeInTheDocument();
+    expect(screen.getByText("Mine only")).toBeInTheDocument();
   });
 
   it("navigates directly on mobile tap without opening rename actions", async () => {

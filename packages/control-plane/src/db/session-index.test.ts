@@ -34,6 +34,8 @@ const QUERY_PATTERNS = {
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
   UPDATE_TITLE: /^UPDATE sessions SET title = \?/,
+  UPDATE_TITLE_IF_NEWER:
+    /^UPDATE sessions SET title = \?, updated_at = \? WHERE id = \? AND updated_at <= \?$/,
   UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
   SELECT_BY_PARENT:
@@ -197,6 +199,17 @@ class FakeD1Database {
       return { meta: { changes: 0 } };
     }
 
+    if (QUERY_PATTERNS.UPDATE_TITLE_IF_NEWER.test(normalized)) {
+      const [title, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
+      const row = this.rows.get(id);
+      if (row && row.updated_at <= maxUpdatedAt) {
+        row.title = title;
+        row.updated_at = updatedAt;
+        return { meta: { changes: 1 } };
+      }
+      return { meta: { changes: 0 } };
+    }
+
     if (QUERY_PATTERNS.UPDATE_TITLE.test(normalized)) {
       const [title, updatedAt, id] = args as [string, number, string];
       const row = this.rows.get(id);
@@ -284,6 +297,14 @@ class FakeD1Database {
       if (conditions.includes("repo_name = ?")) {
         const nameVal = args[argIdx++] as string;
         rows = rows.filter((r) => r.repo_name === nameVal);
+      }
+
+      const userIdMatch = conditions.match(/user_id IN \(([^)]+)\)/);
+      if (userIdMatch) {
+        const userIdCount = userIdMatch[1].split(",").length;
+        const userIds = new Set(args.slice(argIdx, argIdx + userIdCount) as string[]);
+        argIdx += userIdCount;
+        rows = rows.filter((r) => r.user_id !== null && userIds.has(r.user_id));
       }
     }
 
@@ -462,6 +483,30 @@ describe("SessionIndexStore", () => {
       expect(result.total).toBe(2);
     });
 
+    it("filters by creator user ids", async () => {
+      await store.create(makeSession({ id: "alice-old", userId: "alice", updatedAt: 1000 }));
+      await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
+      await store.create(makeSession({ id: "alice-new", userId: "alice", updatedAt: 4000 }));
+      await store.create(makeSession({ id: "historical", userId: null, updatedAt: 5000 }));
+
+      const result = await store.list({ createdByUserIds: ["alice"] });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["alice-new", "alice-old"]);
+      expect(result.total).toBe(2);
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("supports multiple creator user ids", async () => {
+      await store.create(makeSession({ id: "alice", userId: "alice", updatedAt: 1000 }));
+      await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
+      await store.create(makeSession({ id: "carol", userId: "carol", updatedAt: 4000 }));
+
+      const result = await store.list({ createdByUserIds: ["alice", "bob"] });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["bob", "alice"]);
+      expect(result.total).toBe(2);
+    });
+
     it("supports pagination with limit and offset", async () => {
       for (let i = 0; i < 5; i++) {
         await store.create(makeSession({ id: `s${i}`, updatedAt: i * 1000 }));
@@ -525,6 +570,30 @@ describe("SessionIndexStore", () => {
     it("returns false when session not found", async () => {
       const updated = await store.updateTitle("nonexistent", "New Title");
       expect(updated).toBe(false);
+    });
+  });
+
+  describe("updateTitleIfNewer", () => {
+    it("updates the title when the write is current", async () => {
+      await store.create(makeSession({ updatedAt: 1000 }));
+
+      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 2000);
+      expect(updated).toBe(true);
+
+      const session = await store.get("test-id");
+      expect(session?.title).toBe("Generated Title");
+      expect(session?.updatedAt).toBe(2000);
+    });
+
+    it("ignores stale title writes when a newer update already exists", async () => {
+      await store.create(makeSession({ title: "Manual Title", updatedAt: 2000 }));
+
+      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 1500);
+      expect(updated).toBe(false);
+
+      const session = await store.get("test-id");
+      expect(session?.title).toBe("Manual Title");
+      expect(session?.updatedAt).toBe(2000);
     });
   });
 

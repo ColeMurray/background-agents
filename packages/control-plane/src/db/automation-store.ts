@@ -447,14 +447,17 @@ export class AutomationStore {
   }
 
   // --- Recovery sweep queries ---
+  // Backed by partial indexes (migration 0024); `status` must stay a literal, not
+  // a bound param, or the planner skips the index and full-scans automation_runs.
+  static readonly ORPHANED_STARTING_RUNS_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
+  static readonly TIMED_OUT_RUNNING_RUNS_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?";
 
   async getOrphanedStartingRuns(thresholdMs: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
     const result = await this.db
-      .prepare(
-        `SELECT * FROM automation_runs
-         WHERE status = 'starting' AND created_at < ?`
-      )
+      .prepare(AutomationStore.ORPHANED_STARTING_RUNS_SQL)
       .bind(cutoff)
       .all<AutomationRunRow>();
     return result.results || [];
@@ -463,10 +466,7 @@ export class AutomationStore {
   async getTimedOutRunningRuns(executionTimeoutMs: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - executionTimeoutMs;
     const result = await this.db
-      .prepare(
-        `SELECT * FROM automation_runs
-         WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?`
-      )
+      .prepare(AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL)
       .bind(cutoff)
       .all<AutomationRunRow>();
     return result.results || [];

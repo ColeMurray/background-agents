@@ -243,7 +243,12 @@ async function getInstallationTokenWithMetadata(
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Failed to get installation token: ${response.status} ${error}`);
+    // Attach the HTTP status so callers can classify transient (5xx/429)
+    // vs permanent failures rather than substring-matching the message.
+    throw Object.assign(
+      new Error(`Failed to get installation token: ${response.status} ${error}`),
+      { status: response.status }
+    );
   }
 
   return (await response.json()) as InstallationTokenResponse;
@@ -349,33 +354,29 @@ async function refreshInstallationToken(
   return cached;
 }
 
-/**
- * Get installation token with in-memory + KV caching.
- */
-export async function getCachedInstallationToken(
+async function getOrRefreshCachedInstallationToken(
   config: GitHubAppConfig,
   env?: InstallationTokenCacheBindings,
   options?: { forceRefresh?: boolean }
-): Promise<string> {
+): Promise<CachedInstallationToken> {
   const cacheKey = getInstallationTokenCacheKey(config);
   const forceRefresh = options?.forceRefresh ?? false;
 
   if (!forceRefresh) {
     const memoryCached = installationTokenMemoryCache.get(cacheKey);
     if (memoryCached && isTokenUsable(memoryCached)) {
-      return memoryCached.token;
+      return memoryCached;
     }
 
     const persistentCached = await readInstallationTokenFromCache(env, cacheKey);
     if (persistentCached && isTokenUsable(persistentCached)) {
       installationTokenMemoryCache.set(cacheKey, persistentCached);
-      return persistentCached.token;
+      return persistentCached;
     }
 
     const inFlight = installationTokenRefreshInFlight.get(cacheKey);
     if (inFlight) {
-      const shared = await inFlight;
-      return shared.token;
+      return inFlight;
     }
   }
 
@@ -384,8 +385,34 @@ export async function getCachedInstallationToken(
   });
   installationTokenRefreshInFlight.set(cacheKey, refreshPromise);
 
-  const refreshed = await refreshPromise;
-  return refreshed.token;
+  return refreshPromise;
+}
+
+/**
+ * Get installation token with in-memory + KV caching.
+ */
+export async function getCachedInstallationToken(
+  config: GitHubAppConfig,
+  env?: InstallationTokenCacheBindings,
+  options?: { forceRefresh?: boolean }
+): Promise<string> {
+  const cached = await getOrRefreshCachedInstallationToken(config, env, options);
+  return cached.token;
+}
+
+/**
+ * Like {@link getCachedInstallationToken}, but also returns the absolute epoch
+ * milliseconds at which the token expires. Used by callers that need to
+ * forward the token's lifetime to a client (e.g. the sandbox credential
+ * helper, which caches its own copy until shortly before expiry).
+ */
+export async function getCachedInstallationTokenWithExpiry(
+  config: GitHubAppConfig,
+  env?: InstallationTokenCacheBindings,
+  options?: { forceRefresh?: boolean }
+): Promise<{ token: string; expiresAtEpochMs: number }> {
+  const cached = await getOrRefreshCachedInstallationToken(config, env, options);
+  return { token: cached.token, expiresAtEpochMs: cached.expiresAtEpochMs };
 }
 
 // Re-export from shared for backward compatibility
@@ -403,6 +430,7 @@ interface ListInstallationReposResponse {
     full_name: string;
     description: string | null;
     private: boolean;
+    archived: boolean;
     default_branch: string;
     language: string | null;
     topics?: string[];
@@ -467,6 +495,7 @@ export async function listInstallationRepositories(
       fullName: repo.full_name,
       description: repo.description,
       private: repo.private,
+      archived: repo.archived,
       defaultBranch: repo.default_branch,
       language: repo.language,
       topics: repo.topics,
@@ -565,6 +594,7 @@ export async function getInstallationRepository(
     full_name: string;
     description: string | null;
     private: boolean;
+    archived: boolean;
     default_branch: string;
     owner: { login: string };
   };
@@ -576,6 +606,7 @@ export async function getInstallationRepository(
     fullName: data.full_name,
     description: data.description,
     private: data.private,
+    archived: data.archived,
     defaultBranch: data.default_branch,
   };
 }

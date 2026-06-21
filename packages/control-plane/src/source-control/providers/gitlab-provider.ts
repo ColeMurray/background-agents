@@ -18,6 +18,7 @@ import type {
   BuildGitPushSpecConfig,
   GitPushSpec,
   GitPushAuthContext,
+  CredentialHelperAuth,
 } from "../types";
 import { SourceControlProviderError } from "../errors";
 import type { GitLabProviderConfig } from "./types";
@@ -31,6 +32,9 @@ const PER_PAGE = 100;
 
 /** Timeout for GitLab API requests in milliseconds. */
 const GITLAB_FETCH_TIMEOUT_MS = 15_000;
+
+/** GitLab PATs do not expose an expiry, so refresh the helper cache hourly. */
+const GITLAB_CREDENTIAL_HELPER_TTL_MS = 60 * 60 * 1000;
 
 function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -58,7 +62,11 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   private readonly userAgent: string;
 
   constructor(config: GitLabProviderConfig) {
-    this.accessToken = config.accessToken;
+    const accessToken = config.accessToken.trim();
+    if (!accessToken) {
+      throw new SourceControlProviderError("GitLab access token not configured.", "permanent");
+    }
+    this.accessToken = accessToken;
     this.namespace = config.namespace;
     this.userAgent = config.userAgent || USER_AGENT;
   }
@@ -224,7 +232,12 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         namespace: { path: string };
         path: string;
         default_branch: string;
+        archived: boolean;
       };
+
+      if (data.archived) {
+        return null;
+      }
 
       return {
         repoId: data.id,
@@ -252,8 +265,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   async listRepositories(): Promise<InstallationRepository[]> {
     try {
       const url = this.namespace
-        ? `${GITLAB_API_BASE}/groups/${encodeURIComponent(this.namespace)}/projects?per_page=${PER_PAGE}&include_subgroups=true`
-        : `${GITLAB_API_BASE}/projects?membership=true&per_page=${PER_PAGE}`;
+        ? `${GITLAB_API_BASE}/groups/${encodeURIComponent(this.namespace)}/projects?per_page=${PER_PAGE}&include_subgroups=true&archived=false`
+        : `${GITLAB_API_BASE}/projects?membership=true&per_page=${PER_PAGE}&archived=false`;
 
       const response = await fetchWithTimeout(url, {
         headers: this.headers(this.accessToken),
@@ -277,17 +290,21 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         description: string | null;
         visibility: string;
         default_branch: string;
+        archived: boolean;
       }>;
 
-      return data.map((project) => ({
-        id: project.id,
-        owner: project.namespace.path,
-        name: project.path,
-        fullName: project.path_with_namespace,
-        description: project.description,
-        private: project.visibility !== "public",
-        defaultBranch: project.default_branch,
-      }));
+      return data
+        .filter((project) => !project.archived)
+        .map((project) => ({
+          id: project.id,
+          owner: project.namespace.path,
+          name: project.path,
+          fullName: project.path_with_namespace,
+          description: project.description,
+          private: project.visibility !== "public",
+          archived: project.archived,
+          defaultBranch: project.default_branch,
+        }));
     } catch (error) {
       if (error instanceof SourceControlProviderError) {
         throw error;
@@ -340,6 +357,14 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     return {
       authType: "pat",
       token: this.accessToken,
+    };
+  }
+
+  async generateCredentialHelperAuth(): Promise<CredentialHelperAuth> {
+    return {
+      username: "oauth2",
+      password: this.accessToken,
+      expiresAtEpochMs: Date.now() + GITLAB_CREDENTIAL_HELPER_TTL_MS,
     };
   }
 

@@ -3,11 +3,14 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
+import { buildAuthIdentity, buildScmCredentials } from "@/lib/build-auth-identity";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import {
   buildControlPlanePath,
   SESSION_CONTROL_PLANE_QUERY_PARAMS,
 } from "@/lib/control-plane-query";
+import { resolveCurrentUserId } from "@/lib/current-user";
+import { CURRENT_USER_CREATED_BY } from "@/lib/session-list";
 
 export async function GET(request: NextRequest) {
   const routeStart = Date.now();
@@ -19,13 +22,31 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const path = buildControlPlanePath(
-    "/sessions",
-    request.nextUrl.searchParams,
-    SESSION_CONTROL_PLANE_QUERY_PARAMS
-  );
-
   try {
+    const searchParams = new URLSearchParams(request.nextUrl.searchParams);
+
+    const createdByValues = searchParams.getAll("createdBy");
+    if (createdByValues.includes(CURRENT_USER_CREATED_BY)) {
+      const resolved = await resolveCurrentUserId(session.user);
+      if (!resolved.ok) {
+        return NextResponse.json(resolved.body, { status: resolved.status });
+      }
+
+      searchParams.delete("createdBy");
+      for (const value of createdByValues) {
+        searchParams.append(
+          "createdBy",
+          value === CURRENT_USER_CREATED_BY ? resolved.userId : value
+        );
+      }
+    }
+
+    const path = buildControlPlanePath(
+      "/sessions",
+      searchParams,
+      SESSION_CONTROL_PLANE_QUERY_PARAMS
+    );
+
     const fetchStart = Date.now();
     const response = await controlPlaneFetch(path);
     const fetchMs = Date.now() - fetchStart;
@@ -53,7 +74,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     const jwt = await getToken({ req: request });
-    const accessToken = jwt?.accessToken as string | undefined;
 
     // Explicitly pick allowed fields from client body and derive identity
     // from the server-side NextAuth session (not client-supplied data)
@@ -68,15 +88,12 @@ export async function POST(request: NextRequest) {
       branch: body.branch,
       title: body.title,
       spawnSource: "user" as const,
-      scmToken: accessToken,
-      scmRefreshToken: jwt?.refreshToken as string | undefined,
-      scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
-      scmUserId: user.id,
       userId,
-      scmLogin: user.login,
-      scmName: user.name,
-      scmEmail: user.email,
-      scmAvatarUrl: user.image,
+      // Provider-agnostic auth identity (GitHub or Google) resolves the
+      // canonical user; GitHub-only scm* carries SCM credentials + attribution
+      // and is empty for Google.
+      ...buildAuthIdentity(user),
+      ...buildScmCredentials(user, jwt),
     };
 
     const response = await controlPlaneFetch("/sessions", {

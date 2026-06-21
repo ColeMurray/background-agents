@@ -3,7 +3,7 @@ import { generateId } from "../auth/crypto";
 // ── Public types ────────────────────────────────────────────────────
 
 export interface ProviderIdentity {
-  provider: "github" | "slack" | "linear";
+  provider: "github" | "slack" | "linear" | "google";
   providerUserId: string;
   providerLogin?: string;
   providerEmail?: string;
@@ -150,8 +150,12 @@ export class UserStore {
   }
 
   async getIdentitiesForUser(userId: string): Promise<UserIdentity[]> {
+    // ORDER BY created_at gives a deterministic order so callers that pick a
+    // single identity (e.g. resolveGitHubEnrichment) get a stable result.
+    // Google's email-based cross-provider linking makes multi-identity users
+    // more common, so the previously-unordered query could otherwise vary.
     const result = await this.db
-      .prepare("SELECT * FROM user_identities WHERE user_id = ?")
+      .prepare("SELECT * FROM user_identities WHERE user_id = ? ORDER BY created_at ASC")
       .bind(userId)
       .all<UserIdentityRow>();
     return (result.results ?? []).map(toUserIdentity);

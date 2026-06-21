@@ -1,10 +1,17 @@
 import type { Logger } from "../../../logger";
-import type { SessionArtifact } from "@open-inspect/shared";
+import {
+  createMediaArtifactRequestSchema,
+  sandboxEventSchema,
+  type CreateMediaArtifactRequest,
+  type SessionArtifact,
+} from "@open-inspect/shared";
 import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
+import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
+import { parseTunnelUrls } from "../../tunnel-urls";
 
 interface AddParticipantRequest {
   userId: string;
@@ -25,17 +32,11 @@ export interface SandboxHandlerDeps {
   getSession: () => SessionRow | null;
   refreshOpenAIToken: (session: SessionRow) => Promise<OpenAITokenRefreshResult>;
   isOpenAISecretsConfigured: () => boolean;
+  getScmCredentials: () => Promise<ScmCredentialsResult>;
   broadcast: (message: ServerMessage) => void;
   generateId: () => string;
   now: () => number;
   getLog: () => Logger;
-}
-
-interface CreateMediaArtifactRequest {
-  artifactId: string;
-  artifactType: string;
-  objectKey: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface SandboxHandler {
@@ -44,18 +45,45 @@ export interface SandboxHandler {
   addParticipant: (request: Request) => Promise<Response>;
   verifySandboxToken: (request: Request) => Promise<Response>;
   openaiTokenRefresh: () => Promise<Response>;
+  scmCredentials: () => Promise<Response>;
+  /** Return the sandbox's resolved tunnel URLs as a `{ [port]: url }` map. */
+  tunnelUrls: () => Promise<Response>;
 }
 
 export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
   return {
     async sandboxEvent(request: Request): Promise<Response> {
-      const event = (await request.json()) as SandboxEvent;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const result = sandboxEventSchema.safeParse(raw);
+      if (!result.success) {
+        return Response.json({ error: "Invalid sandbox event" }, { status: 400 });
+      }
+
+      const event: SandboxEvent = result.data;
       await deps.processSandboxEvent(event);
       return Response.json({ status: "ok" });
     },
 
     async createMediaArtifact(request: Request): Promise<Response> {
-      const body = (await request.json()) as CreateMediaArtifactRequest;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const result = createMediaArtifactRequestSchema.safeParse(raw);
+      if (!result.success) {
+        return Response.json({ error: "Invalid media artifact body" }, { status: 400 });
+      }
+
+      const body: CreateMediaArtifactRequest = result.data;
       const sandbox = deps.getSandbox();
       if (!sandbox) {
         return Response.json({ error: "No sandbox" }, { status: 404 });
@@ -185,6 +213,72 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
           account_id: result.accountId,
         },
         { status: 200 }
+      );
+    },
+
+    /**
+     * Return the sandbox's resolved tunnel URLs as a `{ [port]: url }` map.
+     *
+     * `sandbox.tunnel_urls` is a JSON-encoded `{ [port: string]: string }`
+     * stored by `SandboxLifecycleManager#storeAndBroadcastTunnelUrls`. When the
+     * control plane has resolved Modal tunnel URLs but the in-sandbox file write
+     * (`sandbox.open` from outside) hasn't propagated to the sandbox's own
+     * filesystem view — a real failure mode on the Modal provider — this
+     * endpoint is the in-sandbox fallback for retrieving them via
+     * `SANDBOX_AUTH_TOKEN`.
+     *
+     * Responses:
+     * - `404` when no sandbox exists for the session.
+     * - `500` when the stored value is malformed — invalid JSON, not a plain
+     *   object, or holding a non-string value — so the in-sandbox setup hard-
+     *   fails on corrupt data instead of writing a garbage `.tunnels.env`. Note
+     *   a not-yet-resolved sandbox still returns `200` with an empty map, so the
+     *   client must tolerate an empty result and retry until ports appear.
+     * - `200` with `{ tunnelUrls }` otherwise (empty map when none are stored).
+     */
+    async tunnelUrls(): Promise<Response> {
+      const sandbox = deps.getSandbox();
+      if (!sandbox) {
+        return Response.json({ error: "No sandbox" }, { status: 404 });
+      }
+
+      let urls: Record<string, string> = {};
+      if (sandbox.tunnel_urls) {
+        const parsed = parseTunnelUrls(sandbox.tunnel_urls);
+        if (!parsed) {
+          deps.getLog().warn("Invalid stored tunnel_urls");
+          return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
+        }
+        urls = parsed;
+      }
+
+      return Response.json(
+        { tunnelUrls: urls },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
+    },
+
+    async scmCredentials(): Promise<Response> {
+      const session = deps.getSession();
+      if (!session) {
+        return Response.json({ error: "No session" }, { status: 404 });
+      }
+
+      const result = await deps.getScmCredentials();
+      if (!result.ok) {
+        return Response.json({ error: result.error }, { status: result.status });
+      }
+
+      return Response.json(
+        {
+          username: result.username,
+          password: result.password,
+          expires_at_epoch_ms: result.expiresAtEpochMs,
+        },
+        {
+          status: 200,
+          headers: { "Cache-Control": "no-store" },
+        }
       );
     },
   };

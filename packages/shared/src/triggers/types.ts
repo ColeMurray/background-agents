@@ -46,7 +46,10 @@ export interface GitHubAutomationEvent extends BaseAutomationEvent {
   source: "github";
   repoOwner: string;
   repoName: string;
+  /** Pull request head ref when the event is tied to a PR (source branch). */
   branch?: string;
+  /** Pull request base ref when the event is tied to a PR (merge target branch). */
+  targetBranch?: string;
   labels?: string[];
   actor?: string;
   changedFiles?: string[];

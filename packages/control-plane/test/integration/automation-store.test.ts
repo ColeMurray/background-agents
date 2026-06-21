@@ -546,6 +546,29 @@ describe("AutomationStore (D1 integration)", () => {
       const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000);
       expect(timedOut).toHaveLength(0);
     });
+
+    // The behavioural tests above pass with or without the index (a scan returns
+    // the same rows); these EXPLAIN the real production SQL to assert the partial
+    // index is actually used.
+    it("orphan sweep is served by idx_runs_orphan_sweep, not a full scan", async () => {
+      const plan = await env.DB.prepare(
+        `EXPLAIN QUERY PLAN ${AutomationStore.ORPHANED_STARTING_RUNS_SQL}`
+      )
+        .bind(Date.now())
+        .all<{ detail: string }>();
+      const detail = plan.results.map((r) => r.detail).join("\n");
+      expect(detail).toContain("USING INDEX idx_runs_orphan_sweep");
+    });
+
+    it("timeout sweep is served by idx_runs_timeout_sweep, not a full scan", async () => {
+      const plan = await env.DB.prepare(
+        `EXPLAIN QUERY PLAN ${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL}`
+      )
+        .bind(Date.now())
+        .all<{ detail: string }>();
+      const detail = plan.results.map((r) => r.detail).join("\n");
+      expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
+    });
   });
 
   // ─── Failure tracking ──────────────────────────────────────────────────────

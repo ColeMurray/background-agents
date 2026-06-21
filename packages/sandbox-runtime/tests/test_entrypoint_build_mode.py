@@ -1,7 +1,7 @@
 """Tests for entrypoint boot modes and git sync."""
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -186,6 +186,72 @@ class TestImageBuildMode:
         ]
         assert len(sync_calls) == 1
         assert sync_calls[0].kwargs["head_sha"] == "abc123def456"
+
+    @pytest.mark.asyncio
+    async def test_reports_success_callback_from_build_mode(self, build_env, tmp_path):
+        """Build mode should report completion itself when callback metadata is configured."""
+        supervisor = _make_supervisor(build_env)
+        supervisor.repo_path = tmp_path
+
+        supervisor.perform_git_sync = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.shutdown = AsyncMock()
+        supervisor.shutdown_event.set()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        async def fake_subprocess(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"abc123def456\n", b""))
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with (
+            patch.dict(os.environ, build_env, clear=False),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                side_effect=fake_subprocess,
+            ),
+            patch(
+                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                return_value=callback,
+            ),
+        ):
+            await supervisor.run()
+
+        callback.report_success.assert_awaited_once_with(
+            base_sha="abc123def456",
+            build_duration_seconds=ANY,
+        )
+        callback.report_failure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reports_failure_callback_from_build_mode(self, build_env):
+        """Build mode should report failures itself when callback metadata is configured."""
+        supervisor = _make_supervisor(build_env)
+
+        supervisor.perform_git_sync = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=False)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with (
+            patch.dict(os.environ, build_env, clear=False),
+            patch(
+                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                return_value=callback,
+            ),
+        ):
+            await supervisor.run()
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_awaited_once_with("setup hook failed in build mode")
 
 
 class TestFromRepoImage:
@@ -396,14 +462,46 @@ class TestSnapshotRestoreMode:
         supervisor._report_fatal_error.assert_called_once()
         supervisor.start_opencode.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_resync_failure_is_reported_but_not_fatal(self, base_env):
+        supervisor = _make_supervisor({**base_env, "RESTORED_FROM_SNAPSHOT": "true"})
+        supervisor.log = MagicMock()
+
+        supervisor._update_existing_repo = AsyncMock(return_value=False)
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
+        supervisor.start_opencode = AsyncMock()
+        supervisor.start_bridge = AsyncMock()
+        supervisor.monitor_processes = AsyncMock()
+        supervisor.shutdown = AsyncMock()
+
+        with patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False):
+            await supervisor.run()
+
+        supervisor.log.warn.assert_any_call(
+            "git.snapshot_resync_failed",
+            reason="origin rewrite or fetch failed; repo may be stale",
+        )
+        startup_call = next(
+            c
+            for c in supervisor.log.info.call_args_list
+            if c.args and c.args[0] == "sandbox.startup"
+        )
+        assert startup_call.kwargs["git_sync_success"] is False
+        supervisor.start_opencode.assert_called_once()
+
 
 class TestUpdateExistingRepo:
     """Test _update_existing_repo() — shared by snapshot-restore and repo-image paths."""
 
     @pytest.mark.asyncio
     async def test_fetches_and_checks_out(self, base_env, tmp_path):
-        """Should set remote auth, fetch with refspec, and checkout."""
-        supervisor = _make_supervisor({**base_env, "VCS_CLONE_TOKEN": "test-token"})
+        """Should rewrite origin to a plain URL, fetch with refspec, and checkout.
+
+        The `set-url` step exists to scrub stale embedded tokens from
+        snapshots taken before the credential-helper migration.
+        """
+        supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path
 
         call_log = []
@@ -422,9 +520,12 @@ class TestUpdateExistingRepo:
             result = await supervisor._update_existing_repo()
 
         assert result is True
-        # set-url, fetch, checkout
+        # set-url (scrub stale embedded token), fetch, checkout
         assert len(call_log) == 3
         assert "set-url" in call_log[0]
+        # The rewrite must use a token-free URL.
+        assert call_log[0][-1] == supervisor._build_repo_url()
+        assert "@" not in call_log[0][-1]
         assert "fetch" in call_log[1]
         assert "checkout" in call_log[2]
         assert "-B" in call_log[2]
@@ -440,34 +541,6 @@ class TestUpdateExistingRepo:
             mock_exec.assert_not_called()
 
         assert result is False
-
-    @pytest.mark.asyncio
-    async def test_skips_set_url_without_token(self, base_env, tmp_path):
-        """Should skip git remote set-url when no clone token."""
-        supervisor = _make_supervisor(base_env)
-        supervisor.vcs_clone_token = ""
-        supervisor.repo_path = tmp_path
-
-        call_log = []
-
-        async def fake_subprocess(*args, **kwargs):
-            call_log.append(args)
-            mock_proc = MagicMock()
-            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-            mock_proc.returncode = 0
-            return mock_proc
-
-        with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
-            side_effect=fake_subprocess,
-        ):
-            result = await supervisor._update_existing_repo()
-
-        assert result is True
-        # Only fetch + checkout, no set-url
-        assert len(call_log) == 2
-        assert "fetch" in call_log[0]
-        assert "checkout" in call_log[1]
 
     @pytest.mark.asyncio
     async def test_uses_explicit_refspec(self, base_env, tmp_path):
@@ -611,7 +684,6 @@ class TestPerformGitSync:
         env = {
             **base_env,
             "SESSION_CONFIG": '{"branch": "feature/abc"}',
-            "VCS_CLONE_TOKEN": "tok",
         }
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path  # Exists, so clone is skipped
@@ -674,7 +746,10 @@ class TestPerformGitSync:
         ("method_name", "args", "log_method_name", "event_name"),
         [
             ("_clone_repo", (), "error", "git.clone_error"),
-            ("_ensure_remote_auth", (), "warn", "git.set_url_failed"),
+            # `_ensure_plain_origin` logs at error level because a failure
+            # here means we'd fall back to the stale embedded-token URL,
+            # which surfaces as an opaque 401 — bad.
+            ("_ensure_plain_origin", (), "error", "git.set_url_failed"),
             ("_fetch_branch", ("feature/test",), "error", "git.fetch_error"),
             ("_checkout_branch", ("feature/test",), "warn", "git.checkout_error"),
         ],
@@ -682,17 +757,15 @@ class TestPerformGitSync:
     async def test_git_failures_redact_credentials_in_logs(
         self, base_env, tmp_path, method_name, args, log_method_name, event_name
     ):
-        env = {
-            **base_env,
-            "VCS_HOST": "github.com",
-            "VCS_CLONE_USERNAME": "x-access-token",
-            "VCS_CLONE_TOKEN": "ghp_secret123",
-        }
+        env = {**base_env, "VCS_HOST": "github.com"}
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path
         supervisor.log = MagicMock()
 
-        stderr_text = f"fatal: Authentication failed for '{supervisor._build_repo_url()}'"
+        # Simulate a redirect chain that leaks credentials from an upstream proxy.
+        stderr_text = (
+            "fatal: redirected to https://other-user:other-secret@example.com/acme/repo.git"
+        )
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -708,27 +781,19 @@ class TestPerformGitSync:
 
         log_call = getattr(supervisor.log, log_method_name).call_args
         assert log_call.args[0] == event_name
-        assert supervisor.vcs_clone_token not in log_call.kwargs["stderr"]
-        assert supervisor._build_repo_url() not in log_call.kwargs["stderr"]
-        assert supervisor._build_repo_url(authenticated=False) in log_call.kwargs["stderr"]
+        # The generic `user:password@` regex masks the upstream creds.
+        assert "other-secret" not in log_call.kwargs["stderr"]
+        assert "https://***@example.com/acme/repo.git" in log_call.kwargs["stderr"]
 
-    def test_redact_git_stderr_hides_bare_tokens_and_fallback_urls(self, base_env):
-        env = {
-            **base_env,
-            "VCS_HOST": "github.com",
-            "VCS_CLONE_USERNAME": "x-access-token",
-            "VCS_CLONE_TOKEN": "ghp_secret123",
-        }
-        supervisor = _make_supervisor(env)
+    def test_redact_git_stderr_masks_userinfo_in_urls(self, base_env):
+        supervisor = _make_supervisor(base_env)
 
         stderr_text = (
-            "fatal: could not read credentials for ghp_secret123\n"
             "fatal: redirected to https://other-user:other-secret@example.com/acme/my-repo.git"
         )
 
         redacted_stderr = supervisor._redact_git_stderr(stderr_text)  # type: ignore[attr-defined]
 
-        assert "ghp_secret123" not in redacted_stderr
         assert "other-secret" not in redacted_stderr
         assert "https://***@example.com/acme/my-repo.git" in redacted_stderr
 
@@ -746,3 +811,77 @@ class TestBaseBranchProperty:
         env = {**base_env, "SESSION_CONFIG": '{"branch": "develop"}'}
         supervisor = _make_supervisor(env)
         assert supervisor.base_branch == "develop"
+
+
+class TestEnsureCredentialHelperConfigured:
+    """Phase-0 git credential helper configuration."""
+
+    @pytest.mark.asyncio
+    async def test_configures_helper_and_usehttppath(self, base_env):
+        """Must set both credential.helper and credential.useHttpPath.
+
+        useHttpPath is load-bearing: the helper fails closed without a path,
+        so a regression dropping it would break every credential request in
+        prod while the helper's own tests (which pass path= manually) stayed
+        green. This pins it at the boot-config layer.
+        """
+        supervisor = _make_supervisor(base_env)
+        supervisor.log = MagicMock()
+
+        git_config_calls = []
+
+        async def fake_subprocess(*args, **kwargs):
+            if "config" in args:
+                git_config_calls.append(args)
+            proc = MagicMock()
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.returncode = 0
+            return proc
+
+        with (
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                side_effect=fake_subprocess,
+            ),
+            patch("sandbox_runtime.entrypoint.Path.write_text"),
+            patch("sandbox_runtime.entrypoint.Path.chmod"),
+            patch("sandbox_runtime.entrypoint.Path.exists", return_value=False),
+        ):
+            await supervisor._ensure_credential_helper_configured()
+
+        assert all("--replace-all" in c for c in git_config_calls)
+        pairs = {(c[4], c[5]) for c in git_config_calls}
+        assert ("credential.helper", "/usr/local/bin/oi-git-credentials") in pairs
+        assert ("credential.useHttpPath", "true") in pairs
+
+    @pytest.mark.asyncio
+    async def test_warns_when_credential_helper_shim_cannot_be_written(self, base_env):
+        supervisor = _make_supervisor(base_env)
+        supervisor.log = MagicMock()
+        git_config_calls = []
+
+        async def fake_subprocess(*args, **kwargs):
+            if "config" in args:
+                git_config_calls.append(args)
+            proc = MagicMock()
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.returncode = 0
+            return proc
+
+        with (
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                side_effect=fake_subprocess,
+            ),
+            patch("sandbox_runtime.entrypoint.Path.write_text", side_effect=OSError("read-only")),
+            patch("sandbox_runtime.entrypoint.Path.exists", return_value=False),
+        ):
+            await supervisor._ensure_credential_helper_configured()
+
+        supervisor.log.warn.assert_any_call(
+            "credential_helper.shim_write_failed",
+            error="read-only",
+        )
+        pairs = {(c[4], c[5]) for c in git_config_calls}
+        assert ("credential.helper", "/usr/local/bin/oi-git-credentials") not in pairs
+        assert ("credential.useHttpPath", "true") in pairs

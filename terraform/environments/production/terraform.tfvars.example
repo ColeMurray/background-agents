@@ -51,10 +51,16 @@ cloudflare_worker_subdomain = ""
 modal_token_id = ""
 modal_token_secret = ""
 
-# Modal workspace name (used in endpoint URLs)
+# Modal workspace, environment, and endpoint web suffix
 # Only required when sandbox_provider = "modal"
-# This is your Modal username/workspace (e.g., "myworkspace" in "https://myworkspace--app.modal.run")
-modal_workspace = ""
+# workspace: your Modal username (e.g., "myworkspace")
+# environment: Modal environment name used by the CLI
+# environment_web_suffix: Modal web suffix used in endpoint URLs:
+#   empty suffix:      https://myworkspace--app.modal.run
+#   "production":      https://myworkspace-production--app.modal.run
+modal_workspace               = ""
+modal_environment             = "main"
+modal_environment_web_suffix  = ""
 
 # Daytona REST API
 # Only required when sandbox_provider = "daytona"
@@ -65,6 +71,17 @@ daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
 daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Read/Write/Delete)
 daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
 # daytona_target = ""          # Optional Daytona target name
+
+# Vercel Sandbox API
+# Only required when sandbox_provider = "vercel"
+# Create a Vercel access token and use a project ID with Sandbox access.
+vercel_sandbox_token      = ""
+vercel_sandbox_project_id = "" # e.g., "prj_xxxxxxxxxxxxxxxxxxxx"
+# vercel_sandbox_team_id  = "" # Optional team ID, e.g., "team_xxxxxxxxxxxxxxxxxxxx"
+# vercel_sandbox_api_base_url = "" # Optional API override for advanced testing
+# vercel_base_snapshot_id = "" # Optional manual override; skips Terraform-managed snapshot builds
+# vercel_sandbox_runtime  = "node24"
+# vercel_snapshot_expiration_ms = 0
 
 # =============================================================================
 # GitHub App Credentials
@@ -117,6 +134,19 @@ github_webhook_secret = ""
 #   App named "Acme Code Review" -> slug "acme-code-review" -> "acme-code-review[bot]"
 # The webhook handler uses this to detect @mentions of the bot in PRs/issues.
 github_bot_username = ""
+
+# =============================================================================
+# Google OAuth Credentials (Optional)
+# =============================================================================
+# Enables "Sign in with Google" for non-developer users (PMs, support agents).
+# Create an OAuth 2.0 Client ID at: https://console.cloud.google.com/apis/credentials
+#   - Application type: Web application
+#   - Authorized redirect URI: {your-web-app-url}/api/auth/callback/google
+#   - Consent screen scopes: openid, email, profile (non-sensitive — no Google review)
+# Set BOTH values to enable Google login, or leave BOTH empty for GitHub-only.
+# Pair with allowed_emails / allowed_email_domains below to control who may sign in.
+google_client_id = ""
+google_client_secret = ""
 
 # =============================================================================
 # Slack App Credentials (Optional)
@@ -183,6 +213,7 @@ nextauth_secret = ""
 # Sandbox backend for session execution
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
 # - "daytona": direct Daytona REST API integration with stop/start resume
+# - "vercel": Vercel Sandbox API with filesystem snapshot restore
 sandbox_provider = "modal"
 
 # Platform for the web app deployment
@@ -210,8 +241,9 @@ project_root = "../../../"
 # app_short_name = "Inspect"
 
 # Optional URL (absolute or root-relative path) to a custom logo image for the
-# command menu and browser favicon. Leave empty to use the built-in icon.
-# Example: "/branding/logo.svg" (file under packages/web/public/) or
+# command menu and browser favicon. Leave empty to use the built-in favicon
+# and default in-app icon.
+# Example: "/branding/acme-logo.svg" (file under packages/web/public/) or
 #          "https://cdn.example.com/logo.svg".
 # app_icon_url = ""
 
@@ -271,18 +303,24 @@ enable_service_bindings = false
 # =============================================================================
 # Access Control
 # =============================================================================
-# Allowlists are OR-based: matching any configured user, email domain, or GitHub
-# org grants access.
+# Allowlists are OR-based: a user is admitted if they match ANY configured
+# allowlist (GitHub username, email domain, exact email, or GitHub org
+# membership). Set at least one unless you intentionally opt into open access
+# with unsafe_allow_all_users = true.
+
 # Comma-separated list of GitHub usernames allowed to sign in
-# Set at least one access-control allowlist unless you intentionally opt into
-# open access with unsafe_allow_all_users = true.
 allowed_users = ""
 
-# Comma-separated list of email domains allowed to sign in
-# Example: "example.com,corp.io"
+# Comma-separated list of email domains allowed to sign in (matches any
+# provider's verified email). Example: "example.com,corp.io"
 allowed_email_domains = ""
 
-# Comma-separated list of GitHub organizations whose active members can sign in
+# Comma-separated list of exact email addresses allowed to sign in. Use this for
+# individual users on shared domains (e.g. one person@gmail.com) where a domain
+# allowlist would admit too many. Example: "pm@gmail.com,agent@gmail.com"
+allowed_emails = ""
+
+# Comma-separated list of GitHub organizations whose active members can sign in.
 # Requests read:org only when set, then checks membership at sign-in with the
 # signing-in user's OAuth token. Existing sessions last until session expiry.
 # Requires GitHub App Organization permissions: Members read-only; existing apps
@@ -290,5 +328,5 @@ allowed_email_domains = ""
 allowed_github_orgs = ""
 
 # Explicitly bypass the Terraform access-control safety check and allow any
-# authenticated GitHub user to sign in when all allowlists are empty.
+# authenticated user to sign in when all allowlists are empty.
 unsafe_allow_all_users = false

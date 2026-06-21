@@ -20,9 +20,10 @@ module "github_bot_worker" {
   count  = var.enable_github_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-github-bot-${local.name_suffix}"
-  script_path = local.github_bot_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-github-bot-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.github_bot_script_path
 
   kv_namespaces = [
     {

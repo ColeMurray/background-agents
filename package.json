@@ -51,6 +51,10 @@
     "packages/modal-infra/**/*.py": [
       "ruff check --fix",
       "ruff format"
+    ],
+    "packages/sandbox-runtime/**/*.py": [
+      "ruff check --fix",
+      "ruff format"
     ]
   }
 }

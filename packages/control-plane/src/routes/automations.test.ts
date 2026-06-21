@@ -27,7 +27,9 @@ const mockStore = {
 };
 
 vi.mock("../db/automation-store", () => ({
-  AutomationStore: vi.fn().mockImplementation(() => mockStore),
+  AutomationStore: vi.fn().mockImplementation(function () {
+    return mockStore;
+  }),
   toAutomation: vi.fn((row: unknown) => row),
   toAutomationRun: vi.fn((row: unknown) => row),
 }));
@@ -36,7 +38,9 @@ const mockUserStore = {
   resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", isNew: false }),
 };
 vi.mock("../db/user-store", () => ({
-  UserStore: vi.fn().mockImplementation(() => mockUserStore),
+  UserStore: vi.fn().mockImplementation(function () {
+    return mockUserStore;
+  }),
 }));
 
 vi.mock("../auth/crypto", () => ({
@@ -228,6 +232,33 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(201);
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
       expect(mockStore.create).toHaveBeenCalledWith(expect.objectContaining({ user_id: null }));
+    });
+
+    it("resolves user_id for a Google automation (auth* fields, no scmUserId)", async () => {
+      mockStore.create.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          ...validBody,
+          authProvider: "google",
+          authUserId: "google-sub-1",
+          authEmail: "pm@corp.com",
+          authName: "PM Person",
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "google",
+          providerUserId: "google-sub-1",
+          providerEmail: "pm@corp.com",
+        })
+      );
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: "resolved-user-1" })
+      );
     });
 
     it("stores reasoning effort when valid for the selected model", async () => {

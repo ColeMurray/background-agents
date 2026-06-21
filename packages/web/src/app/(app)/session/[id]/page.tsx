@@ -3,61 +3,27 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import {
-  Suspense,
-  memo,
-  useState,
-  useRef,
-  useEffect,
-  useLayoutEffect,
-  useCallback,
-  useMemo,
-} from "react";
+import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
-import { SafeMarkdown } from "@/components/safe-markdown";
-import { ToolCallGroup } from "@/components/tool-call-group";
-import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
+import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
-import { Button } from "@/components/ui/button";
-import { useSidebarContext } from "@/components/sidebar-layout";
-import {
-  SessionRightSidebar,
-  SessionRightSidebarContent,
-} from "@/components/session-right-sidebar";
+import { SessionHeader } from "@/components/session-header";
+import { SessionDetailsOverlay } from "@/components/session-details-overlay";
+import { SessionPromptComposer } from "@/components/session-prompt-composer";
+import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
-import { ActionBar } from "@/components/action-bar";
-import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { archiveSession } from "@/lib/archive-session";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import {
+  isArchivedSessionListKey,
+  isUnarchivedSessionListKey,
   removeSessionFromList,
-  SIDEBAR_SESSIONS_KEY,
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import type { Artifact, SandboxEvent } from "@/types/session";
-import {
-  SidebarIcon,
-  ModelIcon,
-  CheckIcon,
-  SendIcon,
-  StopIcon,
-  CopyIcon,
-  ErrorIcon,
-} from "@/components/ui/icons";
-import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
-
-type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
-import type { SessionItem } from "@/components/session-sidebar";
-
-// Event grouping types
-type EventGroup =
-  | { type: "tool_group"; events: ToolCallEvent[]; id: string }
-  | { type: "single"; event: SandboxEvent; id: string };
+import type { ComboboxGroup } from "@/components/ui/combobox";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -66,111 +32,6 @@ type FallbackSessionInfo = {
   repoName: string | null;
   title: string | null;
 };
-
-type SessionsResponse = { sessions: SessionItem[] };
-
-// Group consecutive tool calls of the same type
-function groupEvents(events: SandboxEvent[]): EventGroup[] {
-  const groups: EventGroup[] = [];
-  let currentToolGroup: ToolCallEvent[] = [];
-  let groupIndex = 0;
-
-  const flushToolGroup = () => {
-    if (currentToolGroup.length > 0) {
-      groups.push({
-        type: "tool_group",
-        events: [...currentToolGroup],
-        id: `tool-group-${groupIndex++}`,
-      });
-      currentToolGroup = [];
-    }
-  };
-
-  for (const event of events) {
-    if (event.type === "tool_call") {
-      // Check if same tool as current group
-      if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
-        currentToolGroup.push(event);
-      } else {
-        // Flush previous group and start new one
-        flushToolGroup();
-        currentToolGroup = [event];
-      }
-    } else {
-      // Flush any tool group before non-tool event
-      flushToolGroup();
-      groups.push({
-        type: "single",
-        event,
-        id: `single-${event.type}-${("messageId" in event ? event.messageId : undefined) || event.timestamp}-${groupIndex++}`,
-      });
-    }
-  }
-
-  // Flush final group
-  flushToolGroup();
-
-  return groups;
-}
-
-function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
-  const filteredEvents: Array<SandboxEvent | null> = [];
-  const seenToolCalls = new Map<string, number>();
-  const seenCompletions = new Set<string>();
-  const seenTokens = new Map<string, number>();
-
-  for (const event of events) {
-    if (event.type === "tool_call" && event.callId) {
-      // Deduplicate tool_call events by callId - keep the latest (most complete) one
-      const existingIdx = seenToolCalls.get(event.callId);
-      if (existingIdx !== undefined) {
-        filteredEvents[existingIdx] = event;
-      } else {
-        seenToolCalls.set(event.callId, filteredEvents.length);
-        filteredEvents.push(event);
-      }
-    } else if (event.type === "execution_complete" && event.messageId) {
-      // Skip duplicate execution_complete for the same message
-      if (!seenCompletions.has(event.messageId)) {
-        seenCompletions.add(event.messageId);
-        filteredEvents.push(event);
-      }
-    } else if (event.type === "token" && event.messageId) {
-      // Deduplicate tokens by messageId - keep latest at its chronological position
-      const existingIdx = seenTokens.get(event.messageId);
-      if (existingIdx !== undefined) {
-        filteredEvents[existingIdx] = null;
-      }
-      seenTokens.set(event.messageId, filteredEvents.length);
-      filteredEvents.push(event);
-    } else {
-      // All other events (user_message, git_sync, etc.) - add as-is
-      filteredEvents.push(event);
-    }
-  }
-
-  return groupEvents(filteredEvents.filter((event): event is SandboxEvent => event !== null));
-}
-
-function resolveSessionDisplayInfo(
-  sessionState: SessionState,
-  fallbackSessionInfo: FallbackSessionInfo
-): {
-  repoLabel: string;
-  title: string;
-} {
-  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
-  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
-  const repoLabel =
-    resolvedRepoOwner && resolvedRepoName
-      ? `${resolvedRepoOwner}/${resolvedRepoName}`
-      : "Loading session...";
-
-  return {
-    repoLabel,
-    title: sessionState?.title || fallbackSessionInfo.title || repoLabel,
-  };
-}
 
 export default function SessionPage() {
   return (
@@ -234,7 +95,7 @@ function SessionPageContent() {
     const didArchive = await archiveSession(sessionId);
     if (didArchive) {
       await mutate<SessionListResponse>(
-        SIDEBAR_SESSIONS_KEY,
+        isUnarchivedSessionListKey,
         (current) =>
           current
             ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
@@ -248,8 +109,8 @@ function SessionPageContent() {
   const renameSession = useCallback(
     async (title: string) => {
       const updatedAt = Date.now();
-      const updateSessionsTitle = (data?: SessionsResponse): SessionsResponse => {
-        if (!data?.sessions) return { sessions: [] };
+      const updateSessionsTitle = (data?: SessionListResponse): SessionListResponse | undefined => {
+        if (!data?.sessions) return data;
         return {
           ...data,
           sessions: data.sessions.map((session) =>
@@ -259,22 +120,18 @@ function SessionPageContent() {
       };
 
       try {
-        await mutate<SessionsResponse>(
-          "/api/sessions",
-          async (currentData?: SessionsResponse) => {
-            const success = await triggerRename({ title });
-            if (!success) {
-              throw new Error("Failed to update session title");
-            }
-            return updateSessionsTitle(currentData);
-          },
-          {
-            optimisticData: updateSessionsTitle,
-            rollbackOnError: true,
-            populateCache: true,
-            revalidate: true,
-          }
-        );
+        const success = await triggerRename({ title });
+        if (!success) {
+          throw new Error("Failed to update session title");
+        }
+        await mutate<SessionListResponse>(isUnarchivedSessionListKey, updateSessionsTitle, {
+          populateCache: true,
+          revalidate: true,
+        });
+        await mutate<SessionListResponse>(isArchivedSessionListKey, updateSessionsTitle, {
+          populateCache: true,
+          revalidate: false,
+        });
         return true;
       } catch {
         return false;
@@ -286,9 +143,20 @@ function SessionPageContent() {
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,
     (url: string) =>
-      fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) mutate(SIDEBAR_SESSIONS_KEY);
-        else console.error("Failed to unarchive session");
+      fetch(url, { method: "POST" }).then(async (r) => {
+        if (r.ok) {
+          await mutate<SessionListResponse>(
+            isArchivedSessionListKey,
+            (current) =>
+              current
+                ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+                : current,
+            { revalidate: false, populateCache: true }
+          );
+          mutate(isUnarchivedSessionListKey);
+        } else {
+          console.error("Failed to unarchive session");
+        }
       }),
     { throwOnError: false }
   );
@@ -299,11 +167,22 @@ function SessionPageContent() {
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
+  const modelItems = useMemo<ComboboxGroup[]>(
+    () =>
+      enabledModelOptions.map((group) => ({
+        category: group.category,
+        options: group.models.map((model) => ({
+          value: model.id,
+          label: model.name,
+          description: model.description,
+        })),
+      })),
+    [enabledModelOptions]
+  );
 
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);
@@ -336,7 +215,7 @@ function SessionPageContent() {
     sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
     // Revalidate sidebar so this session bubbles to the top
-    mutate(SIDEBAR_SESSIONS_KEY);
+    mutate(isUnarchivedSessionListKey);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -373,7 +252,6 @@ function SessionPageContent() {
       events={events}
       artifacts={artifacts}
       currentParticipantId={currentParticipantId}
-      messagesEndRef={messagesEndRef}
       prompt={prompt}
       isProcessing={isProcessing}
       selectedModel={selectedModel}
@@ -390,7 +268,7 @@ function SessionPageContent() {
       renameSession={renameSession}
       loadingHistory={loadingHistory}
       loadOlderEvents={loadOlderEvents}
-      modelOptions={enabledModelOptions}
+      modelItems={modelItems}
       fallbackSessionInfo={fallbackSessionInfo}
       sessionId={sessionId}
       selectedMediaArtifactId={selectedMediaArtifactId}
@@ -411,7 +289,6 @@ function SessionContent({
   events,
   artifacts,
   currentParticipantId,
-  messagesEndRef,
   prompt,
   isProcessing,
   selectedModel,
@@ -428,7 +305,7 @@ function SessionContent({
   renameSession,
   loadingHistory,
   loadOlderEvents,
-  modelOptions,
+  modelItems,
   fallbackSessionInfo,
   sessionId,
   selectedMediaArtifactId,
@@ -445,7 +322,6 @@ function SessionContent({
   events: ReturnType<typeof useSessionSocket>["events"];
   artifacts: ReturnType<typeof useSessionSocket>["artifacts"];
   currentParticipantId: string | null;
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
   prompt: string;
   isProcessing: boolean;
   selectedModel: string;
@@ -462,31 +338,17 @@ function SessionContent({
   renameSession: (title: string) => Promise<boolean | undefined>;
   loadingHistory: boolean;
   loadOlderEvents: () => void;
-  modelOptions: ModelCategory[];
+  modelItems: ComboboxGroup[];
   fallbackSessionInfo: FallbackSessionInfo;
   sessionId: string;
   selectedMediaArtifactId: string | null;
   setSelectedMediaArtifactId: (artifactId: string | null) => void;
 }) {
-  const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
-  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
-  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
-  const fallbackRepoLabel =
-    resolvedRepoOwner && resolvedRepoName
-      ? `${resolvedRepoOwner}/${resolvedRepoName}`
-      : "Loading session...";
-  const baseResolvedTitle = sessionState?.title ?? fallbackSessionInfo.title ?? fallbackRepoLabel;
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [isRenaming, setIsRenaming] = useState(false);
-  const [title, setTitle] = useState(baseResolvedTitle);
-  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
-  const [sheetDragY, setSheetDragY] = useState(0);
-  const sheetDragYRef = useRef(0);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
-  const sheetTouchStartYRef = useRef<number | null>(null);
 
   // Terminal panel state
   const [terminalOpen, setTerminalOpen] = useState(() => {
@@ -508,194 +370,15 @@ function SessionContent({
   const ttydToken = sessionState?.ttydToken;
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
 
-  // Scroll pagination refs
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const topSentinelRef = useRef<HTMLDivElement>(null);
-  const hasScrolledRef = useRef(false);
-  const isPrependingRef = useRef(false);
-  const prevScrollHeightRef = useRef(0);
-  const isNearBottomRef = useRef(true);
-
-  const resetSheetDragState = useCallback(() => {
-    setSheetDragY(0);
-    sheetDragYRef.current = 0;
-  }, []);
-
-  const closeDetails = useCallback(() => {
-    setIsDetailsOpen(false);
-    resetSheetDragState();
-    detailsButtonRef.current?.focus();
-  }, [resetSheetDragState]);
-
   const toggleDetails = useCallback(() => {
-    setIsDetailsOpen((prev) => {
-      const next = !prev;
-      if (!next) {
-        resetSheetDragState();
-      }
-      return next;
-    });
-  }, [resetSheetDragState]);
-
-  const handleStartRename = () => {
-    setTitle(resolvedTitle);
-    setIsRenaming(true);
-  };
-
-  const handleRenameSubmit = async () => {
-    if (!sessionState) {
-      setIsRenaming(false);
-      return;
-    }
-
-    const trimmed = title.trim();
-
-    if (!trimmed || trimmed === resolvedTitle) {
-      setIsRenaming(false);
-      return;
-    }
-
-    const previousTitle = resolvedTitle;
-    setIsRenaming(false);
-    setOptimisticTitle(trimmed);
-
-    const success = await renameSession(trimmed);
-    if (!success) {
-      setOptimisticTitle(null);
-      setTitle(previousTitle);
-      setIsRenaming(true);
-    }
-  };
-
-  const resolvedTitle =
-    optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? fallbackRepoLabel;
-
-  useEffect(() => {
-    if (!optimisticTitle) return;
-    if (sessionState?.title === optimisticTitle) {
-      setOptimisticTitle(null);
-    }
-  }, [optimisticTitle, sessionState?.title]);
-
-  const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
-    const startY = event.touches[0]?.clientY;
-    sheetTouchStartYRef.current = startY ?? null;
+    setIsDetailsOpen((prev) => !prev);
   }, []);
-
-  const handleSheetTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
-    const startY = sheetTouchStartYRef.current;
-    const currentY = event.touches[0]?.clientY;
-
-    if (startY === null || currentY === undefined) return;
-
-    const delta = currentY - startY;
-    if (delta > 0) {
-      const nextDragY = Math.min(delta, 180);
-      sheetDragYRef.current = nextDragY;
-      setSheetDragY(nextDragY);
-    } else {
-      sheetDragYRef.current = 0;
-      setSheetDragY(0);
-    }
-  }, []);
-
-  const handleSheetTouchEnd = useCallback(() => {
-    if (sheetDragYRef.current > 100) {
-      closeDetails();
-      sheetTouchStartYRef.current = null;
-      return;
-    }
-
-    sheetDragYRef.current = 0;
-    setSheetDragY(0);
-    sheetTouchStartYRef.current = null;
-  }, [closeDetails]);
-
-  useEffect(() => {
-    if (!isRenaming) setTitle(sessionState?.title ?? "");
-  }, [sessionState?.title, isRenaming]);
 
   useEffect(() => {
     if (isBelowLg) return;
     setIsDetailsOpen(false);
-    resetSheetDragState();
-  }, [isBelowLg, resetSheetDragState]);
+  }, [isBelowLg]);
 
-  useEffect(() => {
-    if (!isDetailsOpen) return;
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeDetails();
-      }
-    };
-
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [closeDetails, isDetailsOpen]);
-
-  useEffect(() => {
-    if (!isDetailsOpen) return;
-
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [isDetailsOpen]);
-
-  // Track user scroll
-  const handleScroll = useCallback(() => {
-    hasScrolledRef.current = true;
-    const el = scrollContainerRef.current;
-    if (el) {
-      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    }
-  }, []);
-
-  // IntersectionObserver to trigger loading older events
-  useEffect(() => {
-    const sentinel = topSentinelRef.current;
-    const container = scrollContainerRef.current;
-    if (!sentinel || !container) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (
-          entry.isIntersecting &&
-          hasScrolledRef.current &&
-          container.scrollHeight > container.clientHeight
-        ) {
-          // Capture scroll height BEFORE triggering load
-          prevScrollHeightRef.current = container.scrollHeight;
-          isPrependingRef.current = true;
-          loadOlderEvents();
-        }
-      },
-      { root: container, threshold: 0.1 }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [loadOlderEvents]);
-
-  // Maintain scroll position when older events are prepended
-  useLayoutEffect(() => {
-    if (isPrependingRef.current && scrollContainerRef.current) {
-      const el = scrollContainerRef.current;
-      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
-      isPrependingRef.current = false;
-    }
-  }, [events]);
-
-  // Auto-scroll to bottom only when near bottom (not when prepending older history)
-  useEffect(() => {
-    if (isNearBottomRef.current && !isPrependingRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-    }
-  }, [events, messagesEndRef]);
-
-  // Deduplicate and group events for rendering
-  const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
@@ -706,97 +389,21 @@ function SessionContent({
     [mediaArtifacts, selectedMediaArtifactId]
   );
 
-  const sessionDisplayInfo = useMemo(
-    () => resolveSessionDisplayInfo(sessionState, fallbackSessionInfo),
-    [fallbackSessionInfo, sessionState]
-  );
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border-muted flex-shrink-0">
-        <div className="px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {!isOpen && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggle}
-                title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-                aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              >
-                <SidebarIcon className="w-4 h-4" />
-              </Button>
-            )}
-            <div>
-              {isRenaming ? (
-                <input
-                  autoFocus
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  onFocus={(e) => e.currentTarget.select()}
-                  onBlur={handleRenameSubmit}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      e.currentTarget.blur();
-                    }
-                    if (e.key === "Escape") {
-                      setIsRenaming(false);
-                    }
-                  }}
-                  className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
-                />
-              ) : (
-                <h1
-                  className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
-                  onClick={handleStartRename}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handleStartRename();
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  title="Click to rename"
-                >
-                  {resolvedTitle}
-                </h1>
-              )}
-              <p className="text-sm text-muted-foreground">{sessionDisplayInfo.repoLabel}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              ref={detailsButtonRef}
-              type="button"
-              onClick={toggleDetails}
-              className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
-              aria-label="Toggle session details"
-              aria-controls="session-details-dialog"
-              aria-expanded={isDetailsOpen}
-            >
-              Details
-            </button>
-            {/* Mobile: single combined status dot */}
-            <div className="md:hidden">
-              <CombinedStatusDot
-                connected={connected}
-                connecting={connecting}
-                sandboxStatus={sessionState?.sandboxStatus}
-              />
-            </div>
-            {/* Desktop: full status indicators */}
-            <div className="hidden md:contents">
-              <ConnectionStatus connected={connected} connecting={connecting} />
-              <SandboxStatus status={sessionState?.sandboxStatus} />
-              <ParticipantsList participants={participants} />
-            </div>
-          </div>
-        </div>
-      </header>
+      <SessionHeader
+        sessionState={sessionState}
+        fallbackSessionInfo={fallbackSessionInfo}
+        connected={connected}
+        connecting={connecting}
+        participants={participants}
+        isDetailsOpen={isDetailsOpen}
+        detailsButtonRef={detailsButtonRef}
+        onToggleDetails={toggleDetails}
+        renameSession={renameSession}
+      />
 
       {/* Connection error banner */}
       {(authError || connectionError) && (
@@ -817,39 +424,16 @@ function SessionContent({
           <PanelGroup orientation="vertical" id="session-terminal">
             {/* Chat / Event Timeline */}
             <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
-              <div
-                ref={scrollContainerRef}
-                onScroll={handleScroll}
-                className="h-full overflow-y-auto overflow-x-hidden p-4"
-              >
-                <div className="max-w-3xl mx-auto space-y-2">
-                  {/* Scroll sentinel for loading older history */}
-                  <div ref={topSentinelRef} className="h-1" />
-                  {loadingHistory && (
-                    <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
-                  )}
-                  {showTimelineSkeleton ? (
-                    <TimelineSkeleton />
-                  ) : (
-                    groupedEvents.map((group) =>
-                      group.type === "tool_group" ? (
-                        <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-                      ) : (
-                        <EventItem
-                          key={group.id}
-                          event={group.event}
-                          sessionId={sessionId}
-                          currentParticipantId={currentParticipantId}
-                          onOpenMedia={setSelectedMediaArtifactId}
-                        />
-                      )
-                    )
-                  )}
-                  {isProcessing && <ThinkingIndicator />}
-
-                  <div ref={messagesEndRef} />
-                </div>
-              </div>
+              <SessionTimeline
+                events={events}
+                sessionId={sessionId}
+                currentParticipantId={currentParticipantId}
+                isProcessing={isProcessing}
+                loadingHistory={loadingHistory}
+                showSkeleton={showTimelineSkeleton}
+                onLoadOlder={loadOlderEvents}
+                onOpenMedia={setSelectedMediaArtifactId}
+              />
             </Panel>
 
             {/* Terminal panel — only rendered when URL + token available and open */}
@@ -878,94 +462,20 @@ function SessionContent({
       </main>
 
       {isBelowLg && (
-        <div
-          className={`fixed inset-0 z-50 lg:hidden ${isDetailsOpen ? "" : "pointer-events-none"}`}
-        >
-          <div
-            className={`absolute inset-0 bg-overlay transition-opacity duration-200 ${
-              isDetailsOpen ? "opacity-100" : "opacity-0"
-            }`}
-            onClick={closeDetails}
-          />
-
-          {isPhone ? (
-            <div
-              id="session-details-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Session details"
-              className="absolute inset-x-0 bottom-0 max-h-[85vh] bg-background border-t border-border-muted shadow-xl flex flex-col"
-              style={{
-                transform: isDetailsOpen ? `translateY(${sheetDragY}px)` : "translateY(100%)",
-                transition: sheetDragY > 0 ? "none" : "transform 200ms ease-in-out",
-              }}
-            >
-              <div
-                className="px-4 pt-3 pb-2 border-b border-border-muted"
-                onTouchStart={handleSheetTouchStart}
-                onTouchMove={handleSheetTouchMove}
-                onTouchEnd={handleSheetTouchEnd}
-                onTouchCancel={handleSheetTouchEnd}
-              >
-                <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-muted" />
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-medium text-foreground">Session details</h2>
-                  <button
-                    type="button"
-                    onClick={closeDetails}
-                    className="text-sm text-muted-foreground hover:text-foreground transition"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-              <div className="overflow-y-auto">
-                <SessionRightSidebarContent
-                  sessionId={sessionId}
-                  sessionState={sessionState}
-                  participants={participants}
-                  events={events}
-                  artifacts={artifacts}
-                  terminalOpen={terminalOpen}
-                  onToggleTerminal={toggleTerminal}
-                  onOpenMedia={setSelectedMediaArtifactId}
-                />
-              </div>
-            </div>
-          ) : (
-            <div
-              id="session-details-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Session details"
-              className="absolute inset-y-0 right-0 w-80 max-w-[85vw] bg-background border-l border-border-muted shadow-xl flex flex-col transition-transform duration-200 ease-in-out"
-              style={{ transform: isDetailsOpen ? "translateX(0)" : "translateX(100%)" }}
-            >
-              <div className="px-4 py-3 border-b border-border-muted flex items-center justify-between">
-                <h2 className="text-sm font-medium text-foreground">Session details</h2>
-                <button
-                  type="button"
-                  onClick={closeDetails}
-                  className="text-sm text-muted-foreground hover:text-foreground transition"
-                >
-                  Close
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                <SessionRightSidebarContent
-                  sessionId={sessionId}
-                  sessionState={sessionState}
-                  participants={participants}
-                  events={events}
-                  artifacts={artifacts}
-                  terminalOpen={terminalOpen}
-                  onToggleTerminal={toggleTerminal}
-                  onOpenMedia={setSelectedMediaArtifactId}
-                />
-              </div>
-            </div>
-          )}
-        </div>
+        <SessionDetailsOverlay
+          open={isDetailsOpen}
+          onOpenChange={setIsDetailsOpen}
+          isPhone={isPhone}
+          returnFocusRef={detailsButtonRef}
+          sessionId={sessionId}
+          sessionState={sessionState}
+          participants={participants}
+          events={events}
+          artifacts={artifacts}
+          terminalOpen={terminalOpen}
+          onToggleTerminal={toggleTerminal}
+          onOpenMedia={setSelectedMediaArtifactId}
+        />
       )}
 
       <MediaLightbox
@@ -979,446 +489,31 @@ function SessionContent({
         }}
       />
 
-      {/* Input */}
-      <footer className="border-t border-border-muted flex-shrink-0">
-        <form onSubmit={handleSubmit} className="max-w-4xl mx-auto p-4 pb-6">
-          {/* Action bar above input */}
-          <div className="mb-3">
-            <ActionBar
-              sessionId={sessionState?.id || ""}
-              sessionStatus={sessionState?.status || ""}
-              artifacts={artifacts}
-              onArchive={handleArchive}
-              onUnarchive={handleUnarchive}
-            />
-          </div>
-
-          {/* Input container */}
-          <div className="border border-border bg-input">
-            {/* Text input area with floating send button */}
-            <div className="relative">
-              <textarea
-                ref={inputRef}
-                value={prompt}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                placeholder={isProcessing ? "Type your next message..." : "Ask or build anything"}
-                className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground"
-                rows={3}
-              />
-              {/* Floating action buttons */}
-              <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                {isProcessing && prompt.trim() && (
-                  <span className="text-xs text-warning">Waiting...</span>
-                )}
-                {isProcessing && (
-                  <button
-                    type="button"
-                    onClick={stopExecution}
-                    className="p-2 text-destructive hover:bg-destructive-muted transition"
-                    title="Stop"
-                  >
-                    <StopIcon className="w-5 h-5" />
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  disabled={!prompt.trim() || isProcessing}
-                  className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                  title={
-                    isProcessing && prompt.trim()
-                      ? "Wait for execution to complete"
-                      : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
-                  }
-                  aria-label={
-                    isProcessing && prompt.trim()
-                      ? "Wait for execution to complete"
-                      : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
-                  }
-                >
-                  <SendIcon className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Footer row with model selector, reasoning pills, and agent label */}
-            <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
-              {/* Left side - Model selector + Reasoning pills */}
-              <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                <Combobox
-                  value={selectedModel}
-                  onChange={setSelectedModel}
-                  items={
-                    modelOptions.map((group) => ({
-                      category: group.category,
-                      options: group.models.map((model) => ({
-                        value: model.id,
-                        label: model.name,
-                        description: model.description,
-                      })),
-                    })) as ComboboxGroup[]
-                  }
-                  direction="up"
-                  dropdownWidth="w-56"
-                  disabled={isProcessing}
-                  triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                >
-                  <ModelIcon className="w-3.5 h-3.5" />
-                  <span className="truncate max-w-[9rem] sm:max-w-none">
-                    {formatModelNameLower(selectedModel)}
-                  </span>
-                </Combobox>
-
-                {/* Reasoning effort pills */}
-                <ReasoningEffortPills
-                  selectedModel={selectedModel}
-                  reasoningEffort={reasoningEffort}
-                  onSelect={setReasoningEffort}
-                  disabled={isProcessing}
-                />
-              </div>
-
-              {/* Right side - Agent label */}
-              <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
-            </div>
-          </div>
-        </form>
-      </footer>
+      <SessionPromptComposer
+        session={{
+          id: sessionId,
+          status: sessionState?.status || "",
+          artifacts,
+          onArchive: handleArchive,
+          onUnarchive: handleUnarchive,
+        }}
+        prompt={{
+          value: prompt,
+          isProcessing,
+          inputRef,
+          onSubmit: handleSubmit,
+          onChange: handleInputChange,
+          onKeyDown: handleKeyDown,
+          onStopExecution: stopExecution,
+        }}
+        model={{
+          selectedModel,
+          reasoningEffort,
+          items: modelItems,
+          onModelChange: setSelectedModel,
+          onReasoningEffortChange: setReasoningEffort,
+        }}
+      />
     </div>
   );
 }
-
-function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
-  if (connecting) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-warning">
-        <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-        Connecting...
-      </span>
-    );
-  }
-
-  if (connected) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-success">
-        <span className="w-2 h-2 rounded-full bg-success" />
-        Connected
-      </span>
-    );
-  }
-
-  return (
-    <span className="flex items-center gap-1 text-xs text-destructive">
-      <span className="w-2 h-2 rounded-full bg-destructive" />
-      Disconnected
-    </span>
-  );
-}
-
-function SandboxStatus({ status }: { status?: string }) {
-  if (!status) return null;
-
-  const colors: Record<string, string> = {
-    pending: "text-muted-foreground",
-    warming: "text-warning",
-    syncing: "text-accent",
-    ready: "text-success",
-    running: "text-accent",
-    stopped: "text-muted-foreground",
-    failed: "text-destructive",
-  };
-
-  return <span className={`text-xs ${colors[status] || colors.pending}`}>Sandbox: {status}</span>;
-}
-
-function CombinedStatusDot({
-  connected,
-  connecting,
-  sandboxStatus,
-}: {
-  connected: boolean;
-  connecting: boolean;
-  sandboxStatus?: string;
-}) {
-  let color: string;
-  let pulse = false;
-  let label: string;
-
-  if (!connected && !connecting) {
-    color = "bg-destructive";
-    label = "Disconnected";
-  } else if (connecting) {
-    color = "bg-warning";
-    pulse = true;
-    label = "Connecting...";
-  } else if (sandboxStatus === "failed") {
-    color = "bg-destructive";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
-    color = "bg-warning";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else {
-    color = "bg-success";
-    label = sandboxStatus ? `Connected \u00b7 Sandbox: ${sandboxStatus}` : "Connected";
-  }
-
-  return (
-    <span title={label} className="flex items-center">
-      <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
-    </span>
-  );
-}
-
-function ThinkingIndicator() {
-  return (
-    <div className="bg-card p-4 flex items-center gap-2">
-      <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
-      <span className="text-sm text-muted-foreground">Thinking...</span>
-    </div>
-  );
-}
-
-function TimelineSkeleton() {
-  return (
-    <div className="space-y-3 py-2 animate-pulse">
-      <div className="bg-card p-4 space-y-2">
-        <div className="h-3 w-24 bg-muted rounded" />
-        <div className="h-3 w-full bg-muted rounded" />
-        <div className="h-3 w-5/6 bg-muted rounded" />
-      </div>
-      <div className="bg-accent-muted p-4 ml-8 space-y-2">
-        <div className="h-3 w-20 bg-muted rounded" />
-        <div className="h-3 w-4/5 bg-muted rounded" />
-      </div>
-      <div className="bg-card p-4 space-y-2">
-        <div className="h-3 w-32 bg-muted rounded" />
-        <div className="h-3 w-3/4 bg-muted rounded" />
-      </div>
-    </div>
-  );
-}
-
-function ParticipantsList({
-  participants,
-}: {
-  participants: { userId: string; name: string; status: string }[];
-}) {
-  if (participants.length === 0) return null;
-
-  // Deduplicate participants by userId (same user may have multiple connections)
-  const uniqueParticipants = Array.from(new Map(participants.map((p) => [p.userId, p])).values());
-
-  return (
-    <div className="flex -space-x-2">
-      {uniqueParticipants.slice(0, 3).map((p) => (
-        <div
-          key={p.userId}
-          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-white"
-          title={p.name}
-        >
-          {p.name.charAt(0).toUpperCase()}
-        </div>
-      ))}
-      {uniqueParticipants.length > 3 && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-white">
-          +{uniqueParticipants.length - 3}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const EventItem = memo(function EventItem({
-  event,
-  sessionId,
-  currentParticipantId,
-  onOpenMedia,
-}: {
-  event: SandboxEvent;
-  sessionId: string;
-  currentParticipantId: string | null;
-  onOpenMedia: (artifactId: string) => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const time = new Date(event.timestamp * 1000).toLocaleTimeString();
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const handleCopyContent = useCallback(async (content: string) => {
-    const success = await copyToClipboard(content);
-    if (!success) return;
-
-    setCopied(true);
-    if (copyTimeoutRef.current) {
-      clearTimeout(copyTimeoutRef.current);
-    }
-    copyTimeoutRef.current = setTimeout(() => {
-      setCopied(false);
-      copyTimeoutRef.current = null;
-    }, 1500);
-  }, []);
-
-  switch (event.type) {
-    case "user_message": {
-      // Display user's prompt with correct author attribution
-      if (!event.content) return null;
-      const messageContent = event.content;
-
-      // Determine if this message is from the current user
-      const isCurrentUser =
-        event.author?.participantId && currentParticipantId
-          ? event.author.participantId === currentParticipantId
-          : !event.author; // Messages without author are assumed to be from current user (local)
-
-      const authorName = isCurrentUser ? "You" : event.author?.name || "Unknown User";
-
-      return (
-        <div className="group bg-accent-muted p-4 ml-8">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              {!isCurrentUser && event.author?.avatar && (
-                <img src={event.author.avatar} alt={authorName} className="w-5 h-5 rounded-full" />
-              )}
-              <span className="text-xs text-accent">{authorName}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
-                title={copied ? "Copied" : "Copy markdown"}
-                aria-label={copied ? "Copied" : "Copy markdown"}
-              >
-                {copied ? (
-                  <CheckIcon className="w-3.5 h-3.5" />
-                ) : (
-                  <CopyIcon className="w-3.5 h-3.5" />
-                )}
-              </button>
-              <span className="text-xs text-secondary-foreground">{time}</span>
-            </div>
-          </div>
-          <pre className="whitespace-pre-wrap text-sm text-foreground">{messageContent}</pre>
-        </div>
-      );
-    }
-
-    case "token": {
-      // Display the model's text response with safe markdown rendering
-      if (!event.content) return null;
-      const messageContent = event.content;
-      return (
-        <div className="group bg-card p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-muted-foreground">Assistant</span>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
-                title={copied ? "Copied" : "Copy markdown"}
-                aria-label={copied ? "Copied" : "Copy markdown"}
-              >
-                {copied ? (
-                  <CheckIcon className="w-3.5 h-3.5" />
-                ) : (
-                  <CopyIcon className="w-3.5 h-3.5" />
-                )}
-              </button>
-              <span className="text-xs text-secondary-foreground">{time}</span>
-            </div>
-          </div>
-          <SafeMarkdown content={messageContent} className="text-sm" />
-        </div>
-      );
-    }
-
-    case "tool_call":
-      // Tool calls are handled by ToolCallGroup component
-      return null;
-
-    case "tool_result":
-      // Tool results are now shown inline with tool calls
-      // Only show standalone results if they're errors
-      if (!event.error) return null;
-      return (
-        <div className="flex items-center gap-2 text-sm text-destructive py-1">
-          <ErrorIcon className="w-4 h-4" />
-          <span className="truncate">{event.error}</span>
-          <span className="text-xs text-secondary-foreground ml-auto">{time}</span>
-        </div>
-      );
-
-    case "git_sync":
-      return (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="w-2 h-2 rounded-full bg-accent" />
-          Git sync: {event.status}
-          <span className="text-xs">{time}</span>
-        </div>
-      );
-
-    case "artifact":
-      if (
-        (event.artifactType !== "screenshot" && event.artifactType !== "video") ||
-        !event.artifactId
-      ) {
-        return null;
-      }
-
-      return (
-        <div className="space-y-2 border border-border-muted bg-card p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">
-              {event.artifactType === "video" ? "Video" : "Screenshot"}
-            </span>
-            <span className="text-xs text-secondary-foreground">{time}</span>
-          </div>
-          <ScreenshotArtifactCard
-            sessionId={sessionId}
-            artifactId={event.artifactId}
-            artifactType={event.artifactType}
-            metadata={event.metadata as Artifact["metadata"] | undefined}
-            onOpen={onOpenMedia}
-          />
-        </div>
-      );
-
-    case "error":
-      return (
-        <div className="flex items-center gap-2 text-sm text-destructive">
-          <span className="w-2 h-2 rounded-full bg-destructive" />
-          Error{event.error ? `: ${event.error}` : ""}
-          <span className="text-xs text-secondary-foreground">{time}</span>
-        </div>
-      );
-
-    case "execution_complete":
-      if (event.success === false) {
-        return (
-          <div className="flex items-center gap-2 text-sm text-destructive">
-            <span className="w-2 h-2 rounded-full bg-destructive" />
-            Execution failed{event.error ? `: ${event.error}` : ""}
-            <span className="text-xs text-secondary-foreground">{time}</span>
-          </div>
-        );
-      }
-      return (
-        <div className="flex items-center gap-2 text-sm text-success">
-          <span className="w-2 h-2 rounded-full bg-success" />
-          Execution complete
-          <span className="text-xs text-secondary-foreground">{time}</span>
-        </div>
-      );
-
-    default:
-      return null;
-  }
-});

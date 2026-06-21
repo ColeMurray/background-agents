@@ -5,11 +5,13 @@
  * code-server password derivation that previously lived in the Python shim.
  */
 
-import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import { computeHmacHex, type SandboxSettings } from "@open-inspect/shared";
+import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
+import { buildSessionConfig } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -28,7 +30,6 @@ const log = createLogger("daytona-provider");
 // Constants (ported from packages/daytona-infra/src/config.py)
 // ---------------------------------------------------------------------------
 
-const CODE_SERVER_PORT = 8080;
 const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
 
 // ---------------------------------------------------------------------------
@@ -59,8 +60,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   constructor(
     private readonly client: DaytonaRestClient,
-    private readonly providerConfig: DaytonaProviderConfig,
-    private readonly getCloneToken: () => Promise<string | null>
+    private readonly providerConfig: DaytonaProviderConfig
   ) {}
 
   // -----------------------------------------------------------------------
@@ -192,21 +192,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   // -----------------------------------------------------------------------
 
   private async buildEnvVars(config: CreateSandboxConfig): Promise<Record<string, string>> {
-    const cloneToken = await this.getCloneToken();
-
     // Start with user env vars (repo secrets), then overlay system vars
     const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
 
-    const sessionConfig: Record<string, string> = {
-      session_id: config.sessionId,
-      repo_owner: config.repoOwner,
-      repo_name: config.repoName,
-      provider: config.provider,
-      model: config.model,
-    };
-    if (config.branch) {
-      sessionConfig.branch = config.branch;
-    }
+    const sessionConfig = buildSessionConfig(config);
 
     Object.assign(envVars, {
       PYTHONUNBUFFERED: "1",
@@ -220,6 +209,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
     if (config.codeServerEnabled) {
       envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
+      envVars.CODE_SERVER_PORT = String(resolveServicePorts(config.sandboxSettings).codeServerPort);
     }
 
     if (config.agentSlackNotifyEnabled) {
@@ -234,13 +224,11 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       envVars.VCS_CLONE_USERNAME = "x-access-token";
     }
 
-    if (cloneToken) {
-      envVars.VCS_CLONE_TOKEN = cloneToken;
-      if (this.providerConfig.scmProvider === "github") {
-        envVars.GITHUB_APP_TOKEN = cloneToken;
-        envVars.GITHUB_TOKEN = cloneToken;
-      }
-    }
+    // Note: no VCS_CLONE_TOKEN / GITHUB_TOKEN / GITHUB_APP_TOKEN. Git
+    // operations in the sandbox authenticate per-request via the system git
+    // credential helper, which hits /sessions/:id/scm-credentials. Embedding
+    // a token in env would silently fail once the token expires (or
+    // immediately, for providers like GitHub Apps with short-lived tokens).
 
     return envVars;
   }
@@ -274,6 +262,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     tunnelUrls?: Record<string, string>;
   }> {
     const expirySeconds = resolvePreviewExpirySeconds(timeoutSeconds);
+    const { codeServerPort } = resolveServicePorts(sandboxSettings);
     let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
     let codeServerUrl: string | undefined;
     let codeServerPassword: string | undefined;
@@ -281,12 +270,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     if (codeServerEnabled) {
       const preview = await this.client.getSignedPreviewUrl(
         daytonaSandboxId,
-        CODE_SERVER_PORT,
+        codeServerPort,
         expirySeconds
       );
       codeServerUrl = preview.url;
       codeServerPassword = await this.deriveCodeServerPassword(logicalSandboxId);
-      tunnelPorts = tunnelPorts.filter((p) => p !== CODE_SERVER_PORT);
+      tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
     }
 
     let tunnelUrls: Record<string, string> | undefined;
@@ -344,26 +333,13 @@ function resolvePreviewExpirySeconds(timeoutSeconds: number | undefined): number
   return Math.min(86400, Math.max(900, timeoutSeconds + 300));
 }
 
-function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
-  if (!rawPorts) return [];
-  const ports: number[] = [];
-  for (const value of rawPorts) {
-    if (Number.isInteger(value) && value >= 1 && value <= 65535) {
-      ports.push(value);
-    }
-    if (ports.length >= MAX_TUNNEL_PORTS) break;
-  }
-  return ports;
-}
-
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
 export function createDaytonaProvider(
   client: DaytonaRestClient,
-  providerConfig: DaytonaProviderConfig,
-  getCloneToken: () => Promise<string | null>
+  providerConfig: DaytonaProviderConfig
 ): DaytonaSandboxProvider {
-  return new DaytonaSandboxProvider(client, providerConfig, getCloneToken);
+  return new DaytonaSandboxProvider(client, providerConfig);
 }

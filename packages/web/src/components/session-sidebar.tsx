@@ -19,13 +19,15 @@ import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
   buildSessionsPageKey,
+  CURRENT_USER_CREATED_BY,
+  isUnarchivedSessionListKey,
   mergeUniqueSessions,
   removeSessionFromList,
-  SIDEBAR_SESSIONS_KEY,
   type SessionListResponse,
 } from "@/lib/session-list";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   MoreIcon,
   SidebarIcon,
@@ -53,6 +55,7 @@ export type SessionItem = Session;
 
 export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
+type SessionCreatorFilter = "all" | "mine";
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -76,6 +79,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const pathname = usePathname();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
+  const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
   const [hasMorePages, setHasMorePages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -83,11 +87,24 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(false);
   const loadingMoreRef = useRef(false);
+  const sessionListVersionRef = useRef(0);
   const isMobile = useIsMobile();
 
-  const { data, isLoading: loading } = useSWR<SessionListResponse>(
-    authSession ? SIDEBAR_SESSIONS_KEY : null
-  );
+  const sidebarSessionsKey = useMemo(() => {
+    if (!authSession) return null;
+
+    return buildSessionsPageKey({
+      excludeStatus: "archived",
+      createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
+    });
+  }, [authSession, sessionCreatorFilter]);
+
+  const {
+    data,
+    error: sessionsError,
+    isLoading: sessionsLoading,
+  } = useSWR<SessionListResponse>(sidebarSessionsKey);
+  const loading = sessionsLoading;
   const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
 
   // Track data reference to clear extraSessions synchronously during render,
@@ -100,25 +117,35 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   }
 
   useEffect(() => {
-    if (!data) return;
-
+    sessionListVersionRef.current += 1;
     setExtraSessions([]);
-    setHasMorePages(data.hasMore);
     setLoadingMore(false);
-    offsetRef.current = firstPageSessions.length;
-    hasMoreRef.current = data.hasMore;
     loadingMoreRef.current = false;
-  }, [data, firstPageSessions.length]);
+
+    const nextHasMore = data?.hasMore ?? false;
+    const nextOffset = data ? firstPageSessions.length : 0;
+
+    setHasMorePages(nextHasMore);
+    offsetRef.current = nextOffset;
+    hasMoreRef.current = nextHasMore;
+  }, [sidebarSessionsKey, data, firstPageSessions.length]);
 
   const loadMoreSessions = useCallback(async () => {
-    if (!authSession || loadingMoreRef.current || !hasMoreRef.current) return;
+    if (!authSession || !sidebarSessionsKey || loadingMoreRef.current || !hasMoreRef.current) {
+      return;
+    }
 
     loadingMoreRef.current = true;
     setLoadingMore(true);
+    const sessionListVersion = sessionListVersionRef.current;
 
     try {
       const response = await fetch(
-        buildSessionsPageKey({ excludeStatus: "archived", offset: offsetRef.current })
+        buildSessionsPageKey({
+          excludeStatus: "archived",
+          createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
+          offset: offsetRef.current,
+        })
       );
 
       if (!response.ok) {
@@ -128,6 +155,10 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       const page: SessionListResponse = await response.json();
       const fetched = page.sessions ?? [];
 
+      if (sessionListVersion !== sessionListVersionRef.current) {
+        return;
+      }
+
       setExtraSessions((prev) => mergeUniqueSessions(prev, fetched));
       setHasMorePages(page.hasMore);
       offsetRef.current += fetched.length;
@@ -135,10 +166,12 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     } catch (error) {
       console.error("Failed to fetch additional sessions:", error);
     } finally {
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
+      if (sessionListVersion === sessionListVersionRef.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
-  }, [authSession]);
+  }, [authSession, sessionCreatorFilter, sidebarSessionsKey]);
 
   const maybeLoadMoreSessions = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -213,10 +246,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
     const active: SessionItem[] = [];
     const inactive: SessionItem[] = [];
+    const now = Date.now();
 
     for (const session of topLevel) {
       const timestamp = session.updatedAt || session.createdAt;
-      if (isInactiveSession(timestamp)) {
+      if (isInactiveSession(timestamp, now)) {
         inactive.push(session);
       } else {
         active.push(session);
@@ -227,11 +261,19 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   }, [sessions, searchQuery]);
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
+  const hasSessionListError = sessionsError;
+  const emptyMessage = hasSessionListError
+    ? "Unable to load sessions"
+    : sessionCreatorFilter === "mine"
+      ? "No sessions started by you"
+      : "No sessions yet";
 
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
+      if (!sidebarSessionsKey) return;
+
       await mutate<SessionListResponse>(
-        SIDEBAR_SESSIONS_KEY,
+        isUnarchivedSessionListKey,
         (current) =>
           current
             ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
@@ -244,7 +286,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         router.push("/");
       }
     },
-    [currentSessionId, router]
+    [currentSessionId, router, sidebarSessionsKey]
   );
 
   const handleNavigationSelect = useCallback(() => {
@@ -253,17 +295,24 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     }
   }, [isMobile, onSessionSelect]);
 
-  const handleSessionRenamed = useCallback((sessionId: string, title: string) => {
-    const updatedAt = Date.now();
-    setExtraSessions((prev) =>
-      prev.map((session) => (session.id === sessionId ? { ...session, title, updatedAt } : session))
-    );
-    void mutate<SessionListResponse>(
-      SIDEBAR_SESSIONS_KEY,
-      (currentData) => applyTitleUpdate(currentData, sessionId, title, updatedAt),
-      { revalidate: false }
-    );
-  }, []);
+  const handleSessionRenamed = useCallback(
+    (sessionId: string, title: string) => {
+      const updatedAt = Date.now();
+      setExtraSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId ? { ...session, title, updatedAt } : session
+        )
+      );
+      if (!sidebarSessionsKey) return;
+
+      void mutate<SessionListResponse>(
+        isUnarchivedSessionListKey,
+        (currentData) => applyTitleUpdate(currentData, sessionId, title, updatedAt),
+        { revalidate: false }
+      );
+    },
+    [sidebarSessionsKey]
+  );
 
   return (
     <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
@@ -337,6 +386,33 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         </Link>
       </div>
 
+      <div className="px-3 pt-2">
+        <ToggleGroup
+          type="single"
+          value={sessionCreatorFilter}
+          onValueChange={(value) => {
+            if (value === "all" || value === "mine") {
+              setSessionCreatorFilter(value);
+            }
+          }}
+          className="grid grid-cols-2 rounded-md border border-border-muted bg-muted p-0.5"
+          aria-label="Session owner filter"
+        >
+          <ToggleGroupItem
+            value="all"
+            className="h-7 rounded-sm text-xs data-[state=on]:bg-background data-[state=on]:text-foreground"
+          >
+            All
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            value="mine"
+            className="h-7 rounded-sm text-xs data-[state=on]:bg-background data-[state=on]:text-foreground"
+          >
+            Mine
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+
       {/* Search */}
       <div className="px-3 py-2">
         <Input
@@ -358,7 +434,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
             <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
           </div>
         ) : sessions.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions yet</div>
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">{emptyMessage}</div>
         ) : (
           <>
             {/* Active Sessions */}

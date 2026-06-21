@@ -46,8 +46,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v50: add ffmpeg for MP4 browser recordings
-CACHE_BUSTER = "v50-add-ffmpeg-video-recording"
+# v51: SCM credential helper backed by control plane; remove embedded VCS tokens
+CACHE_BUSTER = "v52-bake-opencode-global-deps"
 
 # Base image with all development tools
 base_image = (
@@ -132,6 +132,13 @@ base_image = (
     # OpenCode's Npm.install() finds package-lock.json in sync and skips
     # the slow arborist reify() call (2-22s) that would otherwise block
     # the first prompt and exceed the bridge's HTTP timeout.
+    #
+    # Also bake the same tree into OpenCode's GLOBAL config dir. OpenCode installs
+    # @opencode-ai/plugin into every config directory it discovers — including the
+    # global one (HOME=/root, so ~/.config/opencode), which it creates empty on
+    # startup — so without this the runtime _seed_global_opencode_deps() pays a
+    # multi-second node_modules copy on every boot. Baking it makes that seed a
+    # no-op (it skips when node_modules already exists). See #767 / #790.
     .run_commands(
         "mkdir -p /app/opencode-deps",
         # Pin staged plugin to OPENCODE_VERSION so the pre-staged tree copied
@@ -140,6 +147,9 @@ base_image = (
         f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
         " > /app/opencode-deps/package.json",
         "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
+        # Bake the in-sync tree into the global config dir so the runtime seed is a no-op.
+        "mkdir -p /root/.config/opencode",
+        "cp -a /app/opencode-deps/. /root/.config/opencode/",
     )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
@@ -171,6 +181,25 @@ base_image = (
         "mkdir -p /app/plugins",
         "mkdir -p /tmp/opencode",
         "echo 'Image rebuilt at: v21-force-rebuild' > /app/image-version.txt",
+    )
+    # Install the git credential helper shim.
+    #
+    # Each `git` invocation in the sandbox runs this shim, which delegates to
+    # the sandbox-runtime helper module. The helper talks to the control plane
+    # to mint fresh per-request credentials, so git operations no longer rely
+    # on a 1h-TTL token captured at sandbox creation time. Configured at the
+    # system level so it applies before entrypoint.py has a chance to run
+    # (e.g. when restoring a snapshot whose first action is a `git fetch`).
+    .run_commands(
+        "printf '%s\\n'"
+        " '#!/bin/sh'"
+        " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
+        " > /usr/local/bin/oi-git-credentials",
+        "chmod 0755 /usr/local/bin/oi-git-credentials",
+        "git config --system credential.helper /usr/local/bin/oi-git-credentials",
+        # Pass the repo path to the helper so it can scope credentials to the
+        # session repo, not just the host.
+        "git config --system credential.useHttpPath true",
     )
     # Set environment variables (including cache buster to force rebuild)
     .env(

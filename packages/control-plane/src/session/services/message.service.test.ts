@@ -6,7 +6,7 @@ import { MessageService } from "./message.service";
 
 function createService() {
   const repository = {
-    listEvents: vi.fn(),
+    listEventPage: vi.fn(),
     listArtifacts: vi.fn(),
     getArtifactById: vi.fn(),
     listMessages: vi.fn(),
@@ -70,14 +70,25 @@ describe("MessageService", () => {
       { id: "e2", type: "token", data: "{}", message_id: "m1", created_at: 2000 },
       { id: "e1", type: "token", data: "{}", message_id: "m1", created_at: 1000 },
     ];
-    vi.mocked(repository.listEvents).mockReturnValue(events);
+    vi.mocked(repository.listEventPage).mockReturnValue({
+      events: events.slice(0, 2),
+      hasMore: true,
+      nextCursor: { kind: "timeline", createdAt: 2000, id: "e2" },
+    });
 
     const result = service.listEvents({ cursor: null, limit: 2, type: "token", messageId: "m1" });
 
     expect(result.hasMore).toBe(true);
-    expect(result.cursor).toBe("2000");
+    expect(result.cursor).toBe("2000:e2");
     expect(result.events).toHaveLength(2);
-    expect(repository.listEvents).toHaveBeenCalledWith({
+    expect(result.events[0]).toEqual({
+      id: "e3",
+      type: "token",
+      data: {},
+      messageId: "m1",
+      createdAt: 3000,
+    });
+    expect(repository.listEventPage).toHaveBeenCalledWith({
       cursor: null,
       limit: 2,
       type: "token",

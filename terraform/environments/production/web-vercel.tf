@@ -111,5 +111,38 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = false
     },
+    # New env vars MUST be appended here. The module's env-var resource is
+    # count-indexed by list position (modules/vercel-project/main.tf uses count,
+    # because Vercel values are sensitive and can't be for_each keys), so
+    # inserting mid-list renumbers every downstream var and forces Vercel to
+    # destroy/recreate them — which races into ENV_CONFLICT. Appending keeps
+    # existing indices stable.
+    # Google OAuth (optional; both empty for GitHub-only deployments)
+    {
+      key       = "GOOGLE_CLIENT_ID"
+      value     = var.google_client_id
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
+    {
+      key       = "GOOGLE_CLIENT_SECRET"
+      value     = var.google_client_secret
+      targets   = ["production", "preview"]
+      sensitive = true
+    },
+    # Build-time flag that reveals the "Sign in with Google" button. Inlined into
+    # the client bundle, so it must be present at build time (not just runtime).
+    {
+      key       = "NEXT_PUBLIC_GOOGLE_ENABLED"
+      value     = tostring(local.google_enabled)
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
+    {
+      key       = "ALLOWED_EMAILS"
+      value     = var.allowed_emails
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
   ]
 }

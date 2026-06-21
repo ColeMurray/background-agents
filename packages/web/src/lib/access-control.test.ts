@@ -58,9 +58,14 @@ describe("parseBooleanEnv", () => {
 });
 
 describe("checkAccessAllowed", () => {
-  describe("when both allowlists are empty", () => {
+  describe("when all allowlists are empty", () => {
     it("denies all users by default", () => {
-      const config = { allowedDomains: [], allowedUsers: [], unsafeAllowAllUsers: false };
+      const config = {
+        allowedDomains: [],
+        allowedUsers: [],
+        allowedEmails: [],
+        unsafeAllowAllUsers: false,
+      };
 
       expect(checkAccessAllowed(config, {})).toBe(false);
       expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(false);
@@ -68,11 +73,31 @@ describe("checkAccessAllowed", () => {
     });
 
     it("allows all users when unsafeAllowAllUsers is enabled", () => {
-      const config = { allowedDomains: [], allowedUsers: [], unsafeAllowAllUsers: true };
+      const config = {
+        allowedDomains: [],
+        allowedUsers: [],
+        allowedEmails: [],
+        unsafeAllowAllUsers: true,
+      };
 
       expect(checkAccessAllowed(config, {})).toBe(true);
       expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(true);
       expect(checkAccessAllowed(config, { email: "anyone@example.com" })).toBe(true);
+    });
+
+    it("a populated allowedEmails disables the unsafe allow-all gate", () => {
+      const config = {
+        allowedDomains: [],
+        allowedUsers: [],
+        allowedEmails: ["listed@gmail.com"],
+        unsafeAllowAllUsers: true,
+      };
+
+      // The gate only fires when ALL three lists are empty; once allowedEmails is
+      // set, enforcement applies even with unsafeAllowAllUsers on.
+      expect(checkAccessAllowed(config, { email: "listed@gmail.com" })).toBe(true);
+      expect(checkAccessAllowed(config, { email: "other@gmail.com" })).toBe(false);
+      expect(checkAccessAllowed(config, {})).toBe(false);
     });
   });
 
@@ -80,6 +105,7 @@ describe("checkAccessAllowed", () => {
     const config = {
       allowedDomains: [],
       allowedUsers: [],
+      allowedEmails: [],
       allowedOrganizations: ["Acme"],
       unsafeAllowAllUsers: false,
     };
@@ -102,6 +128,7 @@ describe("checkAccessAllowed", () => {
     const config = {
       allowedDomains: [],
       allowedUsers: ["alloweduser"],
+      allowedEmails: [],
       unsafeAllowAllUsers: false,
     };
 
@@ -124,10 +151,40 @@ describe("checkAccessAllowed", () => {
     });
   });
 
+  describe("when allowedEmails is set", () => {
+    const config = {
+      allowedDomains: [],
+      allowedUsers: [],
+      allowedEmails: ["pm@gmail.com", "support@gmail.com"],
+      unsafeAllowAllUsers: false,
+    };
+
+    it("allows an exact listed email — even on a shared domain like gmail.com", () => {
+      expect(checkAccessAllowed(config, { email: "pm@gmail.com" })).toBe(true);
+      expect(checkAccessAllowed(config, { email: "support@gmail.com" })).toBe(true);
+    });
+
+    it("matches case-insensitively", () => {
+      expect(checkAccessAllowed(config, { email: "PM@Gmail.com" })).toBe(true);
+    });
+
+    it("does NOT admit other addresses on the same shared domain", () => {
+      // The whole point of the exact-email list: a gmail.com address is admitted
+      // without admitting every gmail.com account.
+      expect(checkAccessAllowed(config, { email: "stranger@gmail.com" })).toBe(false);
+    });
+
+    it("denies when no email provided", () => {
+      expect(checkAccessAllowed(config, {})).toBe(false);
+      expect(checkAccessAllowed(config, { githubUsername: "pm" })).toBe(false);
+    });
+  });
+
   describe("when allowedDomains is set", () => {
     const config = {
       allowedDomains: ["company.com"],
       allowedUsers: [],
+      allowedEmails: [],
       unsafeAllowAllUsers: false,
     };
 
@@ -149,10 +206,11 @@ describe("checkAccessAllowed", () => {
     });
   });
 
-  describe("when both allowedUsers and allowedDomains are set (OR logic)", () => {
+  describe("when allowedUsers, allowedEmails and allowedDomains are set (OR logic)", () => {
     const config = {
       allowedDomains: ["company.com"],
       allowedUsers: ["specialuser"],
+      allowedEmails: ["contractor@gmail.com"],
       unsafeAllowAllUsers: false,
     };
 
@@ -160,11 +218,15 @@ describe("checkAccessAllowed", () => {
       expect(checkAccessAllowed(config, { githubUsername: "specialuser" })).toBe(true);
     });
 
+    it("allows users matching exact email", () => {
+      expect(checkAccessAllowed(config, { email: "contractor@gmail.com" })).toBe(true);
+    });
+
     it("allows users matching email domain", () => {
       expect(checkAccessAllowed(config, { email: "someone@company.com" })).toBe(true);
     });
 
-    it("allows users matching either condition", () => {
+    it("allows users matching any condition", () => {
       expect(
         checkAccessAllowed(config, {
           githubUsername: "specialuser",
@@ -180,7 +242,7 @@ describe("checkAccessAllowed", () => {
       ).toBe(true);
     });
 
-    it("denies users matching neither condition", () => {
+    it("denies users matching no condition", () => {
       expect(
         checkAccessAllowed(config, {
           githubUsername: "randomuser",
@@ -194,6 +256,7 @@ describe("checkAccessAllowed", () => {
     const config = {
       allowedDomains: ["company.com"],
       allowedUsers: ["specialuser"],
+      allowedEmails: [],
       allowedOrganizations: ["acme"],
       unsafeAllowAllUsers: false,
     };
@@ -217,6 +280,7 @@ describe("checkAccessAllowed", () => {
     const config = {
       allowedDomains: ["company.com"],
       allowedUsers: ["specialuser"],
+      allowedEmails: [],
       unsafeAllowAllUsers: true,
     };
 
@@ -234,6 +298,7 @@ describe("checkAccessAllowed", () => {
       const orgConfig = {
         allowedDomains: [],
         allowedUsers: [],
+        allowedEmails: [],
         allowedOrganizations: ["acme"],
         unsafeAllowAllUsers: true,
       };
@@ -248,6 +313,7 @@ describe("checkAccessAllowed", () => {
     const config = {
       allowedDomains: ["company.com", "partner.org"],
       allowedUsers: ["admin", "developer"],
+      allowedEmails: [],
       unsafeAllowAllUsers: false,
     };
 
@@ -267,14 +333,24 @@ describe("getAccessAllowReason", () => {
   it("returns the matching allow reason", () => {
     expect(
       getAccessAllowReason(
-        { allowedDomains: [], allowedUsers: ["alice"], unsafeAllowAllUsers: false },
+        {
+          allowedDomains: [],
+          allowedUsers: ["alice"],
+          allowedEmails: [],
+          unsafeAllowAllUsers: false,
+        },
         { githubUsername: "Alice" }
       )
     ).toBe("username_allowlist");
 
     expect(
       getAccessAllowReason(
-        { allowedDomains: ["company.com"], allowedUsers: [], unsafeAllowAllUsers: false },
+        {
+          allowedDomains: ["company.com"],
+          allowedUsers: [],
+          allowedEmails: [],
+          unsafeAllowAllUsers: false,
+        },
         { email: "user@company.com" }
       )
     ).toBe("email_domain_allowlist");
@@ -284,6 +360,7 @@ describe("getAccessAllowReason", () => {
         {
           allowedDomains: [],
           allowedUsers: [],
+          allowedEmails: [],
           allowedOrganizations: ["acme"],
           unsafeAllowAllUsers: false,
         },

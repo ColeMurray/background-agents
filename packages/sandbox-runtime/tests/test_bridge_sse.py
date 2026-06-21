@@ -311,6 +311,60 @@ class TestSSEStreaming:
         assert token_events[0]["content"] == "Hello"
 
     @pytest.mark.asyncio
+    async def test_tracks_actual_user_message_id_when_opencode_regenerates_it(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Should accept assistant parts parented to OpenCode's actual user message ID."""
+        http_client = bridge.http_client
+        actual_user_message_id = "msg_actual_user"
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": actual_user_message_id,
+                        "role": "user",
+                        "sessionID": "oc-session-123",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": actual_user_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "text": "Hello via actual parent",
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 1
+        assert token_events[0]["content"] == "Hello via actual parent"
+
+    @pytest.mark.asyncio
     async def test_tool_events(self, bridge: AgentBridge, opencode_message_id: str):
         """Should emit tool events correctly."""
         http_client = bridge.http_client
@@ -477,6 +531,171 @@ class TestSSEStreaming:
         assert events[0]["type"] == "token"
 
     @pytest.mark.asyncio
+    async def test_emits_session_title_from_session_updated(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Should forward OpenCode's generated title from the existing SSE stream."""
+        http_client = bridge.http_client
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "session.updated",
+                {
+                    "sessionID": "oc-session-123",
+                    "info": {
+                        "id": "oc-session-123",
+                        "title": " Generated title ",
+                    },
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        assert {"type": "session_title", "title": "Generated title"} in events
+
+    @pytest.mark.asyncio
+    async def test_ignores_default_session_title(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Should not forward OpenCode's timestamp-based placeholder title."""
+        http_client = bridge.http_client
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "session.updated",
+                {
+                    "sessionID": "oc-session-123",
+                    "info": {
+                        "id": "oc-session-123",
+                        "title": "New session - 2026-05-27T01:02:03.456Z",
+                    },
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        assert [event for event in events if event["type"] == "session_title"] == []
+
+    @pytest.mark.asyncio
+    async def test_ignores_session_title_for_other_session(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Should not forward titles for unrelated OpenCode sessions."""
+        http_client = bridge.http_client
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "session.updated",
+                {
+                    "sessionID": "other-session",
+                    "info": {
+                        "id": "other-session",
+                        "title": "Other title",
+                    },
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        assert [event for event in events if event["type"] == "session_title"] == []
+
+    @pytest.mark.asyncio
+    async def test_no_session_title_when_session_updated_missing(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Should rely only on session.updated for generated title forwarding."""
+        http_client = bridge.http_client
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+        http_client.get_responses = [
+            MockResponse(
+                200,
+                [
+                    {
+                        "info": {
+                            "id": "oc-msg-1",
+                            "role": "assistant",
+                            "parentID": opencode_message_id,
+                        },
+                        "parts": [
+                            {
+                                "type": "text",
+                                "id": "part-1",
+                                "text": "Final text",
+                            }
+                        ],
+                    }
+                ],
+            ),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        assert [event["type"] for event in events] == ["token"]
+        assert events[0]["content"] == "Final text"
+        assert [event for event in events if event["type"] == "session_title"] == []
+
+    @pytest.mark.asyncio
     async def test_handles_session_error(self, bridge: AgentBridge):
         """Should emit error event on session.error."""
         http_client = bridge.http_client
@@ -544,6 +763,32 @@ class TestSSEStreaming:
         # Event should have control plane's messageId
         assert events[0]["messageId"] == "cp-message-from-control-plane"
         assert events[0]["messageId"] != "oc-internal-msg-id"
+
+    @pytest.mark.asyncio
+    async def test_handle_prompt_fails_when_opencode_emits_no_output(self, bridge: AgentBridge):
+        """Should not report success when OpenCode idles without assistant output."""
+        bridge._configure_git_identity = AsyncMock()
+        bridge._send_event = AsyncMock()
+        http_client = bridge.http_client
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        await bridge._handle_prompt(
+            {
+                "messageId": "cp-msg-1",
+                "content": "Test prompt",
+                "model": "anthropic/claude-haiku-4-5",
+            }
+        )
+
+        sent_events = [call.args[0] for call in bridge._send_event.await_args_list]
+        complete = sent_events[-1]
+        assert complete["type"] == "execution_complete"
+        assert complete["messageId"] == "cp-msg-1"
+        assert complete["success"] is False
+        assert complete["error"] == "OpenCode completed without emitting assistant output."
 
 
 class TestFetchFinalMessageState:

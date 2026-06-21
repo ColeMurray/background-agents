@@ -52,23 +52,24 @@ The control plane provides:
 
 ### Sessions
 
-| Endpoint                     | Method    | Description              |
-| ---------------------------- | --------- | ------------------------ |
-| `/sessions`                  | GET       | List user's sessions     |
-| `/sessions`                  | POST      | Create new session       |
-| `/sessions/:id`              | GET       | Get session state        |
-| `/sessions/:id`              | DELETE    | Delete session           |
-| `/sessions/:id/prompt`       | POST      | Enqueue prompt           |
-| `/sessions/:id/stop`         | POST      | Stop execution           |
-| `/sessions/:id/ws`           | WebSocket | Real-time connection     |
-| `/sessions/:id/events`       | GET       | Paginated events         |
-| `/sessions/:id/artifacts`    | GET       | List artifacts           |
-| `/sessions/:id/participants` | GET/POST  | Manage participants      |
-| `/sessions/:id/messages`     | GET       | List messages            |
-| `/sessions/:id/pr`           | POST      | Create pull request      |
-| `/sessions/:id/ws-token`     | POST      | Generate WebSocket token |
-| `/sessions/:id/archive`      | POST      | Archive session          |
-| `/sessions/:id/unarchive`    | POST      | Unarchive session        |
+| Endpoint                        | Method    | Description                    |
+| ------------------------------- | --------- | ------------------------------ |
+| `/sessions`                     | GET       | List user's sessions           |
+| `/sessions`                     | POST      | Create new session             |
+| `/sessions/:id`                 | GET       | Get session state              |
+| `/sessions/:id`                 | DELETE    | Delete session                 |
+| `/sessions/:id/prompt`          | POST      | Enqueue prompt                 |
+| `/sessions/:id/stop`            | POST      | Stop execution                 |
+| `/sessions/:id/ws`              | WebSocket | Real-time connection           |
+| `/sessions/:id/events`          | GET       | Paginated events               |
+| `/sessions/:id/artifacts`       | GET       | List artifacts                 |
+| `/sessions/:id/participants`    | GET/POST  | Manage participants            |
+| `/sessions/:id/messages`        | GET       | List messages                  |
+| `/sessions/:id/pr`              | POST      | Create pull request            |
+| `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials |
+| `/sessions/:id/ws-token`        | POST      | Generate WebSocket token       |
+| `/sessions/:id/archive`         | POST      | Archive session                |
+| `/sessions/:id/unarchive`       | POST      | Unarchive session              |
 
 ### Create PR Payload
 
@@ -81,6 +82,24 @@ The control plane provides:
 
 When `headBranch` is omitted, control-plane resolves it from session state and finally falls back to
 the generated `open-inspect/<session>` branch.
+
+### SCM Credentials
+
+`POST /sessions/:id/scm-credentials` is a sandbox-authenticated endpoint used by the in-sandbox git
+credential helper. It returns fresh SCM credentials for git operations in this shape:
+
+```json
+{
+  "username": "x-access-token",
+  "password": "<short-lived-token>",
+  "expires_at_epoch_ms": 1730000000000
+}
+```
+
+Common failures are `401` for a missing or invalid sandbox token, `404` when the session no longer
+exists, and `5xx` when provider configuration or upstream token minting fails. Source-control
+providers must implement `generateCredentialHelperAuth` before helper-backed sandbox git auth works
+for that provider.
 
 ### Repositories
 
@@ -166,7 +185,7 @@ Each session gets its own SQLite database with:
 - `messages`: Prompt queue and history
 - `events`: Agent events (tool calls, tokens)
 - `artifacts`: PRs, screenshots, previews
-- `sandbox`: Modal sandbox state
+- `sandbox`: selected backend sandbox state
 - `ws_client_mapping`: WebSocket ID to participant mapping (for hibernation recovery)
 
 See `src/session/schema.ts` for full schema.
@@ -194,14 +213,25 @@ const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
 
 The system uses two types of GitHub tokens:
 
-| Token            | Used For    | Sent to Sandbox? | Access Scope                     |
-| ---------------- | ----------- | ---------------- | -------------------------------- |
-| GitHub App Token | Clone, push | Yes (ephemeral)  | All repos where App is installed |
-| User OAuth Token | Create PRs  | No (server-only) | User's accessible repos          |
+| Token            | Used For           | Delivery                      | Access Scope                     |
+| ---------------- | ------------------ | ----------------------------- | -------------------------------- |
+| GitHub App Token | Clone, fetch, push | Brokered to credential helper | All repos where App is installed |
+| User OAuth Token | Create PRs         | Server-only                   | User's accessible repos          |
+
+Fresh sandboxes do not receive a long-lived `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`, or `VCS_CLONE_TOKEN`
+for normal git operations. Git invokes the sandbox credential helper, which calls
+`/sessions/:id/scm-credentials` with the sandbox auth token and receives short-lived credentials on
+demand. Legacy snapshots, repo images, and one-shot image builds may still receive env-token
+fallbacks for compatibility. The helper preserves the existing installation-wide model by serving
+credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
+clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
+Daytona persistent resumes; Modal snapshot restores still mint a fresh fallback token during
+restore.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
-Slack-created sessions), the control-plane still pushes the branch with the GitHub App token and
-returns a manual GitHub `pull/new` URL instead of failing the request.
+Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub
+App credentials and the control plane returns a manual GitHub `pull/new` URL instead of failing the
+request.
 
 ### Why This Matters
 

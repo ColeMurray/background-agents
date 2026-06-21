@@ -4,9 +4,16 @@ import { generateInternalToken } from "./auth/internal";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
 
+const integrationSettingsMocks = vi.hoisted(() => ({
+  resolveCodeServerEnabled: vi.fn().mockResolvedValue(false),
+  resolveSandboxSettings: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
 }));
+
+vi.mock("./session/integration-settings-resolution", () => integrationSettingsMocks);
 
 describe("handleSpawnChild prompt enqueue handling", () => {
   const parentId = "parent-session-1";
@@ -29,7 +36,11 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   };
 
   const makeStore = (parentUserId: string | null = null) => ({
-    get: vi.fn().mockResolvedValue({ userId: parentUserId }),
+    get: vi.fn().mockResolvedValue({
+      userId: parentUserId,
+      repoOwner: spawnContext.repoOwner,
+      repoName: spawnContext.repoName,
+    }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
     countActiveChildren: vi.fn().mockResolvedValue(0),
     countTotalChildren: vi.fn().mockResolvedValue(0),
@@ -39,6 +50,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
+    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
 
   async function makeRequest(env: Record<string, unknown>): Promise<Response> {
@@ -59,7 +72,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("returns 201 when child prompt enqueue succeeds", async () => {
     const store = makeStore("canonical-user-123");
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
@@ -99,7 +114,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("returns 400 when child specifies an invalid model", async () => {
     const store = makeStore();
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
@@ -139,9 +156,83 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(payload.error).toContain("Valid models:");
   });
 
+  it("uses configured concurrent child session limit", async () => {
+    const store = makeStore();
+    store.countActiveChildren.mockResolvedValue(2);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
+      maxConcurrentChildSessions: 2,
+      maxTotalChildSessions: 15,
+    });
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(spawnContext)),
+    } as never;
+
+    const env = {
+      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Maximum concurrent children (2) reached",
+    });
+    expect(integrationSettingsMocks.resolveSandboxSettings).toHaveBeenCalledWith(
+      expect.any(Object),
+      "acme",
+      "web-app"
+    );
+  });
+
+  it("uses configured total child session limit", async () => {
+    const store = makeStore();
+    store.countActiveChildren.mockResolvedValue(0);
+    store.countTotalChildren.mockResolvedValue(4);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
+      maxConcurrentChildSessions: 5,
+      maxTotalChildSessions: 4,
+    });
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(spawnContext)),
+    } as never;
+
+    const env = {
+      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Maximum total children (4) reached",
+    });
+  });
+
   it("returns 400 when child specifies an empty-string model", async () => {
     const store = makeStore();
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
@@ -182,7 +273,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("returns an error and marks child failed when prompt enqueue fails", async () => {
     const store = makeStore();
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),

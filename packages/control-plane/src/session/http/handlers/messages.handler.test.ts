@@ -87,16 +87,25 @@ describe("createMessagesHandler", () => {
     expect(await response.json()).toEqual({ error: "Invalid event type: invalid" });
   });
 
-  it("maps listEvents response", async () => {
+  it("returns 400 for malformed event cursors", async () => {
+    const { handler, messageService } = createHandler();
+
+    const response = handler.listEvents(new URL("http://internal/internal/events?cursor=bad"));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid cursor" });
+    expect(messageService.listEvents).not.toHaveBeenCalled();
+  });
+
+  it("returns listEvents response from service", async () => {
     const { handler, messageService } = createHandler();
     vi.mocked(messageService.listEvents).mockReturnValue({
       events: [
         {
           id: "e1",
           type: "token",
-          data: '{"x":1}',
-          message_id: "m1",
-          created_at: 1000,
+          data: { x: 1 },
+          messageId: "m1",
+          createdAt: 1000,
         },
       ],
       cursor: "1000",
@@ -109,6 +118,33 @@ describe("createMessagesHandler", () => {
       events: [{ id: "e1", type: "token", data: { x: 1 }, messageId: "m1", createdAt: 1000 }],
       cursor: "1000",
       hasMore: false,
+    });
+    expect(messageService.listEvents).toHaveBeenCalledWith({
+      cursor: null,
+      limit: 10,
+      type: null,
+      messageId: null,
+    });
+  });
+
+  it("parses composite event cursors before delegating to the service", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listEvents).mockReturnValue({
+      events: [],
+      cursor: undefined,
+      hasMore: false,
+    });
+
+    const response = handler.listEvents(
+      new URL("http://internal/internal/events?cursor=5000:event-id")
+    );
+
+    expect(response.status).toBe(200);
+    expect(messageService.listEvents).toHaveBeenCalledWith({
+      cursor: { kind: "timeline", createdAt: 5000, id: "event-id" },
+      limit: 50,
+      type: null,
+      messageId: null,
     });
   });
 

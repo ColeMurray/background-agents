@@ -22,20 +22,8 @@ vi.mock("@open-inspect/shared", async () => {
   };
 });
 
-import app, { buildAppHomeIntroText } from "./index";
+import app from "./index";
 import { clearLocalCache } from "./classifier/repos";
-
-describe("buildAppHomeIntroText", () => {
-  it("uses the configured app name", () => {
-    expect(buildAppHomeIntroText("Acme Bot")).toBe("Configure your Acme Bot preferences below.");
-  });
-
-  it("works with the default Open-Inspect name", () => {
-    expect(buildAppHomeIntroText("Open-Inspect")).toBe(
-      "Configure your Open-Inspect preferences below."
-    );
-  });
-});
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -119,6 +107,41 @@ function makeCtx() {
     waitUntil: vi.fn(),
     passThroughOnException: vi.fn(),
   } as any;
+}
+
+/** Build N numbered repos (acme/repo-001 …) for picker/suggestion tests. */
+function buildNumberedRepos(count: number) {
+  return Array.from({ length: count }, (_, idx) => {
+    const number = String(idx + 1).padStart(3, "0");
+    return {
+      id: `acme/repo-${number}`,
+      owner: "acme",
+      name: `repo-${number}`,
+      fullName: `acme/repo-${number}`,
+      defaultBranch: "main",
+      private: true,
+    };
+  });
+}
+
+/** Point CONTROL_PLANE.fetch at a fixed repo list (other routes return enabledModels). */
+function mockReposFetch(env: Env, repos: unknown[]) {
+  (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/repos")) {
+        return new Response(JSON.stringify({ repos }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  );
 }
 
 function createDeferred<T>() {
@@ -289,6 +312,15 @@ function promptFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknow
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
 }
 
+function sessionFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  return fetchMock.mock.calls
+    .filter(([input]) => {
+      const url = typeof input === "string" ? input : String(input);
+      return url.endsWith("/sessions");
+    })
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+}
+
 function slackEventRequest(event: Record<string, unknown>, eventId = crypto.randomUUID()): Request {
   return new Request("http://localhost/events", {
     method: "POST",
@@ -313,6 +345,52 @@ describe("POST /events", () => {
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
+  });
+
+  it("publishes App Home when the home tab is opened", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_home_opened",
+        tab: "home",
+        user: "U123",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+
+    await flushWaitUntil(ctx);
+
+    expect(mockPublishView).toHaveBeenCalledOnce();
+    const [token, userId, view] = mockPublishView.mock.calls[0];
+    expect(token).toBe("xoxb-test");
+    expect(userId).toBe("U123");
+    expect(view).toEqual(
+      expect.objectContaining({
+        type: "home",
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "section",
+            text: expect.objectContaining({
+              text: "Configure your Open-Inspect preferences below.",
+            }),
+          }),
+          expect.objectContaining({
+            type: "section",
+            text: expect.objectContaining({
+              text: expect.stringContaining("*Branch by repository*"),
+            }),
+          }),
+        ]),
+      })
+    );
   });
 
   it("sets Starting status for a new app mention before session creation", async () => {
@@ -352,6 +430,11 @@ describe("POST /events", () => {
 
     const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
     expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
+
+    const sessionBodies = sessionFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(sessionBodies[0]).not.toHaveProperty("title");
 
     const updateBodies = slackApiBodies(slackFetch, "chat.update");
     expect(updateBodies).toEqual(
@@ -1413,34 +1496,8 @@ describe("POST /interactions", () => {
     });
 
     const env = makeEnv();
-    const repos = Array.from({ length: 150 }, (_, idx) => {
-      const number = String(idx + 1).padStart(3, "0");
-      return {
-        id: `acme/repo-${number}`,
-        owner: "acme",
-        name: `repo-${number}`,
-        fullName: `acme/repo-${number}`,
-        defaultBranch: "main",
-        private: true,
-      };
-    });
-
-    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/repos")) {
-          return new Response(JSON.stringify({ repos }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    );
+    const repos = buildNumberedRepos(150);
+    mockReposFetch(env, repos);
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);
@@ -1454,6 +1511,128 @@ describe("POST /interactions", () => {
     expect(body.options).toEqual([
       {
         text: { type: "plain_text", text: "acme/repo-150" },
+        value: "acme/repo-150",
+      },
+    ]);
+  });
+
+  it("routes a quick-pick button click through repo selection", async () => {
+    const slackFetch = mockSlackFetch([]);
+    const env = makeEnv();
+    // No pending message stored, so repo selection reports it can't find the request —
+    // which proves the quick-pick button routed into the same handler as the picker.
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [
+        {
+          action_id: "select_repo_quick_pick",
+          value: "acme/app",
+        },
+      ],
+    };
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(request, env, ctx);
+    expect(response.status).toBe(200);
+
+    await flushWaitUntil(ctx);
+
+    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    expect(
+      postBodies.some((body) => String(body.text).includes("couldn't find your original request"))
+    ).toBe(true);
+
+    slackFetch.mockRestore();
+  });
+
+  it("returns all repos (beyond the old 5-item limit) for the repo clarification picker", async () => {
+    const payload = {
+      type: "block_suggestion",
+      action_id: "select_repo",
+      user: { id: "U123" },
+      value: "",
+    };
+
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+
+    const env = makeEnv();
+    const repos = buildNumberedRepos(150);
+    mockReposFetch(env, repos);
+
+    const ctx = makeCtx();
+    const response = await app.fetch(request, env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+
+    const body = (await response.json()) as {
+      options: Array<{ text: { type: string; text: string }; value: string }>;
+    };
+    // Old behavior capped this at 5; new behavior shows the full list up to
+    // Slack's per-response ceiling.
+    expect(body.options).toHaveLength(100);
+    expect(body.options[0]).toEqual({
+      text: { type: "plain_text", text: "repo-001" },
+      description: { type: "plain_text", text: "repo-001" },
+      value: "acme/repo-001",
+    });
+  });
+
+  it("filters repo clarification suggestions by the typed query", async () => {
+    const payload = {
+      type: "block_suggestion",
+      action_id: "select_repo",
+      user: { id: "U123" },
+      value: "repo-150",
+    };
+
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+
+    const env = makeEnv();
+    const repos = buildNumberedRepos(150);
+    mockReposFetch(env, repos);
+
+    const ctx = makeCtx();
+    const response = await app.fetch(request, env, ctx);
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      options: Array<{ text: { type: string; text: string }; value: string }>;
+    };
+    expect(body.options).toEqual([
+      {
+        text: { type: "plain_text", text: "repo-150" },
+        description: { type: "plain_text", text: "repo-150" },
         value: "acme/repo-150",
       },
     ]);

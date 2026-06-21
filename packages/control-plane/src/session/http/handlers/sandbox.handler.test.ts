@@ -16,6 +16,7 @@ function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
   const isOpenAISecretsConfigured = vi.fn();
+  const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
@@ -36,6 +37,7 @@ function createHandler() {
     getSession,
     refreshOpenAIToken,
     isOpenAISecretsConfigured,
+    getScmCredentials,
     broadcast,
     generateId,
     now,
@@ -51,6 +53,7 @@ function createHandler() {
     getSession,
     refreshOpenAIToken,
     isOpenAISecretsConfigured,
+    getScmCredentials,
     broadcast,
     generateId,
     now,
@@ -61,7 +64,12 @@ function createHandler() {
 describe("createSandboxHandler", () => {
   it("processes sandbox event and returns ok response", async () => {
     const { handler, processSandboxEvent } = createHandler();
-    const event = { type: "heartbeat" };
+    const event = {
+      type: "heartbeat",
+      sandboxId: "sandbox-1",
+      status: "running",
+      timestamp: 123,
+    };
 
     const response = await handler.sandboxEvent(
       new Request("http://internal/internal/sandbox/event", {
@@ -74,6 +82,22 @@ describe("createSandboxHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
     expect(processSandboxEvent).toHaveBeenCalledWith(event);
+  });
+
+  it("rejects malformed sandbox events", async () => {
+    const { handler, processSandboxEvent } = createHandler();
+
+    const response = await handler.sandboxEvent(
+      new Request("http://internal/internal/sandbox/event", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "heartbeat" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid sandbox event" });
+    expect(processSandboxEvent).not.toHaveBeenCalled();
   });
 
   it("adds participant with defaults and returns id", async () => {
@@ -196,6 +220,24 @@ describe("createSandboxHandler", () => {
         timestamp: 1.234,
       },
     });
+  });
+
+  it("rejects malformed media artifact bodies", async () => {
+    const { handler, repository, broadcast } = createHandler();
+
+    const response = await handler.createMediaArtifact(
+      new Request("http://internal/internal/create-media-artifact", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ artifactId: "artifact-1", objectKey: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid media artifact body" });
+    expect(repository.createArtifact).not.toHaveBeenCalled();
+    expect(repository.createEvent).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("rejects media artifacts when no prompt is active", async () => {
@@ -391,5 +433,126 @@ describe("createSandboxHandler", () => {
       account_id: "acct_123",
     });
     expect(refreshOpenAIToken).toHaveBeenCalledWith(session);
+  });
+
+  it("returns 404 when scm credentials have no session", async () => {
+    const { handler, getSession, getScmCredentials } = createHandler();
+    getSession.mockReturnValue(null);
+
+    const response = await handler.scmCredentials();
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "No session" });
+    expect(getScmCredentials).not.toHaveBeenCalled();
+  });
+
+  it("returns mapped service error from scm credentials", async () => {
+    const { handler, getSession, getScmCredentials } = createHandler();
+    getSession.mockReturnValue({ id: "session-1" } as SessionRow);
+    getScmCredentials.mockResolvedValue({
+      ok: false,
+      status: 503,
+      error: "GitHub App not configured",
+    });
+
+    const response = await handler.scmCredentials();
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "GitHub App not configured" });
+  });
+
+  it("returns scm credentials payload on success", async () => {
+    const { handler, getSession, getScmCredentials } = createHandler();
+    getSession.mockReturnValue({ id: "session-1" } as SessionRow);
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+    getScmCredentials.mockResolvedValue({
+      ok: true,
+      username: "x-access-token",
+      password: "ghs_secret",
+      expiresAtEpochMs: expiresAt,
+    });
+
+    const response = await handler.scmCredentials();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      username: "x-access-token",
+      password: "ghs_secret",
+      expires_at_epoch_ms: expiresAt,
+    });
+  });
+
+  it("returns 404 when tunnel URLs have no sandbox", async () => {
+    const { handler, getSandbox } = createHandler();
+    getSandbox.mockReturnValue(null);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "No sandbox" });
+  });
+
+  it("returns an empty map when no tunnel URLs are stored yet", async () => {
+    const { handler, getSandbox } = createHandler();
+    getSandbox.mockReturnValue({ tunnel_urls: null } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({ tunnelUrls: {} });
+  });
+
+  it("returns parsed tunnel URLs on success", async () => {
+    const { handler, getSandbox } = createHandler();
+    getSandbox.mockReturnValue({
+      tunnel_urls: JSON.stringify({ "3000": "https://a.example", "5000": "https://b.example" }),
+    } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      tunnelUrls: { "3000": "https://a.example", "5000": "https://b.example" },
+    });
+  });
+
+  it("returns 500 when stored tunnel URLs are malformed JSON", async () => {
+    const { handler, getSandbox, log } = createHandler();
+    getSandbox.mockReturnValue({ tunnel_urls: "{not json" } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Invalid stored tunnel URLs" });
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("returns 500 when stored tunnel URLs are not an object", async () => {
+    const { handler, getSandbox, log } = createHandler();
+    getSandbox.mockReturnValue({
+      tunnel_urls: JSON.stringify(["3000", "5000"]),
+    } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Invalid stored tunnel URLs" });
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("returns 500 when a stored tunnel URL value is not a string", async () => {
+    const { handler, getSandbox, log } = createHandler();
+    getSandbox.mockReturnValue({
+      tunnel_urls: JSON.stringify({ "3000": "https://a.example", "5000": 5000 }),
+    } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Invalid stored tunnel URLs" });
+    expect(log.warn).toHaveBeenCalled();
   });
 });

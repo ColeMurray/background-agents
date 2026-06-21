@@ -154,7 +154,9 @@ async def api_create_sandbox(
 
         manager = SandboxManager()
 
-        clone_token = _resolve_clone_token()
+        snapshot_id = request.get("snapshot_id")
+        repo_image_id = request.get("repo_image_id") or None
+        clone_token = _resolve_clone_token() if snapshot_id or repo_image_id else None
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
@@ -171,13 +173,13 @@ async def api_create_sandbox(
             repo_owner=request.get("repo_owner"),
             repo_name=request.get("repo_name"),
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
-            snapshot_id=request.get("snapshot_id"),
+            snapshot_id=snapshot_id,
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
             clone_token=clone_token,
             user_env_vars=request.get("user_env_vars") or None,
-            repo_image_id=request.get("repo_image_id") or None,
+            repo_image_id=repo_image_id,
             repo_image_sha=request.get("repo_image_sha") or None,
             code_server_enabled=bool(request.get("code_server_enabled", False)),
             agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),
@@ -550,7 +552,8 @@ async def api_build_repo_image(
         "repo_name": "...",
         "default_branch": "main",
         "build_id": "...",
-        "callback_url": "..."
+        "callback_url": "...",
+        "build_timeout_seconds": 1800  // optional
     }
     """
     start_time = time.time()
@@ -560,14 +563,22 @@ async def api_build_repo_image(
     require_auth(authorization)
 
     try:
+        from .sandbox.manager import (
+            DEFAULT_BUILD_TIMEOUT_SECONDS,
+            build_function_timeout_seconds,
+        )
         from .scheduler.image_builder import build_repo_image
 
         repo_owner = request.get("repo_owner")
         repo_name = request.get("repo_name")
-        default_branch = request.get("default_branch", "main")
+        default_branch = request.get("default_branch")
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
         user_env_vars = request.get("user_env_vars") or None
+        # Already capped by the control plane; default when absent/null.
+        build_timeout_seconds = int(
+            request.get("build_timeout_seconds") or DEFAULT_BUILD_TIMEOUT_SECONDS
+        )
 
         if not repo_owner or not repo_name:
             raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
@@ -575,14 +586,20 @@ async def api_build_repo_image(
         if not build_id:
             raise HTTPException(status_code=400, detail="build_id is required")
 
+        if not default_branch:
+            raise HTTPException(status_code=400, detail="default_branch is required")
+
+        function_timeout = build_function_timeout_seconds(build_timeout_seconds)
+
         # Spawn the async builder — returns immediately
-        await build_repo_image.spawn.aio(
+        await build_repo_image.with_options(timeout=function_timeout).spawn.aio(
             repo_owner=repo_owner,
             repo_name=repo_name,
             default_branch=default_branch,
             callback_url=callback_url,
             build_id=build_id,
             user_env_vars=user_env_vars,
+            build_timeout_seconds=build_timeout_seconds,
         )
 
         return {

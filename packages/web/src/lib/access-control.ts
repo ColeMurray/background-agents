@@ -1,6 +1,7 @@
 export interface AccessControlConfig {
   allowedDomains: string[];
   allowedUsers: string[];
+  allowedEmails: string[];
   allowedOrganizations?: string[];
   unsafeAllowAllUsers: boolean;
 }
@@ -35,6 +36,7 @@ export type GitHubOrganizationAccessResult =
 export type AccessAllowReason =
   | "unsafe_allow_all"
   | "username_allowlist"
+  | "email_allowlist"
   | "email_domain_allowlist"
   | "org_membership";
 
@@ -59,10 +61,11 @@ export function parseBooleanEnv(value: string | undefined): boolean {
  * Returns true if:
  * - All allowlists are empty and unsafeAllowAllUsers is true
  * - User's GitHub username is in allowedUsers
+ * - User's exact email is in allowedEmails
  * - User's email domain is in allowedDomains
  * - User has active membership in an allowed GitHub organization
  *
- * Logic is OR-based: matching either list grants access.
+ * Logic is OR-based: matching any list grants access.
  */
 export function checkAccessAllowed(
   config: AccessControlConfig,
@@ -75,7 +78,7 @@ export function getAccessAllowReason(
   config: AccessControlConfig,
   params: AccessCheckParams
 ): AccessAllowReason | null {
-  const { allowedDomains, allowedUsers, unsafeAllowAllUsers } = config;
+  const { allowedDomains, allowedUsers, allowedEmails, unsafeAllowAllUsers } = config;
   const allowedOrganizations = (config.allowedOrganizations ?? []).map((org) => org.toLowerCase());
   const { githubUsername, email, activeOrganizations } = params;
 
@@ -83,6 +86,7 @@ export function getAccessAllowReason(
   if (
     allowedDomains.length === 0 &&
     allowedUsers.length === 0 &&
+    allowedEmails.length === 0 &&
     allowedOrganizations.length === 0
   ) {
     return unsafeAllowAllUsers ? "unsafe_allow_all" : null;
@@ -91,6 +95,13 @@ export function getAccessAllowReason(
   // Check explicit user allowlist (GitHub username)
   if (githubUsername && allowedUsers.includes(githubUsername.toLowerCase())) {
     return "username_allowlist";
+  }
+
+  // Check exact email allowlist. Provider-agnostic, and the only way to admit a
+  // specific address on a shared domain (e.g. one gmail.com user) without
+  // domain-allowing every gmail.com account.
+  if (email && allowedEmails.includes(email.toLowerCase())) {
+    return "email_allowlist";
   }
 
   // Check email domain allowlist

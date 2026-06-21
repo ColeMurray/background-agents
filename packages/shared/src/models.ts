@@ -16,6 +16,8 @@ export const VALID_MODELS = [
   "anthropic/claude-opus-4-5",
   "anthropic/claude-opus-4-6",
   "anthropic/claude-opus-4-7",
+  "anthropic/claude-opus-4-8",
+  "anthropic/claude-fable-5",
   "openai/gpt-5.2",
   "openai/gpt-5.4",
   "openai/gpt-5.5",
@@ -23,8 +25,13 @@ export const VALID_MODELS = [
   "openai/gpt-5.3-codex",
   "openai/gpt-5.3-codex-spark",
   "opencode/kimi-k2.5",
+  "opencode/kimi-k2.6",
   "opencode/minimax-m2.5",
+  "opencode/qwen3.7-max",
   "opencode/glm-5",
+  "opencode/glm-5.1",
+  "deepseek/deepseek-v4-flash",
+  "deepseek/deepseek-v4-pro",
 ] as const;
 
 export type ValidModel = (typeof VALID_MODELS)[number];
@@ -58,7 +65,18 @@ export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningCo
   "anthropic/claude-sonnet-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
   "anthropic/claude-opus-4-5": { efforts: ["high", "max"], default: "max" },
   "anthropic/claude-opus-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
-  "anthropic/claude-opus-4-7": { efforts: ["low", "medium", "high", "max"], default: "high" },
+  "anthropic/claude-opus-4-7": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    default: "high",
+  },
+  "anthropic/claude-opus-4-8": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    default: "high",
+  },
+  "anthropic/claude-fable-5": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    default: "high",
+  },
   "openai/gpt-5.2": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
   "openai/gpt-5.4": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
   "openai/gpt-5.5": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
@@ -113,7 +131,17 @@ export const MODEL_OPTIONS: ModelCategory[] = [
       {
         id: "anthropic/claude-opus-4-7",
         name: "Claude Opus 4.7",
-        description: "Latest, most capable",
+        description: "Most capable, adaptive thinking",
+      },
+      {
+        id: "anthropic/claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        description: "Most capable, adaptive thinking",
+      },
+      {
+        id: "anthropic/claude-fable-5",
+        name: "Claude Fable 5",
+        description: "Most powerful, new tier above Opus",
       },
     ],
   },
@@ -136,8 +164,18 @@ export const MODEL_OPTIONS: ModelCategory[] = [
     category: "OpenCode Zen",
     models: [
       { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
+      { id: "opencode/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
       { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
+      { id: "opencode/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
+      { id: "opencode/glm-5.1", name: "GLM 5.1", description: "Z.ai" },
+    ],
+  },
+  {
+    category: "DeepSeek",
+    models: [
+      { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "Fast model" },
+      { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "Most capable" },
     ],
   },
 ];
@@ -153,6 +191,8 @@ export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "anthropic/claude-opus-4-5",
   "anthropic/claude-opus-4-6",
   "anthropic/claude-opus-4-7",
+  "anthropic/claude-opus-4-8",
+  "anthropic/claude-fable-5",
   "openai/gpt-5.2",
   "openai/gpt-5.4",
   "openai/gpt-5.5",
