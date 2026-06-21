@@ -64,7 +64,12 @@ function createHandler() {
 describe("createSandboxHandler", () => {
   it("processes sandbox event and returns ok response", async () => {
     const { handler, processSandboxEvent } = createHandler();
-    const event = { type: "heartbeat" };
+    const event = {
+      type: "heartbeat",
+      sandboxId: "sandbox-1",
+      status: "running",
+      timestamp: 123,
+    };
 
     const response = await handler.sandboxEvent(
       new Request("http://internal/internal/sandbox/event", {
@@ -77,6 +82,22 @@ describe("createSandboxHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
     expect(processSandboxEvent).toHaveBeenCalledWith(event);
+  });
+
+  it("rejects malformed sandbox events", async () => {
+    const { handler, processSandboxEvent } = createHandler();
+
+    const response = await handler.sandboxEvent(
+      new Request("http://internal/internal/sandbox/event", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "heartbeat" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid sandbox event" });
+    expect(processSandboxEvent).not.toHaveBeenCalled();
   });
 
   it("adds participant with defaults and returns id", async () => {
@@ -199,6 +220,24 @@ describe("createSandboxHandler", () => {
         timestamp: 1.234,
       },
     });
+  });
+
+  it("rejects malformed media artifact bodies", async () => {
+    const { handler, repository, broadcast } = createHandler();
+
+    const response = await handler.createMediaArtifact(
+      new Request("http://internal/internal/create-media-artifact", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ artifactId: "artifact-1", objectKey: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid media artifact body" });
+    expect(repository.createArtifact).not.toHaveBeenCalled();
+    expect(repository.createEvent).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("rejects media artifacts when no prompt is active", async () => {

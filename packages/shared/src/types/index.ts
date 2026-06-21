@@ -2,6 +2,8 @@
  * Shared type definitions used across Open-Inspect packages.
  */
 
+import { z } from "zod";
+
 // Session states
 export type SessionStatus =
   | "created"
@@ -49,6 +51,10 @@ export type SpawnSource =
   | "linear-bot"
   | "slack-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
+
+const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+
+const recordSchema = z.record(z.string(), z.unknown());
 
 // Participant in a session
 export interface SessionParticipant {
@@ -197,115 +203,109 @@ export interface PullRequest {
   updatedAt: string;
 }
 
+const sandboxEventBaseSchema = z.object({
+  sandboxId: z.string(),
+  timestamp: z.number(),
+  ackId: z.string().optional(),
+});
+
+const messageSandboxEventBaseSchema = sandboxEventBaseSchema.extend({
+  messageId: z.string(),
+});
+
 // Sandbox events (from Modal / control-plane synthesized)
-export type SandboxEvent =
-  | { type: "heartbeat"; sandboxId: string; status: string; timestamp: number }
-  | {
-      type: "token";
-      content: string;
-      messageId: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "tool_call";
-      tool: string;
-      args: Record<string, unknown>;
-      callId: string;
-      status?: string;
-      output?: string;
-      messageId: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "step_start";
-      messageId: string;
-      sandboxId: string;
-      timestamp: number;
-      isSubtask?: boolean;
-    }
-  | {
-      type: "step_finish";
-      cost?: number;
-      tokens?: number;
-      reason?: string;
-      messageId: string;
-      sandboxId: string;
-      timestamp: number;
-      isSubtask?: boolean;
-    }
-  | {
-      type: "tool_result";
-      callId: string;
-      result: string;
-      error?: string;
-      messageId: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "git_sync";
-      status: GitSyncStatus;
-      sha?: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "error";
-      error: string;
-      messageId: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "execution_complete";
-      messageId: string;
-      success: boolean;
-      error?: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "artifact";
-      artifactType: string;
-      artifactId?: string;
-      url: string;
-      metadata?: Record<string, unknown>;
-      messageId?: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "push_complete";
-      branchName: string;
-      sandboxId?: string;
-      timestamp: number;
-    }
-  | {
-      type: "push_error";
-      branchName: string;
-      error: string;
-      sandboxId?: string;
-      timestamp: number;
-    }
-  | {
-      type: "session_title";
-      title: string;
-      sandboxId: string;
-      timestamp: number;
-    }
-  | {
-      type: "user_message";
-      content: string;
-      messageId: string;
-      timestamp: number;
-      author?: {
-        participantId: string;
-        name: string;
-        avatar?: string;
-      };
-    };
+export const sandboxEventSchema = z.discriminatedUnion("type", [
+  sandboxEventBaseSchema.extend({
+    type: z.literal("heartbeat"),
+    status: z.string(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("token"),
+    content: z.string(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("tool_call"),
+    tool: z.string(),
+    args: recordSchema,
+    callId: z.string(),
+    status: z.string().optional(),
+    output: z.string().optional(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("step_start"),
+    isSubtask: z.boolean().optional(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("step_finish"),
+    cost: z.number().optional(),
+    tokens: z.number().optional(),
+    reason: z.string().optional(),
+    isSubtask: z.boolean().optional(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("tool_result"),
+    callId: z.string(),
+    result: z.string(),
+    error: z.string().optional(),
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("git_sync"),
+    status: gitSyncStatusSchema,
+    sha: z.string().optional(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("error"),
+    error: z.string(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("execution_complete"),
+    success: z.boolean(),
+    error: z.string().optional(),
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("artifact"),
+    artifactType: z.string(),
+    artifactId: z.string().optional(),
+    url: z.string(),
+    metadata: recordSchema.optional(),
+    messageId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("push_complete"),
+    branchName: z.string(),
+    sandboxId: z.string().optional(),
+    timestamp: z.number(),
+    ackId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("push_error"),
+    branchName: z.string(),
+    error: z.string(),
+    sandboxId: z.string().optional(),
+    timestamp: z.number(),
+    ackId: z.string().optional(),
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("session_title"),
+    title: z.string(),
+  }),
+  z.object({
+    type: z.literal("user_message"),
+    content: z.string(),
+    messageId: z.string(),
+    timestamp: z.number(),
+    ackId: z.string().optional(),
+    author: z
+      .object({
+        participantId: z.string(),
+        name: z.string(),
+        avatar: z.string().optional(),
+      })
+      .optional(),
+  }),
+]);
+
+export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
 
 // WebSocket message types
 export type ClientMessage =
@@ -567,14 +567,16 @@ export type CallbackContext =
   | AutomationCallbackContext;
 
 // API response types
-export interface CreateSessionRequest {
-  repoOwner: string;
-  repoName: string;
-  title?: string;
-  model?: string;
-  reasoningEffort?: string;
-  branch?: string;
-}
+export const createSessionRequestSchema = z.object({
+  repoOwner: z.string(),
+  repoName: z.string(),
+  title: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  branch: z.string().optional(),
+});
+
+export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
 export interface CreateSessionResponse {
   sessionId: string;

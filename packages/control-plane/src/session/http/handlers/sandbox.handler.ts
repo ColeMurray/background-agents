@@ -1,5 +1,6 @@
 import type { Logger } from "../../../logger";
-import type { SessionArtifact } from "@open-inspect/shared";
+import { sandboxEventSchema, type SessionArtifact } from "@open-inspect/shared";
+import { z } from "zod";
 import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
@@ -41,6 +42,13 @@ interface CreateMediaArtifactRequest {
   metadata?: Record<string, unknown>;
 }
 
+const createMediaArtifactRequestSchema = z.object({
+  artifactId: z.string(),
+  artifactType: z.string(),
+  objectKey: z.string(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
 export interface SandboxHandler {
   sandboxEvent: (request: Request) => Promise<Response>;
   createMediaArtifact: (request: Request) => Promise<Response>;
@@ -55,13 +63,37 @@ export interface SandboxHandler {
 export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
   return {
     async sandboxEvent(request: Request): Promise<Response> {
-      const event = (await request.json()) as SandboxEvent;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const result = sandboxEventSchema.safeParse(raw);
+      if (!result.success) {
+        return Response.json({ error: "Invalid sandbox event" }, { status: 400 });
+      }
+
+      const event: SandboxEvent = result.data;
       await deps.processSandboxEvent(event);
       return Response.json({ status: "ok" });
     },
 
     async createMediaArtifact(request: Request): Promise<Response> {
-      const body = (await request.json()) as CreateMediaArtifactRequest;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const result = createMediaArtifactRequestSchema.safeParse(raw);
+      if (!result.success) {
+        return Response.json({ error: "Invalid media artifact body" }, { status: 400 });
+      }
+
+      const body: CreateMediaArtifactRequest = result.data;
       const sandbox = deps.getSandbox();
       if (!sandbox) {
         return Response.json({ error: "No sandbox" }, { status: 404 });
