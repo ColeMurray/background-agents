@@ -15,8 +15,10 @@ afterEach(cleanup);
 
 // Mutable per-test enabled set; the hoisted use-enabled-models mock closes over it.
 let enabledModelsValue: string[] = ["openai/gpt-5.4"];
+let loadingModelsValue = false;
 beforeEach(() => {
   enabledModelsValue = ["openai/gpt-5.4"];
+  loadingModelsValue = false;
 });
 
 vi.mock("@/hooks/use-repos", () => ({
@@ -52,7 +54,7 @@ vi.mock("@/hooks/use-enabled-models", () => ({
         models: [{ id: "openai/gpt-5.4", name: "GPT-5.4", description: "Test model" }],
       },
     ],
-    loading: false,
+    loading: loadingModelsValue,
   }),
 }));
 
@@ -266,5 +268,24 @@ describe("model normalization", () => {
     const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
     expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
     expect(onSubmit.mock.calls[0][0].reasoningEffort).toBe("high");
+  });
+
+  it("does not submit while enabled models are still loading", () => {
+    loadingModelsValue = true;
+    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8" });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("disables the submit button while enabled models are still loading", () => {
+    loadingModelsValue = true;
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{ ...baseInitialValues, model: "anthropic/claude-opus-4-8" }}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
   });
 });
