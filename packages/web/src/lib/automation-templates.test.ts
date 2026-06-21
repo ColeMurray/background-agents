@@ -8,7 +8,6 @@ import {
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
-  DEFAULT_ENABLED_MODELS,
   DEFAULT_MODEL,
   type AutomationTriggerType,
 } from "@open-inspect/shared";
@@ -18,7 +17,6 @@ import {
   getTemplateById,
   getTemplatesForCategory,
   getVisibleCategories,
-  resolveTemplateInitialValues,
 } from "./automation-templates";
 
 // Keep in sync with INSTRUCTIONS_MAX_LENGTH in automation-form.tsx /
@@ -174,73 +172,5 @@ describe("getVisibleCategories", () => {
 
   it("starts with Popular", () => {
     expect(getVisibleCategories()[0].id).toBe("popular");
-  });
-});
-
-describe("resolveTemplateInitialValues", () => {
-  it("keeps a suggested model that is enabled", () => {
-    const result = resolveTemplateInitialValues({ model: "anthropic/claude-opus-4-8" }, [
-      "anthropic/claude-opus-4-8",
-      DEFAULT_MODEL,
-    ]);
-    expect(result.model).toBe("anthropic/claude-opus-4-8");
-  });
-
-  it("coerces an unenabled suggested model to the default when the default is enabled", () => {
-    const result = resolveTemplateInitialValues({ model: "anthropic/claude-opus-4-8" }, [
-      DEFAULT_MODEL,
-    ]);
-    expect(result.model).toBe(DEFAULT_MODEL);
-  });
-
-  it("coerces to the first enabled model when neither suggestion nor default is enabled", () => {
-    const result = resolveTemplateInitialValues({ model: "anthropic/claude-opus-4-8" }, [
-      "openai/gpt-5.5",
-    ]);
-    expect(result.model).toBe("openai/gpt-5.5");
-  });
-
-  it("omits the model when the template does not suggest one", () => {
-    const result = resolveTemplateInitialValues({ name: "X" }, DEFAULT_ENABLED_MODELS as string[]);
-    expect(result.model).toBeUndefined();
-    expect(result.name).toBe("X");
-  });
-
-  it("drops a reasoning effort the resolved model does not support", () => {
-    const result = resolveTemplateInitialValues(
-      { model: "anthropic/claude-opus-4-8", reasoningEffort: "max" },
-      ["openai/gpt-5.5"]
-    );
-    expect(result.model).toBe("openai/gpt-5.5");
-    expect(result.reasoningEffort).toBeUndefined();
-  });
-
-  it("keeps a reasoning effort valid for the resolved model", () => {
-    const result = resolveTemplateInitialValues(
-      { model: "anthropic/claude-opus-4-8", reasoningEffort: "high" },
-      ["anthropic/claude-opus-4-8"]
-    );
-    expect(result.reasoningEffort).toBe("high");
-  });
-
-  it("passes non-model fields through untouched", () => {
-    const result = resolveTemplateInitialValues(
-      { name: "Find bugs", triggerType: "schedule", scheduleCron: "0 9 * * *" },
-      DEFAULT_ENABLED_MODELS as string[]
-    );
-    expect(result).toMatchObject({
-      name: "Find bugs",
-      triggerType: "schedule",
-      scheduleCron: "0 9 * * *",
-    });
-  });
-
-  it("resolves every catalog template to an enabled model", () => {
-    for (const t of automationTemplates) {
-      const result = resolveTemplateInitialValues(t.prefill, DEFAULT_ENABLED_MODELS as string[]);
-      if (result.model !== undefined) {
-        expect((DEFAULT_ENABLED_MODELS as readonly string[]).includes(result.model)).toBe(true);
-      }
-    }
   });
 });
