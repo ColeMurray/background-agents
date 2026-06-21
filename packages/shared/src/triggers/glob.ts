@@ -7,6 +7,8 @@
  * - Literal characters match exactly (case-sensitive)
  */
 
+import { escapeRegExp } from "../regex";
+
 export function matchGlob(pattern: string, input: string): boolean {
   return globToRegex(pattern).test(input);
 }
@@ -23,14 +25,10 @@ function globToRegex(pattern: string): RegExp {
       regex += "[^/]*";
       i++;
     } else {
-      regex += escapeRegex(pattern[i]);
+      regex += escapeRegExp(pattern[i]);
       i++;
     }
   }
   regex += "$";
   return new RegExp(regex);
-}
-
-function escapeRegex(char: string): string {
-  return char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

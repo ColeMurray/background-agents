@@ -1,4 +1,4 @@
-import { buildInternalAuthHeaders, resolveAppName } from "@open-inspect/shared";
+import { buildInternalAuthHeaders, escapeRegExp, resolveAppName } from "@open-inspect/shared";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -82,8 +82,7 @@ async function sendPrompt(
 }
 
 function stripMention(body: string, botUsername: string): string {
-  const escaped = botUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return body.replace(new RegExp(`@${escaped}`, "gi"), "").trim();
+  return body.replace(new RegExp(`@${escapeRegExp(botUsername)}`, "gi"), "").trim();
 }
 
 function fireAndForgetReaction(

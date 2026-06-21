@@ -1,5 +1,7 @@
 // Integration settings types
 
+import { escapeRegExp } from "../regex";
+
 export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
@@ -183,6 +185,25 @@ export function resolveBuildTimeoutSeconds(settings: SandboxSettings | undefined
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";
 
+/**
+ * A workspace-wide keyword→repository routing rule for Slack. When a Slack
+ * message contains the keyword, the bot routes the agent to the target
+ * repository deterministically, before falling back to LLM classification.
+ */
+export interface SlackRoutingRule {
+  /** Case-insensitive keyword or phrase. Matched as a whole token in the message. */
+  keyword: string;
+  /** Canonical "owner/name" (lowercase) of the target repository. */
+  target: string;
+  // Future (deferred): targetType?: "repository" | "environment" — defaults to "repository".
+}
+
+/** Maximum number of routing rules a workspace can configure (bounds the settings blob). */
+export const MAX_SLACK_ROUTING_RULES = 100;
+
+/** Maximum length of a single routing-rule keyword. */
+export const MAX_SLACK_ROUTING_KEYWORD_LENGTH = 100;
+
 /** Per-repo Slack overrides. Mentions policy is workspace-wide and cannot be overridden per repo. */
 export interface SlackRepoSettings {
   agentNotificationsEnabled?: boolean;
@@ -191,6 +212,55 @@ export interface SlackRepoSettings {
 /** Global Slack defaults: per-repo fields plus workspace-wide policy controls. */
 export interface SlackGlobalSettings extends SlackRepoSettings {
   mentionsPolicy?: SlackMentionsPolicy;
+  /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
+  routingRules?: SlackRoutingRule[];
+}
+
+/**
+ * Clean up raw routing rules for storage or use: trim and lowercase keyword and
+ * target, drop entries that are empty after trimming, de-dupe identical
+ * (keyword, target) pairs, and cap the count at {@link MAX_SLACK_ROUTING_RULES}.
+ *
+ * Lenient by design — it never throws — so it is safe on the bot's read path as
+ * well as the control plane's write path. Shape/length enforcement (with errors)
+ * lives in the control plane validator. A keyword pointing at two different
+ * targets is intentionally preserved; that conflict surfaces at match time.
+ */
+export function normalizeRoutingRules(rules: SlackRoutingRule[] | undefined): SlackRoutingRule[] {
+  if (!rules || rules.length === 0) return [];
+  const seen = new Set<string>();
+  const normalized: SlackRoutingRule[] = [];
+  for (const rule of rules) {
+    const keyword = typeof rule?.keyword === "string" ? rule.keyword.trim().toLowerCase() : "";
+    const target = typeof rule?.target === "string" ? rule.target.trim().toLowerCase() : "";
+    if (!keyword || !target) continue;
+    const dedupeKey = `${keyword} ${target}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    normalized.push({ keyword, target });
+    if (normalized.length >= MAX_SLACK_ROUTING_RULES) break;
+  }
+  return normalized;
+}
+
+/**
+ * Return the rules whose keyword appears in `message` as a whole token
+ * (case-insensitive, word-boundary match so "api" does not match "rapidly";
+ * multi-word keywords match as a phrase). Rule order is preserved. Keywords are
+ * matched literally, so regex-special characters carry no special meaning.
+ *
+ * Boundaries use `\W` (ASCII word characters), which is the right granularity
+ * for the alphanumeric technical keywords this is designed for; matching against
+ * non-ASCII keywords is intentionally looser.
+ */
+export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): SlackRoutingRule[] {
+  if (!message || rules.length === 0) return [];
+  const haystack = message.toLowerCase();
+  return rules.filter((rule) => {
+    const keyword = typeof rule?.keyword === "string" ? rule.keyword.trim().toLowerCase() : "";
+    if (!keyword) return false;
+    return new RegExp(`(?:^|\\W)${escapeRegExp(keyword)}(?:\\W|$)`).test(haystack);
+  });
 }
 
 /** Maps each integration ID to its global and per-repo settings types. */

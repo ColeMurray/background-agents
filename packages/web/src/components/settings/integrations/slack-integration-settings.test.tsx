@@ -355,4 +355,169 @@ describe("SlackIntegrationSettings", () => {
     expect(screen.queryByRole("option", { name: "acme/web" })).toBeNull();
     expect(await screen.findByRole("option", { name: "acme/api" })).toBeInTheDocument();
   });
+
+  describe("routing rules", () => {
+    function routingSection() {
+      return screen.getByRole("heading", { name: /routing rules/i }).closest("section")!;
+    }
+
+    it("renders existing routing rules from settings", () => {
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: false,
+            mentionsPolicy: "allow",
+            routingRules: [{ keyword: "frontend", target: "acme/web" }],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      expect(within(section).getByDisplayValue("frontend")).toBeInTheDocument();
+      expect(within(section).getByText("acme/web")).toBeInTheDocument();
+    });
+
+    it("adds a routing rule and saves it merged into the defaults", async () => {
+      const user = userEvent.setup();
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+        availableRepos: [repo("acme/web")],
+      });
+      fetchMock.mockResolvedValue(okJson({}));
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      await user.click(within(section).getByRole("button", { name: /add rule/i }));
+      await user.type(within(section).getByRole("textbox", { name: /keyword/i }), "Frontend");
+      await user.click(within(section).getByRole("combobox", { name: /target repository/i }));
+      await user.click(await screen.findByRole("option", { name: "acme/web" }));
+      await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/integration-settings/slack",
+        expect.objectContaining({ method: "PUT" })
+      );
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+        settings: SlackGlobalConfig;
+      };
+      expect(body.settings.defaults).toEqual({
+        agentNotificationsEnabled: true,
+        mentionsPolicy: "allow",
+        routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      });
+    });
+
+    it("preserves existing routing rules when the Defaults section is saved", async () => {
+      const user = userEvent.setup();
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: false,
+            mentionsPolicy: "allow",
+            routingRules: [{ keyword: "frontend", target: "acme/web" }],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+      });
+      fetchMock.mockResolvedValue(okJson({}));
+      render(<SlackIntegrationSettings />);
+
+      await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
+      await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+        settings: SlackGlobalConfig;
+      };
+      expect(body.settings.defaults).toEqual({
+        agentNotificationsEnabled: true,
+        mentionsPolicy: "allow",
+        routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      });
+    });
+
+    it("omits routingRules on save after the last rule is removed", async () => {
+      const user = userEvent.setup();
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            routingRules: [{ keyword: "frontend", target: "acme/web" }],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+      });
+      fetchMock.mockResolvedValue(okJson({}));
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      await user.click(within(section).getByRole("button", { name: /remove/i }));
+      await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+        settings: SlackGlobalConfig;
+      };
+      expect(body.settings.defaults).toEqual({
+        agentNotificationsEnabled: true,
+        mentionsPolicy: "allow",
+      });
+    });
+
+    it("blocks save and shows an error when a rule has no target", async () => {
+      const user = userEvent.setup();
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+        availableRepos: [repo("acme/web")],
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      await user.click(within(section).getByRole("button", { name: /add rule/i }));
+      await user.type(within(section).getByRole("textbox", { name: /keyword/i }), "frontend");
+      await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
+
+      expect(toastError).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("warns when a rule targets a repository that is not accessible", () => {
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            routingRules: [{ keyword: "frontend", target: "acme/ghost" }],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      expect(within(section).getByText(/not in your accessible repositories/i)).toBeInTheDocument();
+    });
+
+    it("warns when the same keyword is used by more than one rule", () => {
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            routingRules: [
+              { keyword: "frontend", target: "acme/web" },
+              { keyword: "frontend", target: "acme/api" },
+            ],
+          },
+        },
+        availableRepos: [repo("acme/web"), repo("acme/api")],
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      // Both conflicting rows are flagged.
+      expect(within(section).getAllByText(/used by more than one rule/i)).toHaveLength(2);
+    });
+  });
 });

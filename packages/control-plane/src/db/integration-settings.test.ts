@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { MAX_SLACK_ROUTING_KEYWORD_LENGTH, MAX_SLACK_ROUTING_RULES } from "@open-inspect/shared";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -993,6 +994,77 @@ describe("IntegrationSettingsStore", () => {
       const config = await store.getResolvedConfig("slack", "acme/widgets");
       expect(config.settings.agentNotificationsEnabled).toBe(true);
       expect(config.settings.mentionsPolicy).toBe("allow");
+    });
+
+    it("round-trips and normalizes routingRules at global level", async () => {
+      await store.setGlobal("slack", {
+        defaults: {
+          routingRules: [
+            { keyword: "  FrontEnd ", target: "Acme/Web-App" },
+            { keyword: "api", target: "acme/api" },
+          ],
+        },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.routingRules).toEqual([
+        { keyword: "frontend", target: "acme/web-app" },
+        { keyword: "api", target: "acme/api" },
+      ]);
+    });
+
+    it("rejects routingRules at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects non-array routingRules", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: "frontend" as unknown as [] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects a routing rule with an empty keyword", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "   ", target: "acme/web" }] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects a routing rule whose target is not in owner/name form", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "frontend", target: "not-a-repo" }] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects a routing rule keyword longer than the maximum", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: {
+            routingRules: [
+              { keyword: "x".repeat(MAX_SLACK_ROUTING_KEYWORD_LENGTH + 1), target: "acme/web" },
+            ],
+          },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects more than the maximum number of routing rules", async () => {
+      const tooMany = Array.from({ length: MAX_SLACK_ROUTING_RULES + 1 }, (_, i) => ({
+        keyword: `kw${i}`,
+        target: `acme/repo${i}`,
+      }));
+      await expect(
+        store.setGlobal("slack", { defaults: { routingRules: tooMany } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
     });
   });
 

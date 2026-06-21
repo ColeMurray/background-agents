@@ -4,6 +4,7 @@
 
 export * from "./types";
 export * from "./git";
+export * from "./regex";
 export * from "./auth";
 export * from "./models";
 export * from "./cron";

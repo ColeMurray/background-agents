@@ -54,11 +54,13 @@ repository name when the request could apply to more than one repo:
 @Open-Inspect update the billing docs in acme/api
 ```
 
-Open-Inspect chooses from repositories available to this Open-Inspect deployment. It uses the
-message, Slack channel context, and recent thread context to pick a repository. If only one
-repository is available, it uses that repository automatically. If an administrator has associated
-the Slack channel with exactly one repository, that repository is used. When the match is unclear,
-Open-Inspect asks you to choose from candidate repositories in the Slack thread.
+Open-Inspect chooses from repositories available to this Open-Inspect deployment, using the message,
+Slack channel context, and recent thread context. It picks a repository in this order: if only one
+repository is available, it uses that one; if your message contains a configured
+[routing-rule keyword](#routing-rules), it routes to that keyword's repository; if an administrator
+has associated the Slack channel with exactly one repository, that repository is used; otherwise it
+infers the repository from your message. When the match is unclear, Open-Inspect asks you to choose
+from candidate repositories in the Slack thread.
 
 ### From a DM
 
@@ -83,6 +85,32 @@ request and thread context.
 
 In shared channels, the original requester should choose the repository. If the dropdown has
 expired, send the request again and include the repository name, such as `owner/repo`.
+
+### Routing rules
+
+Administrators can map keywords to repositories so common requests route instantly, without
+Open-Inspect having to guess. Configure them in the web app under **Settings → Integrations → Slack
+→ Routing rules**: each rule pairs a keyword with a target repository.
+
+For example, with `frontend → acme/web-app` and `api → acme/backend`:
+
+- `@Open-Inspect fix the frontend nav bug` → routes to `acme/web-app`
+- `@Open-Inspect add the new api endpoint` → routes to `acme/backend`
+
+How matching works:
+
+- **Whole words, case-insensitive.** `api` matches "the api is down" but not "rapidly".
+- **Channels and DMs.** Rules apply everywhere, which makes them especially useful in DMs where
+  there is no channel association.
+- **Rules beat channel association.** An explicit keyword always wins over the channel's default
+  repository.
+- **Ambiguity asks, never guesses.** If one message matches keywords for two different repositories,
+  Open-Inspect shows the repository picker seeded with those candidates.
+- **Stale targets are ignored.** A rule whose repository is later removed from the deployment
+  becomes inert until access is restored, rather than routing somewhere unexpected.
+
+Routing rules do not override an active thread: a keyword in a thread reply does not move that
+conversation to a different repository.
 
 ---
 
