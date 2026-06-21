@@ -5,7 +5,7 @@ import type { AccessControlConfig } from "./access-control";
 import {
   applyJwtClaims,
   applySessionUser,
-  buildSignInDecision,
+  getStaticSignInReason,
   getVerifiedPrimaryGitHubEmail,
 } from "./auth";
 
@@ -266,120 +266,120 @@ describe("getVerifiedPrimaryGitHubEmail", () => {
   });
 });
 
-describe("buildSignInDecision", () => {
+describe("getStaticSignInReason", () => {
   describe("Google", () => {
     const config = cfg({ allowedEmails: ["pm@gmail.com"] });
 
-    it("denies an unverified email (boolean false) before any allowlist match", () => {
+    it("denies an unverified email (null) before any allowlist match", () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "google",
           profile: { email_verified: false } as unknown as Profile,
           email: "pm@gmail.com",
           config,
         })
-      ).toBe(false);
+      ).toBeNull();
     });
 
     it('denies an unverified email when email_verified is the string "false"', () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "false" } as unknown as Profile,
           email: "pm@gmail.com",
           config,
         })
-      ).toBe(false);
+      ).toBeNull();
     });
 
     it("denies when email_verified is absent", () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "google",
           profile: {} as Profile,
           email: "pm@gmail.com",
           config,
         })
-      ).toBe(false);
+      ).toBeNull();
     });
 
-    it("allows a verified (boolean true) allowlisted email", () => {
+    it("admits a verified (boolean true) allowlisted email with the email reason", () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "google",
           profile: { email_verified: true } as unknown as Profile,
           email: "pm@gmail.com",
           config,
         })
-      ).toBe(true);
+      ).toBe("email_allowlist");
     });
 
-    it('allows a verified email when email_verified is the string "true"', () => {
+    it('admits a verified email when email_verified is the string "true"', () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "true" } as unknown as Profile,
           email: "pm@gmail.com",
           config,
         })
-      ).toBe(true);
+      ).toBe("email_allowlist");
     });
 
     it('accepts a mixed-case "True" string (case-insensitive normalization)', () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "True" } as unknown as Profile,
           email: "pm@gmail.com",
           config,
         })
-      ).toBe(true);
+      ).toBe("email_allowlist");
     });
 
     it("denies a verified email that is not on any allowlist", () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "google",
           profile: { email_verified: true } as unknown as Profile,
           email: "stranger@gmail.com",
           config,
         })
-      ).toBe(false);
+      ).toBeNull();
     });
   });
 
   describe("GitHub", () => {
     it("admits an allowlisted GitHub username without an email_verified check", () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "github",
           profile: { login: "octocat" } as unknown as Profile,
           email: "octo@company.com",
           config: cfg({ allowedUsers: ["octocat"] }),
         })
-      ).toBe(true);
+      ).toBe("username_allowlist");
     });
 
     it("denies a non-allowlisted GitHub user", () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: "github",
           profile: { login: "stranger" } as unknown as Profile,
           email: "stranger@other.com",
           config: cfg({ allowedDomains: ["company.com"], allowedUsers: ["octocat"] }),
         })
-      ).toBe(false);
+      ).toBeNull();
     });
 
     it("treats an undefined provider as the GitHub path", () => {
       expect(
-        buildSignInDecision({
+        getStaticSignInReason({
           provider: undefined,
           profile: { login: "octocat" } as unknown as Profile,
           email: "octo@company.com",
           config: cfg({ allowedUsers: ["octocat"] }),
         })
-      ).toBe(true);
+      ).toBe("username_allowlist");
     });
   });
 });

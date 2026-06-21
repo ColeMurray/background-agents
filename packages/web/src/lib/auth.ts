@@ -5,13 +5,16 @@ import type { GithubEmail, GithubProfile } from "next-auth/providers/github";
 import GoogleProvider from "next-auth/providers/google";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared";
 import {
+  type AccessAllowReason,
   type AccessControlConfig,
-  checkAccessAllowed,
-  checkGitHubOrganizationAccess,
   getAccessAllowReason,
   parseAllowlist,
   parseBooleanEnv,
 } from "./access-control";
+import {
+  checkGitHubOrganizationAccess,
+  type GitHubOrganizationAccessResult,
+} from "./github-org-membership";
 
 export async function getVerifiedPrimaryGitHubEmail(
   accessToken: string | undefined
@@ -69,9 +72,9 @@ export function buildGitHubOAuthScope(
 }
 
 /**
- * Decide whether a sign-in attempt is allowed by the static allowlists. Pure and
- * exported so the policy is unit-testable — NextAuth's inline signIn callback
- * otherwise can't be reached.
+ * Resolve the static (synchronous) allow reason for a sign-in attempt, or null
+ * when the static allowlists don't admit it. Pure and exported so the policy is
+ * unit-testable — NextAuth's inline signIn callback otherwise can't be reached.
  *
  * - GitHub: the email was already resolved to the verified primary in the
  *   provider's userinfo override, so only the allowlist gate applies.
@@ -82,15 +85,16 @@ export function buildGitHubOAuthScope(
  *   defensively — boolean `true` or a case-insensitive "true" string — because
  *   Google has returned the string form in some flows. Anything else fails closed.
  *
- * GitHub organization membership is intentionally NOT decided here: it needs an
- * async call to GitHub's API, so the signIn callback applies it as a fallback.
+ * GitHub organization membership is intentionally NOT resolved here: it needs an
+ * async call to GitHub's API, so the signIn callback applies it as a fallback
+ * when this returns null.
  */
-export function buildSignInDecision(args: {
+export function getStaticSignInReason(args: {
   provider: string | undefined;
   profile: Profile | undefined;
   email: string | null | undefined;
   config: AccessControlConfig;
-}): boolean {
+}): AccessAllowReason | null {
   const { provider, profile, email, config } = args;
 
   if (provider === "google") {
@@ -99,14 +103,14 @@ export function buildSignInDecision(args: {
       googleProfile?.email_verified === true ||
       String(googleProfile?.email_verified).toLowerCase() === "true";
     if (!emailVerified) {
-      return false;
+      return null;
     }
-    return checkAccessAllowed(config, { email: email ?? undefined });
+    return getAccessAllowReason(config, { email: email ?? undefined });
   }
 
   // GitHub (default).
   const githubProfile = profile as { login?: string } | undefined;
-  return checkAccessAllowed(config, {
+  return getAccessAllowReason(config, {
     githubUsername: githubProfile?.login,
     email: email ?? undefined,
   });
@@ -208,6 +212,16 @@ function logSignInDecision(
   });
 }
 
+function getOrgMembershipDecisionReason(orgMembership: GitHubOrganizationAccessResult): string {
+  if (orgMembership.allowed) {
+    return "org_membership";
+  }
+
+  return orgMembership.reason === "unavailable"
+    ? "org_membership_unavailable"
+    : "org_membership_denied";
+}
+
 const providers: NextAuthOptions["providers"] = [
   GitHubProvider<GithubProfile>({
     clientId: process.env.GITHUB_CLIENT_ID!,
@@ -264,14 +278,15 @@ export const authOptions: NextAuthOptions = {
       const githubProfile = profile as { login?: string } | undefined;
 
       // Static, synchronous allowlist gate. Provider-aware: Google requires a
-      // verified email before any email-based match (see buildSignInDecision).
-      if (buildSignInDecision({ provider, profile, email: user.email, config })) {
-        const reason =
-          getAccessAllowReason(config, {
-            githubUsername: githubProfile?.login,
-            email: user.email ?? undefined,
-          }) ?? "allowlist";
-        logSignInDecision(githubProfile?.login, "allow", reason);
+      // verified email before any email-based match (see getStaticSignInReason).
+      const staticReason = getStaticSignInReason({
+        provider,
+        profile,
+        email: user.email,
+        config,
+      });
+      if (staticReason) {
+        logSignInDecision(githubProfile?.login, "allow", staticReason);
         return true;
       }
 
@@ -310,15 +325,3 @@ export const authOptions: NextAuthOptions = {
     error: "/access-denied",
   },
 };
-
-function getOrgMembershipDecisionReason(
-  orgMembership: Awaited<ReturnType<typeof checkGitHubOrganizationAccess>>
-): string {
-  if (orgMembership.allowed) {
-    return "org_membership";
-  }
-
-  return orgMembership.reason === "unavailable"
-    ? "org_membership_unavailable"
-    : "org_membership_denied";
-}
