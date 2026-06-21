@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
-import { clearLocalCache, getRoutingRules } from "./repos";
+import { clearLocalCache, getAvailableRepos, getRoutingRules } from "./repos";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -89,5 +89,115 @@ describe("getRoutingRules", () => {
     expect(await getRoutingRules(env, "trace")).toEqual([
       { keyword: "frontend", target: "acme/web" },
     ]);
+  });
+});
+
+describe("getAvailableRepos", () => {
+  beforeEach(() => {
+    clearLocalCache();
+    vi.clearAllMocks();
+  });
+
+  it("normalizes control-plane repositories and stores them in KV", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        repos: [
+          {
+            id: 123,
+            owner: "Open-Inspect",
+            name: "Background-Agents",
+            fullName: "Open-Inspect/Background-Agents",
+            description: "Fallback description",
+            private: true,
+            defaultBranch: "main",
+            archived: false,
+            metadata: {
+              description: "Slack-facing description",
+              aliases: ["agents"],
+              keywords: ["slack", "classifier"],
+              channelAssociations: ["C123"],
+            },
+          },
+        ],
+        cached: false,
+        cachedAt: new Date().toISOString(),
+      })
+    );
+
+    const repos = await getAvailableRepos(env, "trace-1");
+
+    expect(repos).toEqual([
+      {
+        id: "open-inspect/background-agents",
+        owner: "open-inspect",
+        name: "background-agents",
+        fullName: "open-inspect/background-agents",
+        displayName: "Background-Agents",
+        description: "Slack-facing description",
+        defaultBranch: "main",
+        private: true,
+        aliases: ["agents"],
+        keywords: ["slack", "classifier"],
+        channelAssociations: ["C123"],
+      },
+    ]);
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith("repos:cache", JSON.stringify(repos), {
+      expirationTtl: 300,
+    });
+  });
+
+  it("falls back to cached repos when the control plane returns an error", async () => {
+    const cachedRepos = [
+      {
+        id: "acme/web",
+        owner: "acme",
+        name: "web",
+        fullName: "acme/web",
+        displayName: "web",
+        description: "Cached repo",
+        defaultBranch: "main",
+        private: false,
+      },
+    ];
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue(cachedRepos),
+        put: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
+      },
+    } as unknown as Env;
+
+    await expect(getAvailableRepos(env, "trace-2")).resolves.toEqual(cachedRepos);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+  });
+
+  it("uses the in-memory cache after a successful fetch", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        repos: [
+          {
+            id: 1,
+            owner: "acme",
+            name: "api",
+            fullName: "acme/api",
+            description: null,
+            private: false,
+            defaultBranch: "main",
+            archived: false,
+          },
+        ],
+        cached: false,
+        cachedAt: new Date().toISOString(),
+      })
+    );
+
+    const first = await getAvailableRepos(env);
+    const second = await getAvailableRepos(env);
+
+    expect(second).toBe(first);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 });
