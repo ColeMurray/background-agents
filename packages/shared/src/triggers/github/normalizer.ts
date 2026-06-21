@@ -88,65 +88,174 @@ export function normalizeGitHubEvent(
   const supportedActions = SUPPORTED_EVENTS[githubEventHeader];
   if (!supportedActions) return null;
   if (typeof action !== "string" || !supportedActions.has(action)) return null;
-
-  const typedPayload = payload as unknown as SupportedGitHubPayload;
-
   const eventType = `${githubEventHeader}.${action}`;
-  const repoOwner = getRepoOwner(typedPayload);
-  const repoName = getRepoName(typedPayload);
-  const actor = getActor(typedPayload);
 
   switch (githubEventHeader) {
     case "pull_request":
+      if (!isPullRequestPayload(payload)) return null;
       return normalizePullRequest(
         eventType,
         action,
-        typedPayload as PullRequestPayload,
-        repoOwner,
-        repoName,
-        actor
+        payload,
+        getRepoOwner(payload),
+        getRepoName(payload),
+        getActor(payload)
       );
 
     case "issue_comment":
+      if (!isIssueCommentPayload(payload)) return null;
       return normalizeIssueComment(
         eventType,
-        typedPayload as IssueCommentPayload,
-        repoOwner,
-        repoName,
-        actor
+        payload,
+        getRepoOwner(payload),
+        getRepoName(payload),
+        getActor(payload)
       );
 
     case "pull_request_review_comment":
+      if (!isReviewCommentPayload(payload)) return null;
       return normalizeReviewComment(
         eventType,
-        typedPayload as PullRequestReviewCommentPayload,
-        repoOwner,
-        repoName,
-        actor
+        payload,
+        getRepoOwner(payload),
+        getRepoName(payload),
+        getActor(payload)
       );
 
     case "check_suite":
+      if (!isCheckSuitePayload(payload)) return null;
       return normalizeCheckSuite(
         eventType,
-        typedPayload as CheckSuitePayload,
-        repoOwner,
-        repoName,
-        actor
+        payload,
+        getRepoOwner(payload),
+        getRepoName(payload),
+        getActor(payload)
       );
 
     case "issues":
+      if (!isIssuesPayload(payload)) return null;
       return normalizeIssue(
         eventType,
         action,
-        typedPayload as IssuesPayload,
-        repoOwner,
-        repoName,
-        actor
+        payload,
+        getRepoOwner(payload),
+        getRepoName(payload),
+        getActor(payload)
       );
 
     default:
       return null;
   }
+}
+
+function isPullRequestPayload(payload: unknown): payload is PullRequestPayload {
+  if (!isRecord(payload)) return false;
+  if (!hasValidRepository(payload) || !hasValidSender(payload)) return false;
+  if (!isRecord(payload.pull_request)) return false;
+  return hasValidPullRequest(payload.pull_request);
+}
+
+function isIssueCommentPayload(payload: unknown): payload is IssueCommentPayload {
+  if (!isRecord(payload)) return false;
+  if (!hasValidRepository(payload) || !hasValidSender(payload)) return false;
+  if (!isRecord(payload.issue) || !isRecord(payload.comment)) return false;
+  return hasFiniteNumber(payload.issue.number) && hasFiniteNumber(payload.comment.id);
+}
+
+function isReviewCommentPayload(payload: unknown): payload is PullRequestReviewCommentPayload {
+  if (!isRecord(payload)) return false;
+  if (!hasValidRepository(payload) || !hasValidSender(payload)) return false;
+  if (!isRecord(payload.pull_request) || !isRecord(payload.comment)) return false;
+  if (!hasFiniteNumber(payload.comment.id)) return false;
+  if (!isOptionalString(payload.comment.body)) return false;
+  if (!isOptionalString(payload.comment.path)) return false;
+  if (!isOptionalString(payload.comment.diff_hunk)) return false;
+  return hasValidPullRequest(payload.pull_request);
+}
+
+function isCheckSuitePayload(payload: unknown): payload is CheckSuitePayload {
+  if (!isRecord(payload)) return false;
+  if (!hasValidRepository(payload) || !hasValidSender(payload)) return false;
+  if (!isRecord(payload.check_suite)) return false;
+  if (!hasFiniteNumber(payload.check_suite.id)) return false;
+  if (!isOptionalString(payload.check_suite.conclusion)) return false;
+  if (!isOptionalString(payload.check_suite.head_branch)) return false;
+  if (!isOptionalString(payload.check_suite.head_sha)) return false;
+  const pullRequests = payload.check_suite.pull_requests;
+  return (
+    pullRequests === undefined ||
+    (Array.isArray(pullRequests) &&
+      pullRequests.every(
+        (pullRequest) => isRecord(pullRequest) && hasFiniteNumber(pullRequest.number)
+      ))
+  );
+}
+
+function isIssuesPayload(payload: unknown): payload is IssuesPayload {
+  if (!isRecord(payload)) return false;
+  if (!hasValidRepository(payload) || !hasValidSender(payload)) return false;
+  if (!isRecord(payload.issue)) return false;
+  if (!hasFiniteNumber(payload.issue.number)) return false;
+  if (!isOptionalString(payload.issue.title)) return false;
+  if (!isOptionalString(payload.issue.body)) return false;
+  return hasValidLabels(payload.issue.labels);
+}
+
+function hasValidPullRequest(pr: Record<string, unknown>): boolean {
+  if (!hasFiniteNumber(pr.number)) return false;
+  if (!isOptionalString(pr.title)) return false;
+  if (!isOptionalString(pr.body)) return false;
+  if (!isOptionalBoolean(pr.merged)) return false;
+  if (!hasValidLabels(pr.labels)) return false;
+  if (
+    pr.head !== undefined &&
+    (!isRecord(pr.head) || !isOptionalString(pr.head.ref) || !isOptionalString(pr.head.sha))
+  ) {
+    return false;
+  }
+  if (pr.base !== undefined && (!isRecord(pr.base) || !isOptionalString(pr.base.ref))) {
+    return false;
+  }
+  return true;
+}
+
+function hasValidRepository(payload: Record<string, unknown>): boolean {
+  if (payload.repository === undefined) return true;
+  if (!isRecord(payload.repository)) return false;
+  if (!isOptionalString(payload.repository.name)) return false;
+  if (payload.repository.owner === undefined) return true;
+  return isRecord(payload.repository.owner) && isOptionalString(payload.repository.owner.login);
+}
+
+function hasValidSender(payload: Record<string, unknown>): boolean {
+  if (payload.sender === undefined) return true;
+  return isRecord(payload.sender) && isOptionalString(payload.sender.login);
+}
+
+function hasValidLabels(labels: unknown): boolean {
+  return (
+    labels === undefined ||
+    (Array.isArray(labels) &&
+      labels.every(
+        (label) => isRecord(label) && (label.name === undefined || typeof label.name === "string")
+      ))
+  );
+}
+
+function hasFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
 }
 
 // ─── Per-event normalizers ────────────────────────────────────────────────────

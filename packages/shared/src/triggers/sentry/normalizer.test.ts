@@ -77,6 +77,21 @@ describe("normalizeSentryEvent", () => {
     expect(event!.contextBlock).toContain("acme-backend");
   });
 
+  it("returns null for issue alerts missing consumed issue fields", () => {
+    const malformedPayload = {
+      ...issueAlertPayload,
+      data: {
+        ...issueAlertPayload.data,
+        issue: {
+          ...issueAlertPayload.data.issue,
+          project: { id: 1, name: "Acme Backend" },
+        },
+      },
+    };
+
+    expect(normalizeSentryEvent(malformedPayload)).toBeNull();
+  });
+
   it("normalizes a regression payload", () => {
     const regressionPayload = {
       ...issueAlertPayload,
@@ -109,6 +124,26 @@ describe("normalizeSentryEvent", () => {
     expect(event!.eventType).toBe("metric_alert.critical");
     expect(event!.triggerKey).toBe("sentry_metric:789:2026-03-23T14:30:00Z");
     expect(event!.concurrencyKey).toBe("sentry_metric:789");
+  });
+
+  it("returns null for metric alerts missing trigger key fields", () => {
+    const malformedPayload = {
+      action: "critical",
+      data: {
+        metric_alert: {
+          id: 456,
+          title: "Error rate > 5%",
+          alert_rule: { name: "High error rate" },
+          date_started: "2026-03-23T14:30:00Z",
+          current_trigger: { label: "critical" },
+        },
+        description_text: "Error rate exceeded 5%",
+        description_title: "Metric Alert",
+        web_url: "https://sentry.io/alerts/456/",
+      },
+    };
+
+    expect(normalizeSentryEvent(malformedPayload)).toBeNull();
   });
 
   it("returns null for non-critical metric alerts", () => {

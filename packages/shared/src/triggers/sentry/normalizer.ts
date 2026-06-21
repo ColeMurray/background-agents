@@ -78,7 +78,7 @@ export function normalizeSentryEvent(
 ): SentryAutomationEvent | null {
   // Issue alert (event_alert action or issue action)
   if (isIssueAlertPayload(payload)) {
-    const p = payload as unknown as SentryIssueAlertPayload;
+    const p = payload;
     const issue = p.data.issue;
     const isRegression = p.action === "regression" || issue.status === "regressed";
     const eventType = isRegression ? "issue.regression" : "issue.created";
@@ -96,7 +96,7 @@ export function normalizeSentryEvent(
       sentryProject: issue.project.slug,
       sentryLevel: issue.level,
       culpritFile: p.data.event.metadata.filename,
-      contextBlock: buildSentryContextBlock(p as unknown as Record<string, unknown>),
+      contextBlock: buildSentryContextBlock(payload),
       meta: {
         issueId: issue.id,
         shortId: issue.shortId,
@@ -107,7 +107,7 @@ export function normalizeSentryEvent(
 
   // Metric alert
   if (isMetricAlertPayload(payload)) {
-    const p = payload as unknown as SentryMetricAlertPayload;
+    const p = payload;
     if (p.action !== "critical") return null;
 
     const alert = p.data.metric_alert;
@@ -133,14 +133,67 @@ export function normalizeSentryEvent(
   return null;
 }
 
-function isIssueAlertPayload(payload: Record<string, unknown>): boolean {
-  const data = payload.data as Record<string, unknown> | undefined;
-  return !!data && "issue" in data && "event" in data;
+function isIssueAlertPayload(payload: unknown): payload is SentryIssueAlertPayload {
+  if (!isRecord(payload)) return false;
+  if (typeof payload.action !== "string") return false;
+  if (!isRecord(payload.data)) return false;
+
+  const { event, issue, triggered_rule: triggeredRule } = payload.data;
+  if (!isRecord(event) || !isRecord(issue) || typeof triggeredRule !== "string") return false;
+  if (!isRecord(event.metadata)) return false;
+
+  const metadata = event.metadata;
+  if (!isOptionalString(metadata.type)) return false;
+  if (!isOptionalString(metadata.value)) return false;
+  if (!isOptionalString(metadata.filename)) return false;
+  if (!isOptionalString(metadata.function)) return false;
+
+  if (typeof issue.id !== "string") return false;
+  if (typeof issue.shortId !== "string") return false;
+  if (typeof issue.title !== "string") return false;
+  if (typeof issue.culprit !== "string") return false;
+  if (typeof issue.level !== "string") return false;
+  if (typeof issue.count !== "string") return false;
+  if (typeof issue.firstSeen !== "string") return false;
+  if (typeof issue.lastSeen !== "string") return false;
+  if (typeof issue.status !== "string") return false;
+  if (!isRecord(issue.project) || typeof issue.project.slug !== "string") return false;
+
+  return true;
 }
 
-function isMetricAlertPayload(payload: Record<string, unknown>): boolean {
-  const data = payload.data as Record<string, unknown> | undefined;
-  return !!data && "metric_alert" in data;
+function isMetricAlertPayload(payload: unknown): payload is SentryMetricAlertPayload {
+  if (!isRecord(payload)) return false;
+  if (typeof payload.action !== "string") return false;
+  if (!isRecord(payload.data)) return false;
+
+  const data = payload.data;
+  if (!isRecord(data.metric_alert)) return false;
+  if (typeof data.description_text !== "string") return false;
+  if (typeof data.description_title !== "string") return false;
+  if (typeof data.web_url !== "string") return false;
+
+  const alert = data.metric_alert;
+  if (typeof alert.id !== "number" || !Number.isFinite(alert.id)) return false;
+  if (typeof alert.title !== "string") return false;
+  if (typeof alert.date_started !== "string") return false;
+  if (!isRecord(alert.alert_rule)) return false;
+  if (typeof alert.alert_rule.id !== "number" || !Number.isFinite(alert.alert_rule.id)) {
+    return false;
+  }
+  if (typeof alert.alert_rule.name !== "string") return false;
+  if (!isRecord(alert.current_trigger)) return false;
+  if (typeof alert.current_trigger.label !== "string") return false;
+
+  return true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
 }
 
 function buildSentryMetricContextBlock(p: SentryMetricAlertPayload): string {

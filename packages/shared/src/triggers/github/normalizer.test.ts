@@ -340,6 +340,17 @@ describe("normalizeGitHubEvent", () => {
       expect(normalizeGitHubEvent("pull_request", payload)).toBeNull();
     });
 
+    it("returns null for pull_request with malformed labels", () => {
+      const payload = {
+        action: "opened",
+        repository: repo,
+        sender,
+        pull_request: { ...basePR, labels: "bug" },
+      };
+
+      expect(normalizeGitHubEvent("pull_request", payload)).toBeNull();
+    });
+
     it("returns null for issue_comment without a numeric comment id", () => {
       const payload = {
         action: "created",
@@ -374,6 +385,23 @@ describe("normalizeGitHubEvent", () => {
           pull_requests: [],
         },
       };
+      expect(normalizeGitHubEvent("check_suite", payload)).toBeNull();
+    });
+
+    it("returns null for check_suite with malformed pull request references", () => {
+      const payload = {
+        action: "completed",
+        repository: repo,
+        sender,
+        check_suite: {
+          id: 77777,
+          head_branch: "main",
+          head_sha: "abc123",
+          conclusion: "success",
+          pull_requests: [{ number: "42" }],
+        },
+      };
+
       expect(normalizeGitHubEvent("check_suite", payload)).toBeNull();
     });
 
