@@ -18,11 +18,11 @@
     "@open-inspect/shared": "file:../shared"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.16.13",
+    "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@vitest/coverage-v8": "^4.1.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
-    "@vitest/coverage-v8": "^4.1.0",
     "vitest": "^4.1.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.103.0"
   }
 }
