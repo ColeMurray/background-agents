@@ -413,4 +413,52 @@ describe("normalizeGitHubEvent", () => {
       expect(normalizeGitHubEvent("check_suite", payload)).toBeNull();
     });
   });
+
+  // GitHub models `body`/`merged` as `T | null`; an empty PR/issue description
+  // arrives as `body: null`. These must normalize, not be dropped as malformed.
+  describe("nullable GitHub fields (empty descriptions)", () => {
+    it("normalizes a pull_request whose body is null", () => {
+      const payload = {
+        action: "opened",
+        repository: repo,
+        sender,
+        pull_request: { ...basePR, body: null },
+      };
+
+      const event = normalizeGitHubEvent("pull_request", payload);
+
+      expect(event).not.toBeNull();
+      expect(event!.eventType).toBe("pull_request.opened");
+      expect(event!.contextBlock).not.toContain("Description:");
+    });
+
+    it("normalizes a closed pull_request whose merged is null", () => {
+      const payload = {
+        action: "closed",
+        repository: repo,
+        sender,
+        pull_request: { ...basePR, merged: null },
+      };
+
+      const event = normalizeGitHubEvent("pull_request", payload);
+
+      expect(event).not.toBeNull();
+      expect(event!.contextBlock).toContain("Status: Closed (not merged)");
+    });
+
+    it("normalizes an issue whose body is null", () => {
+      const payload = {
+        action: "opened",
+        repository: repo,
+        sender,
+        issue: { ...issuesOpenedPayload.issue, body: null },
+      };
+
+      const event = normalizeGitHubEvent("issues", payload);
+
+      expect(event).not.toBeNull();
+      expect(event!.eventType).toBe("issues.opened");
+      expect(event!.contextBlock).not.toContain("Description:");
+    });
+  });
 });

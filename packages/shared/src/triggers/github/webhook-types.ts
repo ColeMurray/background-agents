@@ -79,7 +79,10 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
 // normalizer (trigger/concurrency keys, meta) and the context renderer are
 // modeled; `z.object` strips unknown keys. Every field beyond the identity key
 // is optional, so the inferred types stay loose enough for the defensive,
-// optional-chained reads in normalizer.ts and context.ts.
+// optional-chained reads in normalizer.ts and context.ts. Fields GitHub models
+// as `T | null` (an empty PR/issue `body`, an un-merged PR's `merged`) are
+// `.nullable()` so a valid payload that sends `null` parses instead of being
+// dropped as malformed.
 
 const userSchema = z.object({
   login: z.string().optional(),
@@ -101,8 +104,8 @@ const baseEventSchema = z.object({
 const pullRequestObjectSchema = z.object({
   number: z.number(),
   title: z.string().optional(),
-  body: z.string().optional(),
-  merged: z.boolean().optional(),
+  body: z.string().nullable().optional(),
+  merged: z.boolean().nullable().optional(),
   user: userSchema.optional(),
   labels: labelArraySchema.optional(),
   head: z.object({ ref: z.string().optional(), sha: z.string().optional() }).optional(),
@@ -120,7 +123,7 @@ const commentSchema = z.object({
 const issueObjectSchema = z.object({
   number: z.number(),
   title: z.string().optional(),
-  body: z.string().optional(),
+  body: z.string().nullable().optional(),
   user: userSchema.optional(),
   pull_request: z.unknown().optional(),
   labels: labelArraySchema.optional(),
