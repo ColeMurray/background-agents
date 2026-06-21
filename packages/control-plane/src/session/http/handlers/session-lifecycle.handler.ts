@@ -1,9 +1,8 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import type { SandboxSettings } from "@open-inspect/shared";
+import { getValidModelOrDefault, isValidModel, type SandboxSettings } from "@open-inspect/shared";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
-import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
 import {
   normalizeSessionTitle,
   type SessionTitleUpdateOptions,

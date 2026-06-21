@@ -10,7 +10,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  isValidReasoningEffort,
+  resolveAppName,
+  timingSafeEqual,
+} from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
@@ -44,7 +49,6 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import { DEFAULT_MODEL, isValidReasoningEffort } from "../utils/models";
 import type {
   Env,
   ClientInfo,
