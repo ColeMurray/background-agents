@@ -38,6 +38,7 @@ from ..app import (
     validate_control_plane_url,
 )
 from ..auth import generate_internal_token
+from ..clone_token import resolve_clone_token
 from ..log_config import get_logger
 from ..sandbox.manager import (
     DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -173,26 +174,6 @@ async def _callback_with_retry(
     return False
 
 
-def _generate_clone_token() -> str:
-    """Generate a GitHub App install token for git operations. Returns empty string on failure."""
-    from ..auth import generate_installation_token
-
-    try:
-        app_id = os.environ.get("GITHUB_APP_ID")
-        private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-        installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-        if app_id and private_key and installation_id:
-            return generate_installation_token(
-                app_id=app_id,
-                private_key=private_key,
-                installation_id=installation_id,
-            )
-    except Exception as e:
-        log.warn("github.token_error", error=str(e))
-    return ""
-
-
 async def _stream_build_logs(
     sandbox, redact_values: Iterable[str] = ()
 ) -> tuple[str, bool, str | None]:
@@ -286,7 +267,7 @@ async def build_repo_image(
     sandbox_terminated = False
 
     try:
-        clone_token = _generate_clone_token()
+        clone_token = resolve_clone_token() or ""
 
         # Create build sandbox
         log.info(
@@ -579,7 +560,7 @@ async def rebuild_repo_images():
         all_images: list[dict] = status_data.get("images", [])
 
         # 3. Generate GitHub App token for ls-remote
-        clone_token = _generate_clone_token()
+        clone_token = resolve_clone_token() or ""
 
         # 4. Check each enabled repo
         for repo in enabled_repos:
