@@ -49,7 +49,7 @@ async function handleSetGlobal(
   const body = await parseJsonBody<{ settings?: ScmGlobalConfig }>(request);
   if (body instanceof Response) return body;
 
-  if (!body?.settings || typeof body.settings !== "object") {
+  if (!body?.settings || typeof body.settings !== "object" || Array.isArray(body.settings)) {
     return error("Request body must include settings object", 400);
   }
 
@@ -138,7 +138,7 @@ async function handleSetRepoSettings(
   const body = await parseJsonBody<{ settings?: ScmSettings }>(request);
   if (body instanceof Response) return body;
 
-  if (!body?.settings || typeof body.settings !== "object") {
+  if (!body?.settings || typeof body.settings !== "object" || Array.isArray(body.settings)) {
     return error("Request body must include settings object", 400);
   }
 
