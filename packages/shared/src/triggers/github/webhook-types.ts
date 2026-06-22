@@ -170,3 +170,93 @@ export type IssueCommentPayload = z.infer<typeof issueCommentEventSchema>;
 export type PullRequestReviewCommentPayload = z.infer<typeof pullRequestReviewCommentEventSchema>;
 export type CheckSuitePayload = z.infer<typeof checkSuiteEventSchema>;
 export type IssuesPayload = z.infer<typeof issuesEventSchema>;
+
+// ─── GitHub bot handler payload schemas ───────────────────────────────────────
+
+const githubBotUserSchema = z.object({
+  login: z.string(),
+});
+
+const githubBotSenderSchema = githubBotUserSchema.extend({
+  id: z.number(),
+  avatar_url: z.string(),
+});
+
+const githubBotRepositorySchema = z.object({
+  owner: githubBotUserSchema,
+  name: z.string(),
+  private: z.boolean(),
+});
+
+const githubBotPullRequestSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  body: z.string().nullable(),
+  user: githubBotUserSchema,
+  head: z.object({ ref: z.string(), sha: z.string() }),
+  base: z.object({ ref: z.string() }),
+});
+
+export const githubBotPullRequestOpenedPayloadSchema = z.object({
+  action: z.literal("opened"),
+  pull_request: githubBotPullRequestSchema.extend({ draft: z.boolean() }),
+  repository: githubBotRepositorySchema,
+  sender: githubBotSenderSchema,
+});
+
+export const githubBotReviewRequestedPayloadSchema = z.object({
+  action: z.literal("review_requested"),
+  pull_request: githubBotPullRequestSchema,
+  requested_reviewer: githubBotUserSchema.nullable().optional(),
+  repository: githubBotRepositorySchema,
+  sender: githubBotSenderSchema,
+});
+
+export const githubBotReviewRequestedPrecheckPayloadSchema = z.object({
+  action: z.literal("review_requested"),
+  requested_reviewer: githubBotUserSchema.nullable().optional(),
+  repository: z.object({
+    owner: githubBotUserSchema,
+    name: z.string(),
+  }),
+});
+
+export const githubBotIssueCommentPayloadSchema = z.object({
+  action: z.literal("created"),
+  issue: z.object({
+    number: z.number(),
+    title: z.string(),
+    pull_request: z.object({ url: z.string() }).optional(),
+  }),
+  comment: z.object({
+    id: z.number(),
+    body: z.string(),
+    user: githubBotUserSchema,
+  }),
+  repository: githubBotRepositorySchema,
+  sender: githubBotSenderSchema,
+});
+
+export const githubBotReviewCommentPayloadSchema = z.object({
+  action: z.literal("created"),
+  pull_request: githubBotPullRequestSchema.omit({ body: true, user: true }),
+  comment: z.object({
+    id: z.number(),
+    body: z.string(),
+    path: z.string(),
+    diff_hunk: z.string(),
+    user: githubBotUserSchema,
+  }),
+  repository: githubBotRepositorySchema,
+  sender: githubBotSenderSchema,
+});
+
+export type GitHubBotPullRequestOpenedPayload = z.infer<
+  typeof githubBotPullRequestOpenedPayloadSchema
+>;
+export type GitHubBotReviewRequestedPayload = z.infer<typeof githubBotReviewRequestedPayloadSchema>;
+export type GitHubBotReviewRequestedPrecheckPayload = z.infer<
+  typeof githubBotReviewRequestedPrecheckPayloadSchema
+>;
+export type GitHubBotIssueCommentPayload = z.infer<typeof githubBotIssueCommentPayloadSchema>;
+export type GitHubBotReviewCommentPayload = z.infer<typeof githubBotReviewCommentPayloadSchema>;

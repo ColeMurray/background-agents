@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createSessionRequestSchema, sandboxEventSchema } from ".";
+import {
+  createSessionRequestSchema,
+  sandboxEventSchema,
+  slackInteractionPayloadSchema,
+  userPreferencesRequestSchema,
+} from ".";
 
 describe("boundary schemas", () => {
   describe("createSessionRequestSchema", () => {
@@ -83,6 +88,56 @@ describe("boundary schemas", () => {
       if (result.success) {
         expect(result.data.ackId).toBe("ack-1");
       }
+    });
+  });
+
+  describe("slackInteractionPayloadSchema", () => {
+    it("parses a valid modal interaction payload", () => {
+      const result = slackInteractionPayloadSchema.safeParse({
+        type: "view_submission",
+        trigger_id: "trigger-1",
+        user: { id: "U123" },
+        view: {
+          callback_id: "configure_repo",
+          private_metadata: "{}",
+          state: {
+            values: {
+              block: {
+                action: { type: "plain_text_input", value: "open-inspect/background-agents" },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed partial interaction payload", () => {
+      const result = slackInteractionPayloadSchema.safeParse({
+        actions: [{ action_id: "repo_select" }],
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("userPreferencesRequestSchema", () => {
+    it("parses a valid user preferences request", () => {
+      const result = userPreferencesRequestSchema.safeParse({
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "high",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects malformed preference fields", () => {
+      const result = userPreferencesRequestSchema.safeParse({
+        model: 123,
+      });
+
+      expect(result.success).toBe(false);
     });
   });
 });

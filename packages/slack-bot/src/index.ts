@@ -22,6 +22,7 @@ import {
   getChannelInfo,
   getThreadMessages,
   getUserInfo,
+  slackInteractionPayloadSchema,
 } from "@open-inspect/shared";
 import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
@@ -590,7 +591,18 @@ app.post("/interactions", async (c) => {
   }
 
   const payloadStr = new URLSearchParams(body).get("payload") || "{}";
-  const payload = JSON.parse(payloadStr) as SlackInteractionPayload;
+  let rawPayload: unknown;
+  try {
+    rawPayload = JSON.parse(payloadStr);
+  } catch {
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+
+  const parsedPayload = slackInteractionPayloadSchema.safeParse(rawPayload);
+  if (!parsedPayload.success) {
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+  const payload: SlackInteractionPayload = parsedPayload.data;
   const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
 
   const appHomeResponse = await handleAppHomeInteractionRoute(

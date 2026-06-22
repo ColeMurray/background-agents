@@ -14,7 +14,11 @@ import {
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { resolveAppName, verifyInternalToken } from "@open-inspect/shared";
+import {
+  resolveAppName,
+  userPreferencesRequestSchema,
+  verifyInternalToken,
+} from "@open-inspect/shared";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import {
   getTeamRepoMapping,
@@ -228,7 +232,9 @@ app.get("/config/user-prefs/:userId", async (c) => {
 
 app.put("/config/user-prefs/:userId", async (c) => {
   const userId = c.req.param("userId");
-  const body = (await c.req.json()) as Partial<UserPreferences>;
+  const parsedBody = userPreferencesRequestSchema.safeParse(await c.req.json());
+  if (!parsedBody.success) return c.json({ error: "invalid request body" }, 400);
+  const body = parsedBody.data;
   const prefs: UserPreferences = {
     userId,
     model: body.model || c.env.DEFAULT_MODEL,
