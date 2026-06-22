@@ -100,7 +100,7 @@ export interface SlackAppMentionEvent {
   thread_ts?: string;
 }
 
-export type { SlackInteractionPayload } from "@open-inspect/shared";
+export type { SlackInteractionPayload } from "../interaction-payload";
 
 /**
  * Callback context passed with prompts for follow-up notifications.

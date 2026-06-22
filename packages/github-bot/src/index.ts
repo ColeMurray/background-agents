@@ -10,20 +10,19 @@ import type { Env } from "./types";
 import type { Logger } from "./logger";
 import { createLogger, parseLogLevel } from "./logger";
 import { verifyWebhookSignature } from "./verify";
+import { normalizeGitHubEvent, buildInternalAuthHeaders } from "@open-inspect/shared";
 import {
-  normalizeGitHubEvent,
-  buildInternalAuthHeaders,
-  githubBotIssueCommentPayloadSchema,
-  githubBotPullRequestOpenedPayloadSchema,
-  githubBotReviewCommentPayloadSchema,
-  githubBotReviewRequestedPrecheckPayloadSchema,
-  githubBotReviewRequestedPayloadSchema,
-} from "@open-inspect/shared";
+  issueCommentPayloadSchema,
+  pullRequestOpenedPayloadSchema,
+  reviewCommentPayloadSchema,
+  reviewRequestedPayloadSchema,
+} from "./payload-schemas";
 import {
   handlePullRequestOpened,
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
+  isReviewRequestedForBot,
   type HandlerResult,
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared";
@@ -233,18 +232,15 @@ function dispatchHandler(
   switch (event) {
     case "pull_request":
       if (p.action === "opened") {
-        const parsed = githubBotPullRequestOpenedPayloadSchema.safeParse(payload);
+        const parsed = pullRequestOpenedPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed pull_request opened payload");
         return handlePullRequestOpened(env, log, parsed.data, traceId);
       }
       if (p.action === "review_requested") {
-        const prechecked = githubBotReviewRequestedPrecheckPayloadSchema.safeParse(payload);
-        if (!prechecked.success) throw new Error("Malformed pull_request review_requested payload");
-        if (prechecked.data.requested_reviewer?.login !== env.GITHUB_BOT_USERNAME) {
+        if (!isReviewRequestedForBot(payload, env.GITHUB_BOT_USERNAME)) {
           return Promise.resolve({ outcome: "skipped", skip_reason: "review_not_for_bot" });
         }
-
-        const parsed = githubBotReviewRequestedPayloadSchema.safeParse(payload);
+        const parsed = reviewRequestedPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed pull_request review_requested payload");
         return handleReviewRequested(env, log, parsed.data, traceId);
       }
@@ -254,7 +250,7 @@ function dispatchHandler(
       });
     case "issue_comment":
       if (p.action === "created") {
-        const parsed = githubBotIssueCommentPayloadSchema.safeParse(payload);
+        const parsed = issueCommentPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed issue_comment created payload");
         return handleIssueComment(env, log, parsed.data, traceId);
       }
@@ -264,7 +260,7 @@ function dispatchHandler(
       });
     case "pull_request_review_comment":
       if (p.action === "created") {
-        const parsed = githubBotReviewCommentPayloadSchema.safeParse(payload);
+        const parsed = reviewCommentPayloadSchema.safeParse(payload);
         if (!parsed.success)
           throw new Error("Malformed pull_request_review_comment created payload");
         return handleReviewComment(env, log, parsed.data, traceId);

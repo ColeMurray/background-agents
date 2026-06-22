@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  githubBotIssueCommentPayloadSchema,
-  githubBotPullRequestOpenedPayloadSchema,
-  githubBotReviewRequestedPrecheckPayloadSchema,
-  githubBotReviewRequestedPayloadSchema,
-} from "./webhook-types";
+  issueCommentPayloadSchema,
+  pullRequestOpenedPayloadSchema,
+  reviewCommentPayloadSchema,
+  reviewRequestedPayloadSchema,
+} from "../src/payload-schemas";
 
 const sender = { login: "octocat", id: 123, avatar_url: "https://example.com/avatar.png" };
 const repository = { owner: { login: "open-inspect" }, name: "background-agents", private: false };
@@ -18,9 +18,9 @@ const pullRequest = {
   base: { ref: "main" },
 };
 
-describe("GitHub bot webhook payload schemas", () => {
+describe("GitHub bot payload schemas", () => {
   it("parses a valid pull request opened payload", () => {
-    const result = githubBotPullRequestOpenedPayloadSchema.safeParse({
+    const result = pullRequestOpenedPayloadSchema.safeParse({
       action: "opened",
       pull_request: { ...pullRequest, draft: false },
       repository,
@@ -31,7 +31,7 @@ describe("GitHub bot webhook payload schemas", () => {
   });
 
   it("rejects a malformed partial issue comment payload", () => {
-    const result = githubBotIssueCommentPayloadSchema.safeParse({
+    const result = issueCommentPayloadSchema.safeParse({
       action: "created",
       issue: { number: 42, title: "Missing comment" },
       repository,
@@ -42,7 +42,7 @@ describe("GitHub bot webhook payload schemas", () => {
   });
 
   it("parses nullable pull request bodies and nullable requested reviewers", () => {
-    const result = githubBotReviewRequestedPayloadSchema.safeParse({
+    const result = reviewRequestedPayloadSchema.safeParse({
       action: "review_requested",
       pull_request: { ...pullRequest, body: null },
       requested_reviewer: null,
@@ -53,10 +53,24 @@ describe("GitHub bot webhook payload schemas", () => {
     expect(result.success).toBe(true);
   });
 
-  it("prechecks review requests without fields only needed when handling", () => {
-    const result = githubBotReviewRequestedPrecheckPayloadSchema.safeParse({
-      action: "review_requested",
-      repository: { owner: { login: "open-inspect" }, name: "background-agents" },
+  it("parses a valid pull request review comment payload", () => {
+    const result = reviewCommentPayloadSchema.safeParse({
+      action: "created",
+      pull_request: {
+        number: pullRequest.number,
+        title: pullRequest.title,
+        head: pullRequest.head,
+        base: pullRequest.base,
+      },
+      comment: {
+        id: 99,
+        body: "@open-inspect-bot please check this",
+        path: "src/index.ts",
+        diff_hunk: "@@ -1,2 +1,2 @@",
+        user: { login: "reviewer" },
+      },
+      repository,
+      sender,
     });
 
     expect(result.success).toBe(true);

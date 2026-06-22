@@ -40,8 +40,8 @@ export interface Env {
 }
 
 export type {
-  GitHubBotIssueCommentPayload as IssueCommentPayload,
-  GitHubBotPullRequestOpenedPayload as PullRequestOpenedPayload,
-  GitHubBotReviewCommentPayload as ReviewCommentPayload,
-  GitHubBotReviewRequestedPayload as ReviewRequestedPayload,
-} from "@open-inspect/shared";
+  IssueCommentPayload,
+  PullRequestOpenedPayload,
+  ReviewCommentPayload,
+  ReviewRequestedPayload,
+} from "./payload-schemas";

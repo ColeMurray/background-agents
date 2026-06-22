@@ -7,21 +7,7 @@ import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
 export type { GitHubAutomationEvent } from "../types";
 export { normalizeGitHubEvent } from "./normalizer";
-export {
-  GITHUB_WEBHOOK_EVENT_CATALOG,
-  githubBotIssueCommentPayloadSchema,
-  githubBotPullRequestOpenedPayloadSchema,
-  githubBotReviewCommentPayloadSchema,
-  githubBotReviewRequestedPrecheckPayloadSchema,
-  githubBotReviewRequestedPayloadSchema,
-} from "./webhook-types";
-export type {
-  GitHubBotIssueCommentPayload,
-  GitHubBotPullRequestOpenedPayload,
-  GitHubBotReviewCommentPayload,
-  GitHubBotReviewRequestedPrecheckPayload,
-  GitHubBotReviewRequestedPayload,
-} from "./webhook-types";
+export { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
 export const githubSource: TriggerSourceDefinition = {
   source: "github",

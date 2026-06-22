@@ -22,7 +22,6 @@ import {
   getChannelInfo,
   getThreadMessages,
   getUserInfo,
-  slackInteractionPayloadSchema,
 } from "@open-inspect/shared";
 import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
@@ -41,6 +40,7 @@ import {
   buildRepoClarificationBlocks,
 } from "./repo-clarification";
 import { getResolvedUserPreferences } from "./user-preferences";
+import { slackInteractionPayloadSchema } from "./interaction-payload";
 
 const log = createLogger("handler");
 
