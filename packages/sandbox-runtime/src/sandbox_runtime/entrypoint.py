@@ -565,7 +565,7 @@ class SandboxSupervisor:
         self._install_bin_scripts()
 
     def _install_bin_scripts(self) -> None:
-        """Install standalone CLI scripts into /usr/local/bin.
+        """Install standalone CLI scripts into a writable user bin directory.
 
         Scripts in bin/ are standalone CLIs (not OpenCode tool plugins) and must
         NOT be placed in .opencode/tool/ — OpenCode would import() them during
@@ -575,12 +575,14 @@ class SandboxSupervisor:
         if not bin_dir.is_dir():
             return
 
+        install_dir = Path.home() / ".local" / "bin"
+        install_dir.mkdir(parents=True, exist_ok=True)
         for script in bin_dir.iterdir():
             if script.is_file() and script.suffix == ".js":
-                dest = Path("/usr/local/bin") / script.stem
+                dest = install_dir / script.stem
                 shutil.copy(script, dest)
                 dest.chmod(0o755)
-                self.log.info("bin.installed", script=script.stem)
+                self.log.info("bin.installed", script=script.stem, path=str(dest))
 
     def _install_skills(self, workdir: Path) -> None:
         """Copy bundled Skills into the .opencode/skills directory."""
@@ -970,10 +972,10 @@ class SandboxSupervisor:
 
     async def _wait_for_health(self) -> None:
         """Poll health endpoint until server is ready."""
-        health_url = f"http://localhost:{self.OPENCODE_PORT}/global/health"
+        health_url = f"http://127.0.0.1:{self.OPENCODE_PORT}/global/health"
         start_time = time.time()
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             while time.time() - start_time < self.HEALTH_CHECK_TIMEOUT:
                 if self.shutdown_event.is_set():
                     raise RuntimeError("Shutdown requested during startup")

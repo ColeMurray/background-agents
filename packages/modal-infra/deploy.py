@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 # Import modules to register functions with the app
 # This makes all web endpoints and functions available
 from src.app import app
+from src import web_api as _web_api  # noqa: F401
 
 # Re-export the app for Modal
 __all__ = ["app"]

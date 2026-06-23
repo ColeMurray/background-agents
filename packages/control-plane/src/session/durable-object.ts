@@ -19,9 +19,11 @@ import {
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
+import { createOpenComputerRestClient } from "../sandbox/opencomputer-rest-client";
 import { createVercelSandboxClient } from "../sandbox/providers/vercel/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
+import { createOpenComputerProvider } from "../sandbox/providers/opencomputer-provider";
 import { createVercelProvider } from "../sandbox/providers/vercel/provider";
 import { resolveSandboxBackendName, supportsRepoImageBackend } from "../sandbox/provider-name";
 import { createLogger, parseLogLevel } from "../logger";
@@ -630,6 +632,34 @@ export class SessionDO extends DurableObject<Env> {
           runtime: this.env.VERCEL_RUNTIME,
           snapshotExpirationMs: parseInt(this.env.VERCEL_SNAPSHOT_EXPIRATION_MS || "0", 10),
           codeServerPasswordSecret: this.env.VERCEL_TOKEN,
+        });
+      }
+
+      if (sandboxBackend === "opencomputer") {
+        if (
+          !this.env.OPENCOMPUTER_API_URL ||
+          !this.env.OPENCOMPUTER_API_KEY ||
+          !this.env.OPENCOMPUTER_TEMPLATE
+        ) {
+          throw new Error(
+            "OPENCOMPUTER_API_URL, OPENCOMPUTER_API_KEY, and OPENCOMPUTER_TEMPLATE are required when SANDBOX_PROVIDER=opencomputer"
+          );
+        }
+
+        const openComputerClient = createOpenComputerRestClient({
+          apiUrl: this.env.OPENCOMPUTER_API_URL,
+          apiKey: this.env.OPENCOMPUTER_API_KEY,
+          template: this.env.OPENCOMPUTER_TEMPLATE,
+          projectId: this.env.OPENCOMPUTER_PROJECT_ID,
+          target: this.env.OPENCOMPUTER_TARGET,
+        });
+
+        return createOpenComputerProvider(openComputerClient, {
+          scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+          codeServerPasswordSecret: this.env.OPENCOMPUTER_API_KEY,
+          llmEnvVars: {
+            ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY,
+          },
         });
       }
 

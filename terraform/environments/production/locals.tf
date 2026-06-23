@@ -1,8 +1,9 @@
 locals {
-  name_suffix         = var.deployment_name
-  use_modal_backend   = var.sandbox_provider == "modal"
-  use_daytona_backend = var.sandbox_provider == "daytona"
-  use_vercel_backend  = var.sandbox_provider == "vercel"
+  name_suffix              = var.deployment_name
+  use_modal_backend        = var.sandbox_provider == "modal"
+  use_daytona_backend      = var.sandbox_provider == "daytona"
+  use_vercel_backend       = var.sandbox_provider == "vercel"
+  use_opencomputer_backend = var.sandbox_provider == "opencomputer"
 
   # Google login is enabled only when both OAuth credentials are configured.
   # Drives the build-time NEXT_PUBLIC_GOOGLE_ENABLED flag (sign-in button) and

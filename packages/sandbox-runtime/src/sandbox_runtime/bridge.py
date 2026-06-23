@@ -166,7 +166,7 @@ class AgentBridge:
         self.control_plane_url = control_plane_url
         self.auth_token = auth_token
         self.opencode_port = opencode_port
-        self.opencode_base_url = f"http://localhost:{opencode_port}"
+        self.opencode_base_url = f"http://127.0.0.1:{opencode_port}"
 
         # Logger
         self.log = get_logger(
@@ -234,7 +234,8 @@ class AgentBridge:
             timeout=httpx.Timeout(
                 self.HTTP_DEFAULT_TIMEOUT,
                 connect=self.HTTP_CONNECT_TIMEOUT,
-            )
+            ),
+            trust_env=False,
         )
         await self._load_session_id()
 

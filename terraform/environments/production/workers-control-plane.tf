@@ -83,6 +83,16 @@ module "control_plane_worker" {
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
     ] : [],
+    local.use_opencomputer_backend ? [
+      { name = "OPENCOMPUTER_API_URL", value = var.opencomputer_api_url },
+      { name = "OPENCOMPUTER_TEMPLATE", value = var.opencomputer_template },
+    ] : [],
+    local.use_opencomputer_backend && var.opencomputer_project_id != "" ? [
+      { name = "OPENCOMPUTER_PROJECT_ID", value = var.opencomputer_project_id },
+    ] : [],
+    local.use_opencomputer_backend && var.opencomputer_target != "" ? [
+      { name = "OPENCOMPUTER_TARGET", value = var.opencomputer_target },
+    ] : [],
     local.use_vercel_backend ? [
       { name = "VERCEL_PROJECT_ID", value = var.vercel_sandbox_project_id },
       { name = "VERCEL_RUNTIME", value = var.vercel_sandbox_runtime },
@@ -120,6 +130,10 @@ module "control_plane_worker" {
     ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
+    ] : [],
+    local.use_opencomputer_backend ? [
+      { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     ] : [],
     local.use_vercel_backend ? [
       { name = "VERCEL_TOKEN", value = var.vercel_sandbox_token },

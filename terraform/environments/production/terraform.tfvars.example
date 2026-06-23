@@ -83,6 +83,15 @@ vercel_sandbox_project_id = "" # e.g., "prj_xxxxxxxxxxxxxxxxxxxx"
 # vercel_sandbox_runtime  = "node24"
 # vercel_snapshot_expiration_ms = 0
 
+# OpenComputer REST API
+# Only required when sandbox_provider = "opencomputer"
+# The template must include the OpenInspect sandbox runtime entrypoint.
+opencomputer_api_url = "https://app.opencomputer.dev/api"
+opencomputer_api_key = ""
+opencomputer_template = ""
+# opencomputer_project_id = "" # Optional project/workspace scope
+# opencomputer_target     = "" # Optional target/region/cell
+
 # =============================================================================
 # GitHub App Credentials
 # =============================================================================
@@ -214,6 +223,7 @@ nextauth_secret = ""
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
 # - "daytona": direct Daytona REST API integration with stop/start resume
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
+# - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
 sandbox_provider = "modal"
 
 # Platform for the web app deployment

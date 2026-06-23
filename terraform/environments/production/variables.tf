@@ -343,6 +343,52 @@ variable "daytona_target" {
   default     = ""
 }
 
+variable "opencomputer_api_url" {
+  description = "Base URL for the OpenComputer REST API (e.g. https://api.opencomputer.dev)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "opencomputer" || length(var.opencomputer_api_url) > 0
+    error_message = "opencomputer_api_url must be set when sandbox_provider = 'opencomputer'."
+  }
+}
+
+variable "opencomputer_api_key" {
+  description = "API key for OpenComputer REST API (X-API-Key auth)"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "opencomputer" || length(var.opencomputer_api_key) > 0
+    error_message = "opencomputer_api_key must be set when sandbox_provider = 'opencomputer'."
+  }
+}
+
+variable "opencomputer_template" {
+  description = "OpenComputer declarative template containing the OpenInspect sandbox runtime"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "opencomputer" || length(var.opencomputer_template) > 0
+    error_message = "opencomputer_template must be set when sandbox_provider = 'opencomputer'."
+  }
+}
+
+variable "opencomputer_project_id" {
+  description = "Optional OpenComputer project/workspace scope"
+  type        = string
+  default     = ""
+}
+
+variable "opencomputer_target" {
+  description = "Optional OpenComputer target, region, or cell"
+  type        = string
+  default     = ""
+}
+
 variable "vercel_sandbox_token" {
   description = "Vercel API token for the Vercel Sandbox API"
   type        = string
@@ -407,13 +453,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', or 'vercel'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', or 'opencomputer'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', or 'vercel'."
+    condition     = contains(["modal", "daytona", "vercel", "opencomputer"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', or 'opencomputer'."
   }
 }
 
