@@ -193,6 +193,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       NODE_EXTRA_CA_CERTS: OPENSANDBOX_PROXY_CA,
       NPM_CONFIG_CAFILE: OPENSANDBOX_PROXY_CA,
       GIT_SSL_CAINFO: OPENSANDBOX_PROXY_CA,
+      OPENINSPECT_BIN_INSTALL_DIR: USER_BIN,
       NO_PROXY: LOCAL_NO_PROXY,
       no_proxy: LOCAL_NO_PROXY,
       SANDBOX_VERSION: "opencomputer-v1",

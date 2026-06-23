@@ -41,6 +41,7 @@ def _patch_paths(
             .replace("/app/sandbox_runtime/skills", str(skills))
             .replace("/app/sandbox_runtime/bin", str(bin_src))
             .replace("/app/opencode-deps", str(deps_cache))
+            .replace("/usr/local/bin", str(bin_dest))
             .replace("/home/sandbox/.local/bin", str(bin_dest))
         )
         yield
@@ -254,7 +255,7 @@ class TestInstallBinScripts:
     """Cases for _install_bin_scripts() standalone CLI installation."""
 
     def test_scripts_installed_to_bin(self, tmp_path):
-        """JS scripts in bin/ should be copied to user bin without .js extension."""
+        """JS scripts in bin/ should be copied to /usr/local/bin without .js extension."""
         sup = _make_supervisor()
 
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
@@ -273,6 +274,32 @@ class TestInstallBinScripts:
         assert installed.exists()
         assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
         assert installed.stat().st_mode & 0o755
+
+    def test_scripts_installed_to_configured_bin(self, tmp_path, monkeypatch):
+        """OPENINSPECT_BIN_INSTALL_DIR can override the install directory."""
+        sup = _make_supervisor()
+
+        src = tmp_path / "app" / "sandbox_runtime" / "bin"
+        src.mkdir(parents=True)
+        (src / "upload-media.js").write_text("#!/usr/bin/env node\n// upload cli")
+
+        default_dest = tmp_path / "usr-local-bin"
+        default_dest.mkdir()
+        user_dest = tmp_path / "configured-bin"
+        monkeypatch.setenv("OPENINSPECT_BIN_INSTALL_DIR", str(user_dest))
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy",
+            tools=tmp_path / "no-tools",
+            bin_src=src,
+            bin_dest=default_dest,
+        ):
+            sup._install_bin_scripts()
+
+        installed = user_dest / "upload-media"
+        assert installed.exists()
+        assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
+        assert not (default_dest / "upload-media").exists()
 
     def test_non_js_files_skipped(self, tmp_path):
         """Non-.js files in bin/ should not be installed."""
