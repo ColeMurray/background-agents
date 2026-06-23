@@ -27,7 +27,7 @@ cloudflare_api_token = ""
 cloudflare_account_id = ""
 
 # Cloudflare zone ID (optional, only needed for custom domains)
-# From domains overview list, select the "copy zone id"
+# In the Cloudflare dashboard, open the domain's Overview and use "Copy zone ID".
 # cloudflare_zone_id = ""
 
 # Custom domain (hostname) for the Cloudflare web Worker (optional).
