@@ -145,6 +145,12 @@ const RUNTIME_ENV_EXPORTS =
 const RUNTIME_CA_BOOTSTRAP =
   `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates >/tmp/openinspect-update-ca.log 2>&1 || true; ` +
   `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo git config --system http.sslCAInfo ${OPENSANDBOX_PROXY_CA} || true`;
+const RUNTIME_LOG_PATH = "/var/log/openinspect-runtime.log";
+const LEGACY_RUNTIME_LOG_PATH = "/tmp/openinspect-runtime.log";
+const RUNTIME_LOG_BOOTSTRAP =
+  `sudo touch ${RUNTIME_LOG_PATH}; ` +
+  `sudo chown "$(id -u):$(id -g)" ${RUNTIME_LOG_PATH}; ` +
+  `ln -sf ${RUNTIME_LOG_PATH} ${LEGACY_RUNTIME_LOG_PATH}`;
 
 export class OpenComputerRestClient {
   private readonly baseUrl: string;
@@ -264,7 +270,7 @@ export class OpenComputerRestClient {
         cmd: "sh",
         args: [
           "-c",
-          `${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; nohup python3 -m sandbox_runtime.entrypoint >/tmp/openinspect-runtime.log 2>&1 & echo $!`,
+          `${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
         ],
         timeout: 10,
       }
