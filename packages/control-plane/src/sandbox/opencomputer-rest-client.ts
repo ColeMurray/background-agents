@@ -132,6 +132,11 @@ const RUNTIME_CA_EXPORTS =
   `NPM_CONFIG_CAFILE=${OPENSANDBOX_PROXY_CA} ` +
   `GIT_SSL_CAINFO=${OPENSANDBOX_PROXY_CA}`;
 const LOCAL_NO_PROXY = "localhost,127.0.0.1,::1";
+const RUNTIME_HOSTS_BOOTSTRAP =
+  "grep -Eq '^[[:space:]]*127\\.0\\.0\\.1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
+  "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
+  "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
+  "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
 const RUNTIME_ENV_EXPORTS =
   "export HOME=/home/sandbox " +
   `VIRTUAL_ENV=${PYTHON_VENV} ` +
@@ -262,19 +267,14 @@ export class OpenComputerRestClient {
   }
 
   async startRuntime(id: string): Promise<void> {
-    await this.request<void>(
-      "POST",
-      this.expandPath(this.paths.exec, { id }),
-      TIMEOUT_EXEC_MS,
-      {
-        cmd: "sh",
-        args: [
-          "-c",
-          `${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
-        ],
-        timeout: 10,
-      }
-    );
+    await this.request<void>("POST", this.expandPath(this.paths.exec, { id }), TIMEOUT_EXEC_MS, {
+      cmd: "sh",
+      args: [
+        "-c",
+        `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
+      ],
+      timeout: 10,
+    });
   }
 
   async getTunnelUrl(id: string, port: number): Promise<OpenComputerTunnelResponse> {

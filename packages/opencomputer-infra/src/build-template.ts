@@ -17,6 +17,11 @@ const UV_PYTHON_INSTALL_DIR = `${SANDBOX_HOME}/.local/share/uv/python`;
 const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
 const LOCAL_NO_PROXY = "localhost,127.0.0.1,::1";
+const HOSTS_BOOTSTRAP =
+  "grep -Eq '^[[:space:]]*127\\.0\\.0\\.1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
+  "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
+  "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
+  "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
 
 interface BuildOptions {
   apiUrl: string;
@@ -65,9 +70,7 @@ function resolveOptions(args: string[]): BuildOptions {
   const builderMemoryMb = parsePositiveInt(process.env.OPENCOMPUTER_BUILDER_MEMORY_MB, 8192);
 
   return {
-    apiUrl: normalizeApiUrl(
-      process.env.OPENCOMPUTER_API_URL || "https://app.opencomputer.dev/api"
-    ),
+    apiUrl: normalizeApiUrl(process.env.OPENCOMPUTER_API_URL || "https://app.opencomputer.dev/api"),
     apiKey: process.env.OPENCOMPUTER_API_KEY || "",
     snapshotName,
     repoRoot,
@@ -155,6 +158,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       `cd /app/opencode-deps && sudo env npm_config_cache=${NPM_CACHE} npm install --ignore-scripts --no-audit --no-fund`
     )
     .runCommands(
+      HOSTS_BOOTSTRAP,
       "printf '%s\\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"' | sudo tee /usr/local/bin/oi-git-credentials >/dev/null",
       "sudo chmod 0755 /usr/local/bin/oi-git-credentials",
       "sudo git config --system credential.helper /usr/local/bin/oi-git-credentials",
