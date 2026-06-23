@@ -22,6 +22,9 @@ const HOSTS_BOOTSTRAP =
   "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
   "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
   "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
+const DNS_BOOTSTRAP =
+  "sudo rm -f /etc/resolv.conf; " +
+  "printf '%s\\n' 'nameserver 8.8.8.8' 'nameserver 1.1.1.1' | sudo tee /etc/resolv.conf >/dev/null";
 
 interface BuildOptions {
   apiUrl: string;
@@ -159,6 +162,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
     )
     .runCommands(
       HOSTS_BOOTSTRAP,
+      DNS_BOOTSTRAP,
       "printf '%s\\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"' | sudo tee /usr/local/bin/oi-git-credentials >/dev/null",
       "sudo chmod 0755 /usr/local/bin/oi-git-credentials",
       "sudo git config --system credential.helper /usr/local/bin/oi-git-credentials",

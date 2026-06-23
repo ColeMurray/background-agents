@@ -9,10 +9,8 @@
     "build-template:run": "node dist/build-template.js",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@opencomputer/sdk": "^0.7.5"
-  },
   "devDependencies": {
+    "@opencomputer/sdk": "^0.7.5",
     "esbuild": "^0.28.1",
     "typescript": "^5.7.2"
   }
