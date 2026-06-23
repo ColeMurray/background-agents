@@ -40,6 +40,7 @@ import {
   buildRepoClarificationBlocks,
 } from "./repo-clarification";
 import { getResolvedUserPreferences } from "./user-preferences";
+import { slackInteractionPayloadSchema } from "./interaction-payload";
 
 const log = createLogger("handler");
 
@@ -590,7 +591,18 @@ app.post("/interactions", async (c) => {
   }
 
   const payloadStr = new URLSearchParams(body).get("payload") || "{}";
-  const payload = JSON.parse(payloadStr) as SlackInteractionPayload;
+  let rawPayload: unknown;
+  try {
+    rawPayload = JSON.parse(payloadStr);
+  } catch {
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+
+  const parsedPayload = slackInteractionPayloadSchema.safeParse(rawPayload);
+  if (!parsedPayload.success) {
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+  const payload: SlackInteractionPayload = parsedPayload.data;
   const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
 
   const appHomeResponse = await handleAppHomeInteractionRoute(

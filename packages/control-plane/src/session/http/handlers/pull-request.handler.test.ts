@@ -111,6 +111,23 @@ describe("createPullRequestHandler", () => {
     expect(await response.json()).toEqual({ error: "No active prompt found" });
   });
 
+  it("returns 400 for malformed create PR bodies", async () => {
+    const { handler, getSession, createPullRequest } = createHandler();
+    getSession.mockReturnValue(createSession());
+
+    const response = await handler.createPr(
+      new Request("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "PR", body: null }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(createPullRequest).not.toHaveBeenCalled();
+  });
+
   it("returns auth resolution error payload", async () => {
     const { handler, getSession, getPromptingParticipantForPR, resolveAuthForPR } = createHandler();
     const participant = createParticipant();

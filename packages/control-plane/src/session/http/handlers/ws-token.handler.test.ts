@@ -79,6 +79,23 @@ describe("createWsTokenHandler", () => {
     expect(await response.json()).toEqual({ error: "userId is required" });
   });
 
+  it("returns 400 for malformed token metadata", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.generateWsToken(
+      new Request("http://internal/internal/ws-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", scmTokenExpiresAt: "tomorrow" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+  });
+
   it("updates an existing participant and issues a new token", async () => {
     const { handler, repository, getParticipantByUserId, hashToken, log } = createHandler();
     const participant = createParticipant({ scm_token_expires_at: 1000 });
@@ -207,5 +224,43 @@ describe("createWsTokenHandler", () => {
       1234
     );
     expect(getParticipantByUserId).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts nullable optional token fields", async () => {
+    const { handler, repository, getParticipantByUserId } = createHandler();
+    const createdParticipant = createParticipant({ id: "participant-new" });
+    getParticipantByUserId.mockReturnValueOnce(null).mockReturnValueOnce(createdParticipant);
+
+    const response = await handler.generateWsToken(
+      new Request("http://internal/internal/ws-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-1",
+          scmUserId: null,
+          scmLogin: null,
+          scmName: null,
+          scmEmail: null,
+          scmTokenEncrypted: null,
+          scmRefreshTokenEncrypted: null,
+          scmTokenExpiresAt: null,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.createParticipant).toHaveBeenCalledWith({
+      id: "participant-1",
+      userId: "user-1",
+      scmUserId: null,
+      scmLogin: null,
+      scmName: null,
+      scmEmail: null,
+      scmAccessTokenEncrypted: null,
+      scmRefreshTokenEncrypted: null,
+      scmTokenExpiresAt: null,
+      role: "member",
+      joinedAt: 1234,
+    });
   });
 });
