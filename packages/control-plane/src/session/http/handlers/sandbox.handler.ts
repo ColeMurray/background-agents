@@ -162,9 +162,17 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
     },
 
     async verifySandboxToken(request: Request): Promise<Response> {
-      const body = (await request.json()) as { token: string };
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ valid: false, error: "Missing token" }, { status: 400 });
+      }
 
-      if (!body.token) {
+      const body = raw && typeof raw === "object" ? raw : null;
+      const token = body && "token" in body ? body.token : undefined;
+
+      if (typeof token !== "string" || !token) {
         return Response.json({ valid: false, error: "Missing token" }, { status: 400 });
       }
 
@@ -181,7 +189,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ valid: false, error: "Sandbox stopped" }, { status: 410 });
       }
 
-      const isTokenValid = await deps.isValidSandboxToken(body.token, sandbox);
+      const isTokenValid = await deps.isValidSandboxToken(token, sandbox);
       if (!isTokenValid) {
         deps.getLog().warn("Sandbox token verification failed: token mismatch");
         return Response.json({ valid: false, error: "Invalid token" }, { status: 401 });
