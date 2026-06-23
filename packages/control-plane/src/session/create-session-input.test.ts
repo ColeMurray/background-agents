@@ -9,6 +9,14 @@ function jsonRequest(body: unknown): Request {
   });
 }
 
+function rawRequest(body: string): Request {
+  return new Request("http://internal/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+}
+
 describe("parseCreateSessionInput", () => {
   it("parses a valid session input with identity fields", async () => {
     const result = await parseCreateSessionInput(
@@ -41,6 +49,18 @@ describe("parseCreateSessionInput", () => {
     const result = await parseCreateSessionInput(jsonRequest({ repoOwner: "open-inspect" }));
 
     expect(result).toEqual({ ok: false, message: "Invalid session request body" });
+  });
+
+  it("rejects invalid JSON without throwing", async () => {
+    const result = await parseCreateSessionInput(rawRequest("{"));
+
+    expect(result).toEqual({ ok: false, message: "Invalid JSON body" });
+  });
+
+  it.each([null, [], "repo", 123, true])("rejects non-object JSON body %s", async (body) => {
+    const result = await parseCreateSessionInput(jsonRequest(body));
+
+    expect(result).toEqual({ ok: false, message: "JSON body must be an object" });
   });
 
   it("rejects an invalid auth provider instead of preserving it", async () => {
