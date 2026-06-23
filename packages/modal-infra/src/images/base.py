@@ -49,6 +49,38 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # v51: SCM credential helper backed by control plane; remove embedded VCS tokens
 CACHE_BUSTER = "v52-bake-opencode-global-deps"
 
+
+def opencode_deps_staging_commands() -> tuple[str, ...]:
+    """Commands that pre-stage OpenCode plugin deps and global config."""
+    return (
+        "mkdir -p /app/opencode-deps",
+        # Pin staged plugin to OPENCODE_VERSION so the pre-staged tree copied
+        # into .opencode/ at boot matches the globally installed plugin (#567).
+        f'echo \'{{"name":"opencode-tools","type":"module",'
+        f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
+        " > /app/opencode-deps/package.json",
+        "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
+        # Bake the in-sync tree into the global config dir so the runtime seed is a no-op.
+        "mkdir -p /root/.config/opencode",
+        "cp -a /app/opencode-deps/. /root/.config/opencode/",
+    )
+
+
+def git_credential_helper_commands() -> tuple[str, ...]:
+    """Commands that install and configure the Open-Inspect git credential helper."""
+    return (
+        "printf '%s\\n'"
+        " '#!/bin/sh'"
+        " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
+        " > /usr/local/bin/oi-git-credentials",
+        "chmod 0755 /usr/local/bin/oi-git-credentials",
+        "git config --system credential.helper /usr/local/bin/oi-git-credentials",
+        # Pass the repo path to the helper so it can scope credentials to the
+        # session repo, not just the host.
+        "git config --system credential.useHttpPath true",
+    )
+
+
 # Base image with all development tools
 base_image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -140,16 +172,7 @@ base_image = (
     # multi-second node_modules copy on every boot. Baking it makes that seed a
     # no-op (it skips when node_modules already exists). See #767 / #790.
     .run_commands(
-        "mkdir -p /app/opencode-deps",
-        # Pin staged plugin to OPENCODE_VERSION so the pre-staged tree copied
-        # into .opencode/ at boot matches the globally installed plugin (#567).
-        f'echo \'{{"name":"opencode-tools","type":"module",'
-        f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
-        " > /app/opencode-deps/package.json",
-        "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
-        # Bake the in-sync tree into the global config dir so the runtime seed is a no-op.
-        "mkdir -p /root/.config/opencode",
-        "cp -a /app/opencode-deps/. /root/.config/opencode/",
+        *opencode_deps_staging_commands(),
     )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
@@ -191,15 +214,7 @@ base_image = (
     # system level so it applies before entrypoint.py has a chance to run
     # (e.g. when restoring a snapshot whose first action is a `git fetch`).
     .run_commands(
-        "printf '%s\\n'"
-        " '#!/bin/sh'"
-        " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
-        " > /usr/local/bin/oi-git-credentials",
-        "chmod 0755 /usr/local/bin/oi-git-credentials",
-        "git config --system credential.helper /usr/local/bin/oi-git-credentials",
-        # Pass the repo path to the helper so it can scope credentials to the
-        # session repo, not just the host.
-        "git config --system credential.useHttpPath true",
+        *git_credential_helper_commands(),
     )
     # Set environment variables (including cache buster to force rebuild)
     .env(

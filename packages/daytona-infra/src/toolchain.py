@@ -22,10 +22,48 @@ from daytona import CreateSnapshotParams, Daytona, Image
 OPENCODE_VERSION = "1.14.41"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
+TTYD_VERSION = "1.7.7"
+TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-# daytona-v2: install the SCM credential-helper shim and configure
-# git system-wide so per-request token brokerage matches the Modal base image.
-SANDBOX_VERSION = "daytona-v2-credential-helper"
+# daytona-v3: align ttyd and OpenCode dependency staging with Modal/Vercel.
+SANDBOX_VERSION = "daytona-v3-opencode-deps-ttyd"
+
+
+def opencode_deps_staging_commands() -> tuple[str, ...]:
+    """Commands that pre-stage OpenCode plugin deps and global config."""
+    return (
+        "mkdir -p /app/opencode-deps",
+        f'echo \'{{"name":"opencode-tools","type":"module",'
+        f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
+        " > /app/opencode-deps/package.json",
+        "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
+        "mkdir -p /root/.config/opencode",
+        "cp -a /app/opencode-deps/. /root/.config/opencode/",
+    )
+
+
+def ttyd_install_commands() -> tuple[str, ...]:
+    """Commands that install pinned ttyd from the upstream release binary."""
+    return (
+        f"curl -fsSL -o /usr/local/bin/ttyd "
+        f"https://github.com/tsl0922/ttyd/releases/download/{TTYD_VERSION}/ttyd.x86_64",
+        f'echo "{TTYD_SHA256}  /usr/local/bin/ttyd" | sha256sum -c -',
+        "chmod +x /usr/local/bin/ttyd",
+        "ttyd --version",
+    )
+
+
+def git_credential_helper_commands() -> tuple[str, ...]:
+    """Commands that install and configure the Open-Inspect git credential helper."""
+    return (
+        "printf '%s\\n'"
+        " '#!/bin/sh'"
+        ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
+        " > /usr/local/bin/oi-git-credentials",
+        "chmod 0755 /usr/local/bin/oi-git-credentials",
+        "git config --system credential.helper /usr/local/bin/oi-git-credentials",
+        "git config --system credential.useHttpPath true",
+    )
 
 
 def build_base_image(repo_root: Path) -> Image:
@@ -65,27 +103,21 @@ def build_base_image(repo_root: Path) -> Image:
         .run_commands(
             f"npm install -g opencode-ai@{OPENCODE_VERSION}",
             f"npm install -g @opencode-ai/plugin@{OPENCODE_VERSION} zod",
+            *opencode_deps_staging_commands(),
             f"curl -fsSL -o /tmp/code-server.deb "
             f"https://github.com/coder/code-server/releases/download/v{CODE_SERVER_VERSION}/"
             f"code-server_{CODE_SERVER_VERSION}_amd64.deb",
             "dpkg -i /tmp/code-server.deb",
             "rm /tmp/code-server.deb",
+            *ttyd_install_commands(),
             f"npm install -g agent-browser@{AGENT_BROWSER_VERSION}",
             "agent-browser install",
-            "mkdir -p /workspace /app /tmp/opencode",
+            "mkdir -p /workspace /app/plugins /tmp/opencode",
             # Install the SCM credential-helper shim and configure git
             # system-wide. The shim delegates to the Python helper module
             # under sandbox_runtime, baked in at build time via add_local_dir
             # below. Mirror packages/modal-infra/src/images/base.py.
-            "printf '%s\\n'"
-            " '#!/bin/sh'"
-            ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
-            " > /usr/local/bin/oi-git-credentials",
-            "chmod 0755 /usr/local/bin/oi-git-credentials",
-            "git config --system credential.helper /usr/local/bin/oi-git-credentials",
-            # Pass the repo path to the helper so it can scope credentials to
-            # the session repo, not just the host.
-            "git config --system credential.useHttpPath true",
+            *git_credential_helper_commands(),
         )
         .env(
             {
