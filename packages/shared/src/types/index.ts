@@ -530,6 +530,13 @@ export interface UserPreferences {
   updatedAt: number;
 }
 
+export const userPreferencesRequestSchema = z.object({
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
+export type UserPreferencesRequest = z.infer<typeof userPreferencesRequestSchema>;
+
 export interface Logger {
   debug(msg: string, data?: Record<string, unknown>): void;
   info(msg: string, data?: Record<string, unknown>): void;
