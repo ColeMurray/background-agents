@@ -758,7 +758,7 @@ describe("AutomationStore (D1 integration)", () => {
     });
   });
 
-  // ─── Slack triggers (#716) ──────────────────────────────────────────────────
+  // ─── Slack triggers ──────────────────────────────────────────────────
 
   describe("slack triggers", () => {
     const makeSlackAutomation = (overrides?: Partial<AutomationRow>) =>
@@ -934,18 +934,16 @@ describe("AutomationStore (D1 integration)", () => {
       expect(run!.actor_user_id).toBe("U1");
     });
 
-    it("persists max_runs_per_hour and reply_in_thread on the automation", async () => {
+    it("persists max_runs_per_hour on the automation", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeSlackAutomation({ id: "auto-s11", max_runs_per_hour: 5 }));
 
       const row = await store.getById("auto-s11");
       expect(row!.max_runs_per_hour).toBe(5);
-      expect(row!.reply_in_thread).toBe(1); // DB default
 
-      await store.update("auto-s11", { max_runs_per_hour: 20, reply_in_thread: 0 });
+      await store.update("auto-s11", { max_runs_per_hour: 20 });
       const updated = await store.getById("auto-s11");
       expect(updated!.max_runs_per_hour).toBe(20);
-      expect(updated!.reply_in_thread).toBe(0);
     });
   });
 });

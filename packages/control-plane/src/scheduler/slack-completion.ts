@@ -31,8 +31,9 @@ export interface SlackCompletionNotification {
   summary?: string;
   automationName: string;
   /**
-   * The automation's `reply_in_thread` setting. When false, the bot still clears
-   * the `eyes` reaction but posts no completion message into the thread.
+   * The automation's reply-in-thread setting (stored in trigger_config). When
+   * false, the bot still clears the `eyes` reaction but posts no completion
+   * message into the thread.
    */
   replyInThread: boolean;
 }

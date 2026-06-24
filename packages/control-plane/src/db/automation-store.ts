@@ -5,7 +5,12 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
-import type { Automation, AutomationRun, AutomationRunStatus } from "@open-inspect/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationRunStatus,
+  TriggerConfig,
+} from "@open-inspect/shared";
 
 // ─── Internal row types ──────────────────────────────────────────────────────
 
@@ -33,10 +38,8 @@ export interface AutomationRow {
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
-  /** Slack triggers (#716): per-automation hourly run cap (null = app default). */
+  /** Per-automation hourly run cap (null = app default). Enforced for slack_event today. */
   max_runs_per_hour?: number | null;
-  /** Slack triggers (#716): post the run result back into the thread (1/0). */
-  reply_in_thread?: number;
 }
 
 export interface AutomationRunRow {
@@ -52,7 +55,7 @@ export interface AutomationRunRow {
   created_at: number;
   trigger_key: string | null;
   concurrency_key: string | null;
-  // Slack triggers (#716): thread coordinates + posting actor (slack-origin runs only).
+  // Slack triggers: thread coordinates + posting actor (slack-origin runs only).
   slack_channel?: string | null;
   slack_thread_ts?: string | null;
   slack_message_ts?: string | null;
@@ -72,7 +75,19 @@ export type SlackRunColumns = Pick<
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
+/**
+ * The effective reply-in-thread setting from a parsed trigger_config. Stored in
+ * trigger_config (slack_event only); defaults to true — matching the prior
+ * `reply_in_thread NOT NULL DEFAULT 1` column and the camelCase API default.
+ */
+export function getReplyInThread(config: TriggerConfig | null): boolean {
+  return config?.replyInThread ?? true;
+}
+
 export function toAutomation(row: AutomationRow): Automation {
+  const triggerConfig: TriggerConfig | null = row.trigger_config
+    ? JSON.parse(row.trigger_config)
+    : null;
   return {
     id: row.id,
     name: row.name,
@@ -94,9 +109,9 @@ export function toAutomation(row: AutomationRow): Automation {
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
-    triggerConfig: row.trigger_config ? JSON.parse(row.trigger_config) : null,
+    triggerConfig,
     maxRunsPerHour: row.max_runs_per_hour ?? null,
-    replyInThread: row.reply_in_thread == null ? true : row.reply_in_thread === 1,
+    replyInThread: getReplyInThread(triggerConfig),
   };
 }
 
@@ -133,8 +148,8 @@ export class AutomationStore {
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-          event_type, trigger_config, trigger_auth_data, max_runs_per_hour, reply_in_thread)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          event_type, trigger_config, trigger_auth_data, max_runs_per_hour)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -160,8 +175,7 @@ export class AutomationStore {
         row.event_type,
         row.trigger_config,
         row.trigger_auth_data,
-        row.max_runs_per_hour ?? null,
-        row.reply_in_thread ?? 1
+        row.max_runs_per_hour ?? null
       );
   }
 
@@ -240,7 +254,6 @@ export class AutomationStore {
       "trigger_config",
       "trigger_auth_data",
       "max_runs_per_hour",
-      "reply_in_thread",
     ];
 
     for (const field of allowedFields) {
@@ -498,7 +511,7 @@ export class AutomationStore {
     return result.results || [];
   }
 
-  // --- Slack trigger queries (#716) ---
+  // --- Slack trigger queries ---
 
   /** Enabled, non-deleted slack_event automations watching a channel (indexed by channel_id). */
   async getSlackAutomationsForChannel(channelId: string): Promise<AutomationRow[]> {

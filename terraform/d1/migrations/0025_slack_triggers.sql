@@ -1,4 +1,4 @@
--- Slack message triggers (#716): a new `slack_event` automation source.
+-- Slack message triggers: a new `slack_event` automation source.
 -- Additive only. No DO storage-schema change, so no two-phase DO-binding deploy.
 
 -- Channels watched by each slack_event automation. This join table is the
@@ -13,11 +13,10 @@ CREATE TABLE IF NOT EXISTS automation_slack_channels (
 CREATE INDEX IF NOT EXISTS idx_slack_channels_channel
   ON automation_slack_channels (channel_id);
 
--- Per-automation blast-radius controls.
---   max_runs_per_hour: fixed 1-hour windowed cap (NULL = use the app default).
---   reply_in_thread:   post the run result back into the originating thread.
+-- Per-automation rate limit (generic; consumed by slack_event today). A fixed
+-- 1-hour windowed cap; NULL means use the app default. reply_in_thread is NOT a
+-- column — it lives in the automation's trigger_config JSON, keyed by trigger_type.
 ALTER TABLE automations ADD COLUMN max_runs_per_hour INTEGER;
-ALTER TABLE automations ADD COLUMN reply_in_thread INTEGER NOT NULL DEFAULT 1;
 
 -- Slack thread coordinates + posting actor on the run. Nullable; only
 -- slack-origin runs populate them. slack_thread_ts is the reply target;

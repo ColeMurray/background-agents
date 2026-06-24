@@ -305,6 +305,12 @@ async function handleCreateAutomation(
   }
 
   const store = new AutomationStore(env.DB);
+  // reply_in_thread lives inside trigger_config (slack_event only), not a column;
+  // fold the top-level API flag in here, defaulting true (the prior column default).
+  const storedTriggerConfig: TriggerConfig | undefined =
+    triggerType === "slack_event" && body.triggerConfig
+      ? { ...body.triggerConfig, replyInThread: body.replyInThread !== false }
+      : body.triggerConfig;
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
@@ -327,11 +333,10 @@ async function handleCreateAutomation(
     updated_at: now,
     deleted_at: null,
     event_type: body.eventType ?? null,
-    trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
+    trigger_config: storedTriggerConfig ? JSON.stringify(storedTriggerConfig) : null,
     trigger_auth_data: triggerAuthData,
-    // Slack-only knobs; harmless defaults for other sources (they never read these).
+    // Generic per-automation rate cap (consumed by slack today; harmless for others).
     max_runs_per_hour: body.maxRunsPerHour ?? null,
-    reply_in_thread: body.replyInThread === false ? 0 : 1,
   };
 
   // Persist the automation and (for slack_event) its watched-channel index in a
@@ -486,18 +491,16 @@ async function handleUpdateAutomation(
     updateFields.event_type = body.eventType;
   }
 
-  // Update trigger config (conditions) — only for non-schedule types
+  // Validate trigger config (conditions) — only for non-schedule types
   if (body.triggerConfig !== undefined) {
     if (existing.trigger_type === "schedule") {
       return error("Cannot set triggerConfig on schedule automations", 400);
     }
-    if (existing.trigger_type === "slack_event") {
-      const slackError = validateSlackRequiredConditions(body.triggerConfig);
-      if (slackError) return error(slackError, 400);
-    }
-    if (body.triggerConfig === null) {
-      updateFields.trigger_config = null;
-    } else {
+    if (body.triggerConfig !== null) {
+      if (existing.trigger_type === "slack_event") {
+        const slackError = validateSlackRequiredConditions(body.triggerConfig);
+        if (slackError) return error(slackError, 400);
+      }
       if (body.triggerConfig.conditions) {
         if (!Array.isArray(body.triggerConfig.conditions)) {
           return error("triggerConfig.conditions must be an array", 400);
@@ -514,18 +517,35 @@ async function handleUpdateAutomation(
           }
         }
       }
-      updateFields.trigger_config = JSON.stringify(body.triggerConfig);
     }
   }
 
-  // Slack-only knobs
   const maxRunsError = validateMaxRunsPerHour(body.maxRunsPerHour);
   if (maxRunsError) return error(maxRunsError, 400);
   if (body.maxRunsPerHour !== undefined) {
     updateFields.max_runs_per_hour = body.maxRunsPerHour;
   }
-  if (body.replyInThread !== undefined) {
-    updateFields.reply_in_thread = body.replyInThread ? 1 : 0;
+
+  // Persist trigger_config, folding the slack-only replyInThread flag into it
+  // (reply_in_thread is no longer a column). A null clears it; otherwise for
+  // slack_event we merge replyInThread — the explicit flag, else the previously
+  // stored value, else the true default — so a conditions-only edit preserves it.
+  const isSlackEvent = existing.trigger_type === "slack_event";
+  const previousConfig: TriggerConfig | null = existing.trigger_config
+    ? JSON.parse(existing.trigger_config)
+    : null;
+  if (body.triggerConfig === null) {
+    updateFields.trigger_config = null;
+  } else if (
+    body.triggerConfig !== undefined ||
+    (isSlackEvent && body.replyInThread !== undefined)
+  ) {
+    const base = body.triggerConfig ?? previousConfig ?? { conditions: [] };
+    updateFields.trigger_config = JSON.stringify(
+      isSlackEvent
+        ? { ...base, replyInThread: body.replyInThread ?? previousConfig?.replyInThread ?? true }
+        : base
+    );
   }
 
   // Recompute next_run_at if schedule changed (only for schedule types)

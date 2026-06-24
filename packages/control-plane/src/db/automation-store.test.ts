@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   AutomationStore,
   isDuplicateKeyError,
+  getReplyInThread,
   toAutomation,
   toAutomationRun,
   type AutomationRow,
@@ -150,10 +151,26 @@ describe("toAutomation", () => {
     expect(automation.replyInThread).toBe(true);
   });
 
-  it("maps explicit slack knobs (cap + reply_in_thread=0 → false)", () => {
-    const automation = toAutomation({ ...sampleRow, max_runs_per_hour: 5, reply_in_thread: 0 });
+  it("maps an explicit cap and reads reply-in-thread from trigger_config", () => {
+    const automation = toAutomation({
+      ...sampleRow,
+      max_runs_per_hour: 5,
+      trigger_config: JSON.stringify({ conditions: [], replyInThread: false }),
+    });
     expect(automation.maxRunsPerHour).toBe(5);
     expect(automation.replyInThread).toBe(false);
+  });
+});
+
+describe("getReplyInThread", () => {
+  it("defaults to true for a null config or absent flag", () => {
+    expect(getReplyInThread(null)).toBe(true);
+    expect(getReplyInThread({ conditions: [] })).toBe(true);
+  });
+
+  it("respects an explicit flag", () => {
+    expect(getReplyInThread({ conditions: [], replyInThread: false })).toBe(false);
+    expect(getReplyInThread({ conditions: [], replyInThread: true })).toBe(true);
   });
 });
 

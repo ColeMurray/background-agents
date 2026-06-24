@@ -24,6 +24,7 @@ import {
   AutomationStore,
   toAutomationRun,
   isDuplicateKeyError,
+  getReplyInThread,
   type AutomationRow,
   type AutomationRunRow,
   type SlackRunColumns,
@@ -623,14 +624,22 @@ export class SchedulerDO extends DurableObject<Env> {
     if (!binding || !secret) return;
 
     const automation = await store.getById(run.automation_id);
+    let triggerConfig: TriggerConfig | null = null;
+    if (automation?.trigger_config) {
+      try {
+        triggerConfig = JSON.parse(automation.trigger_config) as TriggerConfig;
+      } catch {
+        triggerConfig = null;
+      }
+    }
     const body = buildSlackCompletionNotification({
       run,
       automationName: automation?.name ?? "Automation",
       success,
       error,
-      // Honor the stored reply_in_thread setting (NOT NULL DEFAULT 1). The bot
-      // skips the thread post when this is false but still clears the reaction.
-      replyInThread: automation?.reply_in_thread !== 0,
+      // Honor the stored reply-in-thread setting (in trigger_config; defaults
+      // true). The bot skips the thread post when false but still clears the 👀.
+      replyInThread: getReplyInThread(triggerConfig),
     });
     if (!body) return;
 
