@@ -18,14 +18,12 @@ CREATE INDEX IF NOT EXISTS idx_slack_channels_channel
 -- column — it lives in the automation's trigger_config JSON, keyed by trigger_type.
 ALTER TABLE automations ADD COLUMN max_runs_per_hour INTEGER;
 
--- Slack thread coordinates + posting actor on the run. Nullable; only
--- slack-origin runs populate them. slack_thread_ts is the reply target;
--- slack_message_ts is the triggering message (used to clear the eyes reaction
--- on completion); actor_user_id is the posting Slack user, for attribution.
-ALTER TABLE automation_runs ADD COLUMN slack_channel TEXT;
-ALTER TABLE automation_runs ADD COLUMN slack_thread_ts TEXT;
-ALTER TABLE automation_runs ADD COLUMN slack_message_ts TEXT;
-ALTER TABLE automation_runs ADD COLUMN actor_user_id TEXT;
+-- Source-specific run metadata as JSON; only slack-origin runs populate it
+-- today. For slack: {channel, threadTs?, messageTs} — threadTs is the reply
+-- target (falls back to messageTs), messageTs is the triggering message used to
+-- clear the eyes reaction on completion. Read back only to post the result into
+-- the originating thread; never queried, so no index.
+ALTER TABLE automation_runs ADD COLUMN trigger_run_metadata TEXT;
 
 -- The rate-limit window query (automation_id = ? AND created_at >= ?) is already
 -- served by idx_runs_automation_created (automation_id, created_at DESC) from

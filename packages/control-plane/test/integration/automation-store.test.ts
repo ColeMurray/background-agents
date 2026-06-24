@@ -863,7 +863,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(count).toBe(2);
     });
 
-    it("recordSkippedRun persists a skip with slack coords, no trigger_key, uncounted", async () => {
+    it("recordSkippedRun persists a skip with run metadata, no trigger_key, uncounted", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeSlackAutomation({ id: "auto-s9" }));
 
@@ -872,11 +872,12 @@ describe("AutomationStore (D1 integration)", () => {
         automationId: "auto-s9",
         skipReason: "rate_limited",
         concurrencyKey: "slack:C1:111",
-        slackColumns: {
-          slack_channel: "C1",
-          slack_thread_ts: "111",
-          slack_message_ts: "222",
-          actor_user_id: "U1",
+        runMetadata: {
+          trigger_run_metadata: JSON.stringify({
+            channel: "C1",
+            threadTs: "111",
+            messageTs: "222",
+          }),
         },
       });
 
@@ -884,15 +885,17 @@ describe("AutomationStore (D1 integration)", () => {
       expect(run).not.toBeNull();
       expect(run!.status).toBe("skipped");
       expect(run!.skip_reason).toBe("rate_limited");
-      expect(run!.slack_channel).toBe("C1");
-      expect(run!.slack_message_ts).toBe("222");
+      expect(JSON.parse(run!.trigger_run_metadata!)).toMatchObject({
+        channel: "C1",
+        messageTs: "222",
+      });
       expect(run!.trigger_key).toBeNull();
 
       // A recorded skip must not count toward the rate-limit window.
       expect(await store.countRunsInWindow("auto-s9", Date.now() - 3_600_000)).toBe(0);
     });
 
-    it("insertRun persists slack thread coordinates on a materialized run", async () => {
+    it("insertRun persists trigger_run_metadata on a materialized run", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeSlackAutomation({ id: "auto-s10" }));
 
@@ -902,18 +905,20 @@ describe("AutomationStore (D1 integration)", () => {
           status: "starting",
           trigger_key: "slack:msg:C1:222",
           concurrency_key: "slack:C1:111",
-          slack_channel: "C1",
-          slack_thread_ts: "111",
-          slack_message_ts: "222",
-          actor_user_id: "U1",
+          trigger_run_metadata: JSON.stringify({
+            channel: "C1",
+            threadTs: "111",
+            messageTs: "222",
+          }),
         })
       );
 
       const run = await store.getRunById("auto-s10", "r-mat");
-      expect(run!.slack_channel).toBe("C1");
-      expect(run!.slack_thread_ts).toBe("111");
-      expect(run!.slack_message_ts).toBe("222");
-      expect(run!.actor_user_id).toBe("U1");
+      expect(JSON.parse(run!.trigger_run_metadata!)).toEqual({
+        channel: "C1",
+        threadTs: "111",
+        messageTs: "222",
+      });
     });
 
     it("persists max_runs_per_hour on the automation", async () => {

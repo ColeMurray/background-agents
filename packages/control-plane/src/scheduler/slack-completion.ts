@@ -11,11 +11,33 @@
 
 import type { AutomationRunRow } from "../db/automation-store";
 
-/** Run-row coordinate subset the slack completion notification needs. */
-export type SlackRunCoords = Pick<
-  AutomationRunRow,
-  "slack_channel" | "slack_thread_ts" | "slack_message_ts" | "session_id"
->;
+/**
+ * Slack run coordinates captured at trigger time, serialized into the run's
+ * generic `trigger_run_metadata` column (slack-origin runs only). `threadTs` is
+ * the reply target (falls back to `messageTs`); `messageTs` is the triggering
+ * message, used to clear the `eyes` reaction on completion.
+ */
+export interface SlackRunMetadata {
+  channel: string;
+  threadTs?: string;
+  messageTs: string;
+}
+
+/**
+ * Parse a run row's `trigger_run_metadata` as slack coordinates — null when
+ * absent (a non-slack run) or malformed. Completion is best-effort, so a parse
+ * failure silently no-ops rather than throwing into the dispatch path.
+ */
+export function getSlackRunMetadata(
+  row: Pick<AutomationRunRow, "trigger_run_metadata">
+): SlackRunMetadata | null {
+  if (!row.trigger_run_metadata) return null;
+  try {
+    return JSON.parse(row.trigger_run_metadata) as SlackRunMetadata;
+  } catch {
+    return null;
+  }
+}
 
 /** Max characters of an error surfaced inline; the full transcript is one click away. */
 const SUMMARY_MAX_LENGTH = 1500;
@@ -39,22 +61,23 @@ export interface SlackCompletionNotification {
 }
 
 export function buildSlackCompletionNotification(params: {
-  run: SlackRunCoords;
+  meta: SlackRunMetadata | null;
+  sessionId: string | null;
   automationName: string;
   success: boolean;
   error?: string;
   replyInThread: boolean;
 }): SlackCompletionNotification | null {
-  const { run } = params;
-  if (!run.slack_channel) return null;
-  const threadTs = run.slack_thread_ts ?? run.slack_message_ts ?? undefined;
+  const { meta } = params;
+  if (!meta) return null;
+  const threadTs = meta.threadTs ?? meta.messageTs;
   if (!threadTs) return null;
 
   return {
-    channel: run.slack_channel,
+    channel: meta.channel,
     threadTs,
-    reactionMessageTs: run.slack_message_ts ?? undefined,
-    sessionId: run.session_id ?? null,
+    reactionMessageTs: meta.messageTs,
+    sessionId: params.sessionId,
     success: params.success,
     summary: params.error ? params.error.slice(0, SUMMARY_MAX_LENGTH) : undefined,
     automationName: params.automationName,

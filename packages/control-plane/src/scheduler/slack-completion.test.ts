@@ -2,24 +2,23 @@ import { describe, it, expect } from "vitest";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
-  type SlackRunCoords,
+  type SlackRunMetadata,
 } from "./slack-completion";
 
-function coords(overrides?: Partial<SlackRunCoords>): SlackRunCoords {
+function meta(overrides?: Partial<SlackRunMetadata>): SlackRunMetadata {
   return {
-    slack_channel: "C1",
-    slack_thread_ts: null,
-    slack_message_ts: "1700000000.000100",
-    session_id: "sess-1",
+    channel: "C1",
+    messageTs: "1700000000.000100",
     ...overrides,
   };
 }
 
 describe("buildSlackCompletionNotification", () => {
-  it("returns null for a non-slack run (no channel)", () => {
+  it("returns null for a non-slack run (no metadata)", () => {
     expect(
       buildSlackCompletionNotification({
-        run: coords({ slack_channel: null }),
+        meta: null,
+        sessionId: "sess-1",
         automationName: "Triage",
         success: true,
         replyInThread: true,
@@ -27,10 +26,11 @@ describe("buildSlackCompletionNotification", () => {
     ).toBeNull();
   });
 
-  it("returns null when a slack run has no thread anchor", () => {
+  it("returns null when the metadata has no usable thread anchor", () => {
     expect(
       buildSlackCompletionNotification({
-        run: coords({ slack_thread_ts: null, slack_message_ts: null }),
+        meta: meta({ messageTs: "" }),
+        sessionId: "sess-1",
         automationName: "Triage",
         success: true,
         replyInThread: true,
@@ -40,7 +40,8 @@ describe("buildSlackCompletionNotification", () => {
 
   it("anchors to the thread ts when present", () => {
     const n = buildSlackCompletionNotification({
-      run: coords({ slack_thread_ts: "1699999999.000001" }),
+      meta: meta({ threadTs: "1699999999.000001" }),
+      sessionId: "sess-1",
       automationName: "Triage",
       success: true,
       replyInThread: true,
@@ -59,7 +60,8 @@ describe("buildSlackCompletionNotification", () => {
 
   it("falls back to the message ts as the thread anchor", () => {
     const n = buildSlackCompletionNotification({
-      run: coords({ slack_thread_ts: null }),
+      meta: meta(),
+      sessionId: "sess-1",
       automationName: "Triage",
       success: true,
       replyInThread: true,
@@ -70,7 +72,8 @@ describe("buildSlackCompletionNotification", () => {
   it("includes a truncated error summary on failure", () => {
     const longError = "x".repeat(5000);
     const n = buildSlackCompletionNotification({
-      run: coords(),
+      meta: meta(),
+      sessionId: "sess-1",
       automationName: "Triage",
       success: false,
       error: longError,
@@ -82,7 +85,8 @@ describe("buildSlackCompletionNotification", () => {
 
   it("threads replyInThread=false through so the bot suppresses the thread post", () => {
     const n = buildSlackCompletionNotification({
-      run: coords(),
+      meta: meta(),
+      sessionId: "sess-1",
       automationName: "Triage",
       success: true,
       replyInThread: false,

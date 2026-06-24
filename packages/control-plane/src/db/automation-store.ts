@@ -55,23 +55,15 @@ export interface AutomationRunRow {
   created_at: number;
   trigger_key: string | null;
   concurrency_key: string | null;
-  // Slack triggers: thread coordinates + posting actor (slack-origin runs only).
-  slack_channel?: string | null;
-  slack_thread_ts?: string | null;
-  slack_message_ts?: string | null;
-  actor_user_id?: string | null;
+  // Source-specific run metadata as JSON (slack-origin runs only today; absent
+  // otherwise). Opaque to the store — interpreted by the owning source's layer.
+  trigger_run_metadata?: string | null;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
   session_title: string | null;
   artifact_summary: string | null;
 }
-
-/** The slack thread-coordinate columns of a run row, set together for slack-origin runs. */
-export type SlackRunColumns = Pick<
-  AutomationRunRow,
-  "slack_channel" | "slack_thread_ts" | "slack_message_ts" | "actor_user_id"
->;
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
@@ -341,8 +333,8 @@ export class AutomationStore {
         `INSERT INTO automation_runs
          (id, automation_id, session_id, status, skip_reason, failure_reason,
           scheduled_at, started_at, completed_at, created_at, trigger_key, concurrency_key,
-          slack_channel, slack_thread_ts, slack_message_ts, actor_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          trigger_run_metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         run.id,
@@ -357,10 +349,7 @@ export class AutomationStore {
         run.created_at,
         run.trigger_key ?? null,
         run.concurrency_key ?? null,
-        run.slack_channel ?? null,
-        run.slack_thread_ts ?? null,
-        run.slack_message_ts ?? null,
-        run.actor_user_id ?? null
+        run.trigger_run_metadata ?? null
       );
   }
 
@@ -551,7 +540,7 @@ export class AutomationStore {
   /**
    * Record a `skipped` run for observability (rate-limited / concurrency skips).
    * Leaves trigger_key null so the skip stays excluded from countRunsInWindow.
-   * `slackColumns` carries the run's thread coordinates as a unit — the same
+   * `runMetadata` carries the run's source-specific metadata as a unit — the same
    * value a materialized run is inserted with — so there is no re-mapping.
    */
   async recordSkippedRun(params: {
@@ -559,7 +548,7 @@ export class AutomationStore {
     automationId: string;
     skipReason: string;
     concurrencyKey?: string | null;
-    slackColumns?: SlackRunColumns;
+    runMetadata?: Pick<AutomationRunRow, "trigger_run_metadata">;
   }): Promise<void> {
     const now = Date.now();
     try {
@@ -576,7 +565,7 @@ export class AutomationStore {
         created_at: now,
         trigger_key: null,
         concurrency_key: params.concurrencyKey ?? null,
-        ...params.slackColumns,
+        ...params.runMetadata,
       });
     } catch (e) {
       // Defensive only: the insert uses a fresh unique id and a null trigger_key

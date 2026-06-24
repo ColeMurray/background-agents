@@ -27,10 +27,14 @@ import {
   getReplyInThread,
   type AutomationRow,
   type AutomationRunRow,
-  type SlackRunColumns,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
-import { buildSlackCompletionNotification, buildSlackSkipNotification } from "./slack-completion";
+import {
+  buildSlackCompletionNotification,
+  buildSlackSkipNotification,
+  getSlackRunMetadata,
+  type SlackRunMetadata,
+} from "./slack-completion";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
@@ -495,7 +499,7 @@ export class SchedulerDO extends DurableObject<Env> {
           created_at: now,
           trigger_key: event.triggerKey,
           concurrency_key: event.concurrencyKey,
-          ...(event.source === "slack" ? slackRunColumns(event) : {}),
+          ...(event.source === "slack" ? slackRunMetadata(event) : {}),
         });
       } catch (e) {
         if (isDuplicateKeyError(e)) {
@@ -697,10 +701,12 @@ export class SchedulerDO extends DurableObject<Env> {
     // Slack-triggered runs deliver their result back into the originating
     // thread. The scheduler owns this fan-out (not the session callback path)
     // because the thread coordinates live on the run row. Best-effort.
-    if (run.slack_channel) {
+    const slackMeta = getSlackRunMetadata(run);
+    if (slackMeta) {
       await this.notifySlackCompletion(
         store,
         run,
+        slackMeta,
         body.success,
         body.success ? undefined : body.error
       );
@@ -728,7 +734,7 @@ export class SchedulerDO extends DurableObject<Env> {
       automationId,
       skipReason: reason,
       concurrencyKey: event.concurrencyKey,
-      slackColumns: slackRunColumns(event),
+      runMetadata: slackRunMetadata(event),
     });
   }
 
@@ -742,6 +748,7 @@ export class SchedulerDO extends DurableObject<Env> {
   private async notifySlackCompletion(
     store: AutomationStore,
     run: AutomationRunRow,
+    meta: SlackRunMetadata,
     success: boolean,
     error?: string
   ): Promise<void> {
@@ -759,7 +766,8 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
     const body = buildSlackCompletionNotification({
-      run,
+      meta,
+      sessionId: run.session_id,
       automationName: automation?.name ?? "Automation",
       success,
       error,
@@ -948,12 +956,14 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 }
 
-/** Run-row slack columns for a slack-origin event — shared by insertRun and recordSkippedRun. */
-function slackRunColumns(event: SlackAutomationEvent): SlackRunColumns {
-  return {
-    slack_channel: event.channelId,
-    slack_thread_ts: event.threadTs ?? null,
-    slack_message_ts: event.ts,
-    actor_user_id: event.actorUserId,
+/** Serialized slack run metadata for a slack-origin event — shared by insertRun and recordSkippedRun. */
+function slackRunMetadata(
+  event: SlackAutomationEvent
+): Pick<AutomationRunRow, "trigger_run_metadata"> {
+  const metadata: SlackRunMetadata = {
+    channel: event.channelId,
+    threadTs: event.threadTs ?? undefined,
+    messageTs: event.ts,
   };
+  return { trigger_run_metadata: JSON.stringify(metadata) };
 }

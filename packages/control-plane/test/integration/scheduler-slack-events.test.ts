@@ -127,9 +127,9 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     expect(runs.total).toBeGreaterThanOrEqual(1);
     const run = runs.runs.find((r) => r.trigger_key === event.triggerKey)!;
     expect(run).toBeDefined();
-    expect(run.slack_channel).toBe("C1");
-    expect(run.slack_message_ts).toBe(event.ts);
-    expect(run.actor_user_id).toBe("U1");
+    const metadata = JSON.parse(run.trigger_run_metadata!);
+    expect(metadata.channel).toBe("C1");
+    expect(metadata.messageTs).toBe(event.ts);
   });
 
   it("does not trigger when the text_match condition fails", async () => {
@@ -263,7 +263,7 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     const runs = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
     const skip = runs.runs.find((r) => r.skip_reason === "concurrent_run_active");
     expect(skip).toBeDefined();
-    expect(skip!.slack_channel).toBe("C1");
+    expect(JSON.parse(skip!.trigger_run_metadata!).channel).toBe("C1");
   });
 
   it("dedups a duplicate slack message with the same trigger_key", async () => {
