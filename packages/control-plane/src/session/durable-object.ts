@@ -12,8 +12,10 @@ import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import {
   DEFAULT_MODEL,
+  clientMessageSchema,
   isValidReasoningEffort,
   resolveAppName,
+  sandboxEventSchema,
   timingSafeEqual,
 } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
@@ -1123,7 +1125,12 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const event = JSON.parse(message) as SandboxEvent;
+      const result = sandboxEventSchema.safeParse(JSON.parse(message));
+      if (!result.success) {
+        throw new Error("Invalid sandbox event");
+      }
+
+      const event: SandboxEvent = result.data;
       await this.processSandboxEvent(event);
     } catch (e) {
       this.log.error("Error processing sandbox message", {
@@ -1137,7 +1144,12 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleClientMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const data = JSON.parse(message) as ClientMessage;
+      const result = clientMessageSchema.safeParse(JSON.parse(message));
+      if (!result.success) {
+        throw new Error("Invalid client message");
+      }
+
+      const data: ClientMessage = result.data;
 
       switch (data.type) {
         case "ping":

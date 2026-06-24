@@ -12,6 +12,7 @@
  * SLACK_DENIAL_REASONS by hand.
  */
 
+import { z } from "zod";
 import type { SlackMentionsPolicy } from "../types/integrations";
 
 /** Denial reasons across the slack-notify flow (control plane + plugin). */
@@ -26,7 +27,9 @@ export const SLACK_DENIAL_REASONS = [
   "bridge_error",
 ] as const;
 
-export type SlackDenialReason = (typeof SLACK_DENIAL_REASONS)[number];
+export const slackDenialReasonSchema = z.enum(SLACK_DENIAL_REASONS);
+
+export type SlackDenialReason = z.infer<typeof slackDenialReasonSchema>;
 
 export type SlackWireDenialReason = Exclude<SlackDenialReason, "bridge_error">;
 
@@ -41,16 +44,18 @@ export const SLACK_DENIAL_STATUS: Record<SlackWireDenialReason, number> = {
 };
 
 /** Successful tool_call output produced by the slack-notify route. */
-export interface SlackNotifySuccessOutput {
-  ok: true;
-  channelInput: string;
-  channelId: string;
-  messageTs: string;
-  permalink: string;
-  truncated: boolean;
-  strippedBroadcasts: boolean;
-  mentionsModified: boolean;
-}
+export const slackNotifySuccessOutputSchema = z.object({
+  ok: z.literal(true),
+  channelInput: z.string(),
+  channelId: z.string(),
+  messageTs: z.string(),
+  permalink: z.string(),
+  truncated: z.boolean(),
+  strippedBroadcasts: z.boolean(),
+  mentionsModified: z.boolean(),
+});
+
+export type SlackNotifySuccessOutput = z.infer<typeof slackNotifySuccessOutputSchema>;
 
 /** HTTP failure body returned by the slack-notify endpoint to the sandbox. */
 export interface SlackNotifyFailureBody {
@@ -60,14 +65,17 @@ export interface SlackNotifyFailureBody {
 }
 
 /** `agentMessage` is guidance for the model; `reason` is the code the renderer keys on. */
-export type SlackNotifyToolEnvelope =
-  | SlackNotifySuccessOutput
-  | {
-      ok: false;
-      reason: SlackDenialReason;
-      agentMessage: string;
-      retryAfter?: number;
-    };
+export const slackNotifyToolEnvelopeSchema = z.discriminatedUnion("ok", [
+  slackNotifySuccessOutputSchema,
+  z.object({
+    ok: z.literal(false),
+    reason: slackDenialReasonSchema,
+    agentMessage: z.string(),
+    retryAfter: z.number().optional(),
+  }),
+]);
+
+export type SlackNotifyToolEnvelope = z.infer<typeof slackNotifyToolEnvelopeSchema>;
 
 /** Default mention policy when no per-repo or global override is set. */
 export const DEFAULT_MENTIONS_POLICY: SlackMentionsPolicy = "allow";
