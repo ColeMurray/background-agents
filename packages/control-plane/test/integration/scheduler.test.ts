@@ -420,6 +420,40 @@ describe("SchedulerDO (integration)", () => {
       expect(automation!.enabled).toBe(0);
       expect(automation!.next_run_at).toBeNull();
     });
+
+    it("bulk recovery handles multiple orphaned runs for the same automation", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        makeAutomation({ id: "auto-t6", next_run_at: now + 86400000, enabled: 1 })
+      );
+
+      const tenMinutesAgo = now - 10 * 60 * 1000;
+      const runIds = ["run-bulk-1", "run-bulk-2", "run-bulk-3"];
+      for (let i = 0; i < runIds.length; i++) {
+        await store.insertRun(
+          makeRun("auto-t6", {
+            id: runIds[i],
+            status: "starting",
+            scheduled_at: tenMinutesAgo - i,
+            created_at: tenMinutesAgo - i,
+          })
+        );
+      }
+
+      const stub = getSchedulerStub();
+      const res = await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      expect(res.status).toBe(200);
+
+      for (const runId of runIds) {
+        const run = await store.getRunById("auto-t6", runId);
+        expect(run!.status).toBe("failed");
+        expect(run!.failure_reason).toBe("session_creation_timeout");
+      }
+
+      const automation = await store.getById("auto-t6");
+      expect(automation!.consecutive_failures).toBe(3);
+    });
   });
 
   // ─── Trigger handler ──────────────────────────────────────────────────────

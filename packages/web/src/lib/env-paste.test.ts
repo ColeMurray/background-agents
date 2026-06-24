@@ -57,4 +57,17 @@ JWT='token==abc'
       { key: "DB_URL", value: "postgres://host/db?ssl=true&opt=1" },
     ]);
   });
+
+  it("treats an Azure connection string line as a single secret", () => {
+    const line =
+      'AZURE_BLOB_STORAGE_URL="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=FAKEexampleKey123+slash/pad=="';
+
+    expect(parseMaybeEnvContent(line)).toEqual([
+      {
+        key: "AZURE_BLOB_STORAGE_URL",
+        value:
+          "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=FAKEexampleKey123+slash/pad==",
+      },
+    ]);
+  });
 });

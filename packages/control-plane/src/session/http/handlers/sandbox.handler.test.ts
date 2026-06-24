@@ -282,6 +282,22 @@ describe("createSandboxHandler", () => {
     expect(await response.json()).toEqual({ valid: false, error: "Missing token" });
   });
 
+  it("returns 400 when sandbox token is not a string", async () => {
+    const { handler, isValidSandboxToken } = createHandler();
+
+    const response = await handler.verifySandboxToken(
+      new Request("http://internal/internal/verify-sandbox-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ valid: false, error: "Missing token" });
+    expect(isValidSandboxToken).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when sandbox is missing", async () => {
     const { handler, getSandbox, log } = createHandler();
     getSandbox.mockReturnValue(null);

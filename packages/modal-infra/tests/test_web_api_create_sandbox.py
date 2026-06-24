@@ -51,7 +51,7 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_fresh_boot(monkey
 
     _patch_auth(monkeypatch)
     _patch_manager(monkeypatch, captured)
-    monkeypatch.setattr(web_api, "_resolve_clone_token", lambda: calls.append(True) or "ghs_token")
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
 
     result = await _call_create_sandbox(
         {
@@ -81,7 +81,7 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_repo_image_boot(m
         calls.append(True)
         return "ghs_prebuilt"
 
-    monkeypatch.setattr(web_api, "_resolve_clone_token", resolve_clone_token)
+    monkeypatch.setattr(web_api, "resolve_clone_token", resolve_clone_token)
 
     result = await _call_create_sandbox(
         {
@@ -112,7 +112,7 @@ async def test_create_sandbox_resolves_clone_token_for_snapshot_boot(monkeypatch
         calls.append(True)
         return "ghs_snapshot"
 
-    monkeypatch.setattr(web_api, "_resolve_clone_token", resolve_clone_token)
+    monkeypatch.setattr(web_api, "resolve_clone_token", resolve_clone_token)
 
     result = await _call_create_sandbox(
         {

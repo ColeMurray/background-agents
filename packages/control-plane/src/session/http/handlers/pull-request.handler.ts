@@ -1,13 +1,16 @@
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
 import type { ParticipantRow, SessionRow } from "../../types";
+import { z } from "zod";
 
-interface CreatePrRequest {
-  title: string;
-  body: string;
-  baseBranch?: string;
-  headBranch?: string;
-}
+const createPrRequestSchema = z.object({
+  title: z.string(),
+  body: z.string(),
+  baseBranch: z.string().optional(),
+  headBranch: z.string().optional(),
+});
+
+type CreatePrRequest = z.infer<typeof createPrRequestSchema>;
 
 type PromptingParticipantResult =
   | { participant: ParticipantRow; error?: never; status?: never }
@@ -32,7 +35,18 @@ export interface PullRequestHandler {
 export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequestHandler {
   return {
     async createPr(request: Request): Promise<Response> {
-      const body = (await request.json()) as CreatePrRequest;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const parsed = createPrRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+      const body: CreatePrRequest = parsed.data;
 
       const session = deps.getSession();
       if (!session) {
