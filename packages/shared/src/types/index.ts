@@ -793,10 +793,8 @@ export interface Automation {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
-  /** Per-hour run cap for slack_event automations; null falls back to the default. */
+  /** Generic per-automation hourly run cap (enforced for slack_event today); null = app default. */
   maxRunsPerHour?: number | null;
-  /** Whether slack_event run results are posted back into the originating thread. */
-  replyInThread?: boolean;
 }
 
 export interface CreateAutomationRequest {
@@ -814,7 +812,6 @@ export interface CreateAutomationRequest {
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
   maxRunsPerHour?: number | null;
-  replyInThread?: boolean;
 }
 
 export interface UpdateAutomationRequest {
@@ -828,7 +825,6 @@ export interface UpdateAutomationRequest {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   maxRunsPerHour?: number | null;
-  replyInThread?: boolean;
 }
 
 export interface AutomationRun {

@@ -109,11 +109,11 @@ function validateSlackRequiredConditions(
 }
 
 /**
- * `maxRunsPerHour` is the Slack-only per-automation hourly cap. It feeds the
- * scheduler's `recentRuns >= maxRuns` comparison directly, so reject anything
- * that is not `null`/absent (use the app default) or a positive integer —
- * untrusted JSON could otherwise persist `0`, a negative, a fractional, or a
- * non-number value and corrupt the rate-limit branch.
+ * `maxRunsPerHour` is a generic per-automation hourly cap (enforced for slack_event
+ * today). It feeds the scheduler's `recentRuns >= maxRuns` comparison directly, so
+ * reject anything that is not `null`/absent (use the app default) or a positive
+ * integer — untrusted JSON could otherwise persist `0`, a negative, a fractional, or
+ * a non-number value and corrupt the rate-limit branch.
  */
 function validateMaxRunsPerHour(value: unknown): string | null {
   if (value === undefined || value === null) return null;
@@ -306,12 +306,6 @@ async function handleCreateAutomation(
   }
 
   const store = new AutomationStore(env.DB);
-  // reply_in_thread lives inside trigger_config (slack_event only), not a column;
-  // fold the top-level API flag in here, defaulting true (the prior column default).
-  const storedTriggerConfig: TriggerConfig | undefined =
-    triggerType === "slack_event" && body.triggerConfig
-      ? { ...body.triggerConfig, replyInThread: body.replyInThread !== false }
-      : body.triggerConfig;
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
@@ -334,7 +328,7 @@ async function handleCreateAutomation(
     updated_at: now,
     deleted_at: null,
     event_type: body.eventType ?? null,
-    trigger_config: storedTriggerConfig ? JSON.stringify(storedTriggerConfig) : null,
+    trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
     trigger_auth_data: triggerAuthData,
     // Generic per-automation rate cap (consumed by slack today; harmless for others).
     max_runs_per_hour: body.maxRunsPerHour ?? null,
@@ -531,26 +525,14 @@ async function handleUpdateAutomation(
     updateFields.max_runs_per_hour = body.maxRunsPerHour;
   }
 
-  // Persist trigger_config, folding the slack-only replyInThread flag into it
-  // (reply_in_thread is no longer a column). A null clears it; otherwise for
-  // slack_event we merge replyInThread — the explicit flag, else the previously
-  // stored value, else the true default — so a conditions-only edit preserves it.
-  const isSlackEvent = existing.trigger_type === "slack_event";
-  const previousConfig: TriggerConfig | null = existing.trigger_config
-    ? JSON.parse(existing.trigger_config)
-    : null;
+  // trigger_config is a single source-interpreted JSON blob — slack_event's
+  // replyInThread rides inside it alongside conditions, so a PUT replaces it
+  // wholesale (null clears it). The caller owns the full blob; the web form
+  // always re-submits replyInThread within triggerConfig.
   if (body.triggerConfig === null) {
     updateFields.trigger_config = null;
-  } else if (
-    body.triggerConfig !== undefined ||
-    (isSlackEvent && body.replyInThread !== undefined)
-  ) {
-    const base = body.triggerConfig ?? previousConfig ?? { conditions: [] };
-    updateFields.trigger_config = JSON.stringify(
-      isSlackEvent
-        ? { ...base, replyInThread: body.replyInThread ?? previousConfig?.replyInThread ?? true }
-        : base
-    );
+  } else if (body.triggerConfig !== undefined) {
+    updateFields.trigger_config = JSON.stringify(body.triggerConfig);
   }
 
   // Recompute next_run_at if schedule changed (only for schedule types)

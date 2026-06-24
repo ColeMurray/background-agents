@@ -68,9 +68,10 @@ export interface EnrichedRunRow extends AutomationRunRow {
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
 /**
- * The effective reply-in-thread setting from a parsed trigger_config. Stored in
- * trigger_config (slack_event only); defaults to true — matching the prior
- * `reply_in_thread NOT NULL DEFAULT 1` column and the camelCase API default.
+ * The effective reply-in-thread setting from a parsed trigger_config (slack_event
+ * only); defaults to true — matching the prior `reply_in_thread NOT NULL DEFAULT 1`
+ * column. The single read-path accessor: the setting lives only inside
+ * trigger_config, with no parallel top-level field.
  */
 export function getReplyInThread(config: TriggerConfig | null): boolean {
   return config?.replyInThread ?? true;
@@ -103,7 +104,6 @@ export function toAutomation(row: AutomationRow): Automation {
     eventType: row.event_type ?? null,
     triggerConfig,
     maxRunsPerHour: row.max_runs_per_hour ?? null,
-    replyInThread: getReplyInThread(triggerConfig),
   };
 }
 

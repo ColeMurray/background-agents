@@ -252,9 +252,8 @@ describe("slack_event automation", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       triggerType: "slack_event",
-      replyInThread: false,
       maxRunsPerHour: 5,
-      triggerConfig: validConditions,
+      triggerConfig: { ...validConditions, replyInThread: false },
     });
   });
 
@@ -272,8 +271,8 @@ describe("slack_event automation", () => {
     fireEvent.submit(container.querySelector("form")!);
 
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      replyInThread: true,
       maxRunsPerHour: null,
+      triggerConfig: { ...validConditions, replyInThread: true },
     });
   });
 });

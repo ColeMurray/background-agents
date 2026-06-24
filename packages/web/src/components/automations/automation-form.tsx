@@ -12,6 +12,7 @@ import {
   type AutomationTriggerType,
   type AutomationEventSource,
   type TriggerCondition,
+  type TriggerConfig,
 } from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
@@ -92,10 +93,9 @@ export interface AutomationFormValues {
   instructions: string;
   triggerType: AutomationTriggerType;
   eventType?: string;
-  triggerConfig?: { conditions: TriggerCondition[] };
+  triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
   maxRunsPerHour?: number | null;
-  replyInThread?: boolean;
 }
 
 interface AutomationFormProps {
@@ -135,7 +135,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerConfig?.conditions ?? []
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
-  const [replyInThread, setReplyInThread] = useState(initialValues?.replyInThread ?? true);
+  const [replyInThread, setReplyInThread] = useState(
+    initialValues?.triggerConfig?.replyInThread ?? true
+  );
   const [maxRunsPerHour, setMaxRunsPerHour] = useState(
     initialValues?.maxRunsPerHour != null ? String(initialValues.maxRunsPerHour) : ""
   );
@@ -228,13 +230,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       if (eventType) values.eventType = eventType;
       // Always send triggerConfig so clearing all conditions persists (PUT skips
-      // trigger_config when triggerConfig is omitted).
-      values.triggerConfig = { conditions };
+      // trigger_config when triggerConfig is omitted). For slack_event the
+      // reply-in-thread flag rides inside it (source-interpreted, like conditions).
+      values.triggerConfig = isSlack ? { conditions, replyInThread } : { conditions };
       if (triggerType === "sentry" && mode === "create" && sentryClientSecret.trim()) {
         values.sentryClientSecret = sentryClientSecret.trim();
       }
       if (isSlack) {
-        values.replyInThread = replyInThread;
         const parsed = Number.parseInt(maxRunsPerHour, 10);
         values.maxRunsPerHour = maxRunsPerHour.trim() && parsed > 0 ? parsed : null;
       }
