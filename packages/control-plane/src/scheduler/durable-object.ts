@@ -17,7 +17,12 @@ import {
   type AutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared";
-import { AutomationStore, toAutomationRun, type AutomationRow } from "../db/automation-store";
+import {
+  AutomationStore,
+  toAutomationRun,
+  type AutomationRow,
+  type AutomationRunRow,
+} from "../db/automation-store";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
