@@ -355,6 +355,51 @@ export class AutomationStore {
       .run();
   }
 
+  async bulkFailRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+    if (runIds.length === 0) return;
+    const placeholders = runIds.map(() => "?").join(", ");
+    await this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = 'failed', failure_reason = ?, completed_at = ?
+         WHERE id IN (${placeholders})`
+      )
+      .bind(reason, completedAt, ...runIds)
+      .run();
+  }
+
+  async bulkIncrementFailures(
+    automationIdCounts: Map<string, number>
+  ): Promise<Map<string, number>> {
+    if (automationIdCounts.size === 0) return new Map();
+
+    const now = Date.now();
+    const automationIds = [...automationIdCounts.keys()];
+
+    const statements = automationIds.map((automationId) =>
+      this.db
+        .prepare(
+          `UPDATE automations
+           SET consecutive_failures = consecutive_failures + ?, updated_at = ?
+           WHERE id = ? AND deleted_at IS NULL`
+        )
+        .bind(automationIdCounts.get(automationId)!, now, automationId)
+    );
+    await this.db.batch(statements);
+
+    const placeholders = automationIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(`SELECT id, consecutive_failures FROM automations WHERE id IN (${placeholders})`)
+      .bind(...automationIds)
+      .all<{ id: string; consecutive_failures: number }>();
+
+    const counts = new Map<string, number>();
+    for (const row of result.results ?? []) {
+      counts.set(row.id, row.consecutive_failures);
+    }
+    return counts;
+  }
+
   async getActiveRunForAutomation(automationId: string): Promise<AutomationRunRow | null> {
     return this.db
       .prepare(
@@ -454,20 +499,23 @@ export class AutomationStore {
   static readonly TIMED_OUT_RUNNING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?";
 
-  async getOrphanedStartingRuns(thresholdMs: number): Promise<AutomationRunRow[]> {
+  async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
     const result = await this.db
-      .prepare(AutomationStore.ORPHANED_STARTING_RUNS_SQL)
-      .bind(cutoff)
+      .prepare(`${AutomationStore.ORPHANED_STARTING_RUNS_SQL} LIMIT ?`)
+      .bind(cutoff, limit)
       .all<AutomationRunRow>();
     return result.results || [];
   }
 
-  async getTimedOutRunningRuns(executionTimeoutMs: number): Promise<AutomationRunRow[]> {
+  async getTimedOutRunningRuns(
+    executionTimeoutMs: number,
+    limit: number
+  ): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - executionTimeoutMs;
     const result = await this.db
-      .prepare(AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL)
-      .bind(cutoff)
+      .prepare(`${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL} LIMIT ?`)
+      .bind(cutoff, limit)
       .all<AutomationRunRow>();
     return result.results || [];
   }

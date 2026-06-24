@@ -489,7 +489,7 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const orphaned = await store.getOrphanedStartingRuns(5 * 60 * 1000);
+      const orphaned = await store.getOrphanedStartingRuns(5 * 60 * 1000, 50);
       expect(orphaned).toHaveLength(1);
       expect(orphaned[0].id).toBe("run-orphan-1");
     });
@@ -503,7 +503,7 @@ describe("AutomationStore (D1 integration)", () => {
         makeRun("auto-rec2", { id: "run-recent-1", status: "starting", created_at: now })
       );
 
-      const orphaned = await store.getOrphanedStartingRuns(5 * 60 * 1000);
+      const orphaned = await store.getOrphanedStartingRuns(5 * 60 * 1000, 50);
       expect(orphaned).toHaveLength(0);
     });
 
@@ -524,7 +524,7 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000);
+      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
       expect(timedOut).toHaveLength(1);
       expect(timedOut[0].id).toBe("run-timeout-1");
     });
@@ -543,7 +543,7 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000);
+      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
       expect(timedOut).toHaveLength(0);
     });
 

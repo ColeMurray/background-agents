@@ -43,6 +43,8 @@ function createMockStore() {
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),
+    bulkFailRuns: vi.fn().mockResolvedValue(undefined),
+    bulkIncrementFailures: vi.fn().mockResolvedValue(new Map()),
   };
 }
 
@@ -390,16 +392,17 @@ describe("SchedulerDO", () => {
         created_at: now - 10 * 60 * 1000,
       };
       mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.bulkIncrementFailures.mockResolvedValue(new Map([["auto-1", 1]]));
 
       const scheduler = createSchedulerDO();
       await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
-      expect(mockStore.updateRun).toHaveBeenCalledWith("orphan-1", {
-        status: "failed",
-        failure_reason: "session_creation_timeout",
-        completed_at: expect.any(Number),
-      });
-      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["orphan-1"],
+        "session_creation_timeout",
+        expect.any(Number)
+      );
+      expect(mockStore.bulkIncrementFailures).toHaveBeenCalledWith(new Map([["auto-1", 1]]));
     });
 
     it("passes automation user_id to session index", async () => {
@@ -447,14 +450,138 @@ describe("SchedulerDO", () => {
         started_at: now - 2 * 60 * 60 * 1000,
       };
       mockStore.getTimedOutRunningRuns.mockResolvedValue([timedOutRun]);
+      mockStore.bulkIncrementFailures.mockResolvedValue(new Map([["auto-1", 1]]));
 
       const scheduler = createSchedulerDO();
       await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
-      expect(mockStore.updateRun).toHaveBeenCalledWith("timeout-1", {
-        status: "failed",
-        failure_reason: "execution_timeout",
-        completed_at: expect.any(Number),
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["timeout-1"],
+        "execution_timeout",
+        expect.any(Number)
+      );
+    });
+
+    it("batches multiple orphaned runs into a single bulkFailRuns call", async () => {
+      const orphanedRuns = [
+        { id: "orphan-a", automation_id: "auto-1", status: "starting", created_at: now - 1 },
+        { id: "orphan-b", automation_id: "auto-1", status: "starting", created_at: now - 2 },
+        { id: "orphan-c", automation_id: "auto-1", status: "starting", created_at: now - 3 },
+      ];
+      mockStore.getOrphanedStartingRuns.mockResolvedValue(orphanedRuns);
+      mockStore.bulkIncrementFailures.mockResolvedValue(new Map([["auto-1", 3]]));
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledTimes(1);
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["orphan-a", "orphan-b", "orphan-c"],
+        "session_creation_timeout",
+        expect.any(Number)
+      );
+      expect(mockStore.bulkIncrementFailures).toHaveBeenCalledWith(new Map([["auto-1", 3]]));
+    });
+
+    it("auto-pauses automation when bulk increment reaches threshold", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-1",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.bulkIncrementFailures.mockResolvedValue(new Map([["auto-1", 3]]));
+
+      const scheduler = createSchedulerDO();
+      const warnSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
+        .mockImplementation(() => {});
+
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
+      const autoPauseCall = warnSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.auto_pause"
+      );
+      expect(autoPauseCall).toBeDefined();
+      expect(autoPauseCall![1]).toMatchObject({
+        event: "scheduler.auto_pause",
+        automation_id: "auto-1",
+        consecutive_failures: 3,
+      });
+    });
+
+    it("swallows bulkFailRuns errors and logs scheduler.recovery.bulk_fail_error", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-1",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.bulkFailRuns.mockRejectedValue(new Error("D1 timeout"));
+
+      const scheduler = createSchedulerDO();
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const bulkFailErrorCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event ===
+          "scheduler.recovery.bulk_fail_error"
+      );
+      expect(bulkFailErrorCall).toBeDefined();
+      expect(bulkFailErrorCall![1]).toMatchObject({
+        event: "scheduler.recovery.bulk_fail_error",
+        orphaned_count: 1,
+        timed_out_count: 0,
+        error: "D1 timeout",
+      });
+      expect(mockStore.bulkIncrementFailures).not.toHaveBeenCalled();
+    });
+
+    it("swallows bulkIncrementFailures errors and logs scheduler.recovery.bulk_track_error", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-1",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.bulkIncrementFailures.mockRejectedValue(new Error("D1 timeout"));
+
+      const scheduler = createSchedulerDO();
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["orphan-1"],
+        "session_creation_timeout",
+        expect.any(Number)
+      );
+      const bulkTrackErrorCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event ===
+          "scheduler.recovery.bulk_track_error"
+      );
+      expect(bulkTrackErrorCall).toBeDefined();
+      expect(bulkTrackErrorCall![1]).toMatchObject({
+        event: "scheduler.recovery.bulk_track_error",
+        error: "D1 timeout",
       });
     });
 
