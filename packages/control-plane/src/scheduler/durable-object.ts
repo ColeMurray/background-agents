@@ -17,7 +17,12 @@ import {
   type AutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared";
-import { AutomationStore, toAutomationRun, type AutomationRow } from "../db/automation-store";
+import {
+  AutomationStore,
+  toAutomationRun,
+  type AutomationRow,
+  type AutomationRunRow,
+} from "../db/automation-store";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
@@ -41,6 +46,9 @@ const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
 
 /** Consecutive failure threshold for auto-pause. */
 const AUTO_PAUSE_THRESHOLD = 3;
+
+/** Max runs to recover per sweep type per tick (backpressure). */
+const RECOVERY_SWEEP_LIMIT = 50;
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -243,32 +251,133 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Recovery sweep ──────────────────────────────────────────────────────
 
   private async recoverySweep(store: AutomationStore): Promise<void> {
-    // Orphaned starting runs (session creation never completed)
-    const orphaned = await store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS);
+    const executionTimeoutMs = parseInt(
+      this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
+      10
+    );
+
+    const [orphanedResult, timedOutResult] = await Promise.allSettled([
+      store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
+      store.getTimedOutRunningRuns(executionTimeoutMs, RECOVERY_SWEEP_LIMIT),
+    ]);
+
+    const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
+    const timedOut = timedOutResult.status === "fulfilled" ? timedOutResult.value : [];
+
+    if (orphanedResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query orphaned runs", {
+        event: "scheduler.recovery.query_error",
+        category: "orphaned",
+        error:
+          orphanedResult.reason instanceof Error
+            ? orphanedResult.reason.message
+            : String(orphanedResult.reason),
+      });
+    }
+
+    if (timedOutResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query timed-out runs", {
+        event: "scheduler.recovery.query_error",
+        category: "timed_out",
+        error:
+          timedOutResult.reason instanceof Error
+            ? timedOutResult.reason.message
+            : String(timedOutResult.reason),
+      });
+    }
+
+    if (orphaned.length === 0 && timedOut.length === 0) return;
+
     for (const run of orphaned) {
       this.log.warn("Recovering orphaned starting run", {
         event: "scheduler.recovery.orphaned",
         run_id: run.id,
         automation_id: run.automation_id,
       });
-
-      await this.failRunAndTrack(store, run.id, run.automation_id, "session_creation_timeout");
     }
-
-    // Timed-out running runs
-    const executionTimeoutMs = parseInt(
-      this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
-      10
-    );
-    const timedOut = await store.getTimedOutRunningRuns(executionTimeoutMs);
     for (const run of timedOut) {
       this.log.warn("Recovering timed-out running run", {
         event: "scheduler.recovery.timed_out",
         run_id: run.id,
         automation_id: run.automation_id,
       });
+    }
 
-      await this.failRunAndTrack(store, run.id, run.automation_id, "execution_timeout");
+    const now = Date.now();
+    const recoveredRuns: AutomationRunRow[] = [];
+
+    if (orphaned.length > 0) {
+      try {
+        await store.bulkFailRuns(
+          orphaned.map((r) => r.id),
+          "session_creation_timeout",
+          now
+        );
+        recoveredRuns.push(...orphaned);
+      } catch (e) {
+        this.log.error("Recovery sweep failed to mark orphaned runs as failed", {
+          event: "scheduler.recovery.bulk_fail_error",
+          category: "orphaned",
+          count: orphaned.length,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    if (timedOut.length > 0) {
+      try {
+        await store.bulkFailRuns(
+          timedOut.map((r) => r.id),
+          "execution_timeout",
+          now
+        );
+        recoveredRuns.push(...timedOut);
+      } catch (e) {
+        this.log.error("Recovery sweep failed to mark timed-out runs as failed", {
+          event: "scheduler.recovery.bulk_fail_error",
+          category: "timed_out",
+          count: timedOut.length,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    if (recoveredRuns.length === 0) return;
+
+    const automationCounts = new Map<string, number>();
+    for (const run of recoveredRuns) {
+      automationCounts.set(run.automation_id, (automationCounts.get(run.automation_id) ?? 0) + 1);
+    }
+
+    let newCounts: Map<string, number>;
+    try {
+      newCounts = await store.bulkIncrementFailures(automationCounts);
+    } catch (e) {
+      this.log.error("Recovery sweep failed to track failures", {
+        event: "scheduler.recovery.bulk_track_error",
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
+
+    for (const [automationId, count] of newCounts) {
+      if (count < AUTO_PAUSE_THRESHOLD) continue;
+
+      try {
+        await store.autoPause(automationId);
+        this.log.warn("Automation auto-paused due to consecutive failures", {
+          event: "scheduler.auto_pause",
+          automation_id: automationId,
+          consecutive_failures: count,
+        });
+      } catch (e) {
+        this.log.error("Recovery sweep failed to auto-pause automation", {
+          event: "scheduler.recovery.auto_pause_error",
+          automation_id: automationId,
+          consecutive_failures: count,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
   }
 

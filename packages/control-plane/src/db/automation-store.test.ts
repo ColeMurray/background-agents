@@ -354,7 +354,7 @@ describe("AutomationStore", () => {
         allResults: [sampleRunRow],
       });
       const store = new AutomationStore(db);
-      const result = await store.getOrphanedStartingRuns(5 * 60 * 1000);
+      const result = await store.getOrphanedStartingRuns(5 * 60 * 1000, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'starting'");
     });
@@ -366,7 +366,7 @@ describe("AutomationStore", () => {
         allResults: [{ ...sampleRunRow, status: "running", started_at: now }],
       });
       const store = new AutomationStore(db);
-      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000);
+      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'running'");
     });
