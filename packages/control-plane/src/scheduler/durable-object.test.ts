@@ -625,6 +625,27 @@ describe("SchedulerDO", () => {
 
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
     });
+
+    it("propagates failure-tracking errors so the callback caller retries", async () => {
+      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+
+      const scheduler = createSchedulerDO();
+      await expect(
+        scheduler.fetch(
+          new Request("http://internal/internal/run-complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              automationId: "auto-1",
+              runId: "run-1",
+              sessionId: "sess-1",
+              success: false,
+              error: "Sandbox crashed",
+            }),
+          })
+        )
+      ).rejects.toThrow("D1 timeout");
+    });
   });
 
   describe("/internal/trigger", () => {

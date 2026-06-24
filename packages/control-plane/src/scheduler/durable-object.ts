@@ -60,22 +60,31 @@ export class SchedulerDO extends DurableObject<Env> {
     automationId: string,
     reason: string
   ): Promise<void> {
-    try {
-      await store.updateRun(runId, {
-        status: "failed",
-        failure_reason: reason,
-        completed_at: Date.now(),
-      });
+    await store.updateRun(runId, {
+      status: "failed",
+      failure_reason: reason,
+      completed_at: Date.now(),
+    });
 
-      const count = await store.incrementConsecutiveFailures(automationId);
-      if (count >= AUTO_PAUSE_THRESHOLD) {
-        await store.autoPause(automationId);
-        this.log.warn("Automation auto-paused due to consecutive failures", {
-          event: "scheduler.auto_pause",
-          automation_id: automationId,
-          consecutive_failures: count,
-        });
-      }
+    const count = await store.incrementConsecutiveFailures(automationId);
+    if (count >= AUTO_PAUSE_THRESHOLD) {
+      await store.autoPause(automationId);
+      this.log.warn("Automation auto-paused due to consecutive failures", {
+        event: "scheduler.auto_pause",
+        automation_id: automationId,
+        consecutive_failures: count,
+      });
+    }
+  }
+
+  private async failRunAndTrackBestEffort(
+    store: AutomationStore,
+    runId: string,
+    automationId: string,
+    reason: string
+  ): Promise<void> {
+    try {
+      await this.failRunAndTrack(store, runId, automationId, reason);
     } catch (trackingError) {
       this.log.error("Failed to track run failure", {
         event: "scheduler.fail_track_error",
@@ -204,7 +213,7 @@ export class SchedulerDO extends DurableObject<Env> {
             error: message,
           });
 
-          await this.failRunAndTrack(store, runId, automation.id, message);
+          await this.failRunAndTrackBestEffort(store, runId, automation.id, message);
 
           failed++;
         }
@@ -360,7 +369,7 @@ export class SchedulerDO extends DurableObject<Env> {
         triggered++;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        await this.failRunAndTrack(store, runId, automation.id, message);
+        await this.failRunAndTrackBestEffort(store, runId, automation.id, message);
       }
     }
 
@@ -456,7 +465,7 @@ export class SchedulerDO extends DurableObject<Env> {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
 
-      await this.failRunAndTrack(store, runId, automationId, message);
+      await this.failRunAndTrackBestEffort(store, runId, automationId, message);
 
       this.log.error("Manual trigger failed", {
         event: "scheduler.manual_trigger_failed",
