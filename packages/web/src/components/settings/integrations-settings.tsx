@@ -1,8 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared";
+import { INTEGRATION_DEFINITIONS, type IntegrationId } from "@open-inspect/shared";
 import { ChevronRightIcon } from "@/components/ui/icons";
+
+const DEDICATED_INTEGRATION_SETTINGS = new Set<IntegrationId>([
+  "github",
+  "linear",
+  "code-server",
+  "slack",
+]);
+
+const visibleIntegrations = INTEGRATION_DEFINITIONS.filter((integration) =>
+  DEDICATED_INTEGRATION_SETTINGS.has(integration.id)
+);
 
 export function IntegrationsSettings() {
   return (
@@ -14,7 +25,7 @@ export function IntegrationsSettings() {
 
       <div className="border border-border-muted rounded-md bg-background">
         <ul className="divide-y divide-border-muted">
-          {INTEGRATION_DEFINITIONS.map((integration) => (
+          {visibleIntegrations.map((integration) => (
             <li key={integration.id}>
               <Link
                 href={`/settings/integrations/${integration.id}`}
