@@ -45,6 +45,7 @@ import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
+import type { RepoImageProvider } from "../db/repo-images";
 import {
   createSourceControlProviderFromEnv,
   resolveScmProviderFromEnv,
@@ -809,7 +810,7 @@ export class SessionDO extends DurableObject<Env> {
     let repoImageLookup: RepoImageLookup | undefined;
     if (this.env.DB && supportsRepoImageBackend(sandboxBackend)) {
       const repoImageStore = new RepoImageStore(this.env.DB);
-      const repoImageProvider = sandboxBackend === "vercel" ? "vercel" : "modal";
+      const repoImageProvider = sandboxBackend as RepoImageProvider;
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>
           repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
