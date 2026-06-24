@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
 
@@ -67,7 +68,7 @@ async function seedSlackAutomation(): Promise<string> {
   const store = new AutomationStore(env.DB);
   const automation = makeSlackAutomation();
   await store.create(automation);
-  await store.setSlackChannels(automation.id, ["C1"]);
+  await new SlackChannelStore(env.DB).setSlackChannels(automation.id, ["C1"]);
   return automation.id;
 }
 

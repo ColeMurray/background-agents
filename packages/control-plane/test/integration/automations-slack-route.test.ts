@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { AutomationStore, toAutomation, type AutomationRow } from "../../src/db/automation-store";
+import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
 import type { TriggerConfig } from "@open-inspect/shared";
@@ -185,9 +186,10 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
 
   it("atomically updates conditions and re-syncs the watched-channel index", async () => {
     const store = new AutomationStore(env.DB);
+    const channels = new SlackChannelStore(env.DB);
     const auto = makeSlackAutomation();
     await store.create(auto);
-    await store.setSlackChannels(auto.id, ["C1"]);
+    await channels.setSlackChannels(auto.id, ["C1"]);
 
     const res = await putAutomation(auto.id, {
       triggerConfig: {
@@ -199,7 +201,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     });
     expect(res.status).toBe(200);
 
-    const watched = await store.getWatchedSlackChannels();
+    const watched = await channels.getWatchedSlackChannels();
     expect([...watched].sort()).toEqual(["C2", "C3"]);
   });
 
@@ -267,12 +269,13 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
 
   it("returns the distinct watched channels for enabled slack automations", async () => {
     const store = new AutomationStore(env.DB);
+    const channels = new SlackChannelStore(env.DB);
     const a = makeSlackAutomation();
     const b = makeSlackAutomation();
     await store.create(a);
     await store.create(b);
-    await store.setSlackChannels(a.id, ["C1", "C2"]);
-    await store.setSlackChannels(b.id, ["C2", "C3"]);
+    await channels.setSlackChannels(a.id, ["C1", "C2"]);
+    await channels.setSlackChannels(b.id, ["C2", "C3"]);
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);
@@ -282,9 +285,10 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
 
   it("excludes channels of disabled automations and returns an empty list when none", async () => {
     const store = new AutomationStore(env.DB);
+    const channels = new SlackChannelStore(env.DB);
     const disabled = makeSlackAutomation({ enabled: 0 });
     await store.create(disabled);
-    await store.setSlackChannels(disabled.id, ["C9"]);
+    await channels.setSlackChannels(disabled.id, ["C9"]);
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);

@@ -23,6 +23,7 @@ import {
   toAutomationRun,
   type AutomationRow,
 } from "../db/automation-store";
+import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
 import { resolveProviderIdentity, type SessionIdentityFields } from "../session/identity";
 import { generateId } from "../auth/crypto";
@@ -342,9 +343,13 @@ async function handleCreateAutomation(
   // Persist the automation and (for slack_event) its watched-channel index in a
   // single atomic write, so the canonical trigger_config and the channel index
   // that drives scheduler candidate selection can never drift apart on a partial
-  // failure.
+  // failure. The batch composes the two single-table stores' prepared statements.
   if (triggerType === "slack_event") {
-    await store.createWithSlackChannels(row, extractSlackChannels(body.triggerConfig));
+    const slackStore = new SlackChannelStore(env.DB);
+    await env.DB.batch([
+      store.bindAutomationInsert(row),
+      ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig)),
+    ]);
   } else {
     await store.create(row);
   }
@@ -563,16 +568,26 @@ async function handleUpdateAutomation(
 
   // Apply the update and, when a slack_event automation's conditions changed,
   // re-sync its watched-channel index in the same atomic write so trigger_config
-  // and the channel index can never drift apart on a partial failure.
+  // and the channel index can never drift apart on a partial failure. The batch
+  // composes the two single-table stores' prepared statements, tolerating a null
+  // update statement (no automation fields changed, channels-only re-sync).
   const resyncSlackChannels =
     existing.trigger_type === "slack_event" && body.triggerConfig !== undefined;
-  const updated = resyncSlackChannels
-    ? await store.updateWithSlackChannels(
-        id,
-        updateFields,
-        extractSlackChannels(body.triggerConfig)
-      )
-    : await store.update(id, updateFields);
+  let updated: AutomationRow | null;
+  if (resyncSlackChannels) {
+    const slackStore = new SlackChannelStore(env.DB);
+    const updateStatement = store.bindAutomationUpdate(id, updateFields);
+    const channelStatements = slackStore.bindChannelStatements(
+      id,
+      extractSlackChannels(body.triggerConfig)
+    );
+    await env.DB.batch(
+      updateStatement ? [updateStatement, ...channelStatements] : channelStatements
+    );
+    updated = await store.getById(id);
+  } else {
+    updated = await store.update(id, updateFields);
+  }
   if (!updated) return error("Automation not found", 404);
 
   logger.info("automation.updated", {
@@ -856,8 +871,7 @@ async function handleGetWatchedSlackChannels(
   _match: RegExpMatchArray,
   _ctx: RequestContext
 ): Promise<Response> {
-  const store = new AutomationStore(env.DB);
-  const channels = await store.getWatchedSlackChannels();
+  const channels = await new SlackChannelStore(env.DB).getWatchedSlackChannels();
   return json({ channels });
 }
 

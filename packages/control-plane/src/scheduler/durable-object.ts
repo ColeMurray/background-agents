@@ -29,6 +29,7 @@ import {
   type AutomationRunRow,
   type SlackRunColumns,
 } from "../db/automation-store";
+import { SlackChannelStore } from "../db/slack-channel-store";
 import { buildSlackCompletionNotification, buildSlackSkipNotification } from "./slack-completion";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
@@ -304,7 +305,9 @@ export class SchedulerDO extends DurableObject<Env> {
         );
         break;
       case "slack":
-        candidates = await store.getSlackAutomationsForChannel(event.channelId);
+        candidates = await new SlackChannelStore(this.env.DB).getSlackAutomationsForChannel(
+          event.channelId
+        );
         break;
     }
 

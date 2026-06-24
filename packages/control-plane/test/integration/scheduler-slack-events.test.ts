@@ -5,6 +5,7 @@ import {
   type AutomationRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
+import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared";
 import { cleanD1Tables } from "./cleanup";
 
@@ -107,7 +108,7 @@ async function seedSlackAutomation(
 ): Promise<string> {
   const id = `auto-slack-${Math.random().toString(36).slice(2, 8)}`;
   await store.create(makeAutomation({ id, ...overrides }));
-  await store.setSlackChannels(id, ["C1"]);
+  await new SlackChannelStore(env.DB).setSlackChannels(id, ["C1"]);
   return id;
 }
 

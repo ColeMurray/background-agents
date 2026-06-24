@@ -141,7 +141,11 @@ export class AutomationStore {
 
   // --- Automation CRUD ---
 
-  private bindAutomationInsert(row: AutomationRow): D1PreparedStatement {
+  /**
+   * Prepared INSERT for an automation row. Public so a route can compose it with
+   * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
+   */
+  bindAutomationInsert(row: AutomationRow): D1PreparedStatement {
     return this.db
       .prepare(
         `INSERT INTO automations
@@ -183,18 +187,6 @@ export class AutomationStore {
     await this.bindAutomationInsert(row).run();
   }
 
-  /**
-   * Atomically insert an automation and its watched slack channels in one
-   * `db.batch`, so a slack_event automation can never be committed without its
-   * channel-index rows (which would leave it invisible to the scheduler).
-   */
-  async createWithSlackChannels(row: AutomationRow, channelIds: string[]): Promise<void> {
-    await this.db.batch([
-      this.bindAutomationInsert(row),
-      ...this.bindSlackChannelStatements(row.id, channelIds),
-    ]);
-  }
-
   async getById(id: string): Promise<AutomationRow | null> {
     return this.db
       .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
@@ -230,12 +222,10 @@ export class AutomationStore {
 
   /**
    * Build the dynamic UPDATE statement for the allowed automation fields, or
-   * null when `fields` carries nothing to write.
+   * null when `fields` carries nothing to write. Public so a route can compose it
+   * with `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
-  private bindAutomationUpdate(
-    id: string,
-    fields: Partial<AutomationRow>
-  ): D1PreparedStatement | null {
+  bindAutomationUpdate(id: string, fields: Partial<AutomationRow>): D1PreparedStatement | null {
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -279,24 +269,6 @@ export class AutomationStore {
   async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
-    return this.getById(id);
-  }
-
-  /**
-   * Atomically update an automation and re-sync its watched slack channels in
-   * one `db.batch`, so the canonical `trigger_config` and the channel index can
-   * never drift apart on a partial failure.
-   */
-  async updateWithSlackChannels(
-    id: string,
-    fields: Partial<AutomationRow>,
-    channelIds: string[]
-  ): Promise<AutomationRow | null> {
-    const updateStatement = this.bindAutomationUpdate(id, fields);
-    const channelStatements = this.bindSlackChannelStatements(id, channelIds);
-    await this.db.batch(
-      updateStatement ? [updateStatement, ...channelStatements] : channelStatements
-    );
     return this.getById(id);
   }
 
@@ -509,61 +481,6 @@ export class AutomationStore {
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), triggerType, eventType)
       .all<AutomationRow>();
     return result.results || [];
-  }
-
-  // --- Slack trigger queries ---
-
-  /** Enabled, non-deleted slack_event automations watching a channel (indexed by channel_id). */
-  async getSlackAutomationsForChannel(channelId: string): Promise<AutomationRow[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT a.* FROM automations a
-         JOIN automation_slack_channels c ON c.automation_id = a.id
-         WHERE c.channel_id = ? AND a.enabled = 1 AND a.deleted_at IS NULL
-           AND a.trigger_type = 'slack_event'`
-      )
-      .bind(channelId)
-      .all<AutomationRow>();
-    return result.results || [];
-  }
-
-  /** Distinct channel IDs watched by any enabled slack_event automation. */
-  async getWatchedSlackChannels(): Promise<string[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT DISTINCT c.channel_id FROM automation_slack_channels c
-         JOIN automations a ON a.id = c.automation_id
-         WHERE a.enabled = 1 AND a.deleted_at IS NULL AND a.trigger_type = 'slack_event'`
-      )
-      .all<{ channel_id: string }>();
-    return (result.results || []).map((r) => r.channel_id);
-  }
-
-  /** Replace an automation's watched-channel set atomically. */
-  /** Statements that replace an automation's watched-channel set (DELETE + re-INSERT). */
-  private bindSlackChannelStatements(
-    automationId: string,
-    channelIds: string[]
-  ): D1PreparedStatement[] {
-    const statements: D1PreparedStatement[] = [
-      this.db
-        .prepare("DELETE FROM automation_slack_channels WHERE automation_id = ?")
-        .bind(automationId),
-    ];
-    for (const channelId of channelIds) {
-      statements.push(
-        this.db
-          .prepare(
-            "INSERT OR IGNORE INTO automation_slack_channels (automation_id, channel_id) VALUES (?, ?)"
-          )
-          .bind(automationId, channelId)
-      );
-    }
-    return statements;
-  }
-
-  async setSlackChannels(automationId: string, channelIds: string[]): Promise<void> {
-    await this.db.batch(this.bindSlackChannelStatements(automationId, channelIds));
   }
 
   /**
