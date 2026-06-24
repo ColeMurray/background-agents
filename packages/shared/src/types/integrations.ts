@@ -2,6 +2,7 @@
 
 import { escapeRegExp } from "../regex";
 
+/** Third-party integrations, each surfaced as a card in the Integrations settings list. */
 export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
@@ -24,6 +25,16 @@ export interface GitHubBotSettings {
   allowedTriggerUsers?: string[];
   codeReviewInstructions?: string;
   commentActionInstructions?: string;
+}
+
+/**
+ * Source-control (SCM) behavior settings.
+ *
+ * Provider-agnostic: applies to both GitHub and GitLab.
+ */
+export interface ScmSettings {
+  /** Always open pull/merge requests created by sessions as drafts. */
+  alwaysUseDraftMode?: boolean;
 }
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
@@ -263,13 +274,18 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
   });
 }
 
-/** Maps each integration ID to its global and per-repo settings types. */
+/**
+ * Maps each settings-store key to its global and per-repo settings types. Keys
+ * are the integration IDs plus top-level settings that share the
+ * same generic settings store for storage only.
+ */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
+  scm: IntegrationEntry<ScmSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */
@@ -277,6 +293,7 @@ export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
+export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
 /** Full MCP server config with decrypted credentials. Internal use only. */

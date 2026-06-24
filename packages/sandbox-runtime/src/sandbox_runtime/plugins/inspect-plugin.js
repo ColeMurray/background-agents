@@ -84,12 +84,19 @@ export default tool({
       .describe(
         "Target branch to merge into. Defaults to the repository's default branch (usually 'main')."
       ),
+    draft: z
+      .boolean()
+      .optional()
+      .describe(
+        "Open the pull request as a draft. Set to true to open a draft PR, or false for a ready-for-review PR. Note: this may be overridden by policy."
+      ),
   },
   async execute(args, context) {
     console.log(`[create-pull-request] execute() called with args:`, JSON.stringify(args));
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";
     const baseBranch = args.baseBranch; // undefined if not provided, server will use default
+    const draft = args.draft; // undefined if not provided, server falls back to repo setting
     const headBranch = await getCurrentBranch();
 
     try {
@@ -118,6 +125,7 @@ export default tool({
           body: body,
           baseBranch: baseBranch,
           headBranch: headBranch,
+          draft: draft,
           timestamp: Date.now(),
         }),
       });

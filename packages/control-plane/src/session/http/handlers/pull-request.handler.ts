@@ -8,6 +8,7 @@ const createPrRequestSchema = z.object({
   body: z.string(),
   baseBranch: z.string().optional(),
   headBranch: z.string().optional(),
+  draft: z.boolean().optional(),
 });
 
 type CreatePrRequest = z.infer<typeof createPrRequestSchema>;

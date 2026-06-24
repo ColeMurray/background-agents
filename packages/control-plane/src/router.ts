@@ -16,6 +16,7 @@ import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { createLogger } from "./logger";
 import { type Route, type RequestContext, parsePattern, json, error } from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
+import { scmSettingsRoutes } from "./routes/scm-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
 import { repoImageRoutes } from "./routes/repo-images";
@@ -310,6 +311,9 @@ const routes: Route[] = [
 
   // Integration settings
   ...integrationSettingsRoutes,
+
+  // SCM (source-control) settings
+  ...scmSettingsRoutes,
 
   // Repo image builds
   ...repoImageRoutes,

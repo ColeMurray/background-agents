@@ -94,6 +94,10 @@ async function handleCreatePR(
     return error("headBranch must be a string");
   }
 
+  if (body.draft !== undefined && typeof body.draft !== "boolean") {
+    return error("draft must be a boolean");
+  }
+
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.createPr, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -102,6 +106,7 @@ async function handleCreatePR(
       body: body.body,
       baseBranch: body.baseBranch,
       headBranch: body.headBranch,
+      draft: body.draft,
     }),
   });
 }

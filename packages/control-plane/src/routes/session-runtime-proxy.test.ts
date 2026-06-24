@@ -136,6 +136,51 @@ describe("session runtime proxy routes", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("forwards the draft flag through the create-PR contract", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ prNumber: 1, prUrl: "https://example/pr/1", state: "draft" });
+    });
+    const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "T", body: "B", draft: true }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.createPr);
+    await expect(requests[0].json()).resolves.toMatchObject({ title: "T", body: "B", draft: true });
+  });
+
+  it("rejects a non-boolean draft without forwarding to the runtime", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "T", body: "B", draft: "yes" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "draft must be a boolean" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed create-PR JSON without forwarding to the runtime", async () => {
     const fetch = vi.fn(async () => Response.json({ status: "ok" }));
     const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
