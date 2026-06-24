@@ -541,11 +541,71 @@ describe("SchedulerDO", () => {
       expect(bulkFailErrorCall).toBeDefined();
       expect(bulkFailErrorCall![1]).toMatchObject({
         event: "scheduler.recovery.bulk_fail_error",
-        orphaned_count: 1,
-        timed_out_count: 0,
+        category: "orphaned",
+        count: 1,
         error: "D1 timeout",
       });
       expect(mockStore.bulkIncrementFailures).not.toHaveBeenCalled();
+    });
+
+    it("increments failures for runs marked failed when the other category throws", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-1",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      const timedOutRun = {
+        id: "timeout-1",
+        automation_id: "auto-2",
+        status: "running",
+        started_at: now - 2 * 60 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.getTimedOutRunningRuns.mockResolvedValue([timedOutRun]);
+      mockStore.bulkFailRuns.mockImplementation(async (runIds: string[]) => {
+        if (runIds.includes("timeout-1")) {
+          throw new Error("D1 timeout");
+        }
+      });
+      mockStore.bulkIncrementFailures.mockResolvedValue(new Map([["auto-1", 1]]));
+
+      const scheduler = createSchedulerDO();
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["orphan-1"],
+        "session_creation_timeout",
+        expect.any(Number)
+      );
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["timeout-1"],
+        "execution_timeout",
+        expect.any(Number)
+      );
+
+      expect(mockStore.bulkIncrementFailures).toHaveBeenCalledWith(new Map([["auto-1", 1]]));
+
+      const bulkFailErrorCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event ===
+          "scheduler.recovery.bulk_fail_error"
+      );
+      expect(bulkFailErrorCall).toBeDefined();
+      expect(bulkFailErrorCall![1]).toMatchObject({
+        event: "scheduler.recovery.bulk_fail_error",
+        category: "timed_out",
+        count: 1,
+        error: "D1 timeout",
+      });
     });
 
     it("swallows bulkIncrementFailures errors and logs scheduler.recovery.bulk_track_error", async () => {

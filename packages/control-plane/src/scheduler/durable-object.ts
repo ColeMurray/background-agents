@@ -274,35 +274,49 @@ export class SchedulerDO extends DurableObject<Env> {
     }
 
     const now = Date.now();
+    const recoveredRuns: AutomationRunRow[] = [];
 
-    try {
-      if (orphaned.length > 0) {
+    if (orphaned.length > 0) {
+      try {
         await store.bulkFailRuns(
           orphaned.map((r) => r.id),
           "session_creation_timeout",
           now
         );
+        recoveredRuns.push(...orphaned);
+      } catch (e) {
+        this.log.error("Recovery sweep failed to mark orphaned runs as failed", {
+          event: "scheduler.recovery.bulk_fail_error",
+          category: "orphaned",
+          count: orphaned.length,
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
-      if (timedOut.length > 0) {
+    }
+
+    if (timedOut.length > 0) {
+      try {
         await store.bulkFailRuns(
           timedOut.map((r) => r.id),
           "execution_timeout",
           now
         );
+        recoveredRuns.push(...timedOut);
+      } catch (e) {
+        this.log.error("Recovery sweep failed to mark timed-out runs as failed", {
+          event: "scheduler.recovery.bulk_fail_error",
+          category: "timed_out",
+          count: timedOut.length,
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
-    } catch (e) {
-      this.log.error("Recovery sweep failed to mark runs as failed", {
-        event: "scheduler.recovery.bulk_fail_error",
-        orphaned_count: orphaned.length,
-        timed_out_count: timedOut.length,
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return;
     }
+
+    if (recoveredRuns.length === 0) return;
 
     try {
       const automationCounts = new Map<string, number>();
-      for (const run of [...orphaned, ...timedOut]) {
+      for (const run of recoveredRuns) {
         automationCounts.set(run.automation_id, (automationCounts.get(run.automation_id) ?? 0) + 1);
       }
 

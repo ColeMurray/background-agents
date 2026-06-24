@@ -547,6 +547,52 @@ describe("AutomationStore (D1 integration)", () => {
       expect(timedOut).toHaveLength(0);
     });
 
+    it("drains oldest orphaned runs first when LIMIT is hit", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-order1" }));
+
+      const base = now - 60 * 60 * 1000;
+      for (let i = 0; i < 5; i++) {
+        await store.insertRun(
+          makeRun("auto-order1", {
+            id: `run-order-${i}`,
+            status: "starting",
+            scheduled_at: base + i * 1000,
+            created_at: base + i * 1000,
+          })
+        );
+      }
+
+      const orphaned = await store.getOrphanedStartingRuns(5 * 60 * 1000, 3);
+      expect(orphaned).toHaveLength(3);
+      expect(orphaned.map((r) => r.id)).toEqual(["run-order-0", "run-order-1", "run-order-2"]);
+    });
+
+    it("drains oldest timed-out runs first when LIMIT is hit", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-order2" }));
+
+      const base = now - 3 * 60 * 60 * 1000;
+      for (let i = 0; i < 5; i++) {
+        await store.insertRun(
+          makeRun("auto-order2", {
+            id: `run-to-${i}`,
+            status: "running",
+            session_id: `sess-${i}`,
+            scheduled_at: base + i * 1000,
+            started_at: base + i * 1000,
+            created_at: base + i * 1000,
+          })
+        );
+      }
+
+      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 3);
+      expect(timedOut).toHaveLength(3);
+      expect(timedOut.map((r) => r.id)).toEqual(["run-to-0", "run-to-1", "run-to-2"]);
+    });
+
     // The behavioural tests above pass with or without the index (a scan returns
     // the same rows); these EXPLAIN the real production SQL to assert the partial
     // index is actually used.

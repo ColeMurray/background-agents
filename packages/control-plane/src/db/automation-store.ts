@@ -389,7 +389,10 @@ export class AutomationStore {
 
     const placeholders = automationIds.map(() => "?").join(", ");
     const result = await this.db
-      .prepare(`SELECT id, consecutive_failures FROM automations WHERE id IN (${placeholders})`)
+      .prepare(
+        `SELECT id, consecutive_failures FROM automations
+         WHERE id IN (${placeholders}) AND deleted_at IS NULL`
+      )
       .bind(...automationIds)
       .all<{ id: string; consecutive_failures: number }>();
 
@@ -502,7 +505,7 @@ export class AutomationStore {
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
     const result = await this.db
-      .prepare(`${AutomationStore.ORPHANED_STARTING_RUNS_SQL} LIMIT ?`)
+      .prepare(`${AutomationStore.ORPHANED_STARTING_RUNS_SQL} ORDER BY created_at ASC LIMIT ?`)
       .bind(cutoff, limit)
       .all<AutomationRunRow>();
     return result.results || [];
@@ -514,7 +517,7 @@ export class AutomationStore {
   ): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - executionTimeoutMs;
     const result = await this.db
-      .prepare(`${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL} LIMIT ?`)
+      .prepare(`${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL} ORDER BY started_at ASC LIMIT ?`)
       .bind(cutoff, limit)
       .all<AutomationRunRow>();
     return result.results || [];
