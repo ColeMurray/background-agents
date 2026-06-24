@@ -60,19 +60,29 @@ export class SchedulerDO extends DurableObject<Env> {
     automationId: string,
     reason: string
   ): Promise<void> {
-    await store.updateRun(runId, {
-      status: "failed",
-      failure_reason: reason,
-      completed_at: Date.now(),
-    });
+    try {
+      await store.updateRun(runId, {
+        status: "failed",
+        failure_reason: reason,
+        completed_at: Date.now(),
+      });
 
-    const count = await store.incrementConsecutiveFailures(automationId);
-    if (count >= AUTO_PAUSE_THRESHOLD) {
-      await store.autoPause(automationId);
-      this.log.warn("Automation auto-paused due to consecutive failures", {
-        event: "scheduler.auto_pause",
+      const count = await store.incrementConsecutiveFailures(automationId);
+      if (count >= AUTO_PAUSE_THRESHOLD) {
+        await store.autoPause(automationId);
+        this.log.warn("Automation auto-paused due to consecutive failures", {
+          event: "scheduler.auto_pause",
+          automation_id: automationId,
+          consecutive_failures: count,
+        });
+      }
+    } catch (trackingError) {
+      this.log.error("Failed to track run failure", {
+        event: "scheduler.fail_track_error",
         automation_id: automationId,
-        consecutive_failures: count,
+        run_id: runId,
+        original_reason: reason,
+        error: trackingError instanceof Error ? trackingError.message : String(trackingError),
       });
     }
   }

@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../types";
+import type { Logger } from "../logger";
 
 // Mock cloudflare:workers before importing SchedulerDO (extends DurableObject)
 vi.mock("cloudflare:workers", () => ({
@@ -456,6 +457,52 @@ describe("SchedulerDO", () => {
         completed_at: expect.any(Number),
       });
     });
+
+    it("swallows failRunAndTrack errors and logs scheduler.fail_track_error", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+
+      const failingStub = {
+        fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
+      } as never;
+
+      const env = createEnv();
+      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+
+      const scheduler = createSchedulerDO(env);
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
+      expect(body.failed).toBe(1);
+
+      const failTrackCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.fail_track_error"
+      );
+      expect(failTrackCall).toBeDefined();
+      expect(failTrackCall![1]).toMatchObject({
+        event: "scheduler.fail_track_error",
+        automation_id: "auto-1",
+        run_id: expect.any(String),
+        original_reason: "Session init failed",
+        error: "D1 timeout",
+      });
+
+      const tickErrorCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.tick_error"
+      );
+      expect(tickErrorCall).toBeUndefined();
+
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+    });
   });
 
   describe("/internal/run-complete", () => {
@@ -643,6 +690,42 @@ describe("SchedulerDO", () => {
         expect.any(String),
         expect.objectContaining({ status: "running" })
       );
+    });
+
+    it("returns the normal 500 response when failRunAndTrack itself throws", async () => {
+      mockStore.getById.mockResolvedValue(sampleAutomation);
+      mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+
+      const failingStub = {
+        fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
+      } as never;
+
+      const env = createEnv();
+      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+
+      const scheduler = createSchedulerDO(env);
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: "auto-1" }),
+        })
+      );
+
+      expect(res.status).toBe(500);
+      const body = await res.json<{ error: string }>();
+      expect(body.error).toBe("Failed to trigger automation");
+
+      const failTrackCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.fail_track_error"
+      );
+      expect(failTrackCall).toBeDefined();
     });
   });
 
