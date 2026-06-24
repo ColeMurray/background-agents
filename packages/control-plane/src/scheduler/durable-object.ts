@@ -13,11 +13,22 @@ import {
   nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
+  computeHmacHex,
+  DEFAULT_MAX_RUNS_PER_HOUR,
   type AutomationCallbackContext,
   type AutomationEvent,
+  type SlackAutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared";
-import { AutomationStore, toAutomationRun, type AutomationRow } from "../db/automation-store";
+import {
+  AutomationStore,
+  toAutomationRun,
+  isDuplicateKeyError,
+  type AutomationRow,
+  type AutomationRunRow,
+  type SlackRunColumns,
+} from "../db/automation-store";
+import { buildSlackCompletionNotification, buildSlackSkipNotification } from "./slack-completion";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
@@ -41,6 +52,9 @@ const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
 
 /** Consecutive failure threshold for auto-pause. */
 const AUTO_PAUSE_THRESHOLD = 3;
+
+/** Rate-limit window for slack triggers (1 hour, matching max_runs_per_hour). */
+const SLACK_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -288,12 +302,20 @@ export class SchedulerDO extends DurableObject<Env> {
           event.eventType
         );
         break;
+      case "slack":
+        candidates = await store.getSlackAutomationsForChannel(event.channelId);
+        break;
     }
 
     let triggered = 0;
     let skipped = 0;
+    // Surface at most one concurrency-skip ephemeral per event, even when
+    // several automations watch the same thread and all skip.
+    let concurrencySkipped = false;
 
     for (const automation of candidates) {
+      const now = Date.now();
+
       // 2. Evaluate conditions
       const config: TriggerConfig = automation.trigger_config
         ? JSON.parse(automation.trigger_config)
@@ -302,16 +324,36 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
-      // 3. Concurrency check (per-event-instance)
+      // 3. Rate limit (slack only) — bounds the top-level-post flood that the
+      // per-thread concurrency_key does not. Records a skip for observability.
+      if (event.source === "slack") {
+        const maxRuns = automation.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR;
+        const recentRuns = await store.countRunsInWindow(
+          automation.id,
+          now - SLACK_RATE_LIMIT_WINDOW_MS
+        );
+        if (recentRuns >= maxRuns) {
+          await this.recordSlackSkip(store, automation.id, event, "rate_limited");
+          skipped++;
+          continue;
+        }
+      }
+
+      // 4. Concurrency check (per-event-instance)
       const activeRun = await store.getActiveRunForKey(automation.id, event.concurrencyKey);
       if (activeRun) {
+        // For slack, persist the skip so the bot can surface "a run is already
+        // active for this thread" and so the drop is auditable.
+        if (event.source === "slack") {
+          await this.recordSlackSkip(store, automation.id, event, "concurrent_run_active");
+          concurrencySkipped = true;
+        }
         skipped++;
         continue;
       }
 
-      // 4. Create run (dedup via unique index on trigger_key)
+      // 5. Create run (dedup via unique index on trigger_key)
       const runId = generateId();
-      const now = Date.now();
       try {
         await store.insertRun({
           id: runId,
@@ -326,6 +368,7 @@ export class SchedulerDO extends DurableObject<Env> {
           created_at: now,
           trigger_key: event.triggerKey,
           concurrency_key: event.concurrencyKey,
+          ...(event.source === "slack" ? slackRunColumns(event) : {}),
         });
       } catch (e) {
         if (isDuplicateKeyError(e)) {
@@ -352,6 +395,10 @@ export class SchedulerDO extends DurableObject<Env> {
         const message = e instanceof Error ? e.message : String(e);
         await this.failRunAndTrack(store, runId, automation.id, message);
       }
+    }
+
+    if (event.source === "slack" && concurrencySkipped) {
+      await this.notifySlackConcurrencySkip(event);
     }
 
     this.log.info("Event processed", {
@@ -520,9 +567,127 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
+    // Slack-triggered runs deliver their result back into the originating
+    // thread. The scheduler owns this fan-out (not the session callback path)
+    // because the thread coordinates live on the run row. Best-effort.
+    if (run.slack_channel) {
+      await this.notifySlackCompletion(
+        store,
+        run,
+        body.success,
+        body.success ? undefined : body.error
+      );
+    }
+
     return new Response(JSON.stringify({ ok: true }), {
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  /**
+   * Persist a `skipped` run for a slack event dropped by the rate-limit or
+   * concurrency guard, carrying the same thread coordinates a materialized run
+   * would. Best-effort observability; `recordSkippedRun` swallows the unexpected
+   * duplicate-key case internally.
+   */
+  private async recordSlackSkip(
+    store: AutomationStore,
+    automationId: string,
+    event: SlackAutomationEvent,
+    reason: string
+  ): Promise<void> {
+    await store.recordSkippedRun({
+      id: generateId(),
+      automationId,
+      skipReason: reason,
+      concurrencyKey: event.concurrencyKey,
+      slackColumns: slackRunColumns(event),
+    });
+  }
+
+  /**
+   * Post a Slack-triggered run's result into its originating thread by calling
+   * the slack-bot's `/callbacks/automation-complete` endpoint. Signs the body
+   * with `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the bot's other
+   * callbacks). No-ops when the run has no thread anchor, when `SLACK_BOT` is
+   * unbound, or when the secret is unset — all best-effort.
+   */
+  private async notifySlackCompletion(
+    store: AutomationStore,
+    run: AutomationRunRow,
+    success: boolean,
+    error?: string
+  ): Promise<void> {
+    const binding = this.env.SLACK_BOT;
+    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    if (!binding || !secret) return;
+
+    const automation = await store.getById(run.automation_id);
+    const body = buildSlackCompletionNotification({
+      run,
+      automationName: automation?.name ?? "Automation",
+      success,
+      error,
+    });
+    if (!body) return;
+
+    try {
+      const signature = await computeHmacHex(JSON.stringify(body), secret);
+      const response = await binding.fetch("https://internal/callbacks/automation-complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, signature }),
+      });
+      if (!response.ok) {
+        this.log.warn("Slack completion callback failed", {
+          event: "scheduler.slack_complete_failed",
+          automation_id: run.automation_id,
+          run_id: run.id,
+          http_status: response.status,
+        });
+      }
+    } catch (e) {
+      this.log.warn("Slack completion callback errored", {
+        event: "scheduler.slack_complete_failed",
+        automation_id: run.automation_id,
+        run_id: run.id,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
+  }
+
+  /**
+   * Post a best-effort ephemeral "a run is already active for this thread"
+   * notice to the message author when a slack event is dropped by the
+   * per-thread concurrency guard. No-ops without a binding/secret/actor.
+   */
+  private async notifySlackConcurrencySkip(event: SlackAutomationEvent): Promise<void> {
+    const binding = this.env.SLACK_BOT;
+    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    if (!binding || !secret) return;
+
+    const body = buildSlackSkipNotification({
+      channelId: event.channelId,
+      actorUserId: event.actorUserId,
+      threadTs: event.threadTs,
+      ts: event.ts,
+    });
+    if (!body) return;
+
+    try {
+      const signature = await computeHmacHex(JSON.stringify(body), secret);
+      await binding.fetch("https://internal/callbacks/automation-skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, signature }),
+      });
+    } catch (e) {
+      this.log.warn("Slack skip callback errored", {
+        event: "scheduler.slack_skip_failed",
+        channel: event.channelId,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
   }
 
   // ─── Health check ────────────────────────────────────────────────────────
@@ -638,7 +803,12 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 }
 
-function isDuplicateKeyError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("UNIQUE constraint failed");
+/** Run-row slack columns for a slack-origin event — shared by insertRun and recordSkippedRun. */
+function slackRunColumns(event: SlackAutomationEvent): SlackRunColumns {
+  return {
+    slack_channel: event.channelId,
+    slack_thread_ts: event.threadTs ?? null,
+    slack_message_ts: event.ts,
+    actor_user_id: event.actorUserId,
+  };
 }

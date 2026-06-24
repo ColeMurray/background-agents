@@ -756,7 +756,8 @@ export type AutomationTriggerType =
   | "github_event"
   | "linear_event"
   | "sentry"
-  | "webhook";
+  | "webhook"
+  | "slack_event";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
@@ -785,6 +786,10 @@ export interface Automation {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
+  /** Per-hour run cap for slack_event automations; null falls back to the default. */
+  maxRunsPerHour?: number | null;
+  /** Whether slack_event run results are posted back into the originating thread. */
+  replyInThread?: boolean;
 }
 
 export interface CreateAutomationRequest {
@@ -801,6 +806,8 @@ export interface CreateAutomationRequest {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  maxRunsPerHour?: number | null;
+  replyInThread?: boolean;
 }
 
 export interface UpdateAutomationRequest {
@@ -813,6 +820,8 @@ export interface UpdateAutomationRequest {
   baseBranch?: string;
   eventType?: string;
   triggerConfig?: TriggerConfig;
+  maxRunsPerHour?: number | null;
+  replyInThread?: boolean;
 }
 
 export interface AutomationRun {

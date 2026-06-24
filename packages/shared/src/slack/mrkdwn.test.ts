@@ -115,6 +115,18 @@ describe("applyMentionPolicy", () => {
   it("preserves channel refs", () => {
     expect(applyMentionPolicy("<#C123|ops> <@U1>", "strip")).toBe("<#C123|ops> ");
   });
+
+  it("escape converts the piped <@ID|label> form to literal @ID", () => {
+    expect(applyMentionPolicy("hi <@U123|cole>", "escape")).toBe("hi @U123");
+  });
+
+  it("strip removes the piped <@ID|label> form", () => {
+    expect(applyMentionPolicy("hi <@U123|cole>", "strip")).toBe("hi ");
+  });
+
+  it("handles a mix of bare and piped mentions", () => {
+    expect(applyMentionPolicy("<@U1> and <@U2|two>", "escape")).toBe("@U1 and @U2");
+  });
 });
 
 describe("truncateForSlack", () => {

@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import {
   DEFAULT_MODEL,
+  DEFAULT_MAX_RUNS_PER_HOUR,
   getReasoningConfig,
   isValidCron,
   isValidReasoningEffort,
@@ -93,6 +94,8 @@ export interface AutomationFormValues {
   eventType?: string;
   triggerConfig?: { conditions: TriggerCondition[] };
   sentryClientSecret?: string;
+  maxRunsPerHour?: number | null;
+  replyInThread?: boolean;
 }
 
 interface AutomationFormProps {
@@ -132,9 +135,19 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerConfig?.conditions ?? []
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
+  const [replyInThread, setReplyInThread] = useState(initialValues?.replyInThread ?? true);
+  const [maxRunsPerHour, setMaxRunsPerHour] = useState(
+    initialValues?.maxRunsPerHour != null ? String(initialValues.maxRunsPerHour) : ""
+  );
 
   const isSchedule = triggerType === "schedule";
+  const isSlack = triggerType === "slack_event";
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
+  // Mirror the server rule: a slack_event needs a slack_channel + a text_match.
+  const slackConditionsValid =
+    !isSlack ||
+    (conditions.some((c) => c.type === "slack_channel") &&
+      conditions.some((c) => c.type === "text_match"));
 
   // The model we display and submit. The selector only lists enabled models, so
   // a disabled default (blank create), a disabled saved model (edit), or a
@@ -186,6 +199,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     if (loadingModels) return;
     if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
     if (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim()) return;
+    if (!slackConditionsValid) return;
     if (showEventTypeSelector && !eventType) {
       setEventTypeError("Event type is required.");
       return;
@@ -218,6 +232,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       values.triggerConfig = { conditions };
       if (triggerType === "sentry" && mode === "create" && sentryClientSecret.trim()) {
         values.sentryClientSecret = sentryClientSecret.trim();
+      }
+      if (isSlack) {
+        values.replyInThread = replyInThread;
+        const parsed = Number.parseInt(maxRunsPerHour, 10);
+        values.maxRunsPerHour = maxRunsPerHour.trim() && parsed > 0 ? parsed : null;
       }
     }
 
@@ -258,6 +277,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               webhook: "Inbound Webhook",
               github_event: "GitHub Event",
               linear_event: "Linear Event",
+              slack_event: "Slack Message",
             }[triggerType] || triggerType}
             <span className="text-xs ml-2">(cannot be changed)</span>
           </div>
@@ -511,6 +531,45 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             Optional filters on incoming events. When you add conditions, every condition must pass
             before a run starts.
           </FieldDescription>
+          {isSlack && !slackConditionsValid && (
+            <p className="mt-1 text-xs text-destructive">
+              Slack triggers require at least one Slack Channel and one Message Text condition.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Slack delivery + rate limit (slack_event only) */}
+      {isSlack && (
+        <div className="space-y-4">
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={replyInThread}
+              onChange={(e) => setReplyInThread(e.target.checked)}
+            />
+            Reply in thread
+          </label>
+          <FieldDescription className="-mt-3">
+            Post the run result back into the originating Slack thread when it completes.
+          </FieldDescription>
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">
+              Max runs per hour
+            </label>
+            <Input
+              type="number"
+              min={1}
+              value={maxRunsPerHour}
+              onChange={(e) => setMaxRunsPerHour(e.target.value)}
+              placeholder={`Default (${DEFAULT_MAX_RUNS_PER_HOUR})`}
+              className="w-40"
+            />
+            <FieldDescription>
+              Caps how many runs this automation can start per hour. Extra matching messages are
+              skipped. Leave blank to use the default ({DEFAULT_MAX_RUNS_PER_HOUR}).
+            </FieldDescription>
+          </div>
         </div>
       )}
 
@@ -568,6 +627,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             !selectedRepo ||
             !instructions.trim() ||
             !isScheduleValid ||
+            !slackConditionsValid ||
             (showEventTypeSelector && !eventType) ||
             (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())
           }

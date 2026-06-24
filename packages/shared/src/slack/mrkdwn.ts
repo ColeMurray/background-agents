@@ -22,7 +22,7 @@ const TRUNCATION_MARKER = "… (truncated)";
 
 const BROADCAST_MENTION_RE = /<!(?:channel|here|everyone|subteam\^[A-Z0-9]+(?:\|[^>]*)?)>/g;
 const URL_LINK_RE = /<(https?:\/\/[^|>\s]+|mailto:[^|>\s]+)(?:\|[^>]*)?>/g;
-const USER_MENTION_RE = /<@([A-Z0-9]+)>/g;
+const USER_MENTION_RE = /<@([A-Z0-9]+)(?:\|[^>]*)?>/g;
 
 export function stripBroadcastMentions(text: string): string {
   return text.replace(BROADCAST_MENTION_RE, "");

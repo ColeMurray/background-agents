@@ -46,16 +46,9 @@ let localCache: {
   timestamp: number;
 } | null = null;
 
-/**
- * Local in-memory cache for Slack routing rules. Same TTL as the repos cache;
- * the bot tolerates rules being up to a few minutes stale.
- */
-let routingRulesLocalCache: {
-  rules: SlackRoutingRule[];
-  timestamp: number;
-} | null = null;
-
 const ROUTING_RULES_CACHE_KEY = "slack:routing-rules";
+
+const WATCHED_CHANNELS_CACHE_KEY = "slack:watched-channels";
 
 /**
  * Convert a control plane repo to a RepoConfig.
@@ -197,84 +190,160 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
   return FALLBACK_REPOS;
 }
 
+// ─── Cached control-plane list fetch (shared engine) ─────────────────────────
+
+/** A mutable in-memory cache slot for one list resource. */
+interface CacheSlot<T> {
+  read(): { value: T; timestamp: number } | null;
+  write(value: T): void;
+  clear(): void;
+}
+
+function makeCacheSlot<T>(): CacheSlot<T> {
+  let slot: { value: T; timestamp: number } | null = null;
+  return {
+    read: () => slot,
+    write: (value) => {
+      slot = { value, timestamp: Date.now() };
+    },
+    clear: () => {
+      slot = null;
+    },
+  };
+}
+
 /**
- * Fetch workspace-wide Slack routing rules (keyword → repository) from the
- * control plane's GET /integration-settings/slack endpoint.
- *
- * Mirrors {@link getAvailableRepos}: in-memory cache → control plane → KV cache,
- * and **fails open to an empty list** so a settings-fetch problem never blocks
- * classification — the bot simply behaves as if no rules were configured.
+ * A control-plane list resource fetched through the two-tier cache: in-memory
+ * (LOCAL_CACHE_TTL_MS) → control plane → KV last-known-good. On a fetch failure
+ * it returns whatever `fromCache` yields from KV (empty on a cold miss), so each
+ * resource decides via that whether the failure mode is fail-open or fail-closed.
  */
-export async function getRoutingRules(env: Env, traceId?: string): Promise<SlackRoutingRule[]> {
-  if (
-    routingRulesLocalCache &&
-    Date.now() - routingRulesLocalCache.timestamp < LOCAL_CACHE_TTL_MS
-  ) {
-    return routingRulesLocalCache.rules;
+interface CachedListResource<TItem> {
+  path: string;
+  kvKey: string;
+  /** Log event name for fetch failures. */
+  logEvent: string;
+  /** `key_prefix` used in KV error logs. */
+  kvKeyPrefix: string;
+  slot: CacheSlot<TItem[]>;
+  /** Extract the list from a fresh control-plane JSON response. */
+  fromResponse: (json: unknown) => TItem[];
+  /** Extract the list from a KV-cached JSON value (array or otherwise). */
+  fromCache: (cached: unknown) => TItem[];
+}
+
+async function fetchCachedList<TItem>(
+  env: Env,
+  traceId: string | undefined,
+  resource: CachedListResource<TItem>
+): Promise<TItem[]> {
+  const cached = resource.slot.read();
+  if (cached && Date.now() - cached.timestamp < LOCAL_CACHE_TTL_MS) {
+    return cached.value;
   }
 
   const startTime = Date.now();
   try {
-    const response = await controlPlaneFetch(env, "/integration-settings/slack", traceId);
+    const response = await controlPlaneFetch(env, resource.path, traceId);
 
     if (!response.ok) {
-      log.warn("control_plane.fetch_routing_rules", {
+      log.warn(resource.logEvent, {
         trace_id: traceId,
         outcome: "error",
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return getRoutingRulesFromCache(env);
+      return readListFromKv(env, resource);
     }
 
-    const data = (await response.json()) as { settings?: SlackGlobalConfig | null };
-    const rules = normalizeRoutingRules(data.settings?.defaults?.routingRules);
-
-    routingRulesLocalCache = { rules, timestamp: Date.now() };
+    const items = resource.fromResponse(await response.json());
+    resource.slot.write(items);
 
     try {
-      await createKvCacheStore(env.SLACK_KV).put(ROUTING_RULES_CACHE_KEY, JSON.stringify(rules), {
+      await createKvCacheStore(env.SLACK_KV).put(resource.kvKey, JSON.stringify(items), {
         expirationTtl: KV_CACHE_TTL_SECONDS,
       });
     } catch (e) {
       log.warn("kv.put", {
         trace_id: traceId,
-        key_prefix: "routing_rules_cache",
+        key_prefix: resource.kvKeyPrefix,
         error: e instanceof Error ? e : new Error(String(e)),
       });
     }
 
-    return rules;
+    return items;
   } catch (e) {
-    log.warn("control_plane.fetch_routing_rules", {
+    log.warn(resource.logEvent, {
       trace_id: traceId,
       outcome: "error",
       error: e instanceof Error ? e : new Error(String(e)),
       duration_ms: Date.now() - startTime,
     });
-    return getRoutingRulesFromCache(env);
+    return readListFromKv(env, resource);
+  }
+}
+
+async function readListFromKv<TItem>(
+  env: Env,
+  resource: CachedListResource<TItem>
+): Promise<TItem[]> {
+  try {
+    const cached = await createKvCacheStore(env.SLACK_KV).get(resource.kvKey, "json");
+    return resource.fromCache(cached);
+  } catch (e) {
+    log.warn("kv.get", {
+      key_prefix: resource.kvKeyPrefix,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+    return [];
   }
 }
 
 /**
- * Read routing rules from the KV cache, returning an empty list on miss/error.
- * Fail open: no rules means no deterministic routing, the safe default.
+ * Workspace-wide Slack routing rules (keyword → repository). **Fails open** to
+ * an empty list so a settings-fetch problem never blocks classification — the
+ * bot behaves as if no rules were configured. Rules are normalized on both the
+ * fresh and KV-fallback paths so callers see one canonical shape.
  */
-async function getRoutingRulesFromCache(env: Env): Promise<SlackRoutingRule[]> {
-  try {
-    const cached = await createKvCacheStore(env.SLACK_KV).get(ROUTING_RULES_CACHE_KEY, "json");
-    if (cached && Array.isArray(cached)) {
-      // Normalize on read so the KV-fallback path returns the same canonical
-      // shape as the fresh control-plane path (one uniform contract).
-      return normalizeRoutingRules(cached as SlackRoutingRule[]);
-    }
-  } catch (e) {
-    log.warn("kv.get", {
-      key_prefix: "routing_rules_cache",
-      error: e instanceof Error ? e : new Error(String(e)),
-    });
-  }
-  return [];
+const routingRulesResource: CachedListResource<SlackRoutingRule> = {
+  path: "/integration-settings/slack",
+  kvKey: ROUTING_RULES_CACHE_KEY,
+  logEvent: "control_plane.fetch_routing_rules",
+  kvKeyPrefix: "routing_rules_cache",
+  slot: makeCacheSlot<SlackRoutingRule[]>(),
+  fromResponse: (json) =>
+    normalizeRoutingRules(
+      (json as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
+    ),
+  fromCache: (cached) =>
+    Array.isArray(cached) ? normalizeRoutingRules(cached as SlackRoutingRule[]) : [],
+};
+
+/**
+ * Channel IDs watched by enabled `slack_event` automations. **Fails closed** to
+ * an empty set: an unknown watch-list means the bot forwards no channel
+ * messages, so an outage pauses triggers rather than forwarding every message.
+ * The last-known-good KV copy bridges short outages.
+ */
+const watchedChannelsResource: CachedListResource<string> = {
+  path: "/integration-settings/slack/watched-channels",
+  kvKey: WATCHED_CHANNELS_CACHE_KEY,
+  logEvent: "control_plane.fetch_watched_channels",
+  kvKeyPrefix: "watched_channels_cache",
+  slot: makeCacheSlot<string[]>(),
+  fromResponse: (json) => {
+    const channels = (json as { channels?: string[] }).channels;
+    return Array.isArray(channels) ? channels : [];
+  },
+  fromCache: (cached) => (Array.isArray(cached) ? (cached as string[]) : []),
+};
+
+export async function getRoutingRules(env: Env, traceId?: string): Promise<SlackRoutingRule[]> {
+  return fetchCachedList(env, traceId, routingRulesResource);
+}
+
+export async function getWatchedChannels(env: Env, traceId?: string): Promise<Set<string>> {
+  return new Set(await fetchCachedList(env, traceId, watchedChannelsResource));
 }
 
 /**
@@ -355,5 +424,6 @@ export async function buildRepoDescriptions(env: Env, traceId?: string): Promise
  */
 export function clearLocalCache(): void {
   localCache = null;
-  routingRulesLocalCache = null;
+  routingRulesResource.slot.clear();
+  watchedChannelsResource.slot.clear();
 }

@@ -33,6 +33,10 @@ export interface AutomationRow {
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
+  /** Slack triggers (#716): per-automation hourly run cap (null = app default). */
+  max_runs_per_hour?: number | null;
+  /** Slack triggers (#716): post the run result back into the thread (1/0). */
+  reply_in_thread?: number;
 }
 
 export interface AutomationRunRow {
@@ -48,12 +52,23 @@ export interface AutomationRunRow {
   created_at: number;
   trigger_key: string | null;
   concurrency_key: string | null;
+  // Slack triggers (#716): thread coordinates + posting actor (slack-origin runs only).
+  slack_channel?: string | null;
+  slack_thread_ts?: string | null;
+  slack_message_ts?: string | null;
+  actor_user_id?: string | null;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
   session_title: string | null;
   artifact_summary: string | null;
 }
+
+/** The slack thread-coordinate columns of a run row, set together for slack-origin runs. */
+export type SlackRunColumns = Pick<
+  AutomationRunRow,
+  "slack_channel" | "slack_thread_ts" | "slack_message_ts" | "actor_user_id"
+>;
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
@@ -80,6 +95,8 @@ export function toAutomation(row: AutomationRow): Automation {
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
     triggerConfig: row.trigger_config ? JSON.parse(row.trigger_config) : null,
+    maxRunsPerHour: row.max_runs_per_hour ?? null,
+    replyInThread: row.reply_in_thread == null ? true : row.reply_in_thread === 1,
   };
 }
 
@@ -116,8 +133,8 @@ export class AutomationStore {
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-          event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          event_type, trigger_config, trigger_auth_data, max_runs_per_hour, reply_in_thread)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -142,7 +159,9 @@ export class AutomationStore {
         row.deleted_at,
         row.event_type,
         row.trigger_config,
-        row.trigger_auth_data
+        row.trigger_auth_data,
+        row.max_runs_per_hour ?? null,
+        row.reply_in_thread ?? 1
       )
       .run();
   }
@@ -198,6 +217,8 @@ export class AutomationStore {
       "event_type",
       "trigger_config",
       "trigger_auth_data",
+      "max_runs_per_hour",
+      "reply_in_thread",
     ];
 
     for (const field of allowedFields) {
@@ -291,8 +312,9 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automation_runs
          (id, automation_id, session_id, status, skip_reason, failure_reason,
-          scheduled_at, started_at, completed_at, created_at, trigger_key, concurrency_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          scheduled_at, started_at, completed_at, created_at, trigger_key, concurrency_key,
+          slack_channel, slack_thread_ts, slack_message_ts, actor_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         run.id,
@@ -306,7 +328,11 @@ export class AutomationStore {
         run.completed_at,
         run.created_at,
         run.trigger_key ?? null,
-        run.concurrency_key ?? null
+        run.concurrency_key ?? null,
+        run.slack_channel ?? null,
+        run.slack_thread_ts ?? null,
+        run.slack_message_ts ?? null,
+        run.actor_user_id ?? null
       );
   }
 
@@ -429,6 +455,110 @@ export class AutomationStore {
     return result.results || [];
   }
 
+  // --- Slack trigger queries (#716) ---
+
+  /** Enabled, non-deleted slack_event automations watching a channel (indexed by channel_id). */
+  async getSlackAutomationsForChannel(channelId: string): Promise<AutomationRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT a.* FROM automations a
+         JOIN automation_slack_channels c ON c.automation_id = a.id
+         WHERE c.channel_id = ? AND a.enabled = 1 AND a.deleted_at IS NULL
+           AND a.trigger_type = 'slack_event'`
+      )
+      .bind(channelId)
+      .all<AutomationRow>();
+    return result.results || [];
+  }
+
+  /** Distinct channel IDs watched by any enabled slack_event automation. */
+  async getWatchedSlackChannels(): Promise<string[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT DISTINCT c.channel_id FROM automation_slack_channels c
+         JOIN automations a ON a.id = c.automation_id
+         WHERE a.enabled = 1 AND a.deleted_at IS NULL AND a.trigger_type = 'slack_event'`
+      )
+      .all<{ channel_id: string }>();
+    return (result.results || []).map((r) => r.channel_id);
+  }
+
+  /** Replace an automation's watched-channel set atomically. */
+  async setSlackChannels(automationId: string, channelIds: string[]): Promise<void> {
+    const statements: D1PreparedStatement[] = [
+      this.db
+        .prepare("DELETE FROM automation_slack_channels WHERE automation_id = ?")
+        .bind(automationId),
+    ];
+    for (const channelId of channelIds) {
+      statements.push(
+        this.db
+          .prepare(
+            "INSERT OR IGNORE INTO automation_slack_channels (automation_id, channel_id) VALUES (?, ?)"
+          )
+          .bind(automationId, channelId)
+      );
+    }
+    await this.db.batch(statements);
+  }
+
+  /**
+   * Count runs for an automation since `sinceEpochMs`, for the rate-limit window.
+   * Excludes `skipped` rows — only runs that materialized a session count (a
+   * `failed` run still spawned a sandbox, so it counts). Served by
+   * idx_runs_automation_created (automation_id, created_at).
+   */
+  async countRunsInWindow(automationId: string, sinceEpochMs: number): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM automation_runs
+         WHERE automation_id = ? AND created_at >= ? AND status != 'skipped'`
+      )
+      .bind(automationId, sinceEpochMs)
+      .first<{ count: number }>();
+    return result?.count ?? 0;
+  }
+
+  /**
+   * Record a `skipped` run for observability (rate-limited / concurrency skips).
+   * Leaves trigger_key null so the skip stays excluded from countRunsInWindow.
+   * `slackColumns` carries the run's thread coordinates as a unit — the same
+   * value a materialized run is inserted with — so there is no re-mapping.
+   */
+  async recordSkippedRun(params: {
+    id: string;
+    automationId: string;
+    skipReason: string;
+    concurrencyKey?: string | null;
+    slackColumns?: SlackRunColumns;
+  }): Promise<void> {
+    const now = Date.now();
+    try {
+      await this.insertRun({
+        id: params.id,
+        automation_id: params.automationId,
+        session_id: null,
+        status: "skipped",
+        skip_reason: params.skipReason,
+        failure_reason: null,
+        scheduled_at: now,
+        started_at: null,
+        completed_at: now,
+        created_at: now,
+        trigger_key: null,
+        concurrency_key: params.concurrencyKey ?? null,
+        ...params.slackColumns,
+      });
+    } catch (e) {
+      // Defensive only: the insert uses a fresh unique id and a null trigger_key
+      // (NULLs are distinct under the unique automation_id/trigger_key index), so
+      // a collision is not expected. Swallow one anyway so best-effort skip
+      // bookkeeping never throws into the dispatch path.
+      if (isDuplicateKeyError(e)) return;
+      throw e;
+    }
+  }
+
   async getActiveRunForKey(
     automationId: string,
     concurrencyKey: string | null
@@ -508,4 +638,10 @@ export class AutomationStore {
       .bind(now, automationId)
       .run();
   }
+}
+
+/** True when a D1 write failed because it violated a UNIQUE constraint. */
+export function isDuplicateKeyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE constraint failed");
 }

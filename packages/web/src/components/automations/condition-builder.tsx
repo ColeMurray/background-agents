@@ -30,7 +30,12 @@ const CONDITION_LABELS: Record<string, string> = {
   actor: "Actor",
   check_conclusion: "Check Conclusion",
   linear_status: "Linear Status",
+  text_match: "Message Text",
+  slack_channel: "Slack Channel",
+  slack_actor: "Slack User",
 };
+
+const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
 export const CHECK_CONCLUSION_OPTIONS = [
@@ -84,6 +89,15 @@ export function ConditionBuilder({ conditions, onChange, triggerSource }: Condit
           operator: "eq",
           value: CHECK_CONCLUSION_OPTIONS[0],
         };
+        break;
+      case "text_match":
+        newCondition = { type: "text_match", operator: "contains", value: { pattern: "" } };
+        break;
+      case "slack_channel":
+        newCondition = { type: "slack_channel", operator: "any_of", value: [] };
+        break;
+      case "slack_actor":
+        newCondition = { type: "slack_actor", operator: "include", value: [] };
         break;
       default:
         return;
@@ -241,6 +255,89 @@ function ConditionEditor({
             ))}
           </SelectContent>
         </Select>
+      );
+    case "text_match": {
+      const flags = condition.value.flags ?? "";
+      const caseInsensitive = flags.includes("i");
+      return (
+        <div className="space-y-2">
+          <Select
+            value={condition.operator}
+            onValueChange={(v) =>
+              onChange({ ...condition, operator: v as (typeof TEXT_MATCH_MODES)[number] })
+            }
+          >
+            <SelectTrigger className="w-32 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TEXT_MATCH_MODES.map((mode) => (
+                <SelectItem key={mode} value={mode}>
+                  {mode}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            type="text"
+            value={condition.value.pattern}
+            onChange={(e) =>
+              onChange({ ...condition, value: { ...condition.value, pattern: e.target.value } })
+            }
+            placeholder={
+              condition.operator === "regex"
+                ? "Regular expression, e.g. \\b(deploy|release)\\b"
+                : condition.operator === "exact"
+                  ? "Exact message text to match"
+                  : "Substring to look for, e.g. deploy"
+            }
+            className="text-xs"
+          />
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={caseInsensitive}
+              onChange={(e) =>
+                onChange({
+                  ...condition,
+                  value: { ...condition.value, flags: e.target.checked ? "i" : "" },
+                })
+              }
+            />
+            Case-insensitive
+          </label>
+        </div>
+      );
+    }
+    case "slack_channel":
+      return (
+        <TagInput
+          values={condition.value}
+          onChange={(value) => onChange({ ...condition, value })}
+          placeholder="Add channel ID (e.g. C0123ABCD)..."
+        />
+      );
+    case "slack_actor":
+      return (
+        <div className="space-y-2">
+          <Select
+            value={condition.operator}
+            onValueChange={(v) => onChange({ ...condition, operator: v as "include" | "exclude" })}
+          >
+            <SelectTrigger className="w-32 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="include">include</SelectItem>
+              <SelectItem value="exclude">exclude</SelectItem>
+            </SelectContent>
+          </Select>
+          <TagInput
+            values={condition.value}
+            onChange={(value) => onChange({ ...condition, value })}
+            placeholder="Add Slack user ID (e.g. U0123ABCD)..."
+          />
+        </div>
       );
     default:
       return <div className="text-xs text-muted-foreground">Configuration not available</div>;

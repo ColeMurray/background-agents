@@ -108,9 +108,13 @@ describe("automation templates catalog", () => {
     }
 
     if (t.primaryOutput === "slack") {
-      it("names a Slack channel in its instructions and carries a setup note", () => {
-        expect(t.prefill.instructions).toMatch(/#[a-z0-9-]+/i);
+      it("carries a setup note, and names a Slack channel unless it replies in-thread", () => {
         expect(t.setupNote).toBeTruthy();
+        // slack_event automations deliver the result to the originating thread, so
+        // they don't name a destination channel. slack-notify templates must.
+        if (triggerType !== "slack_event") {
+          expect(t.prefill.instructions).toMatch(/#[a-z0-9-]+/i);
+        }
       });
     }
 

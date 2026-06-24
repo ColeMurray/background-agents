@@ -165,6 +165,119 @@ describe("automation cron submission", () => {
   });
 });
 
+describe("slack_event automation", () => {
+  const slackBase = {
+    name: "Triage Slack reports",
+    repoOwner: "open-inspect",
+    repoName: "background-agents",
+    baseBranch: "main",
+    model: "openai/gpt-5.4",
+    instructions: "Triage the reported issue.",
+    triggerType: "slack_event" as const,
+  };
+
+  const validConditions = {
+    conditions: [
+      { type: "slack_channel" as const, operator: "any_of" as const, value: ["C1"] },
+      { type: "text_match" as const, operator: "contains" as const, value: { pattern: "deploy" } },
+    ],
+  };
+
+  it("shows the Slack delivery controls for slack_event", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+    expect(screen.getByText("Reply in thread")).toBeInTheDocument();
+    expect(screen.getByText("Max runs per hour")).toBeInTheDocument();
+  });
+
+  it("hides the Slack delivery controls for non-slack triggers", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+    expect(screen.queryByText("Reply in thread")).not.toBeInTheDocument();
+    expect(screen.queryByText("Max runs per hour")).not.toBeInTheDocument();
+  });
+
+  it("blocks submit until a slack_channel and text_match condition exist", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: { conditions: [] } }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/require at least one Slack Channel and one Message Text/)
+    ).toBeInTheDocument();
+  });
+
+  it("submits replyInThread and maxRunsPerHour for a valid slack_event", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/Default \(/), { target: { value: "5" } });
+    fireEvent.click(screen.getByLabelText("Reply in thread")); // default true -> false
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      triggerType: "slack_event",
+      replyInThread: false,
+      maxRunsPerHour: 5,
+      triggerConfig: validConditions,
+    });
+  });
+
+  it("defaults maxRunsPerHour to null when left blank", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      replyInThread: true,
+      maxRunsPerHour: null,
+    });
+  });
+});
+
 describe("instructions character counter", () => {
   const baseInitialValues = {
     name: "Daily review",

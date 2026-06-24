@@ -757,4 +757,175 @@ describe("AutomationStore (D1 integration)", () => {
       expect(runs.total).toBe(2);
     });
   });
+
+  // ─── Slack triggers (#716) ──────────────────────────────────────────────────
+
+  describe("slack triggers", () => {
+    const makeSlackAutomation = (overrides?: Partial<AutomationRow>) =>
+      makeAutomation({
+        trigger_type: "slack_event",
+        event_type: "message.posted",
+        ...overrides,
+      });
+
+    it("setSlackChannels writes and replaces the channel set", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeSlackAutomation({ id: "auto-s1" }));
+
+      await store.setSlackChannels("auto-s1", ["C1", "C2"]);
+      expect((await store.getWatchedSlackChannels()).sort()).toEqual(["C1", "C2"]);
+
+      await store.setSlackChannels("auto-s1", ["C2", "C3"]);
+      expect((await store.getWatchedSlackChannels()).sort()).toEqual(["C2", "C3"]);
+    });
+
+    it("getSlackAutomationsForChannel returns only enabled, non-deleted slack automations", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeSlackAutomation({ id: "auto-s2" }));
+      await store.create(makeSlackAutomation({ id: "auto-s3", enabled: 0 }));
+      await store.create(
+        makeAutomation({
+          id: "auto-s4",
+          trigger_type: "github_event",
+          event_type: "pull_request.opened",
+        })
+      );
+
+      await store.setSlackChannels("auto-s2", ["C1"]);
+      await store.setSlackChannels("auto-s3", ["C1"]); // disabled → excluded
+      await store.setSlackChannels("auto-s4", ["C1"]); // wrong trigger_type → excluded
+
+      const matches = await store.getSlackAutomationsForChannel("C1");
+      expect(matches.map((m) => m.id)).toEqual(["auto-s2"]);
+    });
+
+    it("getWatchedSlackChannels dedups and excludes disabled automations", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeSlackAutomation({ id: "auto-s5" }));
+      await store.create(makeSlackAutomation({ id: "auto-s6" }));
+      await store.create(makeSlackAutomation({ id: "auto-s7", enabled: 0 }));
+
+      await store.setSlackChannels("auto-s5", ["C1", "C2"]);
+      await store.setSlackChannels("auto-s6", ["C2", "C3"]); // C2 duplicated across automations
+      await store.setSlackChannels("auto-s7", ["C9"]); // disabled → excluded
+
+      expect((await store.getWatchedSlackChannels()).sort()).toEqual(["C1", "C2", "C3"]);
+    });
+
+    it("countRunsInWindow honors the window and excludes skipped runs", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeSlackAutomation({ id: "auto-s8" }));
+
+      // In-window: completed + failed count; skipped does not.
+      await store.insertRun(
+        makeRun("auto-s8", {
+          id: "r-c",
+          status: "completed",
+          scheduled_at: now - 1000,
+          created_at: now - 1000,
+          completed_at: now,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-s8", {
+          id: "r-f",
+          status: "failed",
+          scheduled_at: now - 2000,
+          created_at: now - 2000,
+          completed_at: now,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-s8", {
+          id: "r-s",
+          status: "skipped",
+          skip_reason: "rate_limited",
+          scheduled_at: now - 3000,
+          created_at: now - 3000,
+          completed_at: now,
+        })
+      );
+      // Out of window (2 hours ago).
+      await store.insertRun(
+        makeRun("auto-s8", {
+          id: "r-old",
+          status: "completed",
+          scheduled_at: now - 7_200_000,
+          created_at: now - 7_200_000,
+          completed_at: now,
+        })
+      );
+
+      const count = await store.countRunsInWindow("auto-s8", now - 3_600_000);
+      expect(count).toBe(2);
+    });
+
+    it("recordSkippedRun persists a skip with slack coords, no trigger_key, uncounted", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeSlackAutomation({ id: "auto-s9" }));
+
+      await store.recordSkippedRun({
+        id: "r-skip",
+        automationId: "auto-s9",
+        skipReason: "rate_limited",
+        concurrencyKey: "slack:C1:111",
+        slackColumns: {
+          slack_channel: "C1",
+          slack_thread_ts: "111",
+          slack_message_ts: "222",
+          actor_user_id: "U1",
+        },
+      });
+
+      const run = await store.getRunById("auto-s9", "r-skip");
+      expect(run).not.toBeNull();
+      expect(run!.status).toBe("skipped");
+      expect(run!.skip_reason).toBe("rate_limited");
+      expect(run!.slack_channel).toBe("C1");
+      expect(run!.slack_message_ts).toBe("222");
+      expect(run!.trigger_key).toBeNull();
+
+      // A recorded skip must not count toward the rate-limit window.
+      expect(await store.countRunsInWindow("auto-s9", Date.now() - 3_600_000)).toBe(0);
+    });
+
+    it("insertRun persists slack thread coordinates on a materialized run", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeSlackAutomation({ id: "auto-s10" }));
+
+      await store.insertRun(
+        makeRun("auto-s10", {
+          id: "r-mat",
+          status: "starting",
+          trigger_key: "slack:msg:C1:222",
+          concurrency_key: "slack:C1:111",
+          slack_channel: "C1",
+          slack_thread_ts: "111",
+          slack_message_ts: "222",
+          actor_user_id: "U1",
+        })
+      );
+
+      const run = await store.getRunById("auto-s10", "r-mat");
+      expect(run!.slack_channel).toBe("C1");
+      expect(run!.slack_thread_ts).toBe("111");
+      expect(run!.slack_message_ts).toBe("222");
+      expect(run!.actor_user_id).toBe("U1");
+    });
+
+    it("persists max_runs_per_hour and reply_in_thread on the automation", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeSlackAutomation({ id: "auto-s11", max_runs_per_hour: 5 }));
+
+      const row = await store.getById("auto-s11");
+      expect(row!.max_runs_per_hour).toBe(5);
+      expect(row!.reply_in_thread).toBe(1); // DB default
+
+      await store.update("auto-s11", { max_runs_per_hour: 20, reply_in_thread: 0 });
+      const updated = await store.getById("auto-s11");
+      expect(updated!.max_runs_per_hour).toBe(20);
+      expect(updated!.reply_in_thread).toBe(0);
+    });
+  });
 });

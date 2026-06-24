@@ -7,7 +7,7 @@ import type { ConditionType } from "./conditions";
 
 // ─── Event Sources ────────────────────────────────────────────────────────────
 
-export type AutomationEventSource = "github" | "linear" | "sentry" | "webhook";
+export type AutomationEventSource = "github" | "linear" | "sentry" | "webhook" | "slack";
 
 /**
  * Maps AutomationTriggerType → AutomationEventSource.
@@ -19,6 +19,7 @@ export const TRIGGER_TYPE_TO_SOURCE: Partial<Record<AutomationTriggerType, Autom
     linear_event: "linear",
     sentry: "sentry",
     webhook: "webhook",
+    slack_event: "slack",
   };
 
 // ─── Base Event ───────────────────────────────────────────────────────────────
@@ -79,13 +80,27 @@ export interface WebhookAutomationEvent extends BaseAutomationEvent {
   body: unknown;
 }
 
+export interface SlackAutomationEvent extends BaseAutomationEvent {
+  source: "slack";
+  channelId: string;
+  channelName?: string;
+  /** Parent thread ts when the message is a thread reply. */
+  threadTs?: string;
+  /** The message's own ts (the triggering message). */
+  ts: string;
+  actorUserId: string;
+  /** Message text — bot-mention token stripped and length-capped. */
+  text: string;
+}
+
 // ─── Discriminated Union ──────────────────────────────────────────────────────
 
 export type AutomationEvent =
   | GitHubAutomationEvent
   | LinearAutomationEvent
   | SentryAutomationEvent
-  | WebhookAutomationEvent;
+  | WebhookAutomationEvent
+  | SlackAutomationEvent;
 
 // ─── Trigger Source Definition ────────────────────────────────────────────────
 

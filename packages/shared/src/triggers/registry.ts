@@ -7,6 +7,7 @@ import type { TriggerSourceDefinition } from "./types";
 import { sentrySource, sentryConditions } from "./sentry";
 import { webhookSource, webhookConditions } from "./webhook";
 import { githubSource } from "./github";
+import { slackSource, slackConditions } from "./slack";
 
 // GitHub and Linear condition handlers (stubs for Phase 2c).
 // These need to exist so that the ConditionRegistry is complete.
@@ -114,6 +115,7 @@ export const conditionRegistry: ConditionRegistry = {
   ...sharedConditions,
   ...sentryConditions,
   ...webhookConditions,
+  ...slackConditions,
 };
 
 /**
@@ -124,4 +126,5 @@ export const triggerSources: TriggerSourceDefinition[] = [
   sentrySource,
   webhookSource,
   githubSource,
+  slackSource,
 ];

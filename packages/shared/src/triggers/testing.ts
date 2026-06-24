@@ -9,6 +9,7 @@ import type {
   WebhookAutomationEvent,
   GitHubAutomationEvent,
   LinearAutomationEvent,
+  SlackAutomationEvent,
 } from "./types";
 import type { TriggerCondition } from "./conditions";
 import { matchesConditions } from "./conditions";
@@ -63,6 +64,19 @@ const defaults: Record<AutomationEventSource, () => AutomationEvent> = {
       automationId: "auto-1",
       body: {},
     }) as WebhookAutomationEvent,
+  slack: () =>
+    ({
+      source: "slack",
+      eventType: "message.posted",
+      triggerKey: "slack:msg:C123:1700000000.000100",
+      concurrencyKey: "slack:C123:1700000000.000100",
+      contextBlock: "Test Slack context",
+      meta: {},
+      channelId: "C123",
+      ts: "1700000000.000100",
+      actorUserId: "U999",
+      text: "test slack message",
+    }) satisfies SlackAutomationEvent,
 };
 
 /**

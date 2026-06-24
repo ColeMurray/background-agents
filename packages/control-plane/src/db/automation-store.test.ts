@@ -142,6 +142,18 @@ describe("toAutomation", () => {
     const automation = toAutomation({ ...sampleRow, enabled: 0 });
     expect(automation.enabled).toBe(false);
   });
+
+  it("defaults the slack knobs (null cap, reply-in-thread on) when unset", () => {
+    const automation = toAutomation(sampleRow);
+    expect(automation.maxRunsPerHour).toBeNull();
+    expect(automation.replyInThread).toBe(true);
+  });
+
+  it("maps explicit slack knobs (cap + reply_in_thread=0 → false)", () => {
+    const automation = toAutomation({ ...sampleRow, max_runs_per_hour: 5, reply_in_thread: 0 });
+    expect(automation.maxRunsPerHour).toBe(5);
+    expect(automation.replyInThread).toBe(false);
+  });
 });
 
 describe("toAutomationRun", () => {

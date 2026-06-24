@@ -199,6 +199,12 @@ variable "enable_slack_bot" {
   }
 }
 
+variable "slack_triggers_enabled" {
+  description = "Kill switch for Slack channel-message automation triggers. When false (default), the slack-bot ignores channel messages and forwards nothing — the feature ships dark. Flip to true only after completing the rollout verification."
+  type        = bool
+  default     = false
+}
+
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string

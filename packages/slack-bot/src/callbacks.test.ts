@@ -244,3 +244,138 @@ describe("POST /callbacks/tool_call", () => {
     await flushWaitUntil(ctx);
   });
 });
+
+function okFetchMock() {
+  return vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+}
+
+function slackCall(
+  fetchMock: ReturnType<typeof okFetchMock>,
+  endpoint: string
+): { url: string; body: Record<string, unknown> } | undefined {
+  const call = fetchMock.mock.calls.find(([url]) => String(url).includes(endpoint));
+  if (!call) return undefined;
+  return {
+    url: String(call[0]),
+    body: JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>,
+  };
+}
+
+async function postCallback(path: string, payload: unknown, env = makeEnv(), ctx = makeCtx()) {
+  const response = await makeApp().fetch(
+    new Request(`http://localhost${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-trace-id": "trace-1" },
+      body: JSON.stringify(payload),
+    }),
+    env,
+    ctx
+  );
+  return { response, env, ctx };
+}
+
+describe("POST /callbacks/automation-complete", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function completeData(overrides: Record<string, unknown> = {}) {
+    return {
+      channel: "C123",
+      threadTs: "111.222",
+      reactionMessageTs: "111.222",
+      sessionId: "sess-1",
+      success: true,
+      automationName: "Auto-triage",
+      ...overrides,
+    };
+  }
+
+  it("rejects an invalid payload", async () => {
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", {
+      channel: "C123",
+    });
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bad signature", async () => {
+    const payload = await signPayload(completeData(), "wrong-secret");
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("posts a success result to the thread and clears the eyes reaction", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(completeData());
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const post = slackCall(fetchMock, "chat.postMessage");
+    expect(post).toBeDefined();
+    expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
+    expect(JSON.stringify(post!.body.blocks)).toContain("Auto-triage");
+    expect(JSON.stringify(post!.body.blocks)).toContain("app.test/session/sess-1");
+
+    const reaction = slackCall(fetchMock, "reactions.remove");
+    expect(reaction).toBeDefined();
+    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
+  });
+
+  it("renders a failure summary when the run failed", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(
+      completeData({ success: false, summary: "boom: the build broke" })
+    );
+    await postCallback("/callbacks/automation-complete", payload).then(({ ctx }) =>
+      flushWaitUntil(ctx)
+    );
+
+    const post = slackCall(fetchMock, "chat.postMessage");
+    expect(JSON.stringify(post!.body.blocks)).toContain("boom: the build broke");
+  });
+});
+
+describe("POST /callbacks/automation-skip", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function skipData(overrides: Record<string, unknown> = {}) {
+    return { channel: "C123", user: "U9", threadTs: "111.222", ...overrides };
+  }
+
+  it("rejects an invalid payload", async () => {
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", { channel: "C123" });
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bad signature", async () => {
+    const payload = await signPayload(skipData(), "wrong-secret");
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("posts an ephemeral notice to the message author", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(skipData());
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const ephemeral = slackCall(fetchMock, "chat.postEphemeral");
+    expect(ephemeral).toBeDefined();
+    expect(ephemeral!.body).toMatchObject({ channel: "C123", user: "U9", thread_ts: "111.222" });
+  });
+});

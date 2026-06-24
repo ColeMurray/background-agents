@@ -140,6 +140,27 @@ export function getPermalink(
   return slackGet(token, "chat.getPermalink", { channel, message_ts: messageTs });
 }
 
+/**
+ * Post an ephemeral message visible only to `user` in `channel` (optionally
+ * threaded). Used to surface best-effort notices — e.g. "a run is already
+ * active for this thread" — without adding noise for everyone else.
+ */
+export function postEphemeral(
+  token: string,
+  channel: string,
+  user: string,
+  text: string,
+  options?: { thread_ts?: string; blocks?: unknown[] }
+): Promise<SlackEnvelope<{ message_ts: string }>> {
+  return slackPost(token, "chat.postEphemeral", {
+    channel,
+    user,
+    text,
+    thread_ts: options?.thread_ts,
+    blocks: options?.blocks,
+  });
+}
+
 export function updateMessage(
   token: string,
   channel: string,
@@ -171,6 +192,23 @@ export function removeReaction(
   name: string
 ): Promise<SlackEnvelope> {
   return slackPost(token, "reactions.remove", { channel, timestamp: messageTs, name });
+}
+
+/** Subset of the `auth.test` response the bot uses to learn its own identity. */
+export interface SlackAuthTestResult {
+  user_id: string;
+  user?: string;
+  team_id?: string;
+  team?: string;
+  bot_id?: string;
+}
+
+/**
+ * Call `auth.test` to resolve the identity of the token's bot user. The
+ * slack-bot uses the returned `user_id` to strip and suppress its own mentions.
+ */
+export function authTest(token: string): Promise<SlackEnvelope<SlackAuthTestResult>> {
+  return slackPost(token, "auth.test");
 }
 
 export interface SlackChannelInfo {
