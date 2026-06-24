@@ -49,6 +49,9 @@ export function createAutomationEventRoute(opts: {
 
     // 2. Validate envelope — source, then source-specific fields, then the
     //    common dispatch keys every event must carry.
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return error("Invalid event: body must be a JSON object", 400);
+    }
     const event = body as Record<string, unknown>;
     if (event.source !== opts.source) {
       return error(`Invalid event: source must be '${opts.source}'`, 400);

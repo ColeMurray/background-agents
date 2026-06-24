@@ -126,8 +126,8 @@ export class AutomationStore {
 
   // --- Automation CRUD ---
 
-  async create(row: AutomationRow): Promise<void> {
-    await this.db
+  private bindAutomationInsert(row: AutomationRow): D1PreparedStatement {
+    return this.db
       .prepare(
         `INSERT INTO automations
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
@@ -162,8 +162,23 @@ export class AutomationStore {
         row.trigger_auth_data,
         row.max_runs_per_hour ?? null,
         row.reply_in_thread ?? 1
-      )
-      .run();
+      );
+  }
+
+  async create(row: AutomationRow): Promise<void> {
+    await this.bindAutomationInsert(row).run();
+  }
+
+  /**
+   * Atomically insert an automation and its watched slack channels in one
+   * `db.batch`, so a slack_event automation can never be committed without its
+   * channel-index rows (which would leave it invisible to the scheduler).
+   */
+  async createWithSlackChannels(row: AutomationRow, channelIds: string[]): Promise<void> {
+    await this.db.batch([
+      this.bindAutomationInsert(row),
+      ...this.bindSlackChannelStatements(row.id, channelIds),
+    ]);
   }
 
   async getById(id: string): Promise<AutomationRow | null> {
@@ -199,7 +214,14 @@ export class AutomationStore {
     return { automations, total: automations.length };
   }
 
-  async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
+  /**
+   * Build the dynamic UPDATE statement for the allowed automation fields, or
+   * null when `fields` carries nothing to write.
+   */
+  private bindAutomationUpdate(
+    id: string,
+    fields: Partial<AutomationRow>
+  ): D1PreparedStatement | null {
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -228,19 +250,40 @@ export class AutomationStore {
       }
     }
 
-    if (setClauses.length === 0) return this.getById(id);
+    if (setClauses.length === 0) return null;
 
     setClauses.push("updated_at = ?");
     params.push(Date.now());
     params.push(id);
 
-    await this.db
+    return this.db
       .prepare(
         `UPDATE automations SET ${setClauses.join(", ")} WHERE id = ? AND deleted_at IS NULL`
       )
-      .bind(...params)
-      .run();
+      .bind(...params);
+  }
 
+  async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
+    const statement = this.bindAutomationUpdate(id, fields);
+    if (statement) await statement.run();
+    return this.getById(id);
+  }
+
+  /**
+   * Atomically update an automation and re-sync its watched slack channels in
+   * one `db.batch`, so the canonical `trigger_config` and the channel index can
+   * never drift apart on a partial failure.
+   */
+  async updateWithSlackChannels(
+    id: string,
+    fields: Partial<AutomationRow>,
+    channelIds: string[]
+  ): Promise<AutomationRow | null> {
+    const updateStatement = this.bindAutomationUpdate(id, fields);
+    const channelStatements = this.bindSlackChannelStatements(id, channelIds);
+    await this.db.batch(
+      updateStatement ? [updateStatement, ...channelStatements] : channelStatements
+    );
     return this.getById(id);
   }
 
@@ -484,7 +527,11 @@ export class AutomationStore {
   }
 
   /** Replace an automation's watched-channel set atomically. */
-  async setSlackChannels(automationId: string, channelIds: string[]): Promise<void> {
+  /** Statements that replace an automation's watched-channel set (DELETE + re-INSERT). */
+  private bindSlackChannelStatements(
+    automationId: string,
+    channelIds: string[]
+  ): D1PreparedStatement[] {
     const statements: D1PreparedStatement[] = [
       this.db
         .prepare("DELETE FROM automation_slack_channels WHERE automation_id = ?")
@@ -499,7 +546,11 @@ export class AutomationStore {
           .bind(automationId, channelId)
       );
     }
-    await this.db.batch(statements);
+    return statements;
+  }
+
+  async setSlackChannels(automationId: string, channelIds: string[]): Promise<void> {
+    await this.db.batch(this.bindSlackChannelStatements(automationId, channelIds));
   }
 
   /**
@@ -640,8 +691,15 @@ export class AutomationStore {
   }
 }
 
-/** True when a D1 write failed because it violated a UNIQUE constraint. */
+/**
+ * True when a D1 write failed because it violated the trigger-key dedup index
+ * (`idx_runs_trigger_key` on `automation_id, trigger_key` — the only UNIQUE on
+ * `automation_runs`). Scoping to the `trigger_key` column keeps unrelated UNIQUE
+ * violations surfacing as real errors instead of being silently swallowed as
+ * duplicates, while matching the column name (not D1's full
+ * `table.col, table.col` string) stays robust to exact message formatting.
+ */
 export function isDuplicateKeyError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("UNIQUE constraint failed");
+  return message.includes("UNIQUE constraint failed") && message.includes("trigger_key");
 }

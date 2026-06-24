@@ -779,6 +779,26 @@ describe("AutomationStore (D1 integration)", () => {
       expect((await store.getWatchedSlackChannels()).sort()).toEqual(["C2", "C3"]);
     });
 
+    it("createWithSlackChannels writes the automation and its channels atomically", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.createWithSlackChannels(makeSlackAutomation({ id: "auto-sc" }), ["C1", "C2"]);
+
+      expect(await store.getById("auto-sc")).not.toBeNull();
+      expect((await store.getWatchedSlackChannels()).sort()).toEqual(["C1", "C2"]);
+    });
+
+    it("updateWithSlackChannels updates the row and re-syncs channels atomically", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.createWithSlackChannels(makeSlackAutomation({ id: "auto-su" }), ["C1"]);
+
+      const updated = await store.updateWithSlackChannels("auto-su", { instructions: "updated" }, [
+        "C2",
+        "C3",
+      ]);
+      expect(updated?.instructions).toBe("updated");
+      expect((await store.getWatchedSlackChannels()).sort()).toEqual(["C2", "C3"]);
+    });
+
     it("getSlackAutomationsForChannel returns only enabled, non-deleted slack automations", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeSlackAutomation({ id: "auto-s2" }));

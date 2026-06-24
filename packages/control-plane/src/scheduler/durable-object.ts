@@ -628,6 +628,9 @@ export class SchedulerDO extends DurableObject<Env> {
       automationName: automation?.name ?? "Automation",
       success,
       error,
+      // Honor the stored reply_in_thread setting (NOT NULL DEFAULT 1). The bot
+      // skips the thread post when this is false but still clears the reaction.
+      replyInThread: automation?.reply_in_thread !== 0,
     });
     if (!body) return;
 
@@ -676,11 +679,18 @@ export class SchedulerDO extends DurableObject<Env> {
 
     try {
       const signature = await computeHmacHex(JSON.stringify(body), secret);
-      await binding.fetch("https://internal/callbacks/automation-skip", {
+      const response = await binding.fetch("https://internal/callbacks/automation-skip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...body, signature }),
       });
+      if (!response.ok) {
+        this.log.warn("Slack skip callback failed", {
+          event: "scheduler.slack_skip_failed",
+          channel: event.channelId,
+          http_status: response.status,
+        });
+      }
     } catch (e) {
       this.log.warn("Slack skip callback errored", {
         event: "scheduler.slack_skip_failed",

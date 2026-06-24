@@ -342,6 +342,46 @@ describe("POST /callbacks/automation-complete", () => {
     const post = slackCall(fetchMock, "chat.postMessage");
     expect(JSON.stringify(post!.body.blocks)).toContain("boom: the build broke");
   });
+
+  it("suppresses the thread post but still clears the reaction when replyInThread is false", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(completeData({ replyInThread: false }));
+    await postCallback("/callbacks/automation-complete", payload).then(({ ctx }) =>
+      flushWaitUntil(ctx)
+    );
+
+    expect(slackCall(fetchMock, "chat.postMessage")).toBeUndefined();
+    const reaction = slackCall(fetchMock, "reactions.remove");
+    expect(reaction).toBeDefined();
+    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
+  });
+
+  it("does not clear the reaction when Slack rejects the post (ok:false)", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const payload = await signPayload(completeData());
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(slackCall(fetchMock, "chat.postMessage")).toBeDefined();
+    expect(slackCall(fetchMock, "reactions.remove")).toBeUndefined();
+  });
+
+  it("does not crash when the Slack post throws", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    const payload = await signPayload(completeData());
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
+
+    expect(response.status).toBe(200);
+    // The fire-and-forget handler must swallow the throw, not reject in waitUntil.
+    await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
+  });
 });
 
 describe("POST /callbacks/automation-skip", () => {
@@ -377,5 +417,15 @@ describe("POST /callbacks/automation-skip", () => {
     const ephemeral = slackCall(fetchMock, "chat.postEphemeral");
     expect(ephemeral).toBeDefined();
     expect(ephemeral!.body).toMatchObject({ channel: "C123", user: "U9", thread_ts: "111.222" });
+  });
+
+  it("does not crash when the ephemeral post throws", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    const payload = await signPayload(skipData());
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);
+
+    expect(response.status).toBe(200);
+    // The fire-and-forget handler must swallow the throw, not reject in waitUntil.
+    await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
   });
 });

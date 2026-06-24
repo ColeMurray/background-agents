@@ -17,7 +17,12 @@ import {
   type AutomationTriggerType,
   type TriggerConfig,
 } from "@open-inspect/shared";
-import { AutomationStore, toAutomation, toAutomationRun } from "../db/automation-store";
+import {
+  AutomationStore,
+  toAutomation,
+  toAutomationRun,
+  type AutomationRow,
+} from "../db/automation-store";
 import { UserStore } from "../db/user-store";
 import { resolveProviderIdentity, type SessionIdentityFields } from "../session/identity";
 import { generateId } from "../auth/crypto";
@@ -85,12 +90,34 @@ function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): 
 function validateSlackRequiredConditions(
   triggerConfig: TriggerConfig | null | undefined
 ): string | null {
-  const conditions = triggerConfig?.conditions ?? [];
+  // Guard the shape here too: this runs before the generic array-shape check in
+  // the update path, so a non-array `conditions` would otherwise throw on
+  // `.some()` and surface as a 500 instead of a 400.
+  const rawConditions = triggerConfig?.conditions;
+  if (rawConditions !== undefined && !Array.isArray(rawConditions)) {
+    return "triggerConfig.conditions must be an array";
+  }
+  const conditions = rawConditions ?? [];
   if (!conditions.some((c) => c.type === "slack_channel")) {
     return "slack_event triggers require a slack_channel condition";
   }
   if (!conditions.some((c) => c.type === "text_match")) {
     return "slack_event triggers require at least one text_match condition";
+  }
+  return null;
+}
+
+/**
+ * `maxRunsPerHour` is the Slack-only per-automation hourly cap. It feeds the
+ * scheduler's `recentRuns >= maxRuns` comparison directly, so reject anything
+ * that is not `null`/absent (use the app default) or a positive integer —
+ * untrusted JSON could otherwise persist `0`, a negative, a fractional, or a
+ * non-number value and corrupt the rate-limit branch.
+ */
+function validateMaxRunsPerHour(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return "maxRunsPerHour must be a positive integer or null";
   }
   return null;
 }
@@ -210,6 +237,9 @@ async function handleCreateAutomation(
     if (slackError) return error(slackError, 400);
   }
 
+  const maxRunsError = validateMaxRunsPerHour(body.maxRunsPerHour);
+  if (maxRunsError) return error(maxRunsError, 400);
+
   // Validate model
   const model = getValidModelOrDefault(body.model);
   const reasoningEffort = resolveReasoningEffort(model, body.reasoningEffort);
@@ -275,7 +305,7 @@ async function handleCreateAutomation(
   }
 
   const store = new AutomationStore(env.DB);
-  await store.create({
+  const row: AutomationRow = {
     id,
     name: body.name.trim(),
     repo_owner: repoOwner,
@@ -302,12 +332,16 @@ async function handleCreateAutomation(
     // Slack-only knobs; harmless defaults for other sources (they never read these).
     max_runs_per_hour: body.maxRunsPerHour ?? null,
     reply_in_thread: body.replyInThread === false ? 0 : 1,
-  });
+  };
 
-  // Mirror the slack_channel condition into the join table that drives
-  // channel-keyed candidate selection in the scheduler.
+  // Persist the automation and (for slack_event) its watched-channel index in a
+  // single atomic write, so the canonical trigger_config and the channel index
+  // that drives scheduler candidate selection can never drift apart on a partial
+  // failure.
   if (triggerType === "slack_event") {
-    await store.setSlackChannels(id, extractSlackChannels(body.triggerConfig));
+    await store.createWithSlackChannels(row, extractSlackChannels(body.triggerConfig));
+  } else {
+    await store.create(row);
   }
 
   const automation = toAutomation((await store.getById(id))!);
@@ -485,6 +519,8 @@ async function handleUpdateAutomation(
   }
 
   // Slack-only knobs
+  const maxRunsError = validateMaxRunsPerHour(body.maxRunsPerHour);
+  if (maxRunsError) return error(maxRunsError, 400);
   if (body.maxRunsPerHour !== undefined) {
     updateFields.max_runs_per_hour = body.maxRunsPerHour;
   }
@@ -505,13 +541,19 @@ async function handleUpdateAutomation(
     updateFields.next_run_at = nextCronOccurrence(cron, tz).getTime();
   }
 
-  const updated = await store.update(id, updateFields);
+  // Apply the update and, when a slack_event automation's conditions changed,
+  // re-sync its watched-channel index in the same atomic write so trigger_config
+  // and the channel index can never drift apart on a partial failure.
+  const resyncSlackChannels =
+    existing.trigger_type === "slack_event" && body.triggerConfig !== undefined;
+  const updated = resyncSlackChannels
+    ? await store.updateWithSlackChannels(
+        id,
+        updateFields,
+        extractSlackChannels(body.triggerConfig)
+      )
+    : await store.update(id, updateFields);
   if (!updated) return error("Automation not found", 404);
-
-  // Re-sync the watched-channel join table when slack conditions change.
-  if (existing.trigger_type === "slack_event" && body.triggerConfig !== undefined) {
-    await store.setSlackChannels(id, extractSlackChannels(body.triggerConfig));
-  }
 
   logger.info("automation.updated", {
     event: "automation.updated",

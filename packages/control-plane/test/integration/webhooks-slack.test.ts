@@ -109,6 +109,19 @@ describe("POST /internal/slack-event (integration)", () => {
     expect(res.status).toBe(400);
   });
 
+  it.each(["null", "[]", "42"])(
+    "returns 400 when the JSON body is not an object (%s)",
+    async (raw) => {
+      const res = await SELF.fetch("https://test.local/internal/slack-event", {
+        method: "POST",
+        headers: await authHeaders(),
+        body: raw,
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("must be a JSON object");
+    }
+  );
+
   it("returns 400 when source is not 'slack'", async () => {
     const res = await postEvent(makeSlackEventBody({ source: "github" }));
     expect(res.status).toBe(400);

@@ -125,6 +125,82 @@ describe("POST /automations — slack_event validation (integration)", () => {
     );
     expect(await res.text()).not.toContain("triggerType must be one of");
   });
+
+  const validSlackConditions = [
+    { type: "slack_channel", operator: "any_of", value: ["C1"] },
+    { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
+  ];
+
+  it.each([0, -3, 1.5, "5", true])(
+    "rejects a non-positive/non-integer maxRunsPerHour=%p on create (400)",
+    async (bad) => {
+      const res = await postAutomation(
+        createBody({ triggerConfig: { conditions: validSlackConditions }, maxRunsPerHour: bad })
+      );
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("maxRunsPerHour");
+    }
+  );
+
+  it("accepts a null maxRunsPerHour (use the app default)", async () => {
+    const res = await postAutomation(
+      createBody({ triggerConfig: { conditions: validSlackConditions }, maxRunsPerHour: null })
+    );
+    // Passes validation; only later fails at repo resolution in the test env.
+    expect(res.status).not.toBe(400);
+  });
+});
+
+describe("PUT /automations/:id — slack_event validation (integration)", () => {
+  beforeEach(cleanD1Tables);
+
+  async function putAutomation(id: string, body: Record<string, unknown>): Promise<Response> {
+    return SELF.fetch(`https://test.local/automations/${id}`, {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("rejects a non-array conditions on update with 400, not 500", async () => {
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation();
+    await store.create(auto);
+
+    const res = await putAutomation(auto.id, { triggerConfig: { conditions: "not-an-array" } });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("must be an array");
+  });
+
+  it("rejects a non-positive maxRunsPerHour on update (400)", async () => {
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation();
+    await store.create(auto);
+
+    const res = await putAutomation(auto.id, { maxRunsPerHour: 0 });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("maxRunsPerHour");
+  });
+
+  it("atomically updates conditions and re-syncs the watched-channel index", async () => {
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation();
+    await store.create(auto);
+    await store.setSlackChannels(auto.id, ["C1"]);
+
+    const res = await putAutomation(auto.id, {
+      triggerConfig: {
+        conditions: [
+          { type: "slack_channel", operator: "any_of", value: ["C2", "C3"] },
+          { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
+        ],
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const watched = await store.getWatchedSlackChannels();
+    expect([...watched].sort()).toEqual(["C2", "C3"]);
+  });
 });
 
 describe("GET /integration-settings/slack/watched-channels (integration)", () => {

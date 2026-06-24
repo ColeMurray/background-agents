@@ -560,6 +560,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             <Input
               type="number"
               min={1}
+              step={1}
               value={maxRunsPerHour}
               onChange={(e) => setMaxRunsPerHour(e.target.value)}
               placeholder={`Default (${DEFAULT_MAX_RUNS_PER_HOUR})`}

@@ -22,6 +22,7 @@ describe("buildSlackCompletionNotification", () => {
         run: coords({ slack_channel: null }),
         automationName: "Triage",
         success: true,
+        replyInThread: true,
       })
     ).toBeNull();
   });
@@ -32,6 +33,7 @@ describe("buildSlackCompletionNotification", () => {
         run: coords({ slack_thread_ts: null, slack_message_ts: null }),
         automationName: "Triage",
         success: true,
+        replyInThread: true,
       })
     ).toBeNull();
   });
@@ -41,6 +43,7 @@ describe("buildSlackCompletionNotification", () => {
       run: coords({ slack_thread_ts: "1699999999.000001" }),
       automationName: "Triage",
       success: true,
+      replyInThread: true,
     });
     expect(n).toMatchObject({
       channel: "C1",
@@ -49,6 +52,7 @@ describe("buildSlackCompletionNotification", () => {
       sessionId: "sess-1",
       success: true,
       automationName: "Triage",
+      replyInThread: true,
     });
     expect(n?.summary).toBeUndefined();
   });
@@ -58,6 +62,7 @@ describe("buildSlackCompletionNotification", () => {
       run: coords({ slack_thread_ts: null }),
       automationName: "Triage",
       success: true,
+      replyInThread: true,
     });
     expect(n?.threadTs).toBe("1700000000.000100");
   });
@@ -69,9 +74,24 @@ describe("buildSlackCompletionNotification", () => {
       automationName: "Triage",
       success: false,
       error: longError,
+      replyInThread: true,
     });
     expect(n?.success).toBe(false);
     expect(n?.summary?.length).toBe(1500);
+  });
+
+  it("threads replyInThread=false through so the bot suppresses the thread post", () => {
+    const n = buildSlackCompletionNotification({
+      run: coords(),
+      automationName: "Triage",
+      success: true,
+      replyInThread: false,
+    });
+    // Still produced (the bot needs it to clear the eyes reaction), but flagged
+    // so the bot posts no message.
+    expect(n).not.toBeNull();
+    expect(n?.replyInThread).toBe(false);
+    expect(n?.reactionMessageTs).toBe("1700000000.000100");
   });
 });
 

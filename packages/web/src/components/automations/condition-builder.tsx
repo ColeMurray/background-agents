@@ -297,12 +297,16 @@ function ConditionEditor({
             <input
               type="checkbox"
               checked={caseInsensitive}
-              onChange={(e) =>
+              onChange={(e) => {
+                // Toggle only the `i` flag, preserving any other valid flag
+                // (e.g. `m`) instead of overwriting the whole string.
+                const withoutI = (condition.value.flags ?? "").replace(/i/g, "");
+                const nextFlags = e.target.checked ? `${withoutI}i` : withoutI;
                 onChange({
                   ...condition,
-                  value: { ...condition.value, flags: e.target.checked ? "i" : "" },
-                })
-              }
+                  value: { ...condition.value, flags: nextFlags || undefined },
+                });
+              }}
             />
             Case-insensitive
           </label>

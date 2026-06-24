@@ -115,6 +115,12 @@ interface AutomationCompletePayload {
   success: boolean;
   summary?: string;
   automationName: string;
+  /**
+   * The automation's reply_in_thread setting. When false, clear the eyes
+   * reaction but post no thread reply. Optional/defaulting-to-true so a payload
+   * from an older scheduler still posts (preserving prior behavior).
+   */
+  replyInThread?: boolean;
   signature: string;
 }
 
@@ -129,7 +135,8 @@ function isValidAutomationCompletePayload(payload: unknown): payload is Automati
     typeof p.signature === "string" &&
     (p.sessionId === null || typeof p.sessionId === "string") &&
     (p.summary === undefined || typeof p.summary === "string") &&
-    (p.reactionMessageTs === undefined || typeof p.reactionMessageTs === "string")
+    (p.reactionMessageTs === undefined || typeof p.reactionMessageTs === "string") &&
+    (p.replyInThread === undefined || typeof p.replyInThread === "boolean")
   );
 }
 
@@ -545,13 +552,28 @@ async function handleAutomationComplete(
   };
 
   try {
-    const blocks = buildAutomationCompletionBlocks(payload, env.WEB_APP_URL);
-    const fallback = `${payload.success ? "Automation completed" : "Automation failed"}: ${payload.automationName}`;
+    // Honor reply_in_thread: when false, skip the thread post but still clear
+    // the eyes reaction below so the triggering message isn't left marked 👀.
+    if (payload.replyInThread !== false) {
+      const blocks = buildAutomationCompletionBlocks(payload, env.WEB_APP_URL);
+      const fallback = `${payload.success ? "Automation completed" : "Automation failed"}: ${payload.automationName}`;
 
-    await postMessage(env.SLACK_BOT_TOKEN, payload.channel, fallback, {
-      thread_ts: payload.threadTs,
-      blocks,
-    });
+      const postResult = await postMessage(env.SLACK_BOT_TOKEN, payload.channel, fallback, {
+        thread_ts: payload.threadTs,
+        blocks,
+      });
+
+      // postMessage can return ok:false without throwing; don't log success then.
+      if (!postResult.ok) {
+        log.warn("callback.automation_complete", {
+          ...base,
+          outcome: "error",
+          slack_error: postResult.error,
+          duration_ms: Date.now() - startTime,
+        });
+        return;
+      }
+    }
 
     if (payload.reactionMessageTs) {
       await clearThinkingReaction(env, payload.channel, payload.reactionMessageTs, traceId);
@@ -561,6 +583,7 @@ async function handleAutomationComplete(
       ...base,
       outcome: "success",
       agent_success: payload.success,
+      replied: payload.replyInThread !== false,
       duration_ms: Date.now() - startTime,
     });
   } catch (error) {
@@ -582,21 +605,33 @@ async function handleAutomationSkip(
   env: Env,
   traceId?: string
 ): Promise<void> {
-  const result = await postEphemeral(
-    env.SLACK_BOT_TOKEN,
-    payload.channel,
-    payload.user,
-    ":hourglass_flowing_sand: A run is already active for this thread — skipping the new trigger.",
-    { thread_ts: payload.threadTs }
-  );
+  // Runs in waitUntil — postEphemeral can throw (network/runtime), so catch here
+  // or the background task rejects without route-level logging.
+  try {
+    const result = await postEphemeral(
+      env.SLACK_BOT_TOKEN,
+      payload.channel,
+      payload.user,
+      ":hourglass_flowing_sand: A run is already active for this thread — skipping the new trigger.",
+      { thread_ts: payload.threadTs }
+    );
 
-  if (!result.ok) {
+    if (!result.ok) {
+      log.warn("callback.automation_skip", {
+        trace_id: traceId,
+        channel: payload.channel,
+        user: payload.user,
+        outcome: "error",
+        slack_error: result.error,
+      });
+    }
+  } catch (error) {
     log.warn("callback.automation_skip", {
       trace_id: traceId,
       channel: payload.channel,
       user: payload.user,
       outcome: "error",
-      slack_error: result.error,
+      error: error instanceof Error ? error : new Error(String(error)),
     });
   }
 }

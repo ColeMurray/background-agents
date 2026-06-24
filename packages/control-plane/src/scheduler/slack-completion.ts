@@ -30,6 +30,11 @@ export interface SlackCompletionNotification {
   /** Short failure summary; omitted on success (the bot renders a generic ✅). */
   summary?: string;
   automationName: string;
+  /**
+   * The automation's `reply_in_thread` setting. When false, the bot still clears
+   * the `eyes` reaction but posts no completion message into the thread.
+   */
+  replyInThread: boolean;
 }
 
 export function buildSlackCompletionNotification(params: {
@@ -37,6 +42,7 @@ export function buildSlackCompletionNotification(params: {
   automationName: string;
   success: boolean;
   error?: string;
+  replyInThread: boolean;
 }): SlackCompletionNotification | null {
   const { run } = params;
   if (!run.slack_channel) return null;
@@ -51,6 +57,7 @@ export function buildSlackCompletionNotification(params: {
     success: params.success,
     summary: params.error ? params.error.slice(0, SUMMARY_MAX_LENGTH) : undefined,
     automationName: params.automationName,
+    replyInThread: params.replyInThread,
   };
 }
 
