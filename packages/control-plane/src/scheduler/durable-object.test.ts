@@ -462,6 +462,46 @@ describe("SchedulerDO", () => {
       );
     });
 
+    it("recovers one category when the other recovery query fails", async () => {
+      const timedOutRun = {
+        id: "timeout-1",
+        automation_id: "auto-1",
+        status: "running",
+        started_at: now - 2 * 60 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockRejectedValue(new Error("D1 orphan query timeout"));
+      mockStore.getTimedOutRunningRuns.mockResolvedValue([timedOutRun]);
+      mockStore.bulkIncrementFailures.mockResolvedValue(new Map([["auto-1", 1]]));
+
+      const scheduler = createSchedulerDO();
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["timeout-1"],
+        "execution_timeout",
+        expect.any(Number)
+      );
+      expect(mockStore.bulkIncrementFailures).toHaveBeenCalledWith(new Map([["auto-1", 1]]));
+
+      const queryErrorCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.recovery.query_error"
+      );
+      expect(queryErrorCall).toBeDefined();
+      expect(queryErrorCall![1]).toMatchObject({
+        event: "scheduler.recovery.query_error",
+        category: "orphaned",
+        error: "D1 orphan query timeout",
+      });
+    });
+
     it("batches multiple orphaned runs into a single bulkFailRuns call", async () => {
       const orphanedRuns = [
         { id: "orphan-a", automation_id: "auto-1", status: "starting", created_at: now - 1 },
@@ -511,6 +551,71 @@ describe("SchedulerDO", () => {
         automation_id: "auto-1",
         consecutive_failures: 3,
       });
+    });
+
+    it("continues auto-pausing later automations when one auto-pause fails", async () => {
+      const orphanedRuns = [
+        {
+          id: "orphan-1",
+          automation_id: "auto-1",
+          status: "starting",
+          created_at: now - 10 * 60 * 1000,
+        },
+        {
+          id: "orphan-2",
+          automation_id: "auto-2",
+          status: "starting",
+          created_at: now - 10 * 60 * 1000,
+        },
+      ];
+      mockStore.getOrphanedStartingRuns.mockResolvedValue(orphanedRuns);
+      mockStore.bulkIncrementFailures.mockResolvedValue(
+        new Map([
+          ["auto-1", 3],
+          ["auto-2", 3],
+        ])
+      );
+      mockStore.autoPause.mockImplementation(async (automationId: string) => {
+        if (automationId === "auto-1") {
+          throw new Error("D1 auto-pause timeout");
+        }
+      });
+
+      const scheduler = createSchedulerDO();
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+      const warnSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-2");
+
+      const autoPauseErrorCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event ===
+          "scheduler.recovery.auto_pause_error"
+      );
+      expect(autoPauseErrorCall).toBeDefined();
+      expect(autoPauseErrorCall![1]).toMatchObject({
+        event: "scheduler.recovery.auto_pause_error",
+        automation_id: "auto-1",
+        consecutive_failures: 3,
+        error: "D1 auto-pause timeout",
+      });
+
+      const autoPauseSuccessCall = warnSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.auto_pause" &&
+          (data as Record<string, unknown> | undefined)?.automation_id === "auto-2"
+      );
+      expect(autoPauseSuccessCall).toBeDefined();
     });
 
     it("swallows bulkFailRuns errors and logs scheduler.recovery.bulk_fail_error", async () => {

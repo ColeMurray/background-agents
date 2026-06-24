@@ -256,10 +256,35 @@ export class SchedulerDO extends DurableObject<Env> {
       10
     );
 
-    const [orphaned, timedOut] = await Promise.all([
+    const [orphanedResult, timedOutResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
       store.getTimedOutRunningRuns(executionTimeoutMs, RECOVERY_SWEEP_LIMIT),
     ]);
+
+    const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
+    const timedOut = timedOutResult.status === "fulfilled" ? timedOutResult.value : [];
+
+    if (orphanedResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query orphaned runs", {
+        event: "scheduler.recovery.query_error",
+        category: "orphaned",
+        error:
+          orphanedResult.reason instanceof Error
+            ? orphanedResult.reason.message
+            : String(orphanedResult.reason),
+      });
+    }
+
+    if (timedOutResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query timed-out runs", {
+        event: "scheduler.recovery.query_error",
+        category: "timed_out",
+        error:
+          timedOutResult.reason instanceof Error
+            ? timedOutResult.reason.message
+            : String(timedOutResult.reason),
+      });
+    }
 
     if (orphaned.length === 0 && timedOut.length === 0) return;
 
@@ -319,28 +344,40 @@ export class SchedulerDO extends DurableObject<Env> {
 
     if (recoveredRuns.length === 0) return;
 
-    try {
-      const automationCounts = new Map<string, number>();
-      for (const run of recoveredRuns) {
-        automationCounts.set(run.automation_id, (automationCounts.get(run.automation_id) ?? 0) + 1);
-      }
+    const automationCounts = new Map<string, number>();
+    for (const run of recoveredRuns) {
+      automationCounts.set(run.automation_id, (automationCounts.get(run.automation_id) ?? 0) + 1);
+    }
 
-      const newCounts = await store.bulkIncrementFailures(automationCounts);
-      for (const [automationId, count] of newCounts) {
-        if (count >= AUTO_PAUSE_THRESHOLD) {
-          await store.autoPause(automationId);
-          this.log.warn("Automation auto-paused due to consecutive failures", {
-            event: "scheduler.auto_pause",
-            automation_id: automationId,
-            consecutive_failures: count,
-          });
-        }
-      }
+    let newCounts: Map<string, number>;
+    try {
+      newCounts = await store.bulkIncrementFailures(automationCounts);
     } catch (e) {
       this.log.error("Recovery sweep failed to track failures", {
         event: "scheduler.recovery.bulk_track_error",
         error: e instanceof Error ? e.message : String(e),
       });
+      return;
+    }
+
+    for (const [automationId, count] of newCounts) {
+      if (count < AUTO_PAUSE_THRESHOLD) continue;
+
+      try {
+        await store.autoPause(automationId);
+        this.log.warn("Automation auto-paused due to consecutive failures", {
+          event: "scheduler.auto_pause",
+          automation_id: automationId,
+          consecutive_failures: count,
+        });
+      } catch (e) {
+        this.log.error("Recovery sweep failed to auto-pause automation", {
+          event: "scheduler.recovery.auto_pause_error",
+          automation_id: automationId,
+          consecutive_failures: count,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
   }
 
