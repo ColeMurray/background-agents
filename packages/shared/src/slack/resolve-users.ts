@@ -1,6 +1,6 @@
 import { getUserInfo as defaultGetUserInfo } from "./client";
 
-type GetUserInfo = (token: string, userId: string) => ReturnType<typeof defaultGetUserInfo>;
+export type GetUserInfo = (token: string, userId: string) => ReturnType<typeof defaultGetUserInfo>;
 
 /**
  * Resolve Slack user IDs to display names.
@@ -9,16 +9,12 @@ type GetUserInfo = (token: string, userId: string) => ReturnType<typeof defaultG
  * error envelope or thrown exception via `Promise.allSettled`), the entry is
  * either populated with the raw user ID (envelope failure) or omitted entirely
  * (thrown exception). Callers should treat a missing entry as "unknown user".
- *
- * The optional `deps` parameter allows injecting a custom `getUserInfo`
- * implementation for testing without module-level mocking.
  */
 export async function resolveUserNames(
   token: string,
   userIds: string[],
-  deps: { getUserInfo?: GetUserInfo } = {}
+  getUserInfo: GetUserInfo = defaultGetUserInfo
 ): Promise<Map<string, string>> {
-  const getUserInfo = deps.getUserInfo ?? defaultGetUserInfo;
   const names = new Map<string, string>();
   const results = await Promise.allSettled(
     userIds.map(async (id) => {

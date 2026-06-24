@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SlackEnvelope, SlackUser } from "./client";
-import { resolveUserNames } from "./resolve-users";
-
-type GetUserInfo = (token: string, userId: string) => Promise<SlackEnvelope<{ user: SlackUser }>>;
+import { resolveUserNames, type GetUserInfo } from "./resolve-users";
 
 describe("resolveUserNames", () => {
   it("resolves display_name when available", async () => {
@@ -11,7 +9,7 @@ describe("resolveUserNames", () => {
       user: { id: "U1", name: "alice", profile: { display_name: "Alice S" } },
     });
 
-    const result = await resolveUserNames("token", ["U1"], { getUserInfo: fakeGetUserInfo });
+    const result = await resolveUserNames("token", ["U1"], fakeGetUserInfo);
     expect(result.get("U1")).toBe("Alice S");
   });
 
@@ -21,7 +19,7 @@ describe("resolveUserNames", () => {
       user: { id: "U2", name: "bob.jones", profile: { display_name: "" } },
     });
 
-    const result = await resolveUserNames("token", ["U2"], { getUserInfo: fakeGetUserInfo });
+    const result = await resolveUserNames("token", ["U2"], fakeGetUserInfo);
     expect(result.get("U2")).toBe("bob.jones");
   });
 
@@ -30,7 +28,7 @@ describe("resolveUserNames", () => {
       throw new Error("network error");
     };
 
-    const result = await resolveUserNames("token", ["U3"], { getUserInfo: fakeGetUserInfo });
+    const result = await resolveUserNames("token", ["U3"], fakeGetUserInfo);
     // Promise.allSettled catches the rejection — ID is not in the map
     expect(result.has("U3")).toBe(false);
   });
@@ -41,7 +39,7 @@ describe("resolveUserNames", () => {
       error: "user_not_found",
     });
 
-    const result = await resolveUserNames("token", ["U4"], { getUserInfo: fakeGetUserInfo });
+    const result = await resolveUserNames("token", ["U4"], fakeGetUserInfo);
     expect(result.get("U4")).toBe("U4");
   });
 
@@ -52,7 +50,7 @@ describe("resolveUserNames", () => {
     };
     const fakeGetUserInfo: GetUserInfo = async (_token, userId) => responses[userId]!;
 
-    const result = await resolveUserNames("token", ["U1", "U2"], { getUserInfo: fakeGetUserInfo });
+    const result = await resolveUserNames("token", ["U1", "U2"], fakeGetUserInfo);
     expect(result.get("U1")).toBe("Alice");
     expect(result.get("U2")).toBe("Bob");
     expect(result.size).toBe(2);
@@ -69,7 +67,7 @@ describe("resolveUserNames", () => {
       },
     });
 
-    const result = await resolveUserNames("token", ["U5"], { getUserInfo: fakeGetUserInfo });
+    const result = await resolveUserNames("token", ["U5"], fakeGetUserInfo);
     // Should use name (jdoe), not real_name (John Doe)
     expect(result.get("U5")).toBe("jdoe");
   });
@@ -81,7 +79,7 @@ describe("resolveUserNames", () => {
       return { ok: true, user: { id: "X", name: "x" } };
     };
 
-    const result = await resolveUserNames("token", [], { getUserInfo: fakeGetUserInfo });
+    const result = await resolveUserNames("token", [], fakeGetUserInfo);
     expect(result.size).toBe(0);
     expect(callCount).toBe(0);
   });
