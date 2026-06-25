@@ -271,6 +271,31 @@ describe("CallbackNotificationService", () => {
       expect(body.signature).toEqual(expect.any(String));
     });
 
+    it("skips automation source — the SchedulerDO has no tool-call consumer", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ automationId: "a1", runId: "r1" }),
+        source: "automation",
+      });
+
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "glob",
+        callId: "call-1",
+      });
+
+      // No forward at all — previously this 404'd against the SchedulerDO.
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+      expect(harness.log.debug).toHaveBeenCalledWith(
+        "callback.tool_call",
+        expect.objectContaining({
+          source: "automation",
+          outcome: "skipped",
+          skip_reason: "automation_no_consumer",
+        })
+      );
+    });
+
     it("skips when no callback context", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue(null);
 

@@ -308,6 +308,21 @@ export class CallbackNotificationService {
     }
 
     const source = message.source ?? null;
+
+    // Automation runs have no tool-call progress consumer: getBinding routes them
+    // to the SchedulerDO, which only implements /internal/run-complete — every
+    // /callbacks/tool_call forward 404s. Skip rather than spam best-effort calls.
+    if (source === "automation") {
+      this.log.debug("callback.tool_call", {
+        message_id: messageId,
+        source,
+        tool,
+        outcome: "skipped",
+        skip_reason: "automation_no_consumer",
+      });
+      return;
+    }
+
     const binding = this.getBinding(source);
     if (!binding) {
       this.log.debug("callback.tool_call", {
