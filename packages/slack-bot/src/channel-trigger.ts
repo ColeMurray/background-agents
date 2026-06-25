@@ -138,20 +138,27 @@ async function forwardSlackEvent(
       return;
     }
 
-    const result = (await response.json()) as { triggered?: number; skipped?: number };
+    const result = (await response.json()) as {
+      triggered?: number;
+      skipped?: number;
+      steered?: number;
+    };
     log.info("slack_trigger.forward", {
       trace_id: traceId,
       outcome: "success",
       channel_id: event.channelId,
       triggered: result.triggered ?? 0,
       skipped: result.skipped ?? 0,
+      steered: result.steered ?? 0,
       duration_ms: Date.now() - startTime,
     });
 
-    // React 👀 on the triggering message only when a run actually materialized,
-    // so unmatched channel chatter doesn't get marked. The scheduler clears it
-    // via /callbacks/automation-complete when the run finishes.
-    if ((result.triggered ?? 0) >= 1) {
+    // React 👀 on the triggering message when a new run materializes or a
+    // follow-up steers an already-active run's session, so unmatched channel
+    // chatter stays unmarked. The reaction clears when the work finishes — via
+    // /callbacks/automation-complete for a new run, or /callbacks/complete for a
+    // steered follow-up turn.
+    if ((result.triggered ?? 0) >= 1 || (result.steered ?? 0) >= 1) {
       const reaction = await addReaction(env.SLACK_BOT_TOKEN, event.channelId, event.ts, "eyes");
       if (!reaction.ok && reaction.error !== "already_reacted") {
         log.warn("slack_trigger.react", {

@@ -81,9 +81,9 @@ export function createAutomationEventRoute(opts: {
       return json({ ok: false, error: "Failed to reach scheduler" }, 502);
     }
 
-    let result: { triggered: number; skipped: number };
+    let result: { triggered: number; skipped: number; steered?: number };
     try {
-      result = await response.json<{ triggered: number; skipped: number }>();
+      result = await response.json<{ triggered: number; skipped: number; steered?: number }>();
     } catch {
       return json({ ok: false, error: "Invalid response from scheduler" }, 502);
     }

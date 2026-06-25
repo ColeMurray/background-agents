@@ -52,7 +52,7 @@ function createMockKV() {
 }
 
 /** Control-plane fetch mock: serves the watched-channel set and records forwards. */
-function makeControlPlaneFetch(watched: string[], triggered: number) {
+function makeControlPlaneFetch(watched: string[], triggered: number, steered: number) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : String(input);
     if (url.includes("/integration-settings/slack/watched-channels")) {
@@ -62,25 +62,27 @@ function makeControlPlaneFetch(watched: string[], triggered: number) {
       });
     }
     if (url.includes("/internal/slack-event")) {
-      return new Response(
-        JSON.stringify({ ok: true, triggered, skipped: triggered === 0 ? 1 : 0 }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      const skipped = triggered === 0 && steered === 0 ? 1 : 0;
+      return new Response(JSON.stringify({ ok: true, triggered, skipped, steered }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
   });
 }
 
 function makeEnv(
-  opts: { triggersEnabled?: boolean; watched?: string[]; triggered?: number } = {}
+  opts: { triggersEnabled?: boolean; watched?: string[]; triggered?: number; steered?: number } = {}
 ): Env {
   return {
     SLACK_KV: createMockKV() as unknown as KVNamespace,
     CONTROL_PLANE: {
-      fetch: makeControlPlaneFetch(opts.watched ?? ["C123"], opts.triggered ?? 1),
+      fetch: makeControlPlaneFetch(
+        opts.watched ?? ["C123"],
+        opts.triggered ?? 1,
+        opts.steered ?? 0
+      ),
     } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
@@ -186,6 +188,23 @@ describe("channel-message automation triggers (POST /events)", () => {
     await flushWaitUntil(ctx);
 
     expect(mockAddReaction).not.toHaveBeenCalled();
+  });
+
+  it("reacts when a follow-up steers an active run (triggered: 0, steered: 1)", async () => {
+    const env = makeEnv({ triggersEnabled: true, watched: ["C123"], triggered: 0, steered: 1 });
+    const ctx = makeCtx();
+
+    // A reply in an active thread is forwarded and steers the running session;
+    // the bot still marks the follow-up message with 👀.
+    const res = await app.fetch(
+      channelMessageRequest({ ts: "1700000000.000200", thread_ts: "1700000000.000100" }),
+      env,
+      ctx
+    );
+    expect(res.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(mockAddReaction).toHaveBeenCalledWith("xoxb-test", "C123", "1700000000.000200", "eyes");
   });
 
   it("does not forward when the kill switch is off (default)", async () => {

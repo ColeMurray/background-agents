@@ -257,8 +257,11 @@ condition to filter by content. See
 - When the run finishes, the agent's final response is posted into the triggering message's thread
   (with links to any pull requests and the full session), and the reaction is cleared. A failed run
   posts a short failure notice instead.
-- A new matching message in a thread that already has an active run is skipped and the author gets
-  an ephemeral "a run is already active" notice.
+- While a run is still in flight, a reply in its thread is routed to the running agent as a
+  follow-up prompt: it steers that session (queued behind the current turn) instead of being
+  dropped. The reply gets its own 👀 reaction and in-thread response, and it does **not** need to
+  match the trigger's text condition — conditions gate new runs, not replies to one in progress. A
+  reply that arrives after the run has finished starts a fresh run instead.
 
 ### Threat model
 

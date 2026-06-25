@@ -234,8 +234,12 @@ finishes, the agent's final response is posted as a reply in that message's thre
 any pull requests it opened and to the full web session — and the reaction is cleared. A failed run
 posts a short failure notice in the thread instead.
 
-While a run is active for a thread, another matching message in that same thread is skipped (reason
-`concurrent_run_active`) and the author receives an ephemeral "a run is already active" notice.
+While a run is active for a thread, a reply in that thread **steers** the running agent: the message
+is enqueued as a follow-up turn on the same session, and the agent posts its response in-thread when
+that turn finishes. A follow-up does not need to match the trigger condition — conditions gate new
+runs, not replies to one already in progress. If the run is still starting and has no session yet,
+the reply falls back to an ephemeral "a run is already active" notice (reason
+`concurrent_run_active`). A reply that arrives after the run has finished starts a fresh run.
 
 ---
 
@@ -350,6 +354,10 @@ those triggers fires while a previous run is still in progress, the new run is r
 Event-driven automations use concurrency keys instead. For inbound webhooks, retries with the same
 `idempotencyKey` are treated as the same event, but separate deliveries without a shared
 `idempotencyKey` can overlap.
+
+Slack Message triggers key concurrency by thread. While a thread's run is in flight, replies in that
+thread are not skipped — they are routed to the running agent as follow-up prompts (see the **Run
+feedback** note under [Slack Message Triggers](#slack-message-triggers)).
 
 This prevents overlapping sessions from interfering with each other on the same repository.
 

@@ -166,17 +166,21 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     expect(runs.total).toBe(0);
   });
 
-  it("records a concurrency skip for slack and creates no new materialized run", async () => {
+  it("falls back to a concurrency skip when the active run has no session to steer", async () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
+    // A run still in "starting" has not created its session yet, so a follow-up
+    // has nothing to steer and is dropped with the "already active" notice.
+    // (The steering path — where the active run has a session_id — is covered in
+    // the SchedulerDO unit tests with a mocked session, so it doesn't attempt a
+    // real sandbox spawn here.)
     const concurrencyKey = "slack:C1:thread-1";
     await store.insertRun(
       makeRun(id, {
         id: "active-1",
-        status: "running",
-        session_id: "sess-x",
-        started_at: Date.now(),
+        status: "starting",
+        session_id: null,
         concurrency_key: concurrencyKey,
         trigger_key: "slack:msg:C1:first",
       })
@@ -185,9 +189,10 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     const res = await sendEvent(
       makeSlackEvent({ text: "deploy", concurrencyKey, triggerKey: "slack:msg:C1:second" })
     );
-    const body = await res.json<{ triggered: number; skipped: number }>();
+    const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
     expect(body.skipped).toBe(1);
     expect(body.triggered).toBe(0);
+    expect(body.steered).toBe(0);
 
     const runs = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
     const skip = runs.runs.find((r) => r.skip_reason === "concurrent_run_active");
@@ -195,21 +200,36 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     expect(JSON.parse(skip!.trigger_run_metadata!).channel).toBe("C1");
   });
 
-  it("dedups a duplicate slack message with the same trigger_key", async () => {
+  it("steers the running session on a follow-up reply instead of dropping it", async () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
-    const event = makeSlackEvent({
-      text: "deploy",
-      triggerKey: "slack:msg:C1:dup",
-      concurrencyKey: "slack:C1:dup",
-    });
-    await sendEvent(event);
-    const res2 = await sendEvent(event);
-    const body2 = await res2.json<{ triggered: number; skipped: number }>();
-    expect(body2.skipped).toBe(1);
+    const concurrencyKey = "slack:C1:thread-steer";
+    // Root message triggers the run and creates its session.
+    const rootRes = await sendEvent(
+      makeSlackEvent({ text: "deploy the api", concurrencyKey, triggerKey: "slack:msg:C1:root" })
+    );
+    const rootBody = await rootRes.json<{ triggered: number }>();
+    expect(rootBody.triggered).toBe(1);
 
+    // A follow-up reply in the same thread (same concurrency key, new message)
+    // is routed to the running session as a steering turn — not skipped.
+    const followRes = await sendEvent(
+      makeSlackEvent({
+        text: "also update the changelog",
+        concurrencyKey,
+        triggerKey: "slack:msg:C1:reply",
+      })
+    );
+    const followBody = await followRes.json<{
+      triggered: number;
+      skipped: number;
+      steered: number;
+    }>();
+    expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+    // No concurrency-skip row recorded — the follow-up was steered, not dropped.
     const runs = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
-    expect(runs.runs.filter((r) => r.trigger_key === "slack:msg:C1:dup")).toHaveLength(1);
+    expect(runs.runs.find((r) => r.skip_reason === "concurrent_run_active")).toBeUndefined();
   });
 });
