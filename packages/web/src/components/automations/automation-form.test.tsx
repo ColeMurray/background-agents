@@ -183,35 +183,6 @@ describe("slack_event automation", () => {
     ],
   };
 
-  it("shows the Slack delivery controls for slack_event", () => {
-    render(
-      <AutomationForm
-        mode="edit"
-        submitting={false}
-        onSubmit={vi.fn()}
-        initialValues={{ ...slackBase, triggerConfig: validConditions }}
-      />
-    );
-    expect(screen.getByText("Max runs per hour")).toBeInTheDocument();
-  });
-
-  it("hides the Slack delivery controls for non-slack triggers", () => {
-    render(
-      <AutomationForm
-        mode="edit"
-        submitting={false}
-        onSubmit={vi.fn()}
-        initialValues={{
-          ...slackBase,
-          triggerType: "github_event",
-          eventType: "pull_request.opened",
-          triggerConfig: { conditions: [] },
-        }}
-      />
-    );
-    expect(screen.queryByText("Max runs per hour")).not.toBeInTheDocument();
-  });
-
   it("blocks submit until a slack_channel and text_match condition exist", () => {
     const onSubmit = vi.fn();
     const { container } = render(
@@ -231,7 +202,7 @@ describe("slack_event automation", () => {
     ).toBeInTheDocument();
   });
 
-  it("submits maxRunsPerHour for a valid slack_event", () => {
+  it("submits a valid slack_event", () => {
     const onSubmit = vi.fn();
     const { container } = render(
       <AutomationForm
@@ -241,34 +212,12 @@ describe("slack_event automation", () => {
         initialValues={{ ...slackBase, triggerConfig: validConditions }}
       />
     );
-
-    fireEvent.change(screen.getByPlaceholderText(/Default \(/), { target: { value: "5" } });
 
     fireEvent.submit(container.querySelector("form")!);
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       triggerType: "slack_event",
-      maxRunsPerHour: 5,
-      triggerConfig: validConditions,
-    });
-  });
-
-  it("defaults maxRunsPerHour to null when left blank", () => {
-    const onSubmit = vi.fn();
-    const { container } = render(
-      <AutomationForm
-        mode="edit"
-        submitting={false}
-        onSubmit={onSubmit}
-        initialValues={{ ...slackBase, triggerConfig: validConditions }}
-      />
-    );
-
-    fireEvent.submit(container.querySelector("form")!);
-
-    expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      maxRunsPerHour: null,
       triggerConfig: validConditions,
     });
   });

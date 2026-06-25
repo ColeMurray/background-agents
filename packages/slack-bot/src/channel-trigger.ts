@@ -3,8 +3,8 @@
  *
  * Ambient (non-mention) messages in watched Slack channels are normalized and
  * forwarded to the control plane, which owns candidate selection, condition
- * evaluation, rate limiting, and dedup. All ingress filtering lives here so the
- * Slack event ack path stays cheap.
+ * evaluation, and dedup. All ingress filtering lives here so the Slack event ack
+ * path stays cheap.
  */
 
 import {
@@ -110,8 +110,8 @@ async function fetchChannelMeta(env: Env, channel: string, ts: string): Promise<
 
 /**
  * Forward a normalized Slack automation event to the control plane. The
- * control plane owns candidate selection, condition evaluation, rate limiting,
- * and dedup; the bot's job ends at delivery.
+ * control plane owns candidate selection, condition evaluation, and dedup; the
+ * bot's job ends at delivery.
  */
 async function forwardSlackEvent(
   env: Env,

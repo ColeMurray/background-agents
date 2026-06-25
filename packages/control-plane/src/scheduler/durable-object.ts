@@ -14,7 +14,6 @@ import {
   matchesConditions,
   conditionRegistry,
   computeHmacHex,
-  DEFAULT_MAX_RUNS_PER_HOUR,
   type AutomationCallbackContext,
   type AutomationEvent,
   type SlackAutomationEvent,
@@ -57,9 +56,6 @@ const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
 
 /** Consecutive failure threshold for auto-pause. */
 const AUTO_PAUSE_THRESHOLD = 3;
-
-/** Rate-limit window for slack triggers (1 hour, matching max_runs_per_hour). */
-const SLACK_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 
 /** Max runs to recover per sweep type per tick (backpressure). */
 const RECOVERY_SWEEP_LIMIT = 50;
@@ -454,22 +450,7 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
-      // 3. Rate limit (slack only) — bounds the top-level-post flood that the
-      // per-thread concurrency_key does not. Records a skip for observability.
-      if (event.source === "slack") {
-        const maxRuns = automation.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR;
-        const recentRuns = await store.countRunsInWindow(
-          automation.id,
-          now - SLACK_RATE_LIMIT_WINDOW_MS
-        );
-        if (recentRuns >= maxRuns) {
-          await this.recordSlackSkip(store, automation.id, event, "rate_limited");
-          skipped++;
-          continue;
-        }
-      }
-
-      // 4. Concurrency check (per-event-instance)
+      // 3. Concurrency check (per-event-instance)
       const activeRun = await store.getActiveRunForKey(automation.id, event.concurrencyKey);
       if (activeRun) {
         // For slack, persist the skip so the bot can surface "a run is already
@@ -482,7 +463,7 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
-      // 5. Create run (dedup via unique index on trigger_key)
+      // 4. Create run (dedup via unique index on trigger_key)
       const runId = generateId();
       try {
         await store.insertRun({
@@ -712,8 +693,8 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 
   /**
-   * Persist a `skipped` run for a slack event dropped by the rate-limit or
-   * concurrency guard, carrying the same thread coordinates a materialized run
+   * Persist a `skipped` run for a slack event dropped by the per-thread
+   * concurrency guard, carrying the same message coordinates a materialized run
    * would. Best-effort observability; `recordSkippedRun` swallows the unexpected
    * duplicate-key case internally.
    */

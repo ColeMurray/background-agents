@@ -108,21 +108,6 @@ function validateSlackTriggerConfig(
   return null;
 }
 
-/**
- * `maxRunsPerHour` is a generic per-automation hourly cap (enforced for slack_event
- * today). It feeds the scheduler's `recentRuns >= maxRuns` comparison directly, so
- * reject anything that is not `null`/absent (use the app default) or a positive
- * integer — untrusted JSON could otherwise persist `0`, a negative, a fractional, or
- * a non-number value and corrupt the rate-limit branch.
- */
-function validateMaxRunsPerHour(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return "maxRunsPerHour must be a positive integer or null";
-  }
-  return null;
-}
-
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 async function handleListAutomations(
@@ -238,9 +223,6 @@ async function handleCreateAutomation(
     if (slackError) return error(slackError, 400);
   }
 
-  const maxRunsError = validateMaxRunsPerHour(body.maxRunsPerHour);
-  if (maxRunsError) return error(maxRunsError, 400);
-
   // Validate model
   const model = getValidModelOrDefault(body.model);
   const reasoningEffort = resolveReasoningEffort(model, body.reasoningEffort);
@@ -330,8 +312,6 @@ async function handleCreateAutomation(
     event_type: body.eventType ?? null,
     trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
     trigger_auth_data: triggerAuthData,
-    // Generic per-automation rate cap (consumed by slack today; harmless for others).
-    max_runs_per_hour: body.maxRunsPerHour ?? null,
   };
 
   // Persist the automation and (for slack_event) its watched-channel index in a
@@ -529,12 +509,6 @@ async function handleUpdateAutomation(
         }
       }
     }
-  }
-
-  const maxRunsError = validateMaxRunsPerHour(body.maxRunsPerHour);
-  if (maxRunsError) return error(maxRunsError, 400);
-  if (body.maxRunsPerHour !== undefined) {
-    updateFields.max_runs_per_hour = body.maxRunsPerHour;
   }
 
   // trigger_config is a single source-interpreted JSON blob (the conditions),

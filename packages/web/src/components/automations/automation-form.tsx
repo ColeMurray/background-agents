@@ -3,7 +3,6 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import {
   DEFAULT_MODEL,
-  DEFAULT_MAX_RUNS_PER_HOUR,
   getReasoningConfig,
   isValidCron,
   isValidReasoningEffort,
@@ -95,7 +94,6 @@ export interface AutomationFormValues {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
-  maxRunsPerHour?: number | null;
 }
 
 interface AutomationFormProps {
@@ -135,9 +133,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerConfig?.conditions ?? []
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
-  const [maxRunsPerHour, setMaxRunsPerHour] = useState(
-    initialValues?.maxRunsPerHour != null ? String(initialValues.maxRunsPerHour) : ""
-  );
 
   const isSchedule = triggerType === "schedule";
   const isSlack = triggerType === "slack_event";
@@ -147,12 +142,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     !isSlack ||
     (conditions.some((c) => c.type === "slack_channel") &&
       conditions.some((c) => c.type === "text_match"));
-  // Mirror the server rule: blank uses the default, otherwise a positive integer.
-  // Use Number (not parseInt) so "1.5" is rejected rather than truncated to 1.
-  const trimmedMaxRuns = maxRunsPerHour.trim();
-  const parsedMaxRuns = Number(trimmedMaxRuns);
-  const maxRunsValid =
-    !isSlack || trimmedMaxRuns === "" || (Number.isInteger(parsedMaxRuns) && parsedMaxRuns > 0);
 
   // The model we display and submit. The selector only lists enabled models, so
   // a disabled default (blank create), a disabled saved model (edit), or a
@@ -205,7 +194,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
     if (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim()) return;
     if (!slackConditionsValid) return;
-    if (!maxRunsValid) return;
     if (showEventTypeSelector && !eventType) {
       setEventTypeError("Event type is required.");
       return;
@@ -238,10 +226,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       values.triggerConfig = { conditions };
       if (triggerType === "sentry" && mode === "create" && sentryClientSecret.trim()) {
         values.sentryClientSecret = sentryClientSecret.trim();
-      }
-      if (isSlack) {
-        // Guarded by maxRunsValid above, so trimmedMaxRuns is "" or a positive integer.
-        values.maxRunsPerHour = trimmedMaxRuns ? parsedMaxRuns : null;
       }
     }
 
@@ -544,35 +528,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </div>
       )}
 
-      {/* Slack rate limit (slack_event only) */}
-      {isSlack && (
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">
-              Max runs per hour
-            </label>
-            <Input
-              type="number"
-              min={1}
-              step={1}
-              value={maxRunsPerHour}
-              onChange={(e) => setMaxRunsPerHour(e.target.value)}
-              placeholder={`Default (${DEFAULT_MAX_RUNS_PER_HOUR})`}
-              className="w-40"
-            />
-            <FieldDescription>
-              Caps how many runs this automation can start per hour. Extra matching messages are
-              skipped. Leave blank to use the default ({DEFAULT_MAX_RUNS_PER_HOUR}).
-            </FieldDescription>
-            {!maxRunsValid && (
-              <p className="mt-1 text-xs text-destructive">
-                Max runs per hour must be a positive whole number.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Instructions */}
       <div>
         <label className="block text-sm font-medium text-foreground mb-1.5">Instructions</label>
@@ -628,7 +583,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             !instructions.trim() ||
             !isScheduleValid ||
             !slackConditionsValid ||
-            !maxRunsValid ||
             (showEventTypeSelector && !eventType) ||
             (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())
           }

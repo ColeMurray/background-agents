@@ -793,8 +793,6 @@ export interface Automation {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
-  /** Generic per-automation hourly run cap (enforced for slack_event today); null = app default. */
-  maxRunsPerHour?: number | null;
 }
 
 export interface CreateAutomationRequest {
@@ -811,7 +809,6 @@ export interface CreateAutomationRequest {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
-  maxRunsPerHour?: number | null;
 }
 
 export interface UpdateAutomationRequest {
@@ -824,7 +821,6 @@ export interface UpdateAutomationRequest {
   baseBranch?: string;
   eventType?: string;
   triggerConfig?: TriggerConfig;
-  maxRunsPerHour?: number | null;
 }
 
 export interface AutomationRun {

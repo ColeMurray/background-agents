@@ -143,19 +143,6 @@ describe("toAutomation", () => {
     const automation = toAutomation({ ...sampleRow, enabled: 0 });
     expect(automation.enabled).toBe(false);
   });
-
-  it("defaults maxRunsPerHour to null when unset", () => {
-    const automation = toAutomation(sampleRow);
-    expect(automation.maxRunsPerHour).toBeNull();
-  });
-
-  it("maps an explicit maxRunsPerHour cap", () => {
-    const automation = toAutomation({
-      ...sampleRow,
-      max_runs_per_hour: 5,
-    });
-    expect(automation.maxRunsPerHour).toBe(5);
-  });
 });
 
 describe("toAutomationRun", () => {

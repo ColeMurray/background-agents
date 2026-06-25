@@ -814,68 +814,18 @@ describe("AutomationStore (D1 integration)", () => {
         ...overrides,
       });
 
-    it("countRunsInWindow honors the window and excludes skipped runs", async () => {
-      const store = new AutomationStore(env.DB);
-      const now = Date.now();
-      await store.create(makeSlackAutomation({ id: "auto-s8" }));
-
-      // In-window: completed + failed count; skipped does not.
-      await store.insertRun(
-        makeRun("auto-s8", {
-          id: "r-c",
-          status: "completed",
-          scheduled_at: now - 1000,
-          created_at: now - 1000,
-          completed_at: now,
-        })
-      );
-      await store.insertRun(
-        makeRun("auto-s8", {
-          id: "r-f",
-          status: "failed",
-          scheduled_at: now - 2000,
-          created_at: now - 2000,
-          completed_at: now,
-        })
-      );
-      await store.insertRun(
-        makeRun("auto-s8", {
-          id: "r-s",
-          status: "skipped",
-          skip_reason: "rate_limited",
-          scheduled_at: now - 3000,
-          created_at: now - 3000,
-          completed_at: now,
-        })
-      );
-      // Out of window (2 hours ago).
-      await store.insertRun(
-        makeRun("auto-s8", {
-          id: "r-old",
-          status: "completed",
-          scheduled_at: now - 7_200_000,
-          created_at: now - 7_200_000,
-          completed_at: now,
-        })
-      );
-
-      const count = await store.countRunsInWindow("auto-s8", now - 3_600_000);
-      expect(count).toBe(2);
-    });
-
-    it("recordSkippedRun persists a skip with run metadata, no trigger_key, uncounted", async () => {
+    it("recordSkippedRun persists a skip with run metadata and no trigger_key", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeSlackAutomation({ id: "auto-s9" }));
 
       await store.recordSkippedRun({
         id: "r-skip",
         automationId: "auto-s9",
-        skipReason: "rate_limited",
+        skipReason: "concurrent_run_active",
         concurrencyKey: "slack:C1:111",
         runMetadata: {
           trigger_run_metadata: JSON.stringify({
             channel: "C1",
-            threadTs: "111",
             messageTs: "222",
           }),
         },
@@ -884,15 +834,12 @@ describe("AutomationStore (D1 integration)", () => {
       const run = await store.getRunById("auto-s9", "r-skip");
       expect(run).not.toBeNull();
       expect(run!.status).toBe("skipped");
-      expect(run!.skip_reason).toBe("rate_limited");
+      expect(run!.skip_reason).toBe("concurrent_run_active");
       expect(JSON.parse(run!.trigger_run_metadata!)).toMatchObject({
         channel: "C1",
         messageTs: "222",
       });
       expect(run!.trigger_key).toBeNull();
-
-      // A recorded skip must not count toward the rate-limit window.
-      expect(await store.countRunsInWindow("auto-s9", Date.now() - 3_600_000)).toBe(0);
     });
 
     it("insertRun persists trigger_run_metadata on a materialized run", async () => {
@@ -907,7 +854,6 @@ describe("AutomationStore (D1 integration)", () => {
           concurrency_key: "slack:C1:111",
           trigger_run_metadata: JSON.stringify({
             channel: "C1",
-            threadTs: "111",
             messageTs: "222",
           }),
         })
@@ -916,21 +862,8 @@ describe("AutomationStore (D1 integration)", () => {
       const run = await store.getRunById("auto-s10", "r-mat");
       expect(JSON.parse(run!.trigger_run_metadata!)).toEqual({
         channel: "C1",
-        threadTs: "111",
         messageTs: "222",
       });
-    });
-
-    it("persists max_runs_per_hour on the automation", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeSlackAutomation({ id: "auto-s11", max_runs_per_hour: 5 }));
-
-      const row = await store.getById("auto-s11");
-      expect(row!.max_runs_per_hour).toBe(5);
-
-      await store.update("auto-s11", { max_runs_per_hour: 20 });
-      const updated = await store.getById("auto-s11");
-      expect(updated!.max_runs_per_hour).toBe(20);
     });
   });
 });

@@ -6,8 +6,7 @@
  * The slack-bot is responsible for ingress filtering (watched channels,
  * mention suppression) and normalization; this endpoint only authenticates,
  * validates the event envelope, and forwards. Channel-keyed candidate
- * selection, condition evaluation, rate limiting, and dedup all happen in the
- * scheduler.
+ * selection, condition evaluation, and dedup all happen in the scheduler.
  */
 
 import { createAutomationEventRoute } from "./automation-event";

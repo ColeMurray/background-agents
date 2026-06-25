@@ -38,8 +38,6 @@ export interface AutomationRow {
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
-  /** Per-automation hourly run cap (null = app default). Enforced for slack_event today. */
-  max_runs_per_hour?: number | null;
 }
 
 export interface AutomationRunRow {
@@ -93,7 +91,6 @@ export function toAutomation(row: AutomationRow): Automation {
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
     triggerConfig,
-    maxRunsPerHour: row.max_runs_per_hour ?? null,
   };
 }
 
@@ -134,8 +131,8 @@ export class AutomationStore {
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-          event_type, trigger_config, trigger_auth_data, max_runs_per_hour)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          event_type, trigger_config, trigger_auth_data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -160,8 +157,7 @@ export class AutomationStore {
         row.deleted_at,
         row.event_type,
         row.trigger_config,
-        row.trigger_auth_data,
-        row.max_runs_per_hour ?? null
+        row.trigger_auth_data
       );
   }
 
@@ -225,7 +221,6 @@ export class AutomationStore {
       "event_type",
       "trigger_config",
       "trigger_auth_data",
-      "max_runs_per_hour",
     ];
 
     for (const field of allowedFields) {
@@ -511,25 +506,9 @@ export class AutomationStore {
   }
 
   /**
-   * Count runs for an automation since `sinceEpochMs`, for the rate-limit window.
-   * Excludes `skipped` rows — only runs that materialized a session count (a
-   * `failed` run still spawned a sandbox, so it counts). Served by
-   * idx_runs_automation_created (automation_id, created_at).
-   */
-  async countRunsInWindow(automationId: string, sinceEpochMs: number): Promise<number> {
-    const result = await this.db
-      .prepare(
-        `SELECT COUNT(*) as count FROM automation_runs
-         WHERE automation_id = ? AND created_at >= ? AND status != 'skipped'`
-      )
-      .bind(automationId, sinceEpochMs)
-      .first<{ count: number }>();
-    return result?.count ?? 0;
-  }
-
-  /**
-   * Record a `skipped` run for observability (rate-limited / concurrency skips).
-   * Leaves trigger_key null so the skip stays excluded from countRunsInWindow.
+   * Record a `skipped` run for observability (concurrency skips).
+   * Leaves trigger_key null so repeated skips never collide on the dedup index
+   * (NULLs are distinct under the unique automation_id/trigger_key index).
    * `runMetadata` carries the run's source-specific metadata as a unit — the same
    * value a materialized run is inserted with — so there is no re-mapping.
    */

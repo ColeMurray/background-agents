@@ -9,9 +9,6 @@ export { normalizeSlackEvent, SLACK_TEXT_MAX_LENGTH } from "./normalizer";
 export type { SlackMessageInput, SlackChannelMeta } from "./normalizer";
 export { slackConditions, REGEX_PATTERN_MAX_LENGTH, ALLOWED_REGEX_FLAGS } from "./conditions";
 
-/** Default per-automation hourly run cap when none is configured (rate limit). */
-export const DEFAULT_MAX_RUNS_PER_HOUR = 10;
-
 export const slackSource: TriggerSourceDefinition = {
   source: "slack",
   triggerType: "slack_event",
