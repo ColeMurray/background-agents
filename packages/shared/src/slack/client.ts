@@ -225,6 +225,64 @@ export function getChannelInfo(
   return slackGet(token, "conversations.info", { channel: channelId });
 }
 
+/** Raw `conversations.list` channel shape (subset the picker consumes). */
+interface SlackConversation {
+  id: string;
+  name: string;
+  is_private?: boolean;
+  is_member?: boolean;
+}
+
+/** Normalized channel for the automation channel picker. */
+export interface SlackChannelListing {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  /** Whether the bot is a member — only member channels deliver messages. */
+  isMember: boolean;
+}
+
+/**
+ * List the workspace's public + private channels via `conversations.list`,
+ * following `response_metadata.next_cursor` pagination and excluding archived
+ * channels. Requires the bot token's `channels:read` (public) and `groups:read`
+ * (private) scopes. Returns the SlackEnvelope failure arm on any page's error.
+ */
+export async function listChannels(
+  token: string
+): Promise<SlackEnvelope<{ channels: SlackChannelListing[] }>> {
+  const channels: SlackChannelListing[] = [];
+  let cursor: string | undefined;
+  // Bound the loop defensively: 1000/page × 20 pages caps at 20k channels.
+  for (let page = 0; page < 20; page++) {
+    const query: Record<string, string> = {
+      types: "public_channel,private_channel",
+      exclude_archived: "true",
+      limit: "1000",
+    };
+    if (cursor) query.cursor = cursor;
+
+    const res = await slackGet<{
+      channels: SlackConversation[];
+      response_metadata?: { next_cursor?: string };
+    }>(token, "conversations.list", query);
+    if (!res.ok) return res;
+
+    for (const c of res.channels) {
+      channels.push({
+        id: c.id,
+        name: c.name,
+        isPrivate: Boolean(c.is_private),
+        isMember: Boolean(c.is_member),
+      });
+    }
+
+    cursor = res.response_metadata?.next_cursor || undefined;
+    if (!cursor) break;
+  }
+  return { ok: true, channels };
+}
+
 export interface SlackThreadMessage {
   ts: string;
   text: string;

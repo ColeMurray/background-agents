@@ -942,7 +942,9 @@ If the bot doesn't see the original message when tagged in a thread reply:
    private channels). These are required by the `conversations.replies` API to fetch thread
    messages.
 2. Verify the bot has `channels:read` and `groups:read` scopes. These are required by
-   `conversations.info` to fetch channel name and description for context.
+   `conversations.info` to fetch channel name and description for context, and by
+   `conversations.list` to populate the automation channel picker. If the picker shows no channels,
+   check these scopes and that the bot is invited to the target channel.
 3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
    take effect.
 

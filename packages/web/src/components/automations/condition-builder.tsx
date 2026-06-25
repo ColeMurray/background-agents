@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { TriggerCondition, AutomationEventSource, JsonPathFilter } from "@open-inspect/shared";
 import { conditionRegistry } from "@open-inspect/shared";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import { ChevronDownIcon } from "@/components/ui/icons";
 import {
   Select,
   SelectContent,
@@ -12,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useSlackChannels } from "@/hooks/use-slack-channels";
 
 interface ConditionBuilderProps {
   conditions: TriggerCondition[];
@@ -315,10 +318,9 @@ function ConditionEditor({
     }
     case "slack_channel":
       return (
-        <TagInput
+        <SlackChannelPicker
           values={condition.value}
           onChange={(value) => onChange({ ...condition, value })}
-          placeholder="Add channel ID (e.g. C0123ABCD)..."
         />
       );
     case "slack_actor":
@@ -346,6 +348,108 @@ function ConditionEditor({
     default:
       return <div className="text-xs text-muted-foreground">Configuration not available</div>;
   }
+}
+
+/**
+ * Channel selector for the `slack_channel` condition. Resolves channel names
+ * from the workspace listing and stores channel IDs. Falls back to manual ID
+ * entry when the listing is unavailable (no bot token, missing scopes, or a
+ * Slack API failure), so the condition is always editable.
+ */
+function SlackChannelPicker({
+  values,
+  onChange,
+}: {
+  values: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const { channels, loading } = useSlackChannels();
+  const byId = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
+
+  const add = (id: string) => {
+    const trimmed = id.trim();
+    if (trimmed && !values.includes(trimmed)) onChange([...values, trimmed]);
+  };
+  const remove = (id: string) => onChange(values.filter((v) => v !== id));
+
+  // Degraded mode: no channel list (no bot token, missing scopes, or empty
+  // workspace). Fall back to manual channel-ID entry so the trigger still works.
+  if (!loading && channels.length === 0) {
+    return (
+      <div className="space-y-2">
+        <TagInput
+          values={values}
+          onChange={onChange}
+          placeholder="Add channel ID (e.g. C0123ABCD)..."
+        />
+        <p className="text-xs text-muted-foreground">
+          Couldn&apos;t list Slack channels — add channel IDs manually. Check that the Slack app has
+          the <code>channels:read</code> / <code>groups:read</code> scopes and that the bot is
+          invited to the channel.
+        </p>
+      </div>
+    );
+  }
+
+  // Unselected channels, bot-member first, then alphabetical.
+  const options: ComboboxOption[] = channels
+    .filter((c) => !values.includes(c.id))
+    .sort((a, b) => Number(b.isMember) - Number(a.isMember) || a.name.localeCompare(b.name))
+    .map((c) => ({
+      value: c.id,
+      label: `#${c.name}`,
+      description: !c.isMember ? "bot not in channel" : c.isPrivate ? "private" : undefined,
+    }));
+  const someNotMember = values.some((id) => byId.get(id)?.isMember === false);
+
+  return (
+    <div className="space-y-2">
+      {values.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {values.map((id) => {
+            const ch = byId.get(id);
+            return (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-muted text-foreground rounded"
+              >
+                {ch ? `#${ch.name}` : id}
+                <button
+                  type="button"
+                  onClick={() => remove(id)}
+                  aria-label={`Remove ${ch ? ch.name : id}`}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <Combobox
+        value=""
+        onChange={add}
+        items={options}
+        searchable
+        searchPlaceholder="Search channels..."
+        dropdownWidth="w-64"
+        disabled={loading}
+        triggerClassName="flex w-56 items-center gap-1.5 px-3 py-2 text-xs border border-border bg-input text-foreground hover:border-foreground/20 transition"
+      >
+        <span className="truncate flex-1 text-left">
+          {loading ? "Loading channels..." : "Add channel..."}
+        </span>
+        <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
+      </Combobox>
+      {someNotMember && (
+        <p className="text-xs text-warning">
+          The bot isn&apos;t a member of some selected channels and won&apos;t receive their
+          messages until it&apos;s invited.
+        </p>
+      )}
+    </div>
+  );
 }
 
 function TagInput({

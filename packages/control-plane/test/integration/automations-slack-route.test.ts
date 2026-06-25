@@ -285,3 +285,31 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
     expect(body.channels).toEqual([]);
   });
 });
+
+describe("GET /integration-settings/slack/channels (integration)", () => {
+  beforeEach(cleanD1Tables);
+
+  async function getSlackChannels(auth = true): Promise<Response> {
+    return SELF.fetch("https://test.local/integration-settings/slack/channels", {
+      method: "GET",
+      headers: auth ? await authHeaders() : undefined,
+    });
+  }
+
+  it("returns 401 without an internal token", async () => {
+    const res = await getSlackChannels(false);
+    expect(res.status).toBe(401);
+  });
+
+  it("degrades to an empty channel list (never a 500) when listing is unavailable", async () => {
+    // The integration env has no usable bot token, so the route returns an empty
+    // list with an error — `not_configured` when unset, or a Slack error such as
+    // `invalid_auth` when a placeholder token is present — rather than throwing.
+    const res = await getSlackChannels();
+    expect(res.status).toBe(200);
+    const body = await res.json<{ channels: string[]; error?: string }>();
+    expect(body.channels).toEqual([]);
+    expect(typeof body.error).toBe("string");
+    expect(body.error).toBeTruthy();
+  });
+});

@@ -5,6 +5,7 @@ export {
   getPermalink,
   getThreadMessages,
   getUserInfo,
+  listChannels,
   openView,
   postEphemeral,
   postMessage,
@@ -16,6 +17,7 @@ export {
 export type {
   SlackAuthTestResult,
   SlackChannelInfo,
+  SlackChannelListing,
   SlackEnvelope,
   SlackThreadMessage,
   SlackUser,

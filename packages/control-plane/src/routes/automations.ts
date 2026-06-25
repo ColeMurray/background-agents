@@ -11,6 +11,7 @@ import {
   getValidModelOrDefault,
   validateConditions,
   conditionRegistry,
+  listChannels,
   TRIGGER_TYPE_TO_SOURCE,
   type CreateAutomationRequest,
   type UpdateAutomationRequest,
@@ -840,6 +841,35 @@ async function handleGetWatchedSlackChannels(
   return json({ channels });
 }
 
+/**
+ * GET /integration-settings/slack/channels
+ *
+ * Lists the workspace's channels (public + private the bot can see) so the
+ * automation form can offer a channel picker instead of a raw channel ID. Sourced
+ * live from Slack via `conversations.list` using the bot token.
+ *
+ * Returns `{ channels }` on success, or `{ channels: [], error }` when the token
+ * is unset or Slack rejects the call (e.g. missing `channels:read`/`groups:read`
+ * scope) — the form then degrades to manual channel-ID entry. Internal-auth gated
+ * by the router (non-public route).
+ */
+async function handleGetSlackChannels(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  if (!env.SLACK_BOT_TOKEN) {
+    return json({ channels: [], error: "not_configured" });
+  }
+  const result = await listChannels(env.SLACK_BOT_TOKEN);
+  if (!result.ok) {
+    logger.warn("slack.channels.list_failed", { slack_error: result.error });
+    return json({ channels: [], error: result.error });
+  }
+  return json({ channels: result.channels });
+}
+
 // ─── Route exports ───────────────────────────────────────────────────────────
 
 export const automationRoutes: Route[] = [
@@ -847,6 +877,11 @@ export const automationRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/integration-settings/slack/watched-channels"),
     handler: handleGetWatchedSlackChannels,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/integration-settings/slack/channels"),
+    handler: handleGetSlackChannels,
   },
   {
     method: "GET",

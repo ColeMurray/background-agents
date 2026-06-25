@@ -58,6 +58,13 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+// The SlackChannelPicker (rendered for slack_channel conditions) lists channels via
+// useSession-backed SWR. The form tests don't exercise channel listing, so stub it out
+// to avoid needing a SessionProvider.
+vi.mock("@/hooks/use-slack-channels", () => ({
+  useSlackChannels: () => ({ channels: [], loading: false }),
+}));
+
 vi.mock("@/components/ui/combobox", () => ({
   Combobox: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));

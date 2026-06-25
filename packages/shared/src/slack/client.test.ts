@@ -6,6 +6,7 @@ import {
   getPermalink,
   getThreadMessages,
   getUserInfo,
+  listChannels,
   openView,
   postMessage,
   publishView,
@@ -475,6 +476,80 @@ describe("openView", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe("expired_trigger_id");
+    }
+  });
+});
+
+describe("listChannels", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("normalizes a single page and requests public + private, non-archived", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        channels: [
+          { id: "C1", name: "general", is_private: false, is_member: true },
+          { id: "C2", name: "secret", is_private: true, is_member: false },
+        ],
+        response_metadata: { next_cursor: "" },
+      })
+    );
+
+    const result = await listChannels("xoxb-token");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.channels).toEqual([
+        { id: "C1", name: "general", isPrivate: false, isMember: true },
+        { id: "C2", name: "secret", isPrivate: true, isMember: false },
+      ]);
+    }
+    const url = String(fetchSpy.mock.calls[0]![0]);
+    expect(url).toContain("conversations.list");
+    expect(url).toContain("types=public_channel%2Cprivate_channel");
+    expect(url).toContain("exclude_archived=true");
+    expect(url).toContain("limit=1000");
+  });
+
+  it("follows next_cursor pagination and concatenates pages", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          channels: [{ id: "C1", name: "a" }],
+          response_metadata: { next_cursor: "cur-2" },
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          channels: [{ id: "C2", name: "b" }],
+          response_metadata: { next_cursor: "" },
+        })
+      );
+
+    const result = await listChannels("xoxb-token");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.channels.map((c) => c.id)).toEqual(["C1", "C2"]);
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(String(fetchSpy.mock.calls[1]![0])).toContain("cursor=cur-2");
+  });
+
+  it("returns the Slack failure envelope when a page errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "missing_scope" })
+    );
+
+    const result = await listChannels("xoxb-token");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("missing_scope");
     }
   });
 });
