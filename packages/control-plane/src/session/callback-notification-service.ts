@@ -115,7 +115,7 @@ export class CallbackNotificationService {
 
     // Route automation callbacks to SchedulerDO (different URL + payload)
     if (context.source === "automation") {
-      return this.notifyAutomationComplete(context, success, error);
+      return this.notifyAutomationComplete(context, success, error, messageId);
     }
 
     if (!this.env.INTERNAL_CALLBACK_SECRET) {
@@ -201,7 +201,8 @@ export class CallbackNotificationService {
   private async notifyAutomationComplete(
     context: { automationId: string; runId: string; automationName: string },
     success: boolean,
-    error?: string
+    error: string | undefined,
+    messageId: string
   ): Promise<void> {
     const binding = this.env.SCHEDULER_CALLBACK;
     if (!binding) {
@@ -213,6 +214,8 @@ export class CallbackNotificationService {
       automationId: context.automationId,
       runId: context.runId,
       sessionId: this.getSessionId(),
+      // The message whose agent response the bot fetches to post the run result.
+      messageId,
       success,
       error,
       automationName: context.automationName,

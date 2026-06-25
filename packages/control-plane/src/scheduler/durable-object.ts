@@ -32,6 +32,7 @@ import {
   buildSlackSkipNotification,
   getSlackRunMetadata,
   type SlackRunMetadata,
+  type SlackCompletionContext,
 } from "./slack-completion";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
@@ -627,6 +628,8 @@ export class SchedulerDO extends DurableObject<Env> {
       automationId: string;
       runId: string;
       sessionId: string;
+      /** Optional for resilience to version skew; the bot falls back to a reaction clear. */
+      messageId?: string;
       success: boolean;
       error?: string;
     };
@@ -678,13 +681,22 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
-    // Slack-triggered runs clear the `eyes` reaction from their triggering
-    // message when they finish. The scheduler owns this fan-out (not the session
-    // callback path) because the message coordinates live on the run row.
-    // Best-effort; success/failure is surfaced in the web UI, not in Slack.
+    // Slack-triggered runs post the agent's result into the triggering message's
+    // thread and clear the `eyes` reaction when they finish. The scheduler owns
+    // this fan-out (not the session callback path) because the message
+    // coordinates live on the run row. Best-effort.
     const slackMeta = getSlackRunMetadata(run);
     if (slackMeta) {
-      await this.notifySlackCompletion(run, slackMeta);
+      const automation = await store.getById(body.automationId);
+      await this.notifySlackCompletion(run, slackMeta, {
+        sessionId: body.sessionId,
+        messageId: body.messageId ?? "",
+        success: body.success,
+        error: body.error,
+        repoFullName: automation ? `${automation.repo_owner}/${automation.repo_name}` : "",
+        model: automation?.model ?? "",
+        reasoningEffort: automation?.reasoning_effort ?? undefined,
+      });
     }
 
     return new Response(JSON.stringify({ ok: true }), {
@@ -714,21 +726,23 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 
   /**
-   * Tell the slack-bot to clear the `eyes` reaction from a slack-triggered run's
-   * triggering message by calling its `/callbacks/automation-complete` endpoint.
-   * Signs the body with `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the
-   * bot's other callbacks). No-ops when the run has no triggering message, when
-   * `SLACK_BOT` is unbound, or when the secret is unset — all best-effort.
+   * Tell the slack-bot to post a slack-triggered run's result into the triggering
+   * message's thread and clear the `eyes` reaction, via its
+   * `/callbacks/automation-complete` endpoint. Signs the body with
+   * `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the bot's other callbacks).
+   * No-ops when the run has no triggering message, when `SLACK_BOT` is unbound, or
+   * when the secret is unset — all best-effort.
    */
   private async notifySlackCompletion(
     run: AutomationRunRow,
-    meta: SlackRunMetadata
+    meta: SlackRunMetadata,
+    ctx: SlackCompletionContext
   ): Promise<void> {
     const binding = this.env.SLACK_BOT;
     const secret = this.env.INTERNAL_CALLBACK_SECRET;
     if (!binding || !secret) return;
 
-    const body = buildSlackCompletionNotification(meta);
+    const body = buildSlackCompletionNotification(meta, ctx);
     if (!body) return;
 
     try {

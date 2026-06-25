@@ -2,7 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { computeHmacHex } from "@open-inspect/shared";
 import { callbacksRouter } from "./callbacks";
+import { extractAgentResponse } from "./completion/extractor";
+import type * as ExtractorModule from "./completion/extractor";
 import type { Env } from "./types";
+
+// The automation-complete post path reuses the interactive completion path, which
+// fetches the agent's response from the control-plane. Stub that extraction so the
+// handler test asserts the in-thread post + reaction clear without reconstructing
+// the event-fetch protocol.
+vi.mock("./completion/extractor", async (importOriginal) => {
+  const actual = await importOriginal<typeof ExtractorModule>();
+  return { ...actual, extractAgentResponse: vi.fn() };
+});
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -307,7 +318,8 @@ describe("POST /callbacks/automation-complete", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("clears the eyes reaction and posts no thread message", async () => {
+  it("clears the reaction without posting when the run carries no session coordinates", async () => {
+    // No sessionId/messageId (e.g. version skew) — falls back to a reaction clear.
     const fetchMock = okFetchMock();
     const payload = await signPayload(completeData());
     const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
@@ -316,6 +328,40 @@ describe("POST /callbacks/automation-complete", () => {
     await flushWaitUntil(ctx);
 
     expect(slackCall(fetchMock, "chat.postMessage")).toBeUndefined();
+    const reaction = slackCall(fetchMock, "reactions.remove");
+    expect(reaction).toBeDefined();
+    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
+  });
+
+  it("posts the agent result in-thread and clears the reaction", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      textContent: "Fixed the bug and opened a PR.",
+      toolCalls: [],
+      artifacts: [],
+      success: true,
+    });
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(
+      completeData({
+        sessionId: "session-9",
+        messageId: "msg-9",
+        success: true,
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    // The agent's response is posted into the triggering message's thread.
+    const post = slackCall(fetchMock, "chat.postMessage");
+    expect(post).toBeDefined();
+    expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
+    expect(JSON.stringify(post!.body)).toContain("Fixed the bug");
+
+    // ...and the eyes reaction is still cleared.
     const reaction = slackCall(fetchMock, "reactions.remove");
     expect(reaction).toBeDefined();
     expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });

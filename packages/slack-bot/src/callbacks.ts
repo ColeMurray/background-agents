@@ -105,13 +105,23 @@ function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
 
 /**
  * Payload for a scheduler-owned automation completion (Slack-triggered run). The
- * SchedulerDO posts this when the run finishes; the bot's only action is to clear
- * the `eyes` reaction it added to the triggering message when the run started.
+ * SchedulerDO posts this when the run finishes. The bot posts the agent's final
+ * response into the triggering message's thread and clears the `eyes` reaction.
+ *
+ * The run-result fields (`sessionId`/`messageId` and the presentation fields) are
+ * optional so a control-plane/bot version skew degrades to a reaction clear only.
  */
 interface AutomationCompletePayload {
   channel: string;
-  /** The triggering message to clear the `eyes` reaction from. */
+  /** The triggering message: thread anchor for the result and the `eyes` reaction target. */
   reactionMessageTs: string;
+  sessionId?: string;
+  messageId?: string;
+  success?: boolean;
+  error?: string;
+  repoFullName?: string;
+  model?: string;
+  reasoningEffort?: string;
   signature: string;
 }
 
@@ -121,7 +131,9 @@ function isValidAutomationCompletePayload(payload: unknown): payload is Automati
   return (
     typeof p.channel === "string" &&
     typeof p.reactionMessageTs === "string" &&
-    typeof p.signature === "string"
+    typeof p.signature === "string" &&
+    (p.sessionId === undefined || typeof p.sessionId === "string") &&
+    (p.messageId === undefined || typeof p.messageId === "string")
   );
 }
 
@@ -289,9 +301,9 @@ callbacksRouter.post("/tool_call", async (c) => {
 });
 
 /**
- * Callback endpoint for Slack-triggered automation completion. Clears the `eyes`
- * reaction from the triggering message. The SchedulerDO owns this fan-out (it
- * holds the message coordinates); this route just delivers the reaction clear.
+ * Callback endpoint for Slack-triggered automation completion. Posts the agent's
+ * final response into the triggering message's thread and clears the `eyes`
+ * reaction. The SchedulerDO owns this fan-out (it holds the message coordinates).
  */
 callbacksRouter.post("/automation-complete", async (c) => {
   const startTime = Date.now();
@@ -476,21 +488,50 @@ async function handleCompletionCallback(
 }
 
 /**
- * Clear the `eyes` reaction from a Slack-triggered run's triggering message when
- * the run completes. Fire-and-forget.
+ * Post a Slack-triggered run's result into the triggering message's thread and
+ * clear the `eyes` reaction. Reuses the interactive completion path
+ * (`handleCompletionCallback`) — which fetches the agent's response, posts it
+ * in-thread, and clears the reaction. Falls back to a reaction clear only when
+ * the run carries no session coordinates (control-plane/bot version skew).
+ * Fire-and-forget.
  */
 async function handleAutomationComplete(
   payload: AutomationCompletePayload,
   env: Env,
   traceId?: string
 ): Promise<void> {
+  if (payload.sessionId && payload.messageId) {
+    await handleCompletionCallback(
+      {
+        sessionId: payload.sessionId,
+        messageId: payload.messageId,
+        success: payload.success ?? true,
+        error: payload.error,
+        timestamp: Date.now(),
+        signature: payload.signature,
+        context: {
+          source: "slack",
+          channel: payload.channel,
+          threadTs: payload.reactionMessageTs,
+          reactionMessageTs: payload.reactionMessageTs,
+          repoFullName: payload.repoFullName ?? "",
+          model: payload.model ?? "",
+          reasoningEffort: payload.reasoningEffort,
+        },
+      },
+      env,
+      traceId
+    );
+    return;
+  }
+
+  // No session coordinates — clear the reaction only.
   const startTime = Date.now();
   const base = {
     trace_id: traceId,
     channel: payload.channel,
     message_ts: payload.reactionMessageTs,
   };
-
   try {
     await clearThinkingReaction(env, payload.channel, payload.reactionMessageTs, traceId);
 

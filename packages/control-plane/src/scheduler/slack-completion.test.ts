@@ -3,6 +3,7 @@ import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
   type SlackRunMetadata,
+  type SlackCompletionContext,
 } from "./slack-completion";
 
 function meta(overrides?: Partial<SlackRunMetadata>): SlackRunMetadata {
@@ -13,20 +14,41 @@ function meta(overrides?: Partial<SlackRunMetadata>): SlackRunMetadata {
   };
 }
 
+function ctx(overrides?: Partial<SlackCompletionContext>): SlackCompletionContext {
+  return {
+    sessionId: "sess-1",
+    messageId: "msg-1",
+    success: true,
+    repoFullName: "acme/web",
+    model: "anthropic/claude-sonnet-4-6",
+    ...overrides,
+  };
+}
+
 describe("buildSlackCompletionNotification", () => {
   it("returns null for a non-slack run (no metadata)", () => {
-    expect(buildSlackCompletionNotification(null)).toBeNull();
+    expect(buildSlackCompletionNotification(null, ctx())).toBeNull();
   });
 
-  it("returns null when there is no triggering message to clear", () => {
-    expect(buildSlackCompletionNotification(meta({ messageTs: "" }))).toBeNull();
+  it("returns null when there is no triggering message to anchor to", () => {
+    expect(buildSlackCompletionNotification(meta({ messageTs: "" }), ctx())).toBeNull();
   });
 
-  it("targets the triggering message's eyes reaction", () => {
-    expect(buildSlackCompletionNotification(meta())).toEqual({
+  it("carries the run result plus the triggering message coordinates", () => {
+    expect(buildSlackCompletionNotification(meta(), ctx({ error: undefined }))).toEqual({
       channel: "C1",
       reactionMessageTs: "1700000000.000100",
+      sessionId: "sess-1",
+      messageId: "msg-1",
+      success: true,
+      repoFullName: "acme/web",
+      model: "anthropic/claude-sonnet-4-6",
     });
+  });
+
+  it("includes the failure detail when the run errored", () => {
+    const result = buildSlackCompletionNotification(meta(), ctx({ success: false, error: "boom" }));
+    expect(result).toMatchObject({ success: false, error: "boom" });
   });
 });
 

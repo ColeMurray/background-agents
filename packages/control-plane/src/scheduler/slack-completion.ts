@@ -38,22 +38,38 @@ export function getSlackRunMetadata(
 }
 
 /**
- * The scheduler → bot payload for a completed slack-triggered run. Its only job
- * is to clear the `eyes` reaction the bot added to the triggering message when
- * the run started; the run's success/failure is surfaced in the web UI, not in
- * Slack.
+ * Run result fields the bot needs to post the agent's final response into the
+ * triggering message's thread. The SchedulerDO sources `sessionId`/`messageId`
+ * (and success/error) from the run-complete callback and repo/model from the
+ * automation row.
  */
-export interface SlackCompletionNotification {
+export interface SlackCompletionContext {
+  sessionId: string;
+  messageId: string;
+  success: boolean;
+  error?: string;
+  repoFullName: string;
+  model: string;
+  reasoningEffort?: string;
+}
+
+/**
+ * The scheduler → bot payload for a completed slack-triggered run. Carries the
+ * triggering message (the thread anchor and the `eyes` reaction target) plus the
+ * run result the bot uses to fetch and post the agent's response in-thread.
+ */
+export interface SlackCompletionNotification extends SlackCompletionContext {
   channel: string;
-  /** The triggering message to clear the `eyes` reaction from. */
+  /** The triggering message: the thread anchor and the `eyes` reaction target. */
   reactionMessageTs: string;
 }
 
 export function buildSlackCompletionNotification(
-  meta: SlackRunMetadata | null
+  meta: SlackRunMetadata | null,
+  ctx: SlackCompletionContext
 ): SlackCompletionNotification | null {
   if (!meta?.messageTs) return null;
-  return { channel: meta.channel, reactionMessageTs: meta.messageTs };
+  return { channel: meta.channel, reactionMessageTs: meta.messageTs, ...ctx };
 }
 
 export interface SlackSkipNotification {
