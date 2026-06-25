@@ -229,9 +229,10 @@ stripped before matching, and messages that `@mention` the bot are handled by th
 
 ### Run feedback
 
-A triggering message is marked with the 👀 reaction while its run is in flight; the reaction is
-cleared when the run finishes. The automation does not post a result back to the channel — follow
-the run in the web app.
+A triggering message is marked with the 👀 reaction while its run is in flight. When the run
+finishes, the agent's final response is posted as a reply in that message's thread — with links to
+any pull requests it opened and to the full web session — and the reaction is cleared. A failed run
+posts a short failure notice in the thread instead.
 
 While a run is active for a thread, another matching message in that same thread is skipped (reason
 `concurrent_run_active`) and the author receives an ephemeral "a run is already active" notice.

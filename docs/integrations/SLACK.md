@@ -253,9 +253,10 @@ condition to filter by content. See
 
 ### Run feedback
 
-- A triggering message gets a 👀 reaction while its run is in flight; it is cleared when the run
-  finishes. The automation does not post the result back to the channel — follow the run in the web
-  app.
+- A triggering message gets a 👀 reaction while its run is in flight.
+- When the run finishes, the agent's final response is posted into the triggering message's thread
+  (with links to any pull requests and the full session), and the reaction is cleared. A failed run
+  posts a short failure notice instead.
 - A new matching message in a thread that already has an active run is skipped and the author gets
   an ephemeral "a run is already active" notice.
 
