@@ -185,9 +185,9 @@ Slack thread continue the existing session.
 
 ## Optional Agent Notifications
 
-Slack-started sessions always get their normal thread replies and completion messages. Agent
-notifications are separate: they let an agent post an extra message to a Slack channel when you
-explicitly ask for it:
+Interactive Slack sessions (DMs and `@mentions`) always get their normal thread replies and
+completion messages. Agent notifications are separate: they let an agent post an extra message to a
+Slack channel when you explicitly ask for it:
 
 ```text
 When you finish, post a short summary to #eng-updates.
@@ -246,18 +246,16 @@ ordinary channel messages:
 - Invite the bot to every channel you intend to watch. The bot only sees messages in channels it is
   a member of.
 
-Then, in the web app, create a **Slack Message** automation, add a **Slack Channel** condition with
-the channel ID(s), and a **Message Text** condition. See
+Then, in the web app, create a **Slack Message** automation and add a **Slack Channel** condition
+(pick channels by name; channel IDs also work as a fallback). Optionally add a **Message Text**
+condition to filter by content. See
 [Slack Message Triggers](../AUTOMATIONS.md#slack-message-triggers) for the full field reference.
 
-### Reply and rate behavior
+### Run feedback
 
-- The run result is posted back into the originating thread when **Reply in thread** is on
-  (default).
-- A triggering message gets a 👀 reaction while its run is in flight; it is cleared when the result
-  posts.
-- **Max runs per hour** caps how often an automation fires; messages over the cap are skipped
-  (recorded as `rate_limited`) and start no session.
+- A triggering message gets a 👀 reaction while its run is in flight; it is cleared when the run
+  finishes. The automation does not post the result back to the channel — follow the run in the web
+  app.
 - A new matching message in a thread that already has an active run is skipped and the author gets
   an ephemeral "a run is already active" notice.
 

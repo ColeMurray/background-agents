@@ -46,12 +46,12 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 
 ### Trigger-Specific Fields
 
-| Trigger Type        | Additional Fields                                                                                                      |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **Schedule**        | **Schedule** and **Timezone**                                                                                          |
-| **Inbound Webhook** | No extra required fields                                                                                               |
-| **Sentry Alert**    | **Event Type** and **Sentry Client Secret**                                                                            |
-| **Slack Message**   | **Conditions** (a Slack Channel and a Message Text condition are required), **Reply in thread**, **Max runs per hour** |
+| Trigger Type        | Additional Fields                                                                            |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| **Schedule**        | **Schedule** and **Timezone**                                                                |
+| **Inbound Webhook** | No extra required fields                                                                     |
+| **Sentry Alert**    | **Event Type** and **Sentry Client Secret**                                                  |
+| **Slack Message**   | **Conditions** (a Slack Channel condition is required; a Message Text condition is optional) |
 
 For non-schedule automations, schedule fields are not used.
 
@@ -206,36 +206,35 @@ operator to set the `SLACK_TRIGGERS_ENABLED` flag and configure the Slack app �
 threat model. The web form and these conditions are always available to author; messages are only
 ingested once the flag is on.
 
-### Required conditions
+### Conditions
 
-A Slack automation must define both:
+A Slack automation must define at least a **Slack Channel** condition; the rest are optional
+filters.
 
-- **Slack Channel** — one or more channel IDs (for example `C0123ABCD`) to watch. Only messages in
-  these channels are considered; the bot must be a member of each.
-- **Message Text** — how the message text is matched. Pick a mode:
+- **Slack Channel** (required) — the channels to watch. Pick channels by name in the web form;
+  channel IDs (for example `C0123ABCD`) also work as a fallback when channel listing is unavailable.
+  Only messages in these channels are considered, and the bot must be a member of each.
+- **Message Text** (optional) — filter on the message text. Without it, every message in the watched
+  channels triggers the automation. Pick a mode:
   - **contains** — the message contains the substring (optionally case-insensitive).
   - **exact** — the message equals the text.
   - **regex** — the message matches a regular expression. Patterns are capped in length and limited
     to the `i` and `m` flags; an invalid pattern is rejected when you save.
-
-Optionally add a **Slack User** condition to include or exclude specific Slack user IDs (an
-allowlist is the recommended way to limit who can trigger a run).
+- **Slack User** (optional) — include or exclude specific Slack user IDs (an allowlist is the
+  recommended way to limit who can trigger a run).
 
 A message runs the automation only when **every** condition passes. The bot-mention token is
 stripped before matching, and messages that `@mention` the bot are handled by the interactive
 `@mention` flow instead — they never double-fire as triggers.
 
-### Delivery and rate behavior
+### Run feedback
 
-| Field                 | Behavior                                                                                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Reply in thread**   | When on (default), the run result is posted back into the originating message's thread.                                                                                                    |
-| **Max runs per hour** | Caps how many runs this automation starts per hour. Extra matching messages are recorded as a skipped run with reason `rate_limited` and start no session. Leave blank to use the default. |
+A triggering message is marked with the 👀 reaction while its run is in flight; the reaction is
+cleared when the run finishes. The automation does not post a result back to the channel — follow
+the run in the web app.
 
 While a run is active for a thread, another matching message in that same thread is skipped (reason
-`concurrent_run_active`) and the author receives an ephemeral "a run is already active" notice. A
-triggering message is marked with the 👀 reaction while its run is in flight; the reaction is
-cleared when the result is posted.
+`concurrent_run_active`) and the author receives an ephemeral "a run is already active" notice.
 
 ---
 
