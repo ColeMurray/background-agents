@@ -236,7 +236,7 @@ describe("getWatchedChannels", () => {
     expect(await getWatchedChannels(env)).toEqual(new Set());
   });
 
-  it("serves the KV last-known-good set on a control-plane failure", async () => {
+  it("serves the watch-list from the KV cache without hitting the control plane", async () => {
     const env = {
       SLACK_KV: {
         get: vi.fn().mockResolvedValue(["C7", "C8"]),
@@ -249,14 +249,29 @@ describe("getWatchedChannels", () => {
 
     expect(await getWatchedChannels(env, "trace")).toEqual(new Set(["C7", "C8"]));
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:watched-channels", "json");
+    // KV is the cache: a hit short-circuits before the control plane is consulted.
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
   });
 
-  it("uses the in-memory cache after a successful fetch", async () => {
-    const env = makeEnv(jsonResponse({ channels: ["C1"] }));
+  it("reads through the KV cache on a subsequent call (no in-memory tier)", async () => {
+    let stored: unknown = null;
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockImplementation(async () => stored),
+        put: vi.fn().mockImplementation(async (_key: string, value: string) => {
+          stored = JSON.parse(value);
+        }),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(jsonResponse({ channels: ["C1"] })),
+      },
+    } as unknown as Env;
 
-    await getWatchedChannels(env);
-    await getWatchedChannels(env);
+    expect(await getWatchedChannels(env)).toEqual(new Set(["C1"]));
+    expect(await getWatchedChannels(env)).toEqual(new Set(["C1"]));
 
+    // First call misses KV and hits the control plane; the second is served from KV.
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
+    expect(env.SLACK_KV.get).toHaveBeenCalledTimes(2);
   });
 });
