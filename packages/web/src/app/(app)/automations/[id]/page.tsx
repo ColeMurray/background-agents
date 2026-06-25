@@ -8,6 +8,7 @@ import { useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationRuns } from "@/hooks/use-automations";
 import { RunHistory } from "@/components/automations/run-history";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
+import { ConditionSummary } from "@/components/automations/condition-summary";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon, PencilIcon } from "@/components/ui/icons";
@@ -247,20 +248,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               )}
               {automation.triggerConfig?.conditions &&
                 automation.triggerConfig.conditions.length > 0 && (
-                  <div className="sm:col-span-2">
-                    <dt className="text-muted-foreground">Conditions</dt>
-                    <dd className="text-foreground">
-                      {automation.triggerConfig.conditions.map((c, i) => (
-                        <span
-                          key={i}
-                          className="inline-block mr-2 mb-1 px-2 py-0.5 bg-muted rounded text-xs"
-                        >
-                          {c.type}: {c.operator}{" "}
-                          {Array.isArray(c.value) ? c.value.join(", ") : String(c.value)}
-                        </span>
-                      ))}
-                    </dd>
-                  </div>
+                  <ConditionSummary conditions={automation.triggerConfig.conditions} />
                 )}
               <div>
                 <dt className="text-muted-foreground">Model</dt>
