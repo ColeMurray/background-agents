@@ -67,18 +67,6 @@ export interface EnrichedRunRow extends AutomationRunRow {
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
-/**
- * The effective reply-in-thread setting from a parsed trigger_config (slack_event
- * only); defaults to true — matching the prior `reply_in_thread NOT NULL DEFAULT 1`
- * column. The single read-path accessor: the setting lives only inside
- * trigger_config, with no parallel top-level field. Any non-boolean stored value
- * resolves to the default, guaranteeing the boolean the scheduler → bot
- * completion payload requires regardless of how the config was written.
- */
-export function getReplyInThread(config: TriggerConfig | null): boolean {
-  return typeof config?.replyInThread === "boolean" ? config.replyInThread : true;
-}
-
 export function toAutomation(row: AutomationRow): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)

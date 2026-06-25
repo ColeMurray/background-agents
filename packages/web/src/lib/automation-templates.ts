@@ -255,7 +255,6 @@ export const automationTemplates: AutomationTemplate[] = [
             value: { pattern: "\\b(bug|broken|error|failing|down|incident)\\b", flags: "i" },
           },
         ],
-        replyInThread: true,
       },
       instructions:
         "A message was posted in a watched Slack channel (the message is shown above). Treat it as a " +

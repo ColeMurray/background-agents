@@ -192,7 +192,6 @@ describe("slack_event automation", () => {
         initialValues={{ ...slackBase, triggerConfig: validConditions }}
       />
     );
-    expect(screen.getByText("Reply in thread")).toBeInTheDocument();
     expect(screen.getByText("Max runs per hour")).toBeInTheDocument();
   });
 
@@ -210,7 +209,6 @@ describe("slack_event automation", () => {
         }}
       />
     );
-    expect(screen.queryByText("Reply in thread")).not.toBeInTheDocument();
     expect(screen.queryByText("Max runs per hour")).not.toBeInTheDocument();
   });
 
@@ -233,7 +231,7 @@ describe("slack_event automation", () => {
     ).toBeInTheDocument();
   });
 
-  it("submits replyInThread and maxRunsPerHour for a valid slack_event", () => {
+  it("submits maxRunsPerHour for a valid slack_event", () => {
     const onSubmit = vi.fn();
     const { container } = render(
       <AutomationForm
@@ -245,7 +243,6 @@ describe("slack_event automation", () => {
     );
 
     fireEvent.change(screen.getByPlaceholderText(/Default \(/), { target: { value: "5" } });
-    fireEvent.click(screen.getByLabelText("Reply in thread")); // default true -> false
 
     fireEvent.submit(container.querySelector("form")!);
 
@@ -253,7 +250,7 @@ describe("slack_event automation", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       triggerType: "slack_event",
       maxRunsPerHour: 5,
-      triggerConfig: { ...validConditions, replyInThread: false },
+      triggerConfig: validConditions,
     });
   });
 
@@ -272,7 +269,7 @@ describe("slack_event automation", () => {
 
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       maxRunsPerHour: null,
-      triggerConfig: { ...validConditions, replyInThread: true },
+      triggerConfig: validConditions,
     });
   });
 });

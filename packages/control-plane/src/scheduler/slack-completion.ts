@@ -5,21 +5,19 @@
  * body) and POSTs it via the optional `SLACK_BOT` Fetcher.
  *
  * Returning `null` from either builder is the explicit signal to skip the bot
- * call — for a non-slack run, a slack run with no thread anchor, or a skip with
- * no actor to address.
+ * call — for a non-slack run, a slack run with no triggering message, or a skip
+ * with no actor to address.
  */
 
 import type { AutomationRunRow } from "../db/automation-store";
 
 /**
  * Slack run coordinates captured at trigger time, serialized into the run's
- * generic `trigger_run_metadata` column (slack-origin runs only). `threadTs` is
- * the reply target (falls back to `messageTs`); `messageTs` is the triggering
- * message, used to clear the `eyes` reaction on completion.
+ * generic `trigger_run_metadata` column (slack-origin runs only). `messageTs` is
+ * the triggering message, used to clear the `eyes` reaction on completion.
  */
 export interface SlackRunMetadata {
   channel: string;
-  threadTs?: string;
   messageTs: string;
 }
 
@@ -39,50 +37,23 @@ export function getSlackRunMetadata(
   }
 }
 
-/** Max characters of an error surfaced inline; the full transcript is one click away. */
-const SUMMARY_MAX_LENGTH = 1500;
-
+/**
+ * The scheduler → bot payload for a completed slack-triggered run. Its only job
+ * is to clear the `eyes` reaction the bot added to the triggering message when
+ * the run started; the run's success/failure is surfaced in the web UI, not in
+ * Slack.
+ */
 export interface SlackCompletionNotification {
   channel: string;
-  threadTs: string;
-  /** Message to clear the `eyes` reaction from (the triggering message). */
-  reactionMessageTs?: string;
-  sessionId: string | null;
-  success: boolean;
-  /** Short failure summary; omitted on success (the bot renders a generic ✅). */
-  summary?: string;
-  automationName: string;
-  /**
-   * The automation's reply-in-thread setting (stored in trigger_config). When
-   * false, the bot still clears the `eyes` reaction but posts no completion
-   * message into the thread.
-   */
-  replyInThread: boolean;
+  /** The triggering message to clear the `eyes` reaction from. */
+  reactionMessageTs: string;
 }
 
-export function buildSlackCompletionNotification(params: {
-  meta: SlackRunMetadata | null;
-  sessionId: string | null;
-  automationName: string;
-  success: boolean;
-  error?: string;
-  replyInThread: boolean;
-}): SlackCompletionNotification | null {
-  const { meta } = params;
-  if (!meta) return null;
-  const threadTs = meta.threadTs ?? meta.messageTs;
-  if (!threadTs) return null;
-
-  return {
-    channel: meta.channel,
-    threadTs,
-    reactionMessageTs: meta.messageTs,
-    sessionId: params.sessionId,
-    success: params.success,
-    summary: params.error ? params.error.slice(0, SUMMARY_MAX_LENGTH) : undefined,
-    automationName: params.automationName,
-    replyInThread: params.replyInThread,
-  };
+export function buildSlackCompletionNotification(
+  meta: SlackRunMetadata | null
+): SlackCompletionNotification | null {
+  if (!meta?.messageTs) return null;
+  return { channel: meta.channel, reactionMessageTs: meta.messageTs };
 }
 
 export interface SlackSkipNotification {

@@ -10,7 +10,6 @@ import { describe, it, expect, vi } from "vitest";
 import {
   AutomationStore,
   isDuplicateKeyError,
-  getReplyInThread,
   toAutomation,
   toAutomationRun,
   type AutomationRow,
@@ -145,32 +144,17 @@ describe("toAutomation", () => {
     expect(automation.enabled).toBe(false);
   });
 
-  it("defaults the slack knobs (null cap, reply-in-thread on) when unset", () => {
+  it("defaults maxRunsPerHour to null when unset", () => {
     const automation = toAutomation(sampleRow);
     expect(automation.maxRunsPerHour).toBeNull();
-    expect(getReplyInThread(automation.triggerConfig)).toBe(true);
   });
 
-  it("maps an explicit cap and reads reply-in-thread from trigger_config", () => {
+  it("maps an explicit maxRunsPerHour cap", () => {
     const automation = toAutomation({
       ...sampleRow,
       max_runs_per_hour: 5,
-      trigger_config: JSON.stringify({ conditions: [], replyInThread: false }),
     });
     expect(automation.maxRunsPerHour).toBe(5);
-    expect(getReplyInThread(automation.triggerConfig)).toBe(false);
-  });
-});
-
-describe("getReplyInThread", () => {
-  it("defaults to true for a null config or absent flag", () => {
-    expect(getReplyInThread(null)).toBe(true);
-    expect(getReplyInThread({ conditions: [] })).toBe(true);
-  });
-
-  it("respects an explicit flag", () => {
-    expect(getReplyInThread({ conditions: [], replyInThread: false })).toBe(false);
-    expect(getReplyInThread({ conditions: [], replyInThread: true })).toBe(true);
   });
 });
 

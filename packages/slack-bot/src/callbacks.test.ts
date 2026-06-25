@@ -287,11 +287,7 @@ describe("POST /callbacks/automation-complete", () => {
   function completeData(overrides: Record<string, unknown> = {}) {
     return {
       channel: "C123",
-      threadTs: "111.222",
       reactionMessageTs: "111.222",
-      sessionId: "sess-1",
-      success: true,
-      automationName: "Auto-triage",
       ...overrides,
     };
   }
@@ -311,44 +307,13 @@ describe("POST /callbacks/automation-complete", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("posts a success result to the thread and clears the eyes reaction", async () => {
+  it("clears the eyes reaction and posts no thread message", async () => {
     const fetchMock = okFetchMock();
     const payload = await signPayload(completeData());
     const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
 
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
-
-    const post = slackCall(fetchMock, "chat.postMessage");
-    expect(post).toBeDefined();
-    expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
-    expect(JSON.stringify(post!.body.blocks)).toContain("Auto-triage");
-    expect(JSON.stringify(post!.body.blocks)).toContain("app.test/session/sess-1");
-
-    const reaction = slackCall(fetchMock, "reactions.remove");
-    expect(reaction).toBeDefined();
-    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
-  });
-
-  it("renders a failure summary when the run failed", async () => {
-    const fetchMock = okFetchMock();
-    const payload = await signPayload(
-      completeData({ success: false, summary: "boom: the build broke" })
-    );
-    await postCallback("/callbacks/automation-complete", payload).then(({ ctx }) =>
-      flushWaitUntil(ctx)
-    );
-
-    const post = slackCall(fetchMock, "chat.postMessage");
-    expect(JSON.stringify(post!.body.blocks)).toContain("boom: the build broke");
-  });
-
-  it("suppresses the thread post but still clears the reaction when replyInThread is false", async () => {
-    const fetchMock = okFetchMock();
-    const payload = await signPayload(completeData({ replyInThread: false }));
-    await postCallback("/callbacks/automation-complete", payload).then(({ ctx }) =>
-      flushWaitUntil(ctx)
-    );
 
     expect(slackCall(fetchMock, "chat.postMessage")).toBeUndefined();
     const reaction = slackCall(fetchMock, "reactions.remove");
@@ -356,24 +321,7 @@ describe("POST /callbacks/automation-complete", () => {
     expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
   });
 
-  it("does not clear the reaction when Slack rejects the post (ok:false)", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })
-    );
-    const payload = await signPayload(completeData());
-    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
-
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    expect(slackCall(fetchMock, "chat.postMessage")).toBeDefined();
-    expect(slackCall(fetchMock, "reactions.remove")).toBeUndefined();
-  });
-
-  it("does not crash when the Slack post throws", async () => {
+  it("does not crash when clearing the reaction throws", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
     const payload = await signPayload(completeData());
     const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);

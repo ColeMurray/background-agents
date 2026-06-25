@@ -1,11 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
-import {
-  AutomationStore,
-  getReplyInThread,
-  toAutomation,
-  type AutomationRow,
-} from "../../src/db/automation-store";
+import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
@@ -99,22 +94,6 @@ describe("POST /automations — slack_event validation (integration)", () => {
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("slack_channel");
-  });
-
-  it("rejects a non-boolean replyInThread (400)", async () => {
-    const res = await postAutomation(
-      createBody({
-        triggerConfig: {
-          conditions: [
-            { type: "slack_channel", operator: "any_of", value: ["C1"] },
-            { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
-          ],
-          replyInThread: "yes",
-        },
-      })
-    );
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain("replyInThread");
   });
 
   it("rejects an invalid regex text_match at save time (400)", async () => {
@@ -241,46 +220,19 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     expect([...watched].sort()).toEqual(["C2", "C3"]);
   });
 
-  it("persists replyInThread inside trigger_config on update", async () => {
+  it("replaces trigger_config wholesale on update", async () => {
     const store = new AutomationStore(env.DB);
     const auto = makeSlackAutomation({
       trigger_config: JSON.stringify({
-        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
-      }),
-    });
-    await store.create(auto);
-
-    const res = await putAutomation(auto.id, {
-      triggerConfig: {
         conditions: [
           { type: "slack_channel", operator: "any_of", value: ["C1"] },
-          { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
+          { type: "text_match", operator: "contains", value: { pattern: "old" } },
         ],
-        replyInThread: false,
-      },
-    });
-    expect(res.status).toBe(200);
-
-    const row = await store.getById(auto.id);
-    const config = JSON.parse(row!.trigger_config!) as TriggerConfig;
-    expect(config.replyInThread).toBe(false);
-    expect(config.conditions.some((c) => c.type === "slack_channel")).toBe(true);
-    // The read-path accessor surfaces the stored flag (no top-level field).
-    expect(getReplyInThread(toAutomation(row!).triggerConfig)).toBe(false);
-  });
-
-  it("replaces trigger_config wholesale on update (replyInThread is not auto-merged)", async () => {
-    const store = new AutomationStore(env.DB);
-    const auto = makeSlackAutomation({
-      trigger_config: JSON.stringify({
-        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
-        replyInThread: false,
       }),
     });
     await store.create(auto);
 
-    // A PUT replaces the whole blob; omitting replyInThread drops it. The client
-    // owns the full trigger_config (the web form always re-submits the flag).
+    // A PUT replaces the whole blob. The client owns the full trigger_config.
     const res = await putAutomation(auto.id, {
       triggerConfig: {
         conditions: [
@@ -292,8 +244,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     expect(res.status).toBe(200);
 
     const config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
-    expect(config.replyInThread).toBeUndefined(); // replaced, not merged
-    expect(getReplyInThread(config)).toBe(true); // resolves to the default on read
+    expect(config.conditions.find((c) => c.type === "slack_channel")?.value).toEqual(["C9"]);
   });
 
   it("rejects clearing trigger_config to null on a slack_event automation (400)", async () => {

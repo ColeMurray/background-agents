@@ -24,7 +24,6 @@ import {
   AutomationStore,
   toAutomationRun,
   isDuplicateKeyError,
-  getReplyInThread,
   type AutomationRow,
   type AutomationRunRow,
 } from "../db/automation-store";
@@ -698,18 +697,13 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
-    // Slack-triggered runs deliver their result back into the originating
-    // thread. The scheduler owns this fan-out (not the session callback path)
-    // because the thread coordinates live on the run row. Best-effort.
+    // Slack-triggered runs clear the `eyes` reaction from their triggering
+    // message when they finish. The scheduler owns this fan-out (not the session
+    // callback path) because the message coordinates live on the run row.
+    // Best-effort; success/failure is surfaced in the web UI, not in Slack.
     const slackMeta = getSlackRunMetadata(run);
     if (slackMeta) {
-      await this.notifySlackCompletion(
-        store,
-        run,
-        slackMeta,
-        body.success,
-        body.success ? undefined : body.error
-      );
+      await this.notifySlackCompletion(run, slackMeta);
     }
 
     return new Response(JSON.stringify({ ok: true }), {
@@ -739,42 +733,21 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 
   /**
-   * Post a Slack-triggered run's result into its originating thread by calling
-   * the slack-bot's `/callbacks/automation-complete` endpoint. Signs the body
-   * with `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the bot's other
-   * callbacks). No-ops when the run has no thread anchor, when `SLACK_BOT` is
-   * unbound, or when the secret is unset — all best-effort.
+   * Tell the slack-bot to clear the `eyes` reaction from a slack-triggered run's
+   * triggering message by calling its `/callbacks/automation-complete` endpoint.
+   * Signs the body with `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the
+   * bot's other callbacks). No-ops when the run has no triggering message, when
+   * `SLACK_BOT` is unbound, or when the secret is unset — all best-effort.
    */
   private async notifySlackCompletion(
-    store: AutomationStore,
     run: AutomationRunRow,
-    meta: SlackRunMetadata,
-    success: boolean,
-    error?: string
+    meta: SlackRunMetadata
   ): Promise<void> {
     const binding = this.env.SLACK_BOT;
     const secret = this.env.INTERNAL_CALLBACK_SECRET;
     if (!binding || !secret) return;
 
-    const automation = await store.getById(run.automation_id);
-    let triggerConfig: TriggerConfig | null = null;
-    if (automation?.trigger_config) {
-      try {
-        triggerConfig = JSON.parse(automation.trigger_config) as TriggerConfig;
-      } catch {
-        triggerConfig = null;
-      }
-    }
-    const body = buildSlackCompletionNotification({
-      meta,
-      sessionId: run.session_id,
-      automationName: automation?.name ?? "Automation",
-      success,
-      error,
-      // Honor the stored reply-in-thread setting (in trigger_config; defaults
-      // true). The bot skips the thread post when false but still clears the 👀.
-      replyInThread: getReplyInThread(triggerConfig),
-    });
+    const body = buildSlackCompletionNotification(meta);
     if (!body) return;
 
     try {
@@ -962,7 +935,6 @@ function slackRunMetadata(
 ): Pick<AutomationRunRow, "trigger_run_metadata"> {
   const metadata: SlackRunMetadata = {
     channel: event.channelId,
-    threadTs: event.threadTs ?? undefined,
     messageTs: event.ts,
   };
   return { trigger_run_metadata: JSON.stringify(metadata) };

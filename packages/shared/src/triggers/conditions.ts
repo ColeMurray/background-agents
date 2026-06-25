@@ -105,10 +105,4 @@ export function validateConditions(
 
 export interface TriggerConfig {
   conditions: TriggerCondition[];
-  /**
-   * slack_event only: post the run result back into the originating thread.
-   * Like `conditions`, this blob is source-specific and interpreted via the
-   * automation's `trigger_type`; absent for other sources. Defaults to true.
-   */
-  replyInThread?: boolean;
 }

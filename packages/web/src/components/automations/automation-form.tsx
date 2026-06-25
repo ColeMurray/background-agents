@@ -135,9 +135,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerConfig?.conditions ?? []
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
-  const [replyInThread, setReplyInThread] = useState(
-    initialValues?.triggerConfig?.replyInThread ?? true
-  );
   const [maxRunsPerHour, setMaxRunsPerHour] = useState(
     initialValues?.maxRunsPerHour != null ? String(initialValues.maxRunsPerHour) : ""
   );
@@ -237,9 +234,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       if (eventType) values.eventType = eventType;
       // Always send triggerConfig so clearing all conditions persists (PUT skips
-      // trigger_config when triggerConfig is omitted). For slack_event the
-      // reply-in-thread flag rides inside it (source-interpreted, like conditions).
-      values.triggerConfig = isSlack ? { conditions, replyInThread } : { conditions };
+      // trigger_config when triggerConfig is omitted).
+      values.triggerConfig = { conditions };
       if (triggerType === "sentry" && mode === "create" && sentryClientSecret.trim()) {
         values.sentryClientSecret = sentryClientSecret.trim();
       }
@@ -548,20 +544,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </div>
       )}
 
-      {/* Slack delivery + rate limit (slack_event only) */}
+      {/* Slack rate limit (slack_event only) */}
       {isSlack && (
         <div className="space-y-4">
-          <label className="flex items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={replyInThread}
-              onChange={(e) => setReplyInThread(e.target.checked)}
-            />
-            Reply in thread
-          </label>
-          <FieldDescription className="-mt-3">
-            Post the run result back into the originating Slack thread when it completes.
-          </FieldDescription>
           <div>
             <label className="block text-sm font-medium text-foreground mb-1.5">
               Max runs per hour

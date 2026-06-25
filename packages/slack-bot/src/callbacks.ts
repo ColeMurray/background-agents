@@ -104,23 +104,14 @@ function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
 }
 
 /**
- * Payload for a scheduler-owned automation completion (Slack-triggered run).
- * Posted by the SchedulerDO into the originating thread.
+ * Payload for a scheduler-owned automation completion (Slack-triggered run). The
+ * SchedulerDO posts this when the run finishes; the bot's only action is to clear
+ * the `eyes` reaction it added to the triggering message when the run started.
  */
 interface AutomationCompletePayload {
   channel: string;
-  threadTs: string;
-  reactionMessageTs?: string;
-  sessionId: string | null;
-  success: boolean;
-  summary?: string;
-  automationName: string;
-  /**
-   * The automation's reply_in_thread setting. When false, clear the eyes
-   * reaction but post no thread reply. Optional/defaulting-to-true so a payload
-   * from an older scheduler still posts (preserving prior behavior).
-   */
-  replyInThread?: boolean;
+  /** The triggering message to clear the `eyes` reaction from. */
+  reactionMessageTs: string;
   signature: string;
 }
 
@@ -129,14 +120,8 @@ function isValidAutomationCompletePayload(payload: unknown): payload is Automati
   const p = payload;
   return (
     typeof p.channel === "string" &&
-    typeof p.threadTs === "string" &&
-    typeof p.success === "boolean" &&
-    typeof p.automationName === "string" &&
-    typeof p.signature === "string" &&
-    (p.sessionId === null || typeof p.sessionId === "string") &&
-    (p.summary === undefined || typeof p.summary === "string") &&
-    (p.reactionMessageTs === undefined || typeof p.reactionMessageTs === "string") &&
-    (p.replyInThread === undefined || typeof p.replyInThread === "boolean")
+    typeof p.reactionMessageTs === "string" &&
+    typeof p.signature === "string"
   );
 }
 
@@ -157,48 +142,6 @@ function isValidAutomationSkipPayload(payload: unknown): payload is AutomationSk
     typeof p.threadTs === "string" &&
     typeof p.signature === "string"
   );
-}
-
-/**
- * Build the blocks for an automation completion message: a ✅/❌ headline, an
- * optional failure summary, and a "View Session" deep link when a session
- * exists. Mirrors the compact style of the completion error path.
- */
-function buildAutomationCompletionBlocks(
-  payload: AutomationCompletePayload,
-  webAppUrl: string
-): unknown[] {
-  const emoji = payload.success ? ":white_check_mark:" : ":x:";
-  const verb = payload.success ? "completed" : "failed";
-  const blocks: unknown[] = [
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: `${emoji} *Automation ${verb}:* ${payload.automationName}` },
-    },
-  ];
-
-  if (payload.summary) {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: truncateError(payload.summary, 2000) },
-    });
-  }
-
-  if (payload.sessionId) {
-    blocks.push({
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "View Session" },
-          url: `${webAppUrl}/session/${payload.sessionId}`,
-          action_id: "view_session",
-        },
-      ],
-    });
-  }
-
-  return blocks;
 }
 
 /**
@@ -346,10 +289,9 @@ callbacksRouter.post("/tool_call", async (c) => {
 });
 
 /**
- * Callback endpoint for Slack-triggered automation completion. Posts the run
- * result into the originating thread and clears the `eyes` reaction. The
- * SchedulerDO owns this fan-out (it holds the thread coordinates); this route
- * just renders and delivers.
+ * Callback endpoint for Slack-triggered automation completion. Clears the `eyes`
+ * reaction from the triggering message. The SchedulerDO owns this fan-out (it
+ * holds the message coordinates); this route just delivers the reaction clear.
  */
 callbacksRouter.post("/automation-complete", async (c) => {
   const startTime = Date.now();
@@ -534,8 +476,8 @@ async function handleCompletionCallback(
 }
 
 /**
- * Post an automation completion result into the originating Slack thread and
- * clear the `eyes` reaction from the triggering message. Fire-and-forget.
+ * Clear the `eyes` reaction from a Slack-triggered run's triggering message when
+ * the run completes. Fire-and-forget.
  */
 async function handleAutomationComplete(
   payload: AutomationCompletePayload,
@@ -546,44 +488,15 @@ async function handleAutomationComplete(
   const base = {
     trace_id: traceId,
     channel: payload.channel,
-    thread_ts: payload.threadTs,
-    session_id: payload.sessionId,
-    automation_name: payload.automationName,
+    message_ts: payload.reactionMessageTs,
   };
 
   try {
-    // Honor reply_in_thread: when false, skip the thread post but still clear
-    // the eyes reaction below so the triggering message isn't left marked 👀.
-    if (payload.replyInThread !== false) {
-      const blocks = buildAutomationCompletionBlocks(payload, env.WEB_APP_URL);
-      const fallback = `${payload.success ? "Automation completed" : "Automation failed"}: ${payload.automationName}`;
-
-      const postResult = await postMessage(env.SLACK_BOT_TOKEN, payload.channel, fallback, {
-        thread_ts: payload.threadTs,
-        blocks,
-      });
-
-      // postMessage can return ok:false without throwing; don't log success then.
-      if (!postResult.ok) {
-        log.warn("callback.automation_complete", {
-          ...base,
-          outcome: "error",
-          slack_error: postResult.error,
-          duration_ms: Date.now() - startTime,
-        });
-        return;
-      }
-    }
-
-    if (payload.reactionMessageTs) {
-      await clearThinkingReaction(env, payload.channel, payload.reactionMessageTs, traceId);
-    }
+    await clearThinkingReaction(env, payload.channel, payload.reactionMessageTs, traceId);
 
     log.info("callback.automation_complete", {
       ...base,
       outcome: "success",
-      agent_success: payload.success,
-      replied: payload.replyInThread !== false,
       duration_ms: Date.now() - startTime,
     });
   } catch (error) {

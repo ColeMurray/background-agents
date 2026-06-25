@@ -85,10 +85,7 @@ function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): 
 /**
  * Validate a slack_event trigger config before persistence. It must be scoped —
  * an explicit channel set + at least one `text_match` (net-new validation; the
- * engine otherwise skips condition validation entirely when none are present) —
- * and `replyInThread`, when present, must be a boolean: it rides verbatim into
- * the scheduler → bot completion payload, which the bot rejects if it is not a
- * boolean (dropping the run's thread reply and leaving the 👀 reaction stuck).
+ * engine otherwise skips condition validation entirely when none are present).
  * Returns an error message, or null when valid.
  */
 function validateSlackTriggerConfig(
@@ -107,10 +104,6 @@ function validateSlackTriggerConfig(
   }
   if (!conditions.some((c) => c.type === "text_match")) {
     return "slack_event triggers require at least one text_match condition";
-  }
-  const replyInThread = triggerConfig?.replyInThread as unknown;
-  if (replyInThread !== undefined && typeof replyInThread !== "boolean") {
-    return "triggerConfig.replyInThread must be a boolean";
   }
   return null;
 }
@@ -544,10 +537,9 @@ async function handleUpdateAutomation(
     updateFields.max_runs_per_hour = body.maxRunsPerHour;
   }
 
-  // trigger_config is a single source-interpreted JSON blob — slack_event's
-  // replyInThread rides inside it alongside conditions, so a PUT replaces it
-  // wholesale (null clears it). The caller owns the full blob; the web form
-  // always re-submits replyInThread within triggerConfig.
+  // trigger_config is a single source-interpreted JSON blob (the conditions),
+  // so a PUT replaces it wholesale (null clears it). The caller owns the full
+  // blob; the web form always re-submits the conditions within triggerConfig.
   if (body.triggerConfig === null) {
     updateFields.trigger_config = null;
   } else if (body.triggerConfig !== undefined) {
