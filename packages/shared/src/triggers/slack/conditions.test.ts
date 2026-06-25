@@ -204,6 +204,56 @@ describe("validateConditions (slack)", () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
+  it("rejects a slack_channel value that is a string, not an array", () => {
+    // A bare string passes the TS type's `.length` check but would be iterated
+    // character-by-character when the watched-channel index is built.
+    const errors = validateConditions(
+      [{ type: "slack_channel", operator: "any_of", value: "C123" } as unknown as TriggerCondition],
+      "slack",
+      conditionRegistry
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a slack_channel array with a non-string element", () => {
+    const errors = validateConditions(
+      [
+        {
+          type: "slack_channel",
+          operator: "any_of",
+          value: ["C1", 123],
+        } as unknown as TriggerCondition,
+      ],
+      "slack",
+      conditionRegistry
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a text_match value that is not an object (no throw)", () => {
+    const errors = validateConditions(
+      [{ type: "text_match", operator: "contains", value: null } as unknown as TriggerCondition],
+      "slack",
+      conditionRegistry
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a text_match pattern that is not a string", () => {
+    const errors = validateConditions(
+      [
+        {
+          type: "text_match",
+          operator: "contains",
+          value: { pattern: 123 },
+        } as unknown as TriggerCondition,
+      ],
+      "slack",
+      conditionRegistry
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
   it("reports a slack condition used on a github trigger", () => {
     const errors = validateConditions(
       [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],

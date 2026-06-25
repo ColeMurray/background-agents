@@ -86,6 +86,37 @@ describe("POST /automations — slack_event validation (integration)", () => {
     expect(await res.text()).toContain("text_match");
   });
 
+  it("rejects a slack_channel value that is not an array of strings (400)", async () => {
+    const res = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [
+            { type: "slack_channel", operator: "any_of", value: "C1" },
+            { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
+          ],
+        },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("slack_channel");
+  });
+
+  it("rejects a non-boolean replyInThread (400)", async () => {
+    const res = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [
+            { type: "slack_channel", operator: "any_of", value: ["C1"] },
+            { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
+          ],
+          replyInThread: "yes",
+        },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("replyInThread");
+  });
+
   it("rejects an invalid regex text_match at save time (400)", async () => {
     const res = await postAutomation(
       createBody({
@@ -263,6 +294,30 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     const config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
     expect(config.replyInThread).toBeUndefined(); // replaced, not merged
     expect(getReplyInThread(config)).toBe(true); // resolves to the default on read
+  });
+
+  it("rejects clearing trigger_config to null on a slack_event automation (400)", async () => {
+    const store = new AutomationStore(env.DB);
+    const channels = new SlackChannelStore(env.DB);
+    const auto = makeSlackAutomation({
+      trigger_config: JSON.stringify({
+        conditions: [
+          { type: "slack_channel", operator: "any_of", value: ["C1"] },
+          { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
+        ],
+      }),
+    });
+    await store.create(auto);
+    await channels.setSlackChannels(auto.id, ["C1"]);
+
+    const res = await putAutomation(auto.id, { triggerConfig: null });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("Cannot clear triggerConfig");
+
+    // The rejected request left both the config and the derived index intact —
+    // an enabled-but-untriggerable state never materializes.
+    expect((await store.getById(auto.id))!.trigger_config).not.toBeNull();
+    expect([...(await channels.getWatchedSlackChannels())]).toEqual(["C1"]);
   });
 });
 

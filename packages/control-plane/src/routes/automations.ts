@@ -83,12 +83,15 @@ function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): 
 }
 
 /**
- * Slack triggers must be scoped: an explicit channel set + at least one
- * `text_match`. This is net-new validation — the engine otherwise skips
- * condition validation entirely when none are present. Returns an error message,
- * or null when valid.
+ * Validate a slack_event trigger config before persistence. It must be scoped —
+ * an explicit channel set + at least one `text_match` (net-new validation; the
+ * engine otherwise skips condition validation entirely when none are present) —
+ * and `replyInThread`, when present, must be a boolean: it rides verbatim into
+ * the scheduler → bot completion payload, which the bot rejects if it is not a
+ * boolean (dropping the run's thread reply and leaving the 👀 reaction stuck).
+ * Returns an error message, or null when valid.
  */
-function validateSlackRequiredConditions(
+function validateSlackTriggerConfig(
   triggerConfig: TriggerConfig | null | undefined
 ): string | null {
   // Guard the shape here too: this runs before the generic array-shape check in
@@ -104,6 +107,10 @@ function validateSlackRequiredConditions(
   }
   if (!conditions.some((c) => c.type === "text_match")) {
     return "slack_event triggers require at least one text_match condition";
+  }
+  const replyInThread = triggerConfig?.replyInThread as unknown;
+  if (replyInThread !== undefined && typeof replyInThread !== "boolean") {
+    return "triggerConfig.replyInThread must be a boolean";
   }
   return null;
 }
@@ -234,7 +241,7 @@ async function handleCreateAutomation(
 
   // Slack triggers require explicit scoping (a channel set + at least one text_match).
   if (triggerType === "slack_event") {
-    const slackError = validateSlackRequiredConditions(body.triggerConfig);
+    const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);
   }
 
@@ -495,9 +502,21 @@ async function handleUpdateAutomation(
     if (existing.trigger_type === "schedule") {
       return error("Cannot set triggerConfig on schedule automations", 400);
     }
-    if (body.triggerConfig !== null) {
+    if (body.triggerConfig === null) {
+      // A slack_event's trigger_config holds its required scoping (channel +
+      // text_match) and the watched-channel index is derived from it. Clearing
+      // it would leave the automation enabled but untriggerable, so reject null
+      // — pause or delete instead. (Other sources may clear conditions to a
+      // match-all, so null stays allowed for them.)
       if (existing.trigger_type === "slack_event") {
-        const slackError = validateSlackRequiredConditions(body.triggerConfig);
+        return error(
+          "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
+          400
+        );
+      }
+    } else {
+      if (existing.trigger_type === "slack_event") {
+        const slackError = validateSlackTriggerConfig(body.triggerConfig);
         if (slackError) return error(slackError, 400);
       }
       if (body.triggerConfig.conditions) {

@@ -27,6 +27,21 @@ function flagsAllowed(flags: string | undefined): boolean {
 }
 
 /**
+ * True when `value` is an array of one or more non-empty strings. The condition
+ * value arrives as untrusted JSON typed only by assertion, so the handlers below
+ * verify the runtime shape before it is persisted — a bare string would satisfy
+ * the TypeScript type's `.length` check and then be iterated character-by-character
+ * when the watched-channel index is built.
+ */
+function isNonEmptyStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((v) => typeof v === "string" && v !== "")
+  );
+}
+
+/**
  * Slack condition handlers. `slack_actor` is a distinct slack-only handler — the
  * github/linear `actor` handler passes through for slack, so it cannot be reused.
  */
@@ -34,10 +49,17 @@ export const slackConditions = {
   text_match: {
     appliesTo: ["slack"] as const,
     validate(c: { operator: "contains" | "exact" | "regex"; value: TextMatchValue }) {
-      const { pattern, flags } = c.value;
-      if (!pattern) return "Text match pattern is required";
+      const value = c.value as unknown;
+      if (typeof value !== "object" || value === null) {
+        return "text_match value must be an object with a pattern";
+      }
+      const { pattern, flags } = value as { pattern?: unknown; flags?: unknown };
+      if (typeof pattern !== "string" || pattern === "") return "Text match pattern is required";
       if (pattern.length > REGEX_PATTERN_MAX_LENGTH) {
         return `Pattern exceeds the ${REGEX_PATTERN_MAX_LENGTH}-character limit`;
+      }
+      if (flags !== undefined && typeof flags !== "string") {
+        return "text_match flags must be a string";
       }
       if (!flagsAllowed(flags)) return "Unsupported regex flag";
       if (c.operator === "regex") {
@@ -80,7 +102,9 @@ export const slackConditions = {
   slack_channel: {
     appliesTo: ["slack"] as const,
     validate(c: { value: string[] }) {
-      return c.value.length === 0 ? "At least one channel required" : null;
+      return isNonEmptyStringArray(c.value)
+        ? null
+        : "slack_channel requires at least one channel ID";
     },
     evaluate(c: { value: string[] }, event: AutomationEvent) {
       if (event.source !== "slack") return true;
@@ -90,7 +114,7 @@ export const slackConditions = {
   slack_actor: {
     appliesTo: ["slack"] as const,
     validate(c: { value: string[] }) {
-      return c.value.length === 0 ? "At least one actor required" : null;
+      return isNonEmptyStringArray(c.value) ? null : "slack_actor requires at least one user ID";
     },
     evaluate(c: { operator: "include" | "exclude"; value: string[] }, event: AutomationEvent) {
       if (event.source !== "slack") return true;

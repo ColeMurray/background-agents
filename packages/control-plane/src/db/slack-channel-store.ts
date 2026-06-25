@@ -68,7 +68,15 @@ export class SlackChannelStore {
     return statements;
   }
 
-  /** Replace an automation's watched-channel set atomically. */
+  /**
+   * Replace an automation's watched-channel set atomically. Test-support only —
+   * production writes compose `bindChannelStatements` into the same `db.batch` as
+   * the automation row so the index stays coupled to the canonical trigger_config.
+   * A standalone write here would let the two drift, so it is kept off the
+   * production path.
+   *
+   * @internal
+   */
   async setSlackChannels(automationId: string, channelIds: string[]): Promise<void> {
     await this.db.batch(this.bindChannelStatements(automationId, channelIds));
   }

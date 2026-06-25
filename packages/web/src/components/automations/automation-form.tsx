@@ -150,6 +150,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     !isSlack ||
     (conditions.some((c) => c.type === "slack_channel") &&
       conditions.some((c) => c.type === "text_match"));
+  // Mirror the server rule: blank uses the default, otherwise a positive integer.
+  // Use Number (not parseInt) so "1.5" is rejected rather than truncated to 1.
+  const trimmedMaxRuns = maxRunsPerHour.trim();
+  const parsedMaxRuns = Number(trimmedMaxRuns);
+  const maxRunsValid =
+    !isSlack || trimmedMaxRuns === "" || (Number.isInteger(parsedMaxRuns) && parsedMaxRuns > 0);
 
   // The model we display and submit. The selector only lists enabled models, so
   // a disabled default (blank create), a disabled saved model (edit), or a
@@ -202,6 +208,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
     if (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim()) return;
     if (!slackConditionsValid) return;
+    if (!maxRunsValid) return;
     if (showEventTypeSelector && !eventType) {
       setEventTypeError("Event type is required.");
       return;
@@ -237,8 +244,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         values.sentryClientSecret = sentryClientSecret.trim();
       }
       if (isSlack) {
-        const parsed = Number.parseInt(maxRunsPerHour, 10);
-        values.maxRunsPerHour = maxRunsPerHour.trim() && parsed > 0 ? parsed : null;
+        // Guarded by maxRunsValid above, so trimmedMaxRuns is "" or a positive integer.
+        values.maxRunsPerHour = trimmedMaxRuns ? parsedMaxRuns : null;
       }
     }
 
@@ -572,6 +579,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               Caps how many runs this automation can start per hour. Extra matching messages are
               skipped. Leave blank to use the default ({DEFAULT_MAX_RUNS_PER_HOUR}).
             </FieldDescription>
+            {!maxRunsValid && (
+              <p className="mt-1 text-xs text-destructive">
+                Max runs per hour must be a positive whole number.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -631,6 +643,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             !instructions.trim() ||
             !isScheduleValid ||
             !slackConditionsValid ||
+            !maxRunsValid ||
             (showEventTypeSelector && !eventType) ||
             (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())
           }
