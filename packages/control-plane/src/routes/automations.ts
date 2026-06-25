@@ -83,9 +83,10 @@ function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): 
 }
 
 /**
- * Validate a slack_event trigger config before persistence. It must be scoped —
- * an explicit channel set + at least one `text_match` (net-new validation; the
- * engine otherwise skips condition validation entirely when none are present).
+ * Validate a slack_event trigger config before persistence. It must be scoped to
+ * an explicit channel set (net-new validation; the engine otherwise skips
+ * condition validation entirely when none are present). A text_match is optional
+ * — without one the automation fires on every message in the watched channel.
  * Returns an error message, or null when valid.
  */
 function validateSlackTriggerConfig(
@@ -101,9 +102,6 @@ function validateSlackTriggerConfig(
   const conditions = rawConditions ?? [];
   if (!conditions.some((c) => c.type === "slack_channel")) {
     return "slack_event triggers require a slack_channel condition";
-  }
-  if (!conditions.some((c) => c.type === "text_match")) {
-    return "slack_event triggers require at least one text_match condition";
   }
   return null;
 }
@@ -217,7 +215,7 @@ async function handleCreateAutomation(
     }
   }
 
-  // Slack triggers require explicit scoping (a channel set + at least one text_match).
+  // Slack triggers require explicit scoping (at least one watched channel).
   if (triggerType === "slack_event") {
     const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);

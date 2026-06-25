@@ -183,7 +183,7 @@ describe("slack_event automation", () => {
     ],
   };
 
-  it("blocks submit until a slack_channel and text_match condition exist", () => {
+  it("blocks submit until a slack_channel condition exists", () => {
     const onSubmit = vi.fn();
     const { container } = render(
       <AutomationForm
@@ -197,9 +197,7 @@ describe("slack_event automation", () => {
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(
-      screen.getByText(/require at least one Slack Channel and one Message Text/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
   });
 
   it("submits a valid slack_event", () => {
@@ -220,6 +218,26 @@ describe("slack_event automation", () => {
       triggerType: "slack_event",
       triggerConfig: validConditions,
     });
+  });
+
+  it("submits a slack_event with only a slack_channel condition (no text_match)", () => {
+    const onSubmit = vi.fn();
+    const channelOnly = {
+      conditions: [{ type: "slack_channel" as const, operator: "any_of" as const, value: ["C1"] }],
+    };
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: channelOnly }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ triggerConfig: channelOnly });
   });
 });
 

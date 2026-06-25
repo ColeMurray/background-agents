@@ -69,7 +69,7 @@ describe("POST /automations — slack_event validation (integration)", () => {
     expect(await res.text()).toContain("slack_channel");
   });
 
-  it("rejects a slack_event without a text_match condition (400)", async () => {
+  it("accepts a slack_event with only a slack_channel condition (no text_match)", async () => {
     const res = await postAutomation(
       createBody({
         triggerConfig: {
@@ -77,8 +77,9 @@ describe("POST /automations — slack_event validation (integration)", () => {
         },
       })
     );
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain("text_match");
+    // text_match is optional; the channel-only config passes validation and only
+    // later fails at repo resolution in the test env.
+    expect(res.status).not.toBe(400);
   });
 
   it("rejects a slack_channel value that is not an array of strings (400)", async () => {

@@ -137,11 +137,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const isSchedule = triggerType === "schedule";
   const isSlack = triggerType === "slack_event";
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
-  // Mirror the server rule: a slack_event needs a slack_channel + a text_match.
-  const slackConditionsValid =
-    !isSlack ||
-    (conditions.some((c) => c.type === "slack_channel") &&
-      conditions.some((c) => c.type === "text_match"));
+  // Mirror the server rule: a slack_event needs a slack_channel. A text_match is
+  // optional — without one it fires on every message in the watched channel.
+  const slackConditionsValid = !isSlack || conditions.some((c) => c.type === "slack_channel");
 
   // The model we display and submit. The selector only lists enabled models, so
   // a disabled default (blank create), a disabled saved model (edit), or a
@@ -522,7 +520,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </FieldDescription>
           {isSlack && !slackConditionsValid && (
             <p className="mt-1 text-xs text-destructive">
-              Slack triggers require at least one Slack Channel and one Message Text condition.
+              Slack triggers require at least one Slack Channel condition.
             </p>
           )}
         </div>
