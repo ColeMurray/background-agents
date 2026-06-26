@@ -640,34 +640,38 @@ export interface ListSessionsResponse {
 // --- Agent-spawned sub-sessions ---
 
 /** Request body for POST /sessions/:parentId/children */
-export interface SpawnChildSessionRequest {
-  title: string;
-  prompt: string;
-  repoOwner?: string;
-  repoName?: string;
-  model?: string;
-  reasoningEffort?: string;
-}
+export const spawnChildSessionRequestSchema = z.object({
+  title: z.string(),
+  prompt: z.string(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
+export type SpawnChildSessionRequest = z.infer<typeof spawnChildSessionRequestSchema>;
 
 /** Returned by parent DO's GET /internal/spawn-context */
-export interface SpawnContext {
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  model: string;
-  reasoningEffort: string | null;
-  baseBranch: string | null;
-  owner: {
-    userId: string;
-    scmUserId: string | null;
-    scmLogin: string | null;
-    scmName: string | null;
-    scmEmail: string | null;
-    scmAccessTokenEncrypted: string | null;
-    scmRefreshTokenEncrypted: string | null;
-    scmTokenExpiresAt: number | null;
-  };
-}
+export const spawnContextSchema = z.object({
+  repoOwner: z.string(),
+  repoName: z.string(),
+  repoId: z.number().nullable(),
+  model: z.string(),
+  reasoningEffort: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  owner: z.object({
+    userId: z.string(),
+    scmUserId: z.string().nullable(),
+    scmLogin: z.string().nullable(),
+    scmName: z.string().nullable(),
+    scmEmail: z.string().nullable(),
+    scmAccessTokenEncrypted: z.string().nullable(),
+    scmRefreshTokenEncrypted: z.string().nullable(),
+    scmTokenExpiresAt: z.number().nullable(),
+  }),
+});
+
+export type SpawnContext = z.infer<typeof spawnContextSchema>;
 
 /** Returned by child DO's GET /internal/child-summary */
 export interface ChildSessionFinalResponse extends AgentResponse {
