@@ -268,6 +268,95 @@ describe("authOptions signIn", () => {
     // The org fallback is GitHub-only, so a non-GitHub token never reaches GitHub.
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("admits a GitHub user whose non-primary verified email matches the domain allowlist", async () => {
+    // The core behavior of PR #829: the gate considers ALL verified emails, not
+    // just the primary. Here the primary (personal.com) does not match but a
+    // non-primary verified company.com email does. Before the fix this user was
+    // silently denied because only user.email (the primary) was checked.
+    const { authOptions } = await importAuthModule({
+      ALLOWED_EMAIL_DOMAINS: "company.com",
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "github", access_token: "gho_token" },
+        profile: {
+          login: "octocat",
+          verifiedEmails: [
+            { email: "octo@personal.com", primary: true, verified: true, visibility: "private" },
+            { email: "octo@company.com", primary: false, verified: true, visibility: null },
+          ],
+        },
+        user: { email: "octo@personal.com" },
+      } as never)
+    ).resolves.toBe(true);
+
+    expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
+      login: "octocat",
+      decision: "allow",
+      reason: "email_domain_allowlist",
+    });
+  });
+
+  it("denies a GitHub user when none of the verified emails match the allowlists", async () => {
+    const { authOptions } = await importAuthModule({
+      ALLOWED_EMAIL_DOMAINS: "company.com",
+      ALLOWED_EMAILS: "exact@gmail.com",
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "github", access_token: "gho_token" },
+        profile: {
+          login: "stranger",
+          verifiedEmails: [
+            {
+              email: "stranger@personal.com",
+              primary: true,
+              verified: true,
+              visibility: "private",
+            },
+            { email: "stranger@other.com", primary: false, verified: true, visibility: null },
+          ],
+        },
+        user: { email: "stranger@personal.com" },
+      } as never)
+    ).resolves.toBe(false);
+
+    expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
+      login: "stranger",
+      decision: "deny",
+      reason: "no_matching_policy",
+    });
+  });
+
+  it("does not trust user.email for the GitHub email/domain gate when verified emails are unavailable", async () => {
+    // Fail-closed guard: if the verified-email fetch came back empty (e.g.
+    // /user/emails 403'd for lack of the Email-addresses permission), the gate
+    // must NOT fall back to user.email — that value is not independently verified
+    // here. A user.email on an allowed domain must still be denied.
+    const { authOptions } = await importAuthModule({
+      ALLOWED_EMAIL_DOMAINS: "company.com",
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "github", access_token: "gho_token" },
+        profile: { login: "octocat", verifiedEmails: [] },
+        user: { email: "octo@company.com" },
+      } as never)
+    ).resolves.toBe(false);
+
+    expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
+      login: "octocat",
+      decision: "deny",
+      reason: "no_matching_policy",
+    });
+  });
 });
 
 describe("getVerifiedGitHubEmails", () => {
@@ -303,6 +392,33 @@ describe("getVerifiedGitHubEmails", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
 
     await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+  });
+
+  it("hints at the missing Email-addresses permission on a 403", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
+
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-email-fetch] request failed",
+      expect.objectContaining({
+        status: 403,
+        hint: expect.stringContaining("Email addresses"),
+      })
+    );
+  });
+
+  it("does not attach the permission hint on non-403 failures", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 500 }));
+
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-email-fetch] request failed",
+      expect.not.objectContaining({ hint: expect.anything() })
+    );
   });
 });
 

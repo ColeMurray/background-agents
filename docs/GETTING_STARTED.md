@@ -254,7 +254,11 @@ access.
    - For existing GitHub Apps, republish the permission change and request/approve installation
      updates before testing org membership sign-in.
 7. Set **Account permissions**:
-   - Email addresses: **Read-only**
+   - Email addresses: **Read-only** _(required for `ALLOWED_EMAILS`/`ALLOWED_EMAIL_DOMAINS`; without
+     it the app cannot read verified emails and those allowlists silently deny every GitHub
+     sign-in)_
+   - For existing GitHub Apps, republish the permission change and request/approve installation
+     updates, otherwise the added permission does not apply to current installs.
 8. Click **"Create GitHub App"**
 9. Note the **App ID** and **Client ID** (top of page)
 10. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client

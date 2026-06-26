@@ -49,13 +49,27 @@ export async function getVerifiedGitHubEmails({
 
   try {
     const response = await fetchImpl("https://api.github.com/user/emails", {
-      headers: { Authorization: `Bearer ${accessToken}`, "User-Agent": userAgent },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": userAgent,
+      },
       signal: controller.signal,
     });
     if (!response.ok) {
       console.warn("[github-email-fetch] request failed", {
         status: response.status,
         elapsedMs: Math.round(performance.now() - startedAt),
+        // A 403 here almost always means the GitHub App is missing the "Email
+        // addresses" account permission (read-only), so /user/emails is forbidden
+        // even with a valid token. Without it, ALLOWED_EMAILS /
+        // ALLOWED_EMAIL_DOMAINS can never match a GitHub sign-in, which otherwise
+        // looks like an unexplained "no_matching_policy" denial. Surface a fix.
+        // (OAuth App deployments authorize this via the user:email scope instead.)
+        ...(response.status === 403 && {
+          hint: "GitHub App is likely missing the 'Email addresses: Read-only' account permission; grant it and re-approve the installation, or ALLOWED_EMAILS/ALLOWED_EMAIL_DOMAINS will not match GitHub sign-ins.",
+        }),
       });
       return [];
     }
