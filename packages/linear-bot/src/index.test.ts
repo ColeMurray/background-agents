@@ -1,6 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { Env } from "./types";
 import type * as WebhookHandler from "./webhook-handler";
+import {
+  createFakeKV,
+  makeExecutionContext,
+  makeLinearBotEnv,
+  signLinearWebhookRequest,
+} from "./test-helpers";
 
 const mocks = vi.hoisted(() => ({
   handleAgentSessionEvent: vi.fn(async () => undefined),
@@ -15,76 +20,6 @@ vi.mock("./webhook-handler", async (importOriginal) => {
 });
 
 const { default: app } = await import("./index");
-
-const SECRET = "test-linear-webhook-secret";
-
-interface PutCall {
-  key: string;
-  value: string;
-  options?: { expirationTtl?: number };
-}
-
-async function sign(body: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  return Array.from(new Uint8Array(signature))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function createFakeKV(initial: Record<string, string> = {}) {
-  const store = new Map(Object.entries(initial));
-  const putCalls: PutCall[] = [];
-
-  const kv = {
-    get: vi.fn(async (key: string, type?: string) => {
-      const value = store.get(key) ?? null;
-      if (value === null) return null;
-      if (type === "json") return JSON.parse(value) as unknown;
-      return value;
-    }),
-    put: vi.fn(async (key: string, value: string, options?: { expirationTtl?: number }) => {
-      store.set(key, value);
-      putCalls.push({ key, value, options });
-    }),
-    delete: vi.fn(async (key: string) => {
-      store.delete(key);
-    }),
-  };
-
-  return { kv: kv as unknown as KVNamespace, store, putCalls };
-}
-
-function makeEnv(kv: KVNamespace): Env {
-  return {
-    LINEAR_KV: kv,
-    LINEAR_WEBHOOK_SECRET: SECRET,
-    DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
-    DEPLOYMENT_NAME: "test",
-    CONTROL_PLANE_URL: "https://control-plane.example.test",
-    WEB_APP_URL: "https://web.example.test",
-    LINEAR_CLIENT_ID: "linear-client-id",
-    LINEAR_CLIENT_SECRET: "linear-client-secret",
-    WORKER_URL: "https://linear-bot.example.test",
-    ANTHROPIC_API_KEY: "anthropic-key",
-    CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
-  };
-}
-
-function makeCtx() {
-  return {
-    props: {},
-    waitUntil: vi.fn(),
-    passThroughOnException: vi.fn(),
-  } as unknown as ExecutionContext & { waitUntil: ReturnType<typeof vi.fn> };
-}
 
 function makeAgentSessionPayload(webhookId = "webhook-config-1") {
   return {
@@ -103,7 +38,7 @@ async function makeWebhookRequest(payload: unknown, deliveryId?: string): Promis
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    "linear-signature": await sign(body),
+    "linear-signature": await signLinearWebhookRequest(body),
   };
   if (deliveryId) headers["linear-delivery"] = deliveryId;
 
@@ -121,11 +56,11 @@ describe("POST /webhook", () => {
 
   it("rejects AgentSessionEvent payloads without Linear-Delivery before dedupe or enqueue", async () => {
     const { kv } = createFakeKV();
-    const ctx = makeCtx();
+    const ctx = makeExecutionContext();
 
     const res = await app.fetch(
       await makeWebhookRequest(makeAgentSessionPayload()),
-      makeEnv(kv),
+      makeLinearBotEnv(kv),
       ctx
     );
 
@@ -139,8 +74,8 @@ describe("POST /webhook", () => {
 
   it("deduplicates AgentSessionEvent deliveries by Linear-Delivery header", async () => {
     const { kv, putCalls } = createFakeKV();
-    const env = makeEnv(kv);
-    const ctx = makeCtx();
+    const env = makeLinearBotEnv(kv);
+    const ctx = makeExecutionContext();
     const payload = makeAgentSessionPayload();
 
     const firstRes = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
@@ -159,8 +94,8 @@ describe("POST /webhook", () => {
 
   it("does not treat distinct Linear-Delivery headers with the same webhookId as duplicates", async () => {
     const { kv, putCalls } = createFakeKV();
-    const env = makeEnv(kv);
-    const ctx = makeCtx();
+    const env = makeLinearBotEnv(kv);
+    const ctx = makeExecutionContext();
     const payload = makeAgentSessionPayload("stable-webhook-config-id");
 
     const firstRes = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
@@ -177,7 +112,7 @@ describe("POST /webhook", () => {
 
   it("rejects malformed AgentSessionEvent payloads before dedupe", async () => {
     const { kv } = createFakeKV();
-    const ctx = makeCtx();
+    const ctx = makeExecutionContext();
     const payload = {
       type: "AgentSessionEvent",
       action: "created",
@@ -186,12 +121,17 @@ describe("POST /webhook", () => {
       agentSession: {},
     };
 
-    const res = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), makeEnv(kv), ctx);
+    const res = await app.fetch(
+      await makeWebhookRequest(payload, "delivery-1"),
+      makeLinearBotEnv(kv),
+      ctx
+    );
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "Invalid payload" });
     expect(kv.get).not.toHaveBeenCalled();
     expect(kv.put).not.toHaveBeenCalled();
     expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
   });
 });
