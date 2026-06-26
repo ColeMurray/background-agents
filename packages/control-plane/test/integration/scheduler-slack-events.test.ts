@@ -232,4 +232,53 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     const runs = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
     expect(runs.runs.find((r) => r.skip_reason === "concurrent_run_active")).toBeUndefined();
   });
+
+  it("continues the same session on a reply after the run has completed", async () => {
+    const store = new AutomationStore(env.DB);
+    const id = await seedSlackAutomation(store);
+
+    const concurrencyKey = "slack:C1:thread-done";
+    // Root message triggers the run and creates its session.
+    const rootRes = await sendEvent(
+      makeSlackEvent({
+        text: "deploy the api",
+        concurrencyKey,
+        triggerKey: "slack:msg:C1:root-done",
+      })
+    );
+    expect((await rootRes.json<{ triggered: number }>()).triggered).toBe(1);
+
+    // Simulate the run finishing. Its session stays steerable within the window,
+    // just like an @mention thread after a turn completes.
+    const afterRoot = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
+    const rootRun = afterRoot.runs.find((r) => r.trigger_key === "slack:msg:C1:root-done")!;
+    expect(rootRun.session_id).toBeTruthy();
+    await store.updateRun(rootRun.id, { status: "completed", completed_at: Date.now() });
+
+    // A reply after completion — with text that does NOT match the trigger
+    // conditions — still continues the same session, proving the steer bypasses
+    // both condition matching and the run-status filter.
+    const followRes = await sendEvent(
+      makeSlackEvent({
+        text: "thanks! can you also bump the version?",
+        concurrencyKey,
+        triggerKey: "slack:msg:C1:reply-done",
+      })
+    );
+    const followBody = await followRes.json<{
+      triggered: number;
+      skipped: number;
+      steered: number;
+    }>();
+    expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+    // The reply created no new run and recorded no skip — it reused the completed
+    // run's session. Exactly one materialized run remains (the completed root).
+    const afterReply = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
+    expect(
+      afterReply.runs.find((r) => r.trigger_key === "slack:msg:C1:reply-done")
+    ).toBeUndefined();
+    expect(afterReply.runs.find((r) => r.skip_reason === "concurrent_run_active")).toBeUndefined();
+    expect(afterReply.runs.filter((r) => r.trigger_key !== null)).toHaveLength(1);
+  });
 });

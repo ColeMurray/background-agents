@@ -257,11 +257,12 @@ condition to filter by content. See
 - When the run finishes, the agent's final response is posted into the triggering message's thread
   (with links to any pull requests and the full session), and the reaction is cleared. A failed run
   posts a short failure notice instead.
-- While a run is still in flight, a reply in its thread is routed to the running agent as a
-  follow-up prompt: it steers that session (queued behind the current turn) instead of being
-  dropped. The reply gets its own 👀 reaction and in-thread response, and it does **not** need to
-  match the trigger's text condition — conditions gate new runs, not replies to one in progress. A
-  reply that arrives after the run has finished starts a fresh run instead.
+- Every reply in a thread continues the same session — during the run and after it finishes — for up
+  to 24 hours after the thread's first trigger, like replying in an `@mention` thread. The reply is
+  routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone idle),
+  gets its own 👀 reaction and in-thread response, and does **not** need to match the trigger's text
+  condition — conditions gate new runs, not replies that continue a thread. A reply more than 24
+  hours after the first trigger starts a fresh run.
 
 ### Threat model
 

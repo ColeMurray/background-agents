@@ -563,6 +563,30 @@ export class AutomationStore {
       .first<AutomationRunRow>();
   }
 
+  /**
+   * The most recent materialized run (any status, with a session) for a thread's
+   * concurrency key, created at/after `sinceMs`. Powers Slack thread-session
+   * continuity: a reply continues this run's session regardless of run status.
+   * Excludes skipped rows and not-yet-started runs (session_id NULL). Backed by
+   * idx_runs_thread_continuity (migration 0028).
+   */
+  async getLatestSteerableRunForThread(
+    automationId: string,
+    concurrencyKey: string | null,
+    sinceMs: number
+  ): Promise<AutomationRunRow | null> {
+    if (concurrencyKey === null) return null;
+    return this.db
+      .prepare(
+        `SELECT * FROM automation_runs
+         WHERE automation_id = ? AND concurrency_key = ?
+           AND session_id IS NOT NULL AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .bind(automationId, concurrencyKey, sinceMs)
+      .first<AutomationRunRow>();
+  }
+
   // --- Recovery sweep queries ---
   // Backed by partial indexes (migration 0024); `status` must stay a literal, not
   // a bound param, or the planner skips the index and full-scans automation_runs.

@@ -32,6 +32,7 @@ function createMockStore() {
     getOverdueAutomations: vi.fn().mockResolvedValue([]),
     getActiveRunForAutomation: vi.fn().mockResolvedValue(null),
     getActiveRunForKey: vi.fn().mockResolvedValue(null),
+    getLatestSteerableRunForThread: vi.fn().mockResolvedValue(null),
     recordSkippedRun: vi.fn().mockResolvedValue(undefined),
     createRunAndAdvanceSchedule: vi.fn().mockResolvedValue(undefined),
     insertRun: vi.fn().mockResolvedValue(undefined),
@@ -1123,10 +1124,10 @@ describe("SchedulerDO", () => {
     });
   });
 
-  describe("/internal/event — slack steering", () => {
-    it("steers the active run's session even when the follow-up fails trigger conditions", async () => {
+  describe("/internal/event — slack thread continuity", () => {
+    it("steers the thread session even when the follow-up fails trigger conditions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getActiveRunForKey.mockResolvedValue({
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
         id: "active-run",
         status: "running",
         session_id: "sess-running",
@@ -1138,7 +1139,7 @@ describe("SchedulerDO", () => {
 
       const scheduler = createSchedulerDO(env);
       // A natural follow-up reply won't repeat the "deploy" trigger keyword, yet
-      // it must still steer the running session — conditions gate new runs only.
+      // it must still steer the thread's session — conditions gate new runs only.
       const res = await scheduler.fetch(
         slackEventRequest({ text: "thanks — also update the changelog" })
       );
@@ -1146,6 +1147,14 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(200);
       const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
       expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+      // The continuity lookup is scoped to the thread's concurrency key and a time
+      // window measured from now (24h back).
+      expect(mockStore.getLatestSteerableRunForThread).toHaveBeenCalledWith(
+        "auto-slack",
+        "slack:C1:thread-root",
+        expect.any(Number)
+      );
 
       // The follow-up was enqueued onto the existing session as a slack-sourced
       // turn, so its reply posts back in-thread via /callbacks/complete.
@@ -1161,13 +1170,45 @@ describe("SchedulerDO", () => {
         repoFullName: "acme/web-app",
       });
 
-      // No skip row, no "already active" ephemeral.
+      // A steer is not a new trigger and not a skip.
+      expect(mockStore.insertRun).not.toHaveBeenCalled();
       expect(mockStore.recordSkippedRun).not.toHaveBeenCalled();
     });
 
-    it("anchors the thread to the message ts for a top-level (non-reply) trigger", async () => {
+    it("continues the same session on a reply after the run has completed", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getActiveRunForKey.mockResolvedValue({
+      // The thread's run finished, but its session is still steerable within the
+      // window — like replying after an @mention turn ends.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "done-run",
+        status: "completed",
+        session_id: "sess-done",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        slackEventRequest({ text: "actually, can you also bump the version?" })
+      );
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+      const promptBody = await getPromptBody(fetchMock);
+      expect(promptBody.source).toBe("slack");
+      expect(promptBody.content).toBe("actually, can you also bump the version?");
+      // Routed to the completed run's session — no new run, and the concurrency
+      // guard is never consulted (the steer short-circuits the loop).
+      expect(mockStore.insertRun).not.toHaveBeenCalled();
+      expect(mockStore.getActiveRunForKey).not.toHaveBeenCalled();
+    });
+
+    it("anchors the thread to the message ts for a top-level (non-reply) follow-up", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
         id: "active-run",
         status: "running",
         session_id: "sess-running",
@@ -1188,8 +1229,27 @@ describe("SchedulerDO", () => {
       });
     });
 
-    it("falls back to a concurrency skip when the active run has no session yet", async () => {
+    it("starts a fresh run when no steerable session exists (outside the window)", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      // Outside the continuity window → no steerable run, and no active run.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
+
+      const scheduler = createSchedulerDO();
+      // Matching text so the trigger conditions pass.
+      const res = await scheduler.fetch(slackEventRequest());
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(mockStore.insertRun).toHaveBeenCalledWith(
+        expect.objectContaining({ automation_id: "auto-slack", status: "starting" })
+      );
+    });
+
+    it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      // Run is still starting → not yet steerable, but it blocks a second run.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue({
         id: "starting-run",
         status: "starting",
@@ -1210,15 +1270,20 @@ describe("SchedulerDO", () => {
       expect(promptCallCount(fetchMock)).toBe(0);
     });
 
-    it("records a skip when steering the session fails", async () => {
+    it("falls through to a new trigger when steering the session fails", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getActiveRunForKey.mockResolvedValue({
-        id: "active-run",
-        status: "running",
-        session_id: "sess-running",
+      // A completed run is steerable, but the enqueue will fail; with the run no
+      // longer active, the reply is re-evaluated as a new trigger (it matches),
+      // mirroring the @mention path's stale-session → new-session recovery.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "done-run",
+        status: "completed",
+        session_id: "sess-done",
       });
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
 
-      // Session DO rejects the prompt enqueue → steering fails → fall back to skip.
+      // Session DO rejects every fetch → steerSession fails AND the fresh run's
+      // session init fails, so the run is created then marked failed.
       const failingStub = {
         fetch: vi.fn().mockResolvedValue(new Response("boom", { status: 500 })),
       } as never;
@@ -1229,8 +1294,14 @@ describe("SchedulerDO", () => {
       const res = await scheduler.fetch(slackEventRequest());
 
       const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 0, skipped: 1, steered: 0 });
-      expect(mockStore.recordSkippedRun).toHaveBeenCalled();
+      // Steer failed → fell through → matched conditions → fresh run created
+      // (insertRun) but its session init failed, so triggered stays 0.
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(mockStore.insertRun).toHaveBeenCalledWith(
+        expect.objectContaining({ automation_id: "auto-slack", status: "starting" })
+      );
+      // Not treated as a concurrency skip.
+      expect(mockStore.recordSkippedRun).not.toHaveBeenCalled();
     });
   });
 

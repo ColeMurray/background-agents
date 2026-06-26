@@ -62,6 +62,14 @@ const AUTO_PAUSE_THRESHOLD = 3;
 /** Max runs to recover per sweep type per tick (backpressure). */
 const RECOVERY_SWEEP_LIMIT = 50;
 
+/**
+ * How long after a slack run's first trigger that thread replies keep continuing
+ * the same session (matches the interactive thread→session KV TTL of 24h). Steering
+ * does not create new runs, so this is measured from the root run's `created_at` and
+ * does not slide — a reply after the window forks a fresh run.
+ */
+const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
 
@@ -446,34 +454,33 @@ export class SchedulerDO extends DurableObject<Env> {
     for (const automation of candidates) {
       const now = Date.now();
 
-      // Active run for this automation in this thread/key. Looked up before
-      // condition matching because a slack follow-up reply steers the running
-      // session regardless of the trigger conditions — a natural reply ("also
-      // do X") won't contain the trigger keyword that started the run.
-      const activeRun = await store.getActiveRunForKey(automation.id, event.concurrencyKey);
-
-      // A slack message in a thread that already has an active run is a
-      // follow-up: enqueue it onto that run's session as the next turn (queued
-      // behind the in-flight one) so the user can steer the running agent. Its
-      // reply posts back in-thread via the slack completion callback, exactly
-      // like an interactive follow-up. Falls back to the "already active" notice
-      // when there is no session to steer yet (run still starting) or the
-      // enqueue fails.
-      if (event.source === "slack" && activeRun) {
+      // Slack thread continuity — mirrors the interactive @mention path: any reply
+      // in a thread that already has a session (any run status, within the
+      // continuity window) continues that session, regardless of trigger
+      // conditions. A reply is a steer, not a new trigger: a natural reply ("also
+      // do X") won't contain the keyword that started the run, and a reply after
+      // the run finished should still land in the same session. Its reply posts
+      // back in-thread via the slack completion callback, exactly like an
+      // interactive follow-up.
+      if (event.source === "slack") {
+        const steerable = await store.getLatestSteerableRunForThread(
+          automation.id,
+          event.concurrencyKey,
+          now - SLACK_THREAD_CONTINUITY_WINDOW_MS
+        );
         if (
-          activeRun.session_id &&
-          (await this.steerActiveRun(activeRun.session_id, automation, event))
+          steerable?.session_id &&
+          (await this.steerSession(steerable.session_id, automation, event))
         ) {
           steered++;
-        } else {
-          await this.recordSlackSkip(store, automation.id, event, "concurrent_run_active");
-          concurrencySkipped = true;
-          skipped++;
+          continue;
         }
-        continue;
+        // No steerable session (outside the window, no session yet, or a rare
+        // enqueue error) → fall through. Like the @mention path's stale-session
+        // recovery, the reply is re-evaluated as a potential new trigger below.
       }
 
-      // Evaluate trigger conditions (these gate starting a NEW run).
+      // Trigger conditions gate starting a NEW run.
       const config: TriggerConfig = automation.trigger_config
         ? JSON.parse(automation.trigger_config)
         : { conditions: [] };
@@ -481,9 +488,16 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
-      // Concurrency guard for non-slack sources (slack's active-run case is
-      // handled above): never start a second concurrent run for the same key.
+      // Concurrency guard: never start a second run while one is active for this
+      // key. For slack this also covers the brief window before a run has created
+      // its session (no steerable row yet), so a reply racing the initial trigger
+      // gets the "already active" notice instead of a second session.
+      const activeRun = await store.getActiveRunForKey(automation.id, event.concurrencyKey);
       if (activeRun) {
+        if (event.source === "slack") {
+          await this.recordSlackSkip(store, automation.id, event, "concurrent_run_active");
+          concurrencySkipped = true;
+        }
         skipped++;
         continue;
       }
@@ -938,15 +952,16 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 
   /**
-   * Route a follow-up slack message in an active thread to the run's existing
-   * session as the next turn, letting the user steer the running agent instead
-   * of having the message dropped by the per-thread concurrency guard. The turn
-   * queues behind the in-flight one; its reply posts back in-thread via the
-   * slack completion callback (source "slack"), exactly like an interactive
-   * follow-up. Returns false when the enqueue fails, so the caller can fall back
-   * to the "already active" notice.
+   * Route a follow-up slack message in a thread to its run's existing session as
+   * the next turn — whether that run is still in flight, completed, or failed —
+   * so every reply in the thread continues the same session, like the interactive
+   * @mention path. If the session has gone idle the prompt re-spawns/restores it
+   * in the background; its reply posts back in-thread via the slack completion
+   * callback (source "slack"), exactly like an interactive follow-up. Returns
+   * false when the enqueue fails, so the caller can fall through to the trigger
+   * path (stale-session recovery).
    */
-  private async steerActiveRun(
+  private async steerSession(
     sessionId: string,
     automation: AutomationRow,
     event: SlackAutomationEvent
@@ -970,7 +985,7 @@ export class SchedulerDO extends DurableObject<Env> {
         source: "slack",
         callbackContext,
       });
-      this.log.info("Steered active run with slack follow-up", {
+      this.log.info("Steered thread session with slack follow-up", {
         event: "scheduler.slack_steer",
         automation_id: automation.id,
         session_id: sessionId,
@@ -978,7 +993,7 @@ export class SchedulerDO extends DurableObject<Env> {
       });
       return true;
     } catch (e) {
-      this.log.warn("Failed to steer active run; falling back to skip notice", {
+      this.log.warn("Failed to steer thread session; falling through to trigger path", {
         event: "scheduler.slack_steer_failed",
         automation_id: automation.id,
         session_id: sessionId,
