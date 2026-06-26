@@ -169,19 +169,20 @@ export class RepoImageStore {
       .bind(build.repo_owner, build.repo_name, build.provider, build.base_branch)
       .first<{ id: string; provider_image_id: string; provider_session_id: string | null }>();
 
-    const statements: D1PreparedStatement[] = [
-      this.db
-        .prepare(
-          "UPDATE repo_images SET status = 'ready', provider_image_id = ?, base_sha = ?, build_duration_seconds = ? WHERE id = ? AND provider = ? AND status = 'building'"
-        )
-        .bind(providerImageId, baseSha, buildDurationSeconds, buildId, provider),
-    ];
+    const updateResult = await this.db
+      .prepare(
+        "UPDATE repo_images SET status = 'ready', provider_image_id = ?, base_sha = ?, build_duration_seconds = ? WHERE id = ? AND provider = ? AND status = 'building'"
+      )
+      .bind(providerImageId, baseSha, buildDurationSeconds, buildId, provider)
+      .run();
 
-    if (oldReady) {
-      statements.push(this.db.prepare("DELETE FROM repo_images WHERE id = ?").bind(oldReady.id));
+    if ((updateResult.meta?.changes ?? 0) === 0) {
+      return { updated: false, replacedImageId: null, replacedProviderSessionId: null };
     }
 
-    await this.db.batch(statements);
+    if (oldReady) {
+      await this.db.prepare("DELETE FROM repo_images WHERE id = ?").bind(oldReady.id).run();
+    }
 
     return {
       updated: true,

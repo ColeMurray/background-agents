@@ -513,7 +513,9 @@ describe("RepoImageStore", () => {
         provider: "modal",
         baseBranch: "main",
       });
-      await store.bindProviderSession("img-old", "modal", "modal-build-session-old");
+      await expect(
+        store.bindProviderSession("img-old", "modal", "modal-build-session-old")
+      ).resolves.toBe(true);
       await store.markReady("img-old", "modal", "modal-img-old", "sha-old", 30);
 
       vi.advanceTimersByTime(60000);

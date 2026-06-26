@@ -168,6 +168,7 @@ const TIMEOUT_EXEC_MS = 15_000;
 const TIMEOUT_BUILD_EXEC_MS = 30 * 60_000;
 const TIMEOUT_CHECKPOINT_MS = 5 * 60_000;
 const TIMEOUT_SECRET_STORE_MS = 30_000;
+const RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS = 10_000;
 const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
 const PYTHON_VENV = "/home/sandbox/.venv";
@@ -223,11 +224,16 @@ export class OpenComputerRestClient {
     params: OpenComputerCreateSandboxParams
   ): Promise<OpenComputerSandboxResponse> {
     const startMs = Date.now();
+    const metadata = {
+      ...(params.labels ?? {}),
+      ...(params.projectId ? { opencomputer_project_id: params.projectId } : {}),
+      ...(params.target ? { opencomputer_target: params.target } : {}),
+    };
     const body: Record<string, unknown> = {
       templateID: "base",
       snapshot: params.template,
       envs: params.env,
-      metadata: params.labels,
+      metadata,
     };
     if (params.timeoutSeconds !== undefined) {
       body.timeout = params.timeoutSeconds;
@@ -338,6 +344,10 @@ export class OpenComputerRestClient {
     );
   }
 
+  async deleteSandbox(id: string): Promise<void> {
+    await this.request<void>("DELETE", this.expandPath(this.paths.sandbox, { id }), TIMEOUT_GET_MS);
+  }
+
   async startRuntime(id: string, extraEnv: Record<string, string> = {}): Promise<void> {
     const exports = this.shellExportEnv(extraEnv);
     await this.request<void>("POST", this.expandPath(this.paths.exec, { id }), TIMEOUT_EXEC_MS, {
@@ -346,7 +356,7 @@ export class OpenComputerRestClient {
         "-c",
         `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
       ],
-      timeout: 10,
+      timeout: RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS / 1000,
     });
   }
 
@@ -435,7 +445,15 @@ export class OpenComputerRestClient {
       };
       if (body !== undefined) init.body = JSON.stringify(body);
 
-      const response = await fetch(url, init);
+      let response: Response;
+      try {
+        response = await fetch(url, init);
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new Error(`OpenComputer request timed out after ${timeoutMs}ms`);
+        }
+        throw error;
+      }
 
       if (response.status === 404) {
         const text = await response.text();

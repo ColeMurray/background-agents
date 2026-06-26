@@ -148,7 +148,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       `ln -sf ${PYTHON_VENV}/bin/python ${USER_BIN}/python`,
       `HOME=${SANDBOX_HOME} UV_CACHE_DIR=${UV_CACHE} uv pip install --python ${PYTHON_VENV}/bin/python httpx websockets "pydantic>=2.0" "PyJWT[crypto]"`,
       `sudo rm -rf /app && sudo ln -s ${SANDBOX_APP_DIR} /app`,
-      `sudo env npm_config_cache=${NPM_CACHE} npm install -g --prefix ${NPM_PREFIX} pnpm@10 opencode-ai@${OPENCODE_VERSION} @opencode-ai/plugin@${OPENCODE_VERSION} zod`
+      `sudo env npm_config_cache=${NPM_CACHE} npm install -g --prefix ${NPM_PREFIX} pnpm@10 opencode-ai@${OPENCODE_VERSION} @opencode-ai/plugin@${OPENCODE_VERSION} zod@4.4.3`
     )
     .runCommands(
       `curl -fsSL -o /tmp/code-server.deb https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_amd64.deb`,

@@ -38,8 +38,8 @@ import {
 } from "./shared";
 
 const logger = createLogger("router:repo-images");
-const VERCEL_CALLBACK_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
-const VERCEL_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+const REPO_IMAGE_CALLBACK_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
+const REPO_IMAGE_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
 function requireRepoImages(env: Env): Response | null {
   if (supportsRepoImageBackend(env.SANDBOX_PROVIDER)) {
@@ -158,14 +158,17 @@ function getBearerToken(request: Request): string | null {
   return token || null;
 }
 
-function getVercelCallbackBearerToken(request: Request): string | null {
+function getRepoImageCallbackBearerToken(request: Request): string | null {
   const token = getBearerToken(request);
-  if (!token || !VERCEL_CALLBACK_TOKEN_PATTERN.test(token)) return null;
+  if (!token || !REPO_IMAGE_CALLBACK_TOKEN_PATTERN.test(token)) return null;
   return token;
 }
 
-function requireVercelCallbackBearerAuth(request: Request, ctx: RequestContext): Response | null {
-  if (getVercelCallbackBearerToken(request)) return null;
+function requireRepoImageCallbackBearerAuth(
+  request: Request,
+  ctx: RequestContext
+): Response | null {
+  if (getRepoImageCallbackBearerToken(request)) return null;
 
   logger.warn("repo_image.callback_auth_failed", {
     request_id: ctx.request_id,
@@ -184,7 +187,7 @@ async function requireCallbackPreParseAuth(
     return requireBuildCallbackAuth(request, env, ctx);
   }
 
-  return requireVercelCallbackBearerAuth(request, ctx);
+  return requireRepoImageCallbackBearerAuth(request, ctx);
 }
 
 async function requireTokenBuildCallbackAuth(
@@ -194,7 +197,7 @@ async function requireTokenBuildCallbackAuth(
   params: { buildId: string; provider: "vercel" | "opencomputer"; providerSessionId: string },
   ctx: RequestContext
 ): Promise<Response | null> {
-  const token = getVercelCallbackBearerToken(request);
+  const token = getRepoImageCallbackBearerToken(request);
   if (!token) {
     logger.warn("repo_image.callback_auth_failed", {
       build_id: params.buildId,
@@ -618,6 +621,18 @@ async function completeOpenComputerBuildFromSession(
       params.buildDurationSeconds
     );
     if (!result.updated) {
+      try {
+        await openComputerProvider.deleteProviderImage(snapshot.imageId, params.providerSessionId);
+      } catch (cleanupError) {
+        logger.warn("repo_image.opencomputer_checkpoint_cleanup_failed", {
+          build_id: params.buildId,
+          provider_session_id: params.providerSessionId,
+          provider_image_id: snapshot.imageId,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          request_id: params.requestId,
+          trace_id: params.traceId,
+        });
+      }
       logger.warn("repo_image.opencomputer_checkpoint_not_applied", {
         build_id: params.buildId,
         provider_session_id: params.providerSessionId,
@@ -773,30 +788,33 @@ async function handleBuildFailed(
     });
 
     if (backend === "opencomputer" && body.provider_session_id) {
-      ctx.executionCtx?.waitUntil(
-        (async () => {
-          try {
-            await createConfiguredOpenComputerProvider(env).stopSandbox({
-              providerObjectId: body.provider_session_id!,
-              sessionId: buildId,
-              reason: "repo_image_build_failed",
-              correlation: {
-                request_id: ctx.request_id,
-                trace_id: ctx.trace_id,
-                sandbox_id: body.provider_session_id!,
-              },
-            });
-          } catch (stopError) {
-            logger.warn("repo_image.opencomputer_build_stop_failed", {
-              build_id: buildId,
-              provider_session_id: body.provider_session_id,
-              error: stopError instanceof Error ? stopError.message : String(stopError),
+      const cleanupPromise = (async () => {
+        try {
+          await createConfiguredOpenComputerProvider(env).stopSandbox({
+            providerObjectId: body.provider_session_id!,
+            sessionId: buildId,
+            reason: "repo_image_build_failed",
+            correlation: {
               request_id: ctx.request_id,
               trace_id: ctx.trace_id,
-            });
-          }
-        })()
-      );
+              sandbox_id: body.provider_session_id!,
+            },
+          });
+        } catch (stopError) {
+          logger.warn("repo_image.opencomputer_build_stop_failed", {
+            build_id: buildId,
+            provider_session_id: body.provider_session_id,
+            error: stopError instanceof Error ? stopError.message : String(stopError),
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+          });
+        }
+      })();
+      if (ctx.executionCtx) {
+        ctx.executionCtx.waitUntil(cleanupPromise);
+      } else {
+        await cleanupPromise;
+      }
     }
 
     return json({ ok: true });
@@ -863,7 +881,7 @@ async function handleTriggerBuild(
       provider: backend,
       baseBranch: defaultBranch,
       callbackTokenHash,
-      callbackTokenExpiresAt: callbackToken ? now + VERCEL_CALLBACK_TOKEN_TTL_MS : undefined,
+      callbackTokenExpiresAt: callbackToken ? now + REPO_IMAGE_CALLBACK_TOKEN_TTL_MS : undefined,
     });
 
     // Construct callback URL

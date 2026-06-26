@@ -42,7 +42,7 @@ import {
 } from "../provider";
 
 const log = createLogger("opencomputer-provider");
-const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
+const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST: string[] = [];
 const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
   "OI_REPO_IMAGE_BUILD_ID",
@@ -93,6 +93,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
+    let providerObjectId: string | undefined;
     try {
       const envVars = await this.buildRuntimeEnvVars(config, {
         fromRepoImage: !!config.repoImageId,
@@ -120,7 +121,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
             projectId: this.client.config.projectId,
             target: this.client.config.target,
           });
-      const providerObjectId = sandbox.id;
+      providerObjectId = sandbox.id;
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -140,6 +141,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         tunnelUrls: tunnels.tunnelUrls,
       };
     } catch (error) {
+      if (providerObjectId) {
+        await this.cleanupSandboxAfterFailedCreate(providerObjectId, config.sessionId);
+      }
       if (secretStore) {
         try {
           await this.client.deleteSecretStore(secretStore.id);
@@ -157,6 +161,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
   async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
+    let providerObjectId: string | undefined;
     try {
       const envVars = await this.buildRuntimeEnvVars(config, { restoredFromSnapshot: true });
       secretStore = await this.createSecretStoreFor(config.sessionId, config.userEnvVars);
@@ -168,7 +173,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         secretStore: secretStore?.name,
       });
-      const providerObjectId = sandbox.id;
+      providerObjectId = sandbox.id;
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -187,6 +192,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         tunnelUrls: tunnels.tunnelUrls,
       };
     } catch (error) {
+      if (providerObjectId) {
+        await this.cleanupSandboxAfterFailedCreate(providerObjectId, config.sessionId);
+      }
       if (secretStore) {
         try {
           await this.client.deleteSecretStore(secretStore.id);
@@ -214,7 +222,12 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         }
       );
 
-      if (checkpoint.status && checkpoint.status !== "ready" && checkpoint.status !== "created") {
+      if (
+        checkpoint.status &&
+        checkpoint.status !== "ready" &&
+        checkpoint.status !== "created" &&
+        checkpoint.status !== "processing"
+      ) {
         return { success: false, error: `Checkpoint status was ${checkpoint.status}` };
       }
 
@@ -511,9 +524,26 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     if (normalized.includes("ANTHROPIC")) return ["api.anthropic.com"];
     if (normalized.includes("OPENAI")) return ["api.openai.com"];
     if (normalized.includes("GITHUB") || normalized.includes("VCS_CLONE")) {
-      return ["github.com", "api.github.com"];
+      return this.providerConfig.scmProvider === "gitlab"
+        ? ["gitlab.com", "api.gitlab.com"]
+        : ["github.com", "api.github.com"];
     }
     return undefined;
+  }
+
+  private async cleanupSandboxAfterFailedCreate(
+    providerObjectId: string,
+    sessionId: string
+  ): Promise<void> {
+    try {
+      await this.client.deleteSandbox(providerObjectId);
+    } catch (cleanupError) {
+      log.warn("opencomputer.sandbox_cleanup_failed", {
+        session_id: sessionId,
+        provider_object_id: providerObjectId,
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+    }
   }
 
   private buildLabels(config: CreateSandboxConfig | RestoreConfig): Record<string, string> {

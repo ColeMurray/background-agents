@@ -355,7 +355,7 @@ variable "opencomputer_api_url" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "opencomputer" || length(var.opencomputer_api_url) > 0
+    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_api_url)) > 0
     error_message = "opencomputer_api_url must be set when sandbox_provider = 'opencomputer'."
   }
 }
@@ -367,7 +367,7 @@ variable "opencomputer_api_key" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "opencomputer" || length(var.opencomputer_api_key) > 0
+    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_api_key)) > 0
     error_message = "opencomputer_api_key must be set when sandbox_provider = 'opencomputer'."
   }
 }
@@ -378,7 +378,7 @@ variable "opencomputer_template" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "opencomputer" || length(var.opencomputer_template) > 0
+    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_template)) > 0
     error_message = "opencomputer_template must be set when sandbox_provider = 'opencomputer'."
   }
 }

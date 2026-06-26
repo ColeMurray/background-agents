@@ -36,8 +36,9 @@ function createMockClient(overrides: Partial<OpenComputerRestClient> = {}): Open
     createCheckpoint: vi.fn(async () => ({
       id: "checkpoint-1",
       sandboxId: "oc-sandbox-1",
-      status: "ready",
+      status: "processing",
     })),
+    deleteSandbox: vi.fn(async (): Promise<void> => undefined),
     deleteCheckpoint: vi.fn(async (): Promise<void> => undefined),
     getSandbox: vi.fn(
       async (): Promise<OpenComputerSandboxResponse> => ({
@@ -145,7 +146,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-test");
     expect(client.createSecretStore).toHaveBeenCalledWith({
       name: "openinspect-session-1",
-      egressAllowlist: ["*"],
+      egressAllowlist: [],
     });
     expect(client.setSecret).toHaveBeenCalledWith({
       storeId: "secret-store-1",
@@ -175,6 +176,50 @@ describe("OpenComputerSandboxProvider", () => {
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-provider");
+  });
+
+  it("scopes clone secrets to GitLab hosts for GitLab sessions", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "gitlab",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      userEnvVars: { VCS_CLONE_TOKEN: "gl-token" },
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      VCS_HOST: "gitlab.com",
+      VCS_CLONE_USERNAME: "oauth2",
+    });
+    expect(client.setSecret).toHaveBeenCalledWith({
+      storeId: "secret-store-1",
+      name: "VCS_CLONE_TOKEN",
+      value: "gl-token",
+      allowedHosts: ["gitlab.com", "api.gitlab.com"],
+    });
+  });
+
+  it("cleans up a created sandbox when runtime startup fails", async () => {
+    const client = createMockClient({
+      startRuntime: vi.fn(async () => {
+        throw new Error("runtime failed");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await expect(provider.createSandbox(baseConfig)).rejects.toThrow(
+      "Failed to create OpenComputer sandbox"
+    );
+
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
   });
 
   it("forks from a repo image checkpoint when provided", async () => {
