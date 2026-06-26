@@ -35,4 +35,15 @@ describe("slack notify tool envelope schema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("parses retry windows with an explicit seconds field", () => {
+    const result = slackNotifyToolEnvelopeSchema.safeParse({
+      ok: false,
+      reason: "rate_limited",
+      agentMessage: "Slack rate-limited the request.",
+      retryAfterSeconds: 30,
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

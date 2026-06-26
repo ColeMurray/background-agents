@@ -128,7 +128,7 @@ export function SlackNotifyEvent({
             <SlackNotifyDenialBody
               reason={denial}
               channelInput={channelInput}
-              retryAfterSeconds={envelopeDenial?.retryAfter}
+              retryAfterSeconds={envelopeDenial?.retryAfterSeconds}
             />
           ) : (
             <span className="text-secondary-foreground">No details available</span>

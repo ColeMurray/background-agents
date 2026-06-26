@@ -128,6 +128,14 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
     });
+
+    it("parses fetch history messages with an omitted cursor", () => {
+      const result = clientMessageSchema.safeParse({
+        type: "fetch_history",
+      });
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe("userPreferencesRequestSchema", () => {

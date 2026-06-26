@@ -71,7 +71,7 @@ export const slackNotifyToolEnvelopeSchema = z.discriminatedUnion("ok", [
     ok: z.literal(false),
     reason: slackDenialReasonSchema,
     agentMessage: z.string(),
-    retryAfter: z.number().optional(),
+    retryAfterSeconds: z.number().optional(),
   }),
 ]);
 

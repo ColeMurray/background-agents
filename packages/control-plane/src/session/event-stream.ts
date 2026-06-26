@@ -15,7 +15,9 @@ const MIN_HISTORY_LIMIT = 1;
 const MAX_HISTORY_LIMIT = 500;
 const HISTORY_EXCLUDED_TYPES = ["heartbeat"];
 
-export type EventStreamCursor = Extract<ClientMessage, { type: "fetch_history" }>["cursor"];
+export type EventStreamCursor = NonNullable<
+  Extract<ClientMessage, { type: "fetch_history" }>["cursor"]
+>;
 export type SessionReplay = NonNullable<Extract<ServerMessage, { type: "subscribed" }>["replay"]>;
 export type SessionHistoryPage = Omit<Extract<ServerMessage, { type: "history_page" }>, "type">;
 
