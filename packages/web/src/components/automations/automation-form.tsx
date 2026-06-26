@@ -61,6 +61,10 @@ const DEFAULT_REASONING_VALUE = "__default__";
 const INSTRUCTIONS_MAX_LENGTH = 15000;
 const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
 
+function requiresRepositoryTarget(triggerType: AutomationTriggerType): boolean {
+  return triggerType === "github_event" || triggerType === "linear_event";
+}
+
 const toOption = (tz: string) => ({ value: tz, label: tz.replace(/_/g, " ") });
 
 const TIMEZONE_GROUPS: ComboboxGroup[] = [
@@ -138,6 +142,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>(
     initialValues?.triggerType ?? "schedule"
   );
+  const repoTargetRequired = requiresRepositoryTarget(triggerType);
   const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
   const [eventTypeError, setEventTypeError] = useState("");
   const [conditions, setConditions] = useState<TriggerCondition[]>(
@@ -186,6 +191,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     }
   }, [showEventTypeSelector, eventType]);
 
+  useEffect(() => {
+    if (repoTargetRequired && targetMode === "no_repository") {
+      setTargetMode("fixed_single_repo");
+    }
+  }, [repoTargetRequired, targetMode]);
+
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
       setSelectedRepo(repoFullName);
@@ -195,13 +206,17 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     [repos]
   );
 
-  const handleTargetModeChange = useCallback((nextMode: AutomationTargetMode) => {
-    setTargetMode(nextMode);
-    if (nextMode === "no_repository") {
-      setSelectedRepo("");
-      setBaseBranch("");
-    }
-  }, []);
+  const handleTargetModeChange = useCallback(
+    (nextMode: AutomationTargetMode) => {
+      if (repoTargetRequired && nextMode === "no_repository") return;
+      setTargetMode(nextMode);
+      if (nextMode === "no_repository") {
+        setSelectedRepo("");
+        setBaseBranch("");
+      }
+    },
+    [repoTargetRequired]
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -339,8 +354,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               value="no_repository"
               checked={targetMode === "no_repository"}
               onChange={() => handleTargetModeChange("no_repository")}
+              disabled={repoTargetRequired}
               label="No repository"
-              description="Run without cloning a repository."
+              description={
+                repoTargetRequired
+                  ? "Repository-scoped triggers need a repository."
+                  : "Run without cloning a repository."
+              }
             />
           </div>
         ) : (

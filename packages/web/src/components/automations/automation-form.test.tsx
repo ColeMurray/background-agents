@@ -179,6 +179,34 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0].baseBranch).toBeUndefined();
   });
 
+  it("disables no_repository for GitHub event automations", () => {
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Review new PRs",
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+        }}
+      />
+    );
+    const noRepositoryRadio = () =>
+      container.querySelector<HTMLInputElement>('input[value="no_repository"]')!;
+    const singleRepositoryRadio = () =>
+      container.querySelector<HTMLInputElement>('input[value="fixed_single_repo"]')!;
+
+    fireEvent.click(screen.getByText("No repository"));
+    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /GitHub Event/ }));
+
+    expect(noRepositoryRadio()).toBeDisabled();
+    expect(singleRepositoryRadio()).toBeChecked();
+    expect(screen.getByText("Select repository")).toBeInTheDocument();
+  });
+
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
     const onSubmit = vi.fn();
     const { container } = render(
