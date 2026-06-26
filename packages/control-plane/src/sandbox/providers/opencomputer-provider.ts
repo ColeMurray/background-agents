@@ -122,6 +122,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
             target: this.client.config.target,
           });
       providerObjectId = sandbox.id;
+      await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -174,6 +175,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
+      await this.client.setSandboxTimeout(
+        providerObjectId,
+        config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS
+      );
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,

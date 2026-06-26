@@ -53,6 +53,7 @@ function createMockClient(overrides: Partial<OpenComputerRestClient> = {}): Open
       })
     ),
     hibernateSandbox: vi.fn(async (): Promise<void> => undefined),
+    setSandboxTimeout: vi.fn(async (): Promise<void> => undefined),
     startRuntime: vi.fn(async (): Promise<void> => undefined),
     createSecretStore: vi.fn(async () => ({
       id: "secret-store-1",
@@ -148,6 +149,7 @@ describe("OpenComputerSandboxProvider", () => {
       name: "openinspect-session-1",
       egressAllowlist: ["*"],
     });
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 7200);
     expect(client.setSecret).toHaveBeenCalledWith({
       storeId: "secret-store-1",
       name: "ANTHROPIC_API_KEY",
@@ -249,6 +251,7 @@ describe("OpenComputerSandboxProvider", () => {
         }),
       })
     );
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 7200);
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
   });
 
@@ -271,6 +274,7 @@ describe("OpenComputerSandboxProvider", () => {
         env: expect.objectContaining({ RESTORED_FROM_SNAPSHOT: "true" }),
       })
     );
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 7200);
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
   });
 

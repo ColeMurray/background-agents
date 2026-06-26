@@ -42,6 +42,7 @@ export interface OpenComputerApiPaths {
   sandbox: string;
   wake: string;
   hibernate: string;
+  timeout: string;
   tunnel: string;
   exec: string;
   checkpoints: string;
@@ -150,6 +151,7 @@ const DEFAULT_PATHS: OpenComputerApiPaths = {
   sandbox: "/sandboxes/:id",
   wake: "/sandboxes/:id/wake",
   hibernate: "/sandboxes/:id/hibernate",
+  timeout: "/sandboxes/:id/timeout",
   tunnel: "/sandboxes/:id/preview",
   exec: "/sandboxes/:id/exec/run",
   checkpoints: "/sandboxes/:id/checkpoints",
@@ -342,6 +344,12 @@ export class OpenComputerRestClient {
       this.expandPath(this.paths.hibernate, { id }),
       TIMEOUT_HIBERNATE_MS
     );
+  }
+
+  async setSandboxTimeout(id: string, timeoutSeconds: number): Promise<void> {
+    await this.request<void>("POST", this.expandPath(this.paths.timeout, { id }), TIMEOUT_GET_MS, {
+      timeout: timeoutSeconds,
+    });
   }
 
   async deleteSandbox(id: string): Promise<void> {
