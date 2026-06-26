@@ -60,6 +60,10 @@ def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
     )
 
 
+def _repository_mode(repo_owner: str | None, repo_name: str | None) -> str:
+    return "single" if repo_owner and repo_name else "none"
+
+
 def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
     """Map sandbox settings to Modal resource kwargs.
 
@@ -87,8 +91,8 @@ def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
 class SandboxConfig:
     """Configuration for creating a sandbox."""
 
-    repo_owner: str
-    repo_name: str
+    repo_owner: str | None
+    repo_name: str | None
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
     snapshot_id: str | None = None
     session_config: SessionConfig | None = None
@@ -384,10 +388,16 @@ class SandboxManager:
         start_time = time.time()
 
         # Use provided sandbox_id from control plane, or generate one
+        repository_mode = _repository_mode(config.repo_owner, config.repo_name)
         if config.sandbox_id:
             sandbox_id = config.sandbox_id
         else:
-            sandbox_id = f"sandbox-{config.repo_owner}-{config.repo_name}-{int(time.time() * 1000)}"
+            sandbox_name = (
+                f"{config.repo_owner}-{config.repo_name}"
+                if repository_mode == "single"
+                else "no-repository"
+            )
+            sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
         # Prepare environment variables (user vars first, system vars override)
         env_vars: dict[str, str] = {}
@@ -401,8 +411,9 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": config.control_plane_url,
                 "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
-                "REPO_OWNER": config.repo_owner,
-                "REPO_NAME": config.repo_name,
+                "REPOSITORY_MODE": repository_mode,
+                "REPO_OWNER": config.repo_owner or "",
+                "REPO_NAME": config.repo_name or "",
             }
         )
 
@@ -726,17 +737,21 @@ class SandboxManager:
 
         # Handle both SessionConfig and dict
         if isinstance(session_config, dict):
-            repo_owner = session_config.get("repo_owner", "")
-            repo_name = session_config.get("repo_name", "")
+            repo_owner = session_config.get("repo_owner")
+            repo_name = session_config.get("repo_name")
             session_config_json = json.dumps(session_config)
         else:
             repo_owner = session_config.repo_owner
             repo_name = session_config.repo_name
             session_config_json = session_config.model_dump_json()
+        repository_mode = _repository_mode(repo_owner, repo_name)
 
         # Use provided sandbox_id or generate one
         if not sandbox_id:
-            sandbox_id = f"sandbox-{repo_owner}-{repo_name}-{int(time.time() * 1000)}"
+            sandbox_name = (
+                f"{repo_owner}-{repo_name}" if repository_mode == "single" else "no-repository"
+            )
+            sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
         # Lookup the image by ID
         image = modal.Image.from_id(snapshot_image_id)
@@ -753,8 +768,9 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": control_plane_url,
                 "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
-                "REPO_OWNER": repo_owner,
-                "REPO_NAME": repo_name,
+                "REPOSITORY_MODE": repository_mode,
+                "REPO_OWNER": repo_owner or "",
+                "REPO_NAME": repo_name or "",
                 "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone
                 "SESSION_CONFIG": session_config_json,
             }

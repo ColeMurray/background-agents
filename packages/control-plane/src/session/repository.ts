@@ -65,10 +65,10 @@ export interface UpsertSessionData {
   id: string;
   sessionName: string;
   title: string | null;
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   repoId?: number | null;
-  baseBranch?: string;
+  baseBranch?: string | null;
   model: string;
   reasoningEffort?: string | null;
   status: SessionStatus;
@@ -264,7 +264,7 @@ export class SessionRepository {
       data.repoOwner,
       data.repoName,
       data.repoId ?? null,
-      data.baseBranch ?? "main",
+      data.baseBranch ?? (data.repoOwner && data.repoName ? "main" : null),
       data.model,
       data.reasoningEffort ?? null,
       data.status,

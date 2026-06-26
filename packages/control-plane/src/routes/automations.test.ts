@@ -200,6 +200,66 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", { body: validBody });
       expect(res.status).toBe(201);
       expect(mockStore.create).toHaveBeenCalledTimes(1);
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target_mode: "fixed_single_repo",
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+        })
+      );
+    });
+
+    it("creates no_repository automation without repo fields", async () => {
+      const noRepoRow = {
+        ...sampleRow,
+        target_mode: "no_repository",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.create.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(noRepoRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Incident sweep",
+          targetMode: "no_repository",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Check recent incidents and summarize.",
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target_mode: "no_repository",
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        })
+      );
+    });
+
+    it("rejects no_repository for repo-scoped triggers", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "PR review",
+          targetMode: "no_repository",
+          instructions: "Review the PR.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "no_repository automations are not supported for repo-scoped triggers",
+      });
     });
 
     it("resolves user_id when scmUserId is provided", async () => {

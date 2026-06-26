@@ -18,11 +18,11 @@ const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "canc
  */
 interface InitRequest {
   sessionName: string;
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   repoId?: number;
-  defaultBranch?: string;
-  branch?: string;
+  defaultBranch?: string | null;
+  branch?: string | null;
   title?: string;
   model?: string;
   reasoningEffort?: string;
@@ -125,7 +125,8 @@ export function createSessionLifecycleHandler(
       }
 
       const reasoningEffort = deps.validateReasoningEffort(model, body.reasoningEffort);
-      const baseBranch = body.branch || body.defaultBranch || "main";
+      const baseBranch =
+        body.repoOwner && body.repoName ? body.branch || body.defaultBranch || "main" : null;
 
       deps.repository.upsertSession({
         id: sessionId,

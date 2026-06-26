@@ -46,6 +46,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
+import { resolveAutomationTarget } from "../automation/target-resolution";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -872,6 +873,7 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
+    const target = await resolveAutomationTarget(this.env, automation);
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -893,19 +895,21 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
+    const { repoOwner, repoName, repoId, baseBranch } = target;
+
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
-      resolveCodeServerEnabled(this.env.DB, automation.repo_owner, automation.repo_name),
-      resolveSandboxSettings(this.env.DB, automation.repo_owner, automation.repo_name),
+      resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),
+      resolveSandboxSettings(this.env.DB, repoOwner, repoName),
     ]);
 
     await initializeSession(
       this.env,
       {
         sessionId,
-        repoOwner: automation.repo_owner,
-        repoName: automation.repo_name,
-        repoId: automation.repo_id,
-        defaultBranch: automation.base_branch,
+        repoOwner,
+        repoName,
+        repoId,
+        defaultBranch: baseBranch,
         title: `[Auto] ${automation.name}`,
         model: automation.model,
         reasoningEffort: automation.reasoning_effort,

@@ -3,8 +3,8 @@ import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
 export interface SessionEntry {
   id: string;
   title: string | null;
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   model: string;
   reasoningEffort: string | null;
   baseBranch: string | null;
@@ -27,8 +27,8 @@ export interface SessionEntry {
 interface SessionRow {
   id: string;
   title: string | null;
-  repo_owner: string;
-  repo_name: string;
+  repo_owner: string | null;
+  repo_name: string | null;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -102,8 +102,8 @@ export class SessionIndexStore {
       .bind(
         session.id,
         session.title,
-        session.repoOwner.toLowerCase(),
-        session.repoName.toLowerCase(),
+        session.repoOwner?.toLowerCase() ?? null,
+        session.repoName?.toLowerCase() ?? null,
         session.model,
         session.reasoningEffort,
         session.baseBranch,

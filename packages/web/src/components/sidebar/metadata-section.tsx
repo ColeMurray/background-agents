@@ -24,10 +24,10 @@ interface MetadataSectionProps {
   createdAt: number;
   model?: string;
   reasoningEffort?: string;
-  baseBranch: string;
+  baseBranch: string | null;
   branchName?: string;
-  repoOwner?: string;
-  repoName?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
   artifacts?: Artifact[];
   parentSessionId?: string | null;
   totalCost?: number;

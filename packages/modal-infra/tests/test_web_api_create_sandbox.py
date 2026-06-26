@@ -128,3 +128,30 @@ async def test_create_sandbox_resolves_clone_token_for_snapshot_boot(monkeypatch
     assert result["success"] is True
     assert calls == [True]
     assert captured["config"].fallback_clone_token == "ghs_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
+    """No-repository sandboxes are represented by null repo fields."""
+    captured = {}
+
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: "unused")
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    config = captured["config"]
+
+    assert result["success"] is True
+    assert config.repo_owner is None
+    assert config.repo_name is None
+    assert config.session_config.repo_owner is None
+    assert config.session_config.repo_name is None
+    assert config.fallback_clone_token is None

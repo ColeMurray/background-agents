@@ -33,6 +33,17 @@ def repo_image_env(base_env):
     }
 
 
+@pytest.fixture
+def no_repo_env(base_env):
+    """Env vars for a session without a repository workspace."""
+    return {
+        **base_env,
+        "REPO_OWNER": "",
+        "REPO_NAME": "",
+        "SESSION_CONFIG": "{}",
+    }
+
+
 def _make_supervisor(env_vars: dict):
     """Create a SandboxSupervisor with the given env vars patched in."""
     with patch.dict(os.environ, env_vars, clear=False):
@@ -489,6 +500,51 @@ class TestSnapshotRestoreMode:
         )
         assert startup_call.kwargs["git_sync_success"] is False
         supervisor.start_opencode.assert_called_once()
+
+
+class TestNoRepositoryMode:
+    """Missing repo fields: no clone or repo hooks, but OpenCode still starts."""
+
+    @pytest.mark.asyncio
+    async def test_perform_git_sync_skips_clone(self, no_repo_env):
+        supervisor = _make_supervisor(no_repo_env)
+        supervisor.log = MagicMock()
+
+        with patch("sandbox_runtime.entrypoint.asyncio.create_subprocess_exec") as mock_exec:
+            result = await supervisor.perform_git_sync()
+
+        assert result is True
+        mock_exec.assert_not_called()
+        supervisor.log.info.assert_any_call("git.skip_clone", reason="no_repository")
+
+    @pytest.mark.asyncio
+    async def test_skips_repo_hooks_but_starts_agent(self, no_repo_env):
+        supervisor = _make_supervisor(no_repo_env)
+
+        supervisor._ensure_credential_helper_configured = AsyncMock()
+        supervisor.perform_git_sync = AsyncMock(return_value=True)
+        supervisor._update_existing_repo = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
+        supervisor.start_code_server = AsyncMock()
+        supervisor.start_ttyd = AsyncMock()
+        supervisor.start_ttyd_proxy = AsyncMock()
+        supervisor.start_opencode = AsyncMock()
+        supervisor.start_bridge = AsyncMock()
+        supervisor.monitor_processes = AsyncMock()
+        supervisor.shutdown = AsyncMock()
+
+        with patch.dict(os.environ, no_repo_env, clear=False):
+            await supervisor.run()
+
+        assert supervisor.has_repository is False
+        assert supervisor.boot_mode == "no_repository"
+        supervisor.perform_git_sync.assert_called_once()
+        supervisor._update_existing_repo.assert_not_called()
+        supervisor.run_setup_script.assert_not_called()
+        supervisor.run_start_script.assert_not_called()
+        supervisor.start_opencode.assert_called_once()
+        supervisor.start_bridge.assert_called_once()
 
 
 class TestUpdateExistingRepo:

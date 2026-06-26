@@ -81,6 +81,9 @@ export class SessionPullRequestService {
     if (!session) {
       return { kind: "error", status: 404, error: "Session not found" };
     }
+    if (!session.repo_owner || !session.repo_name) {
+      return { kind: "error", status: 400, error: "Pull requests require a repository target" };
+    }
 
     this.deps.log.info("Creating PR", { user_id: input.promptingUserId });
 

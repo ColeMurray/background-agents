@@ -130,8 +130,12 @@ describe("applyMigrations", () => {
       { name: "scm_access_token_encrypted" },
       { name: "scm_token_expires_at" },
     ]);
-    // Migration 24 checks session columns — include base_branch so it skips the rename
-    mock.setData("PRAGMA table_info(session)", [{ name: "base_branch" }]);
+    // Migration 24 checks session columns; migration 31 checks nullable repo columns.
+    mock.setData("PRAGMA table_info(session)", [
+      { name: "repo_owner", notnull: 0 },
+      { name: "repo_name", notnull: 0 },
+      { name: "base_branch", notnull: 0 },
+    ]);
     const originalExec = mock.sql.exec.bind(mock.sql);
     mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
       if (query.includes("ALTER TABLE")) {

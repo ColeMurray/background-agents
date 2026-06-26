@@ -66,6 +66,12 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       if ("error" in authResolution) {
         return Response.json({ error: authResolution.error }, { status: authResolution.status });
       }
+      if (!session.repo_owner || !session.repo_name || !session.base_branch) {
+        return Response.json(
+          { error: "Pull requests require a repository target" },
+          { status: 400 }
+        );
+      }
 
       const result = await deps.createPullRequest({
         ...body,

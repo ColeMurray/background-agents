@@ -21,6 +21,14 @@ vi.mock("cloudflare:workers", () => ({
   },
 }));
 
+const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
+
+vi.mock("../source-control", () => ({
+  createSourceControlProviderFromEnv: vi.fn(() => ({
+    checkRepositoryAccess: mockCheckRepositoryAccess,
+  })),
+}));
+
 // Must import AFTER vi.mock so the hoisted mock is in place
 const { SchedulerDO } = await import("./durable-object");
 
@@ -288,6 +296,12 @@ describe("SchedulerDO", () => {
     vi.clearAllMocks();
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);
+    mockCheckRepositoryAccess.mockResolvedValue({
+      repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
+      defaultBranch: "main",
+    });
   });
 
   describe("/internal/health", () => {
@@ -355,6 +369,135 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(200);
       const initBody = await getInitBody(fetchMock);
       expect(initBody.reasoningEffort).toBe("high");
+    });
+
+    it("uses the resolved repository for session creation", async () => {
+      const automation = {
+        ...sampleAutomation,
+        repo_owner: "ACME",
+        repo_name: "Web-App",
+        repo_id: 111,
+        base_branch: "release",
+      };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+      mockCheckRepositoryAccess.mockResolvedValue({
+        repoId: 98765,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "main",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockCheckRepositoryAccess).toHaveBeenCalledWith({
+        owner: "ACME",
+        name: "Web-App",
+      });
+
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.repoOwner).toBe("acme");
+      expect(initBody.repoName).toBe("web-app");
+      expect(initBody.repoId).toBe(98765);
+      expect(initBody.defaultBranch).toBe("release");
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoOwner: "acme",
+          repoName: "web-app",
+          baseBranch: "release",
+        })
+      );
+    });
+
+    it("creates sessions with null repo fields for no_repository automations", async () => {
+      const automation = {
+        ...sampleAutomation,
+        target_mode: "no_repository",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockCheckRepositoryAccess).not.toHaveBeenCalled();
+
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.repoOwner).toBeNull();
+      expect(initBody.repoName).toBeNull();
+      expect(initBody.repoId).toBeNull();
+      expect(initBody.defaultBranch).toBeNull();
+      expect(initBody.codeServerEnabled).toBe(false);
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+        })
+      );
+    });
+
+    it("falls back to the repository default branch during target resolution", async () => {
+      const automation = { ...sampleAutomation, base_branch: "" };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+      mockCheckRepositoryAccess.mockResolvedValue({
+        repoId: 12345,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "develop",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.defaultBranch).toBe("develop");
+    });
+
+    it("fails the run when target repository access is unavailable", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockCheckRepositoryAccess.mockResolvedValue(null);
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ processed: number; failed: number }>();
+      expect(body.processed).toBe(0);
+      expect(body.failed).toBe(1);
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: "Repository is not accessible for the configured SCM provider",
+        })
+      );
     });
 
     it("passes resolved code-server and sandbox settings into automation sessions", async () => {

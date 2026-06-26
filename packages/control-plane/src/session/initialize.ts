@@ -15,11 +15,11 @@ export interface SessionInitInput {
   sessionId: string;
 
   // Repository
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   repoId?: number | null;
-  defaultBranch?: string;
-  branch?: string;
+  defaultBranch?: string | null;
+  branch?: string | null;
 
   // Session config
   title?: string;
@@ -65,6 +65,8 @@ export async function initializeSession(
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
   const now = Date.now();
+  const baseBranch =
+    input.repoOwner && input.repoName ? input.branch || input.defaultBranch || "main" : null;
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(env.DB);
@@ -75,7 +77,7 @@ export async function initializeSession(
     repoName: input.repoName,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
-    baseBranch: input.branch || input.defaultBranch || "main",
+    baseBranch,
     status: "created",
     parentSessionId: input.parentSessionId,
     spawnSource: input.spawnSource,

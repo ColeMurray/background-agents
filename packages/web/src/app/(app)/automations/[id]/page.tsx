@@ -14,6 +14,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon, PencilIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatModelNameLower } from "@/lib/format";
+import { formatRepoLabel } from "@/lib/repo-label";
 
 const RUNS_PAGE_SIZE = 20;
 
@@ -129,7 +130,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <AutomationStatusBadge automation={automation} />
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                {automation.repoOwner}/{automation.repoName}
+                {formatRepoLabel(automation.repoOwner, automation.repoName)}
                 {automation.baseBranch && ` · ${automation.baseBranch}`}
               </p>
             </div>

@@ -1706,9 +1706,9 @@ export class SessionDO extends DurableObject<Env> {
     return {
       id: this.getPublicSessionId(session),
       title: session?.title ?? null,
-      repoOwner: session?.repo_owner ?? "",
-      repoName: session?.repo_name ?? "",
-      baseBranch: session?.base_branch ?? "main",
+      repoOwner: session?.repo_owner ?? null,
+      repoName: session?.repo_name ?? null,
+      baseBranch: session?.base_branch ?? null,
       branchName: session?.branch_name ?? null,
       status: session?.status ?? "created",
       sandboxStatus: sandbox?.status ?? "pending",
@@ -1766,6 +1766,9 @@ export class SessionDO extends DurableObject<Env> {
     if (session.repo_id) {
       return session.repo_id;
     }
+    if (!session.repo_owner || !session.repo_name) {
+      throw new Error("Session has no repository target");
+    }
 
     const result = await this.sourceControlProvider.checkRepositoryAccess({
       owner: session.repo_owner,
@@ -1798,9 +1801,12 @@ export class SessionDO extends DurableObject<Env> {
     const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
     const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    const repoId = await this.ensureRepoId(session);
-    const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-    const repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+    let repoSecrets: Record<string, string> = {};
+    if (session.repo_owner && session.repo_name) {
+      const repoId = await this.ensureRepoId(session);
+      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+    }
 
     // Merge: repo overrides global
     const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);

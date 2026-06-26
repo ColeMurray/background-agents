@@ -78,9 +78,9 @@ export interface SessionParticipant {
 export interface Session {
   id: string;
   title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;
@@ -387,9 +387,9 @@ export type ServerMessage =
 export interface SessionState {
   id: string;
   title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
   branchName: string | null;
   status: SessionStatus;
   sandboxStatus: SandboxStatus;
@@ -689,8 +689,8 @@ export interface ChildSessionDetail {
     id: string;
     title: string;
     status: SessionStatus;
-    repoOwner: string;
-    repoName: string;
+    repoOwner: string | null;
+    repoName: string | null;
     branchName: string | null;
     model: string;
     createdAt: number;
@@ -768,15 +768,18 @@ export type AutomationTriggerType =
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
+export type AutomationTargetMode = "fixed_single_repo" | "no_repository";
+
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
 
 export interface Automation {
   id: string;
   name: string;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
+  targetMode: AutomationTargetMode;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
   repoId: number | null;
   instructions: string;
   triggerType: AutomationTriggerType;
@@ -797,8 +800,9 @@ export interface Automation {
 
 export interface CreateAutomationRequest {
   name: string;
-  repoOwner: string;
-  repoName: string;
+  targetMode?: AutomationTargetMode;
+  repoOwner?: string;
+  repoName?: string;
   baseBranch?: string;
   instructions: string;
   triggerType?: AutomationTriggerType;

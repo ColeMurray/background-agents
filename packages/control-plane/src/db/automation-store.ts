@@ -17,9 +17,10 @@ import type {
 export interface AutomationRow {
   id: string;
   name: string;
-  repo_owner: string;
-  repo_name: string;
-  base_branch: string;
+  target_mode?: string | null;
+  repo_owner: string | null;
+  repo_name: string | null;
+  base_branch: string | null;
   repo_id: number | null;
   instructions: string;
   trigger_type: string;
@@ -65,6 +66,10 @@ export interface EnrichedRunRow extends AutomationRunRow {
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
+function automationTargetMode(row: AutomationRow) {
+  return row.target_mode === "no_repository" ? "no_repository" : "fixed_single_repo";
+}
+
 export function toAutomation(row: AutomationRow): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)
@@ -72,6 +77,7 @@ export function toAutomation(row: AutomationRow): Automation {
   return {
     id: row.id,
     name: row.name,
+    targetMode: automationTargetMode(row),
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
     baseBranch: row.base_branch,
@@ -128,15 +134,16 @@ export class AutomationStore {
     return this.db
       .prepare(
         `INSERT INTO automations
-         (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+         (id, name, target_mode, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
           event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
         row.name,
+        row.target_mode ?? "fixed_single_repo",
         row.repo_owner,
         row.repo_name,
         row.base_branch,

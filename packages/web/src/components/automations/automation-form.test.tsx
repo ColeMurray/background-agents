@@ -142,6 +142,43 @@ describe("automation cron submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("submits no_repository automations without repo fields", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Check incidents",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Inspect recent alerts and send a summary.",
+        }}
+      />
+    );
+
+    expect(screen.getByText("Select repository")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("No repository"));
+
+    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      name: "Check incidents",
+      targetMode: "no_repository",
+      instructions: "Inspect recent alerts and send a summary.",
+    });
+    expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].repoName).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].baseBranch).toBeUndefined();
+  });
+
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
     const onSubmit = vi.fn();
     const { container } = render(

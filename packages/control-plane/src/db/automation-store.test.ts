@@ -81,6 +81,7 @@ const now = Date.now();
 const sampleRow: AutomationRow = {
   id: "auto_test1",
   name: "Daily sync",
+  target_mode: "fixed_single_repo",
   repo_owner: "acme",
   repo_name: "web-app",
   base_branch: "main",
@@ -125,6 +126,7 @@ describe("toAutomation", () => {
   it("converts row to camelCase Automation", () => {
     const automation = toAutomation(sampleRow);
     expect(automation.id).toBe("auto_test1");
+    expect(automation.targetMode).toBe("fixed_single_repo");
     expect(automation.repoOwner).toBe("acme");
     expect(automation.repoName).toBe("web-app");
     expect(automation.baseBranch).toBe("main");
@@ -142,6 +144,22 @@ describe("toAutomation", () => {
   it("converts enabled=0 to false", () => {
     const automation = toAutomation({ ...sampleRow, enabled: 0 });
     expect(automation.enabled).toBe(false);
+  });
+
+  it("maps no_repository automations with nullable legacy repo fields", () => {
+    const automation = toAutomation({
+      ...sampleRow,
+      target_mode: "no_repository",
+      repo_owner: null,
+      repo_name: null,
+      repo_id: null,
+      base_branch: null,
+    });
+
+    expect(automation.targetMode).toBe("no_repository");
+    expect(automation.repoOwner).toBeNull();
+    expect(automation.repoName).toBeNull();
+    expect(automation.baseBranch).toBeNull();
   });
 });
 
@@ -174,6 +192,7 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("INSERT INTO automations");
       expect(statements[0].params[0]).toBe("auto_test1");
       expect(statements[0].params[1]).toBe("Daily sync");
+      expect(statements[0].params[2]).toBe("fixed_single_repo");
     });
   });
 

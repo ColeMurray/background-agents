@@ -112,6 +112,7 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
   return {
     id: "auto-test",
     name: "Test Automation",
+    targetMode: "fixed_single_repo",
     repoOwner: "test-owner",
     repoName: "test-repo",
     baseBranch: "main",
