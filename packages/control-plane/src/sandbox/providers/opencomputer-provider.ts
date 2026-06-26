@@ -28,7 +28,6 @@ import {
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
-  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   type ResumeConfig,
   type ResumeResult,
   type RestoreConfig,
@@ -43,6 +42,7 @@ import {
 
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
+const OPENCOMPUTER_DEFAULT_SANDBOX_TIMEOUT_SECONDS = 120;
 const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
   "OI_REPO_IMAGE_BUILD_ID",
@@ -101,7 +101,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       });
       secretStore = await this.createSecretStoreFor(config.sessionId, config.userEnvVars);
       const labels = this.buildLabels(config);
-      const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
+      const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
       const sandbox = config.repoImageId
         ? await this.client.forkFromCheckpoint({
             checkpointId: config.repoImageId,
@@ -171,13 +171,13 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         name: config.sandboxId,
         env: envVars,
         labels: this.buildLabels(config),
-        timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        timeoutSeconds: resolveOpenComputerTimeoutSeconds(config.timeoutSeconds),
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
       await this.client.setSandboxTimeout(
         providerObjectId,
-        config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS
+        resolveOpenComputerTimeoutSeconds(config.timeoutSeconds)
       );
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
@@ -639,6 +639,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
     return SandboxProviderError.fromFetchError(message, error);
   }
+}
+
+function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number {
+  return timeoutSeconds ?? OPENCOMPUTER_DEFAULT_SANDBOX_TIMEOUT_SECONDS;
 }
 
 export function createOpenComputerProvider(
