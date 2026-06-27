@@ -436,6 +436,18 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
     }
 
+    // OpenComputer forks (repo-image create + snapshot restore) inherit the
+    // source sandbox's persisted env. Repo-image checkpoints are taken from a
+    // build sandbox, so its build-mode markers — IMAGE_BUILD_MODE plus the
+    // repo-image build-callback vars — leak into the forked session unless we
+    // override them here, making the supervisor re-enter image-build mode
+    // (booting "build" instead of "repo_image", then failing the already-
+    // completed build-complete callback). A runtime session is never an image
+    // build, so force the markers off. IMAGE_BUILD_MODE is checked as
+    // === "true" in entrypoint.py, so "false" disables it.
+    envVars.IMAGE_BUILD_MODE = "false";
+    for (const key of REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
+
     if (this.providerConfig.scmProvider === "gitlab") {
       envVars.VCS_HOST = "gitlab.com";
       envVars.VCS_CLONE_USERNAME = "oauth2";

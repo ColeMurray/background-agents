@@ -248,6 +248,12 @@ describe("OpenComputerSandboxProvider", () => {
         env: expect.objectContaining({
           FROM_REPO_IMAGE: "true",
           REPO_IMAGE_SHA: "abc123",
+          // Build-mode markers inherited from the build sandbox's checkpoint
+          // must be neutralized so the fork boots as a session, not a build.
+          IMAGE_BUILD_MODE: "false",
+          OI_REPO_IMAGE_BUILD_ID: "",
+          OI_REPO_IMAGE_CALLBACK_URL: "",
+          OI_REPO_IMAGE_CALLBACK_TOKEN: "",
         }),
       })
     );
@@ -271,11 +277,33 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.forkFromCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
         checkpointId: "checkpoint-session-1",
-        env: expect.objectContaining({ RESTORED_FROM_SNAPSHOT: "true" }),
+        env: expect.objectContaining({
+          RESTORED_FROM_SNAPSHOT: "true",
+          IMAGE_BUILD_MODE: "false",
+        }),
       })
     );
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 600);
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("never marks a runtime session as an image build", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox(baseConfig);
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      IMAGE_BUILD_MODE: "false",
+      OI_REPO_IMAGE_PROVIDER_SESSION_ID: "",
+      OI_REPO_IMAGE_BUILD_ID: "",
+      OI_REPO_IMAGE_CALLBACK_URL: "",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "",
+    });
   });
 
   it("creates checkpoints for snapshots", async () => {
