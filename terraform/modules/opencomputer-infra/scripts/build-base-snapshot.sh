@@ -29,9 +29,15 @@ cd "${PROJECT_ROOT}" || {
     exit 1
 }
 
-# build-template.ts reads OPENCOMPUTER_API_URL / OPENCOMPUTER_API_KEY / OPENCOMPUTER_TEMPLATE
-# from the environment and creates the snapshot under that exact name. The image is
-# content-addressed (image.cacheKey()), so an unchanged source rebuild is a cheap no-op.
-OPENINSPECT_REPO_ROOT="${PROJECT_ROOT}" npm run build:opencomputer-template
+# Build the bundle, then run it directly from the repo root (mirrors the sibling Vercel builder,
+# terraform/modules/vercel-sandbox-infra). We've cd'd into the repo, so cwd is the repo root;
+# running `node <dist>` from here keeps cwd at the root, which is how build-template.ts resolves
+# the sandbox-runtime source.
+# (Running the builder via `npm -w` instead would move cwd into packages/opencomputer-infra and
+# mis-resolve the runtime dir.) build-template.ts reads OPENCOMPUTER_API_URL /
+# OPENCOMPUTER_API_KEY / OPENCOMPUTER_TEMPLATE from the env and creates the snapshot under that
+# exact name; the image is content-addressed (image.cacheKey()) so an unchanged rebuild is cheap.
+npm run build -w @open-inspect/opencomputer-infra
+node packages/opencomputer-infra/dist/build-template.js
 
 echo "Built OpenComputer base snapshot ${OPENCOMPUTER_TEMPLATE}"
