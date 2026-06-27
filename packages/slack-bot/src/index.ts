@@ -41,6 +41,7 @@ import {
   buildRepoClarificationBlocks,
 } from "./repo-clarification";
 import { getResolvedUserPreferences } from "./user-preferences";
+import { getAvailableModels, getSlackDefaultModel } from "./app-home/models";
 import { slackInteractionPayloadSchema } from "./interaction-payload";
 
 const log = createLogger("handler");
@@ -368,7 +369,14 @@ async function startSessionAndSendPrompt(
   channelDescription?: string,
   traceId?: string
 ): Promise<{ sessionId: string } | null> {
-  const userPrefs = await getResolvedUserPreferences(env, userId);
+  const [availableModels, slackDefaultModel] = await Promise.all([
+    getAvailableModels(env, traceId),
+    getSlackDefaultModel(env, traceId),
+  ]);
+  const userPrefs = await getResolvedUserPreferences(env, userId, {
+    defaultModel: slackDefaultModel ?? env.DEFAULT_MODEL,
+    enabledModels: availableModels.map((modelOption) => modelOption.value),
+  });
   const model = userPrefs.model;
   const reasoningEffort = userPrefs.reasoningEffort;
   const globalBranch = userPrefs.branch;

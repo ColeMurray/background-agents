@@ -504,6 +504,7 @@ export interface AgentResponse {
 export interface UserPreferences {
   userId: string;
   model: string;
+  appHomeModelOverride?: boolean;
   reasoningEffort?: string;
   branch?: string;
   updatedAt: number;
