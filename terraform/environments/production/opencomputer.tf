@@ -7,20 +7,29 @@
 data "external" "opencomputer_source_hash" {
   count = local.use_opencomputer_backend ? 1 : 0
 
+  # Hash every file the image actually bakes in: build-template.ts copies the whole
+  # sandbox-runtime tree via collectRuntimeFiles (not just *.py/.js/.ts — skill prompts,
+  # assets, etc.), so mirror its include/exclude policy here, and add the builder + its
+  # dependency manifests so an SDK/toolchain bump also invalidates the snapshot.
   program = ["bash", "-c", <<-EOF
+    set -euo pipefail
     cd "${var.project_root}"
     paths=(
-      packages/sandbox-runtime/pyproject.toml
       packages/sandbox-runtime/src
+      packages/sandbox-runtime/pyproject.toml
       packages/opencomputer-infra/src/build-template.ts
+      packages/opencomputer-infra/package.json
+      package-lock.json
     )
     if command -v sha256sum &> /dev/null; then
       hash=$(find "$${paths[@]}" -type f \
-        \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "pyproject.toml" \) \
+        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
+        -not -name '*.pyc' -not -name '.DS_Store' \
         -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
     else
       hash=$(find "$${paths[@]}" -type f \
-        \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "pyproject.toml" \) \
+        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
+        -not -name '*.pyc' -not -name '.DS_Store' \
         -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"
