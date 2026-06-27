@@ -156,11 +156,15 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
     )
     .runCommands(
       // GitHub CLI — installed to /usr/bin/gh (the path the runtime's gh wrapper expects).
-      "sudo mkdir -p -m 755 /etc/apt/keyrings",
-      "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null",
-      "sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg",
-      'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null',
-      "sudo apt-get update && sudo apt-get install -y gh || true",
+      // Best-effort end-to-end (keyring + apt source + install) so a cli.github.com hiccup
+      // can't fail the build, matching how vercel/bootstrap.ts best-efforts its whole gh block.
+      "if ! command -v gh >/dev/null 2>&1; then " +
+        "sudo mkdir -p -m 755 /etc/apt/keyrings && " +
+        "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null && " +
+        "sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && " +
+        'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null && ' +
+        "sudo apt-get update && sudo apt-get install -y gh; " +
+        "fi || true",
       // ttyd (terminal) — pinned binary, checksum-verified (matches the Vercel base image).
       `curl -fsSL -o /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64`,
       `echo "${TTYD_SHA256}  /tmp/ttyd" | sha256sum -c -`,
@@ -190,14 +194,14 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       "sudo git config --system credential.useHttpPath true",
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates || true`,
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo git config --system http.sslCAInfo ${OPENSANDBOX_PROXY_CA} || true`
-    )
-    .runCommands(
-      // The npm/bun/agent-browser steps above run as root (sudo) and write under the sandbox
-      // user's HOME. Re-own HOME so the non-root runtime can read/write those caches.
-      `sudo chown -R sandbox:sandbox ${SANDBOX_HOME} || true`
     );
 
   image = addRuntimeDir(image, runtimeDir);
+
+  // The npm/bun/agent-browser installs above run as root (sudo) and write under the sandbox
+  // user's HOME, and addRuntimeDir copies the runtime in as root too. Re-own HOME last so the
+  // non-root runtime can read/write its own code and the install caches.
+  image = image.runCommands(`sudo chown -R sandbox:sandbox ${SANDBOX_HOME} || true`);
 
   return image
     .env({
