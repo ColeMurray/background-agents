@@ -19,6 +19,7 @@ export interface ResolvedUserPreferences {
   model: string;
   reasoningEffort: string | undefined;
   branch: string | undefined;
+  appHomeModelOverride: boolean;
 }
 
 type UserPreferencesPatch = Partial<ResolvedUserPreferences>;
@@ -40,9 +41,9 @@ function hasPreferenceField<K extends keyof UserPreferencesPatch>(
 function normalizeResolvedPreferences(
   preferences: ResolvedUserPreferences,
   defaultModel: string | undefined,
-  options: { validateBranch?: boolean } = {}
+  options: { validateBranch?: boolean; enabledModels?: string[] } = {}
 ): ResolvedUserPreferences {
-  const model = getValidModelOrDefault(preferences.model ?? defaultModel ?? DEFAULT_MODEL);
+  const model = resolveEnabledModel(preferences.model, defaultModel, options.enabledModels);
   const reasoningEffort =
     preferences.reasoningEffort && isValidReasoningEffort(model, preferences.reasoningEffort)
       ? preferences.reasoningEffort
@@ -56,7 +57,25 @@ function normalizeResolvedPreferences(
     model,
     reasoningEffort,
     branch,
+    appHomeModelOverride: preferences.appHomeModelOverride,
   };
+}
+
+function resolveEnabledModel(
+  model: string | undefined | null,
+  defaultModel: string | undefined,
+  enabledModels: string[] | undefined
+): string {
+  const desired = getValidModelOrDefault(model ?? defaultModel ?? DEFAULT_MODEL);
+  const fallback = getValidModelOrDefault(defaultModel ?? DEFAULT_MODEL);
+  if (!enabledModels || enabledModels.length === 0) {
+    return desired;
+  }
+
+  const enabled = new Set(enabledModels);
+  if (enabled.has(desired)) return desired;
+  if (enabled.has(fallback)) return fallback;
+  return enabledModels[0] ?? fallback;
 }
 
 function mergeUserPreferencesPatch(
@@ -71,10 +90,17 @@ function mergeUserPreferencesPatch(
       ? undefined
       : current.reasoningEffort;
   const branch = hasPreferenceField(patch, "branch") ? patch.branch : current.branch;
+  const appHomeModelOverride = hasPreferenceField(patch, "model")
+    ? true
+    : current.appHomeModelOverride;
 
-  return normalizeResolvedPreferences({ model, reasoningEffort, branch }, defaultModel, {
-    validateBranch: false,
-  });
+  return normalizeResolvedPreferences(
+    { model, reasoningEffort, branch, appHomeModelOverride },
+    defaultModel,
+    {
+      validateBranch: false,
+    }
+  );
 }
 
 function isValidUserPreferences(data: unknown): data is UserPreferences {
@@ -89,22 +115,32 @@ function isValidUserPreferences(data: unknown): data is UserPreferences {
     typeof obj.userId === "string" &&
     typeof obj.model === "string" &&
     typeof obj.updatedAt === "number" &&
+    (obj.appHomeModelOverride === undefined || typeof obj.appHomeModelOverride === "boolean") &&
     branchValid
   );
 }
 
 export function resolveUserPreferences(
   prefs: UserPreferences | null | undefined,
-  defaultModel: string | undefined
+  defaultModel: string | undefined,
+  enabledModels?: string[]
 ): ResolvedUserPreferences {
+  const appHomeModelOverride = prefs ? prefs.appHomeModelOverride !== false : false;
   return normalizeResolvedPreferences(
     {
-      model: prefs?.model ?? defaultModel ?? DEFAULT_MODEL,
+      model: appHomeModelOverride && prefs ? prefs.model : (defaultModel ?? DEFAULT_MODEL),
       reasoningEffort: prefs?.reasoningEffort,
       branch: prefs?.branch,
+      appHomeModelOverride,
     },
-    defaultModel
+    defaultModel,
+    { enabledModels }
   );
+}
+
+export interface UserPreferenceResolutionOptions {
+  defaultModel?: string;
+  enabledModels?: string[];
 }
 
 export async function getUserPreferences(
@@ -127,10 +163,15 @@ export async function getUserPreferences(
 
 export async function getResolvedUserPreferences(
   env: Env,
-  userId: string
+  userId: string,
+  options: UserPreferenceResolutionOptions = {}
 ): Promise<ResolvedUserPreferences> {
   const prefs = await getUserPreferences(env, userId);
-  return resolveUserPreferences(prefs, env.DEFAULT_MODEL);
+  return resolveUserPreferences(
+    prefs,
+    options.defaultModel ?? env.DEFAULT_MODEL,
+    options.enabledModels
+  );
 }
 
 export async function saveUserPreferences(
@@ -154,6 +195,7 @@ export async function saveUserPreferences(
     const prefs: UserPreferences = {
       userId,
       model: normalizedPreferences.model,
+      appHomeModelOverride: normalizedPreferences.appHomeModelOverride,
       reasoningEffort: normalizedPreferences.reasoningEffort,
       branch: normalizedBranch,
       updatedAt: Date.now(),

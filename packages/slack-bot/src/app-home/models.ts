@@ -2,6 +2,8 @@ import {
   DEFAULT_ENABLED_MODELS,
   MODEL_OPTIONS,
   buildInternalAuthHeaders,
+  isValidModel,
+  type SlackGlobalConfig,
 } from "@open-inspect/shared";
 import type { Env } from "../types";
 import type { ModelOption } from "./slack-types";
@@ -49,4 +51,27 @@ export async function getAvailableModels(env: Env, traceId?: string): Promise<Mo
   }
 
   return getDefaultModelOptions();
+}
+
+export async function getSlackDefaultModel(
+  env: Env,
+  traceId?: string
+): Promise<string | undefined> {
+  try {
+    const headers = await getAuthHeaders(env, traceId);
+    const response = await env.CONTROL_PLANE.fetch("https://internal/integration-settings/slack", {
+      method: "GET",
+      headers,
+    });
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const data = (await response.json()) as { settings: SlackGlobalConfig | null };
+    const model = data.settings?.defaults?.model;
+    return model && isValidModel(model) ? model : undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -1,7 +1,11 @@
 import { getDefaultReasoningEffort } from "@open-inspect/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./types";
-import { getUserPreferences, updateUserPreferences } from "./user-preferences";
+import {
+  getUserPreferences,
+  resolveUserPreferences,
+  updateUserPreferences,
+} from "./user-preferences";
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -45,6 +49,7 @@ describe("updateUserPreferences", () => {
 
     const prefs = await getUserPreferences(env, "U123");
     expect(prefs?.model).toBe("anthropic/claude-haiku-4-5");
+    expect(prefs?.appHomeModelOverride).toBe(true);
     expect(prefs?.reasoningEffort).toBe(getDefaultReasoningEffort("anthropic/claude-haiku-4-5"));
     expect(prefs?.branch).toBe("staging");
   });
@@ -68,5 +73,63 @@ describe("updateUserPreferences", () => {
     expect(prefs?.model).toBe("anthropic/claude-haiku-4-5");
     expect(prefs?.reasoningEffort).toBe("max");
     expect(prefs?.branch).toBeUndefined();
+  });
+
+  it("does not mark the model as overridden when only branch is changed", async () => {
+    const env = makeEnv();
+
+    await updateUserPreferences(env, "U123", { branch: "feature/test" });
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBe("anthropic/claude-haiku-4-5");
+    expect(prefs?.appHomeModelOverride).toBe(false);
+    expect(prefs?.branch).toBe("feature/test");
+  });
+});
+
+describe("resolveUserPreferences", () => {
+  it("uses the Slack default model when App Home has not overridden model", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        appHomeModelOverride: false,
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["anthropic/claude-sonnet-4-6"]
+    );
+
+    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("falls back when the App Home model is no longer enabled", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        appHomeModelOverride: true,
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]
+    );
+
+    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("uses the first enabled model when neither preferred nor default is enabled", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        appHomeModelOverride: true,
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["openai/gpt-5.2"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.2");
   });
 });
