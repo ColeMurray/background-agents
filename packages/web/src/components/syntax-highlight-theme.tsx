@@ -16,9 +16,14 @@ const LINK_ID = "hljs-theme-link";
  * user preferences. Must be rendered as a single instance (in Providers).
  */
 export function SyntaxHighlightTheme() {
-  const { resolvedTheme } = useTheme();
-  const { colorSchemeMode, preferredLightTheme, preferredDarkTheme } =
+  const { resolvedTheme, setTheme } = useTheme();
+  const { colorSchemeMode, preferredLightTheme, preferredDarkTheme, isHydrated } =
     useSyntaxHighlightPreferences();
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    setTheme(colorSchemeMode);
+  }, [colorSchemeMode, isHydrated, setTheme]);
 
   useEffect(() => {
     // Determine which color scheme is active

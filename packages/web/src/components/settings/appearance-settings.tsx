@@ -1,5 +1,6 @@
 "use client";
 
+import { useTheme } from "next-themes";
 import {
   useSyntaxHighlightPreferences,
   LIGHT_THEMES,
@@ -53,6 +54,12 @@ function ThemeRow({
 export function AppearanceSettings() {
   const { colorSchemeMode, preferredLightTheme, preferredDarkTheme, update } =
     useSyntaxHighlightPreferences();
+  const { setTheme } = useTheme();
+
+  function updateColorSchemeMode(value: ColorSchemeMode) {
+    update({ colorSchemeMode: value });
+    setTheme(value);
+  }
 
   return (
     <div>
@@ -83,7 +90,7 @@ export function AppearanceSettings() {
               size="sm"
               value={colorSchemeMode}
               onValueChange={(value) => {
-                if (value) update({ colorSchemeMode: value as ColorSchemeMode });
+                if (value) updateColorSchemeMode(value as ColorSchemeMode);
               }}
             >
               {COLOR_SCHEME_OPTIONS.map((opt) => {

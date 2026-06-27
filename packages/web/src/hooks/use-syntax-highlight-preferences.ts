@@ -71,10 +71,12 @@ function read(): SyntaxHighlightPreferences {
 
 export function useSyntaxHighlightPreferences() {
   const [prefs, setPrefs] = useState(DEFAULTS);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   // Hydrate from localStorage on mount and listen for cross-instance changes
   useEffect(() => {
     setPrefs(read());
+    setIsHydrated(true);
 
     const onChange = () => setPrefs(read());
     window.addEventListener(CHANGE_EVENT, onChange);
@@ -88,5 +90,5 @@ export function useSyntaxHighlightPreferences() {
     window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
   }, []);
 
-  return { ...prefs, update };
+  return { ...prefs, update, isHydrated };
 }

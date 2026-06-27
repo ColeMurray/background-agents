@@ -150,6 +150,57 @@ pre code.hljs {
   }
 }
 
+/* Light mode via class (authoritative when next-themes is loaded) */
+.light {
+  --background: #f8f8f6;
+  --foreground: #1a1a1a;
+
+  --card: #f8f8f6;
+  --card-foreground: #1a1a1a;
+
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+
+  --primary: #1a1a1a;
+  --primary-foreground: #ffffff;
+
+  --secondary: rgba(0, 0, 0, 0.05);
+
+  --accent: #8b7355;
+  --accent-foreground: #ffffff;
+  --accent-muted: rgba(139, 115, 85, 0.1);
+
+  --muted: rgba(0, 0, 0, 0.05);
+  --muted-foreground: #6b655f;
+  --secondary-foreground: #9c9690;
+
+  --destructive: #c24a3a;
+  --destructive-foreground: #ffffff;
+
+  --border: rgba(0, 0, 0, 0.1);
+  --border-muted: rgba(0, 0, 0, 0.05);
+
+  --input: #ffffff;
+
+  --ring: #8b7355;
+
+  --success: #4d9a5f;
+  --success-muted: rgba(77, 154, 95, 0.1);
+
+  --warning: #c49135;
+  --warning-foreground: #ffffff;
+  --warning-muted: rgba(196, 145, 53, 0.1);
+
+  --info: #5b82a8;
+  --info-foreground: #ffffff;
+  --info-muted: rgba(91, 130, 168, 0.1);
+
+  --destructive-muted: rgba(194, 74, 58, 0.08);
+  --destructive-border: rgba(194, 74, 58, 0.2);
+
+  --overlay: rgba(0, 0, 0, 0.5);
+}
+
 /* Dark mode via class (authoritative when next-themes is loaded) */
 .dark {
   --background: #1a1a1a;
