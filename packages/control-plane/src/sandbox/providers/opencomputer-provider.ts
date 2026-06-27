@@ -324,6 +324,22 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
   }
 
+  /**
+   * Permanently delete a sandbox. Used to tear down ephemeral repo-image build
+   * sandboxes once their checkpoint has been taken: stopSandbox only hibernates
+   * (pause-for-resume), which is correct for idle sessions but would leak the
+   * single-use build sandbox. Idempotent — a missing sandbox is treated as
+   * already deleted.
+   */
+  async deleteSandbox(providerObjectId: string): Promise<void> {
+    try {
+      await this.client.deleteSandbox(providerObjectId);
+    } catch (error) {
+      if (error instanceof OpenComputerNotFoundError) return;
+      throw this.classifyError("Failed to delete OpenComputer sandbox", error);
+    }
+  }
+
   async triggerRepoImageBuild(
     config: TriggerOpenComputerRepoImageBuildConfig
   ): Promise<TriggerOpenComputerRepoImageBuildResult> {
@@ -519,8 +535,19 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
   }
 
-  private buildSecretStoreName(sessionId: string): string {
-    return `openinspect-${sessionId.slice(0, 32)}`;
+  /**
+   * Build a unique secret-store name for a sandbox. The store is linked to its
+   * sandbox by the name returned at creation and is never looked up by a
+   * re-derived name, so the name only needs to be unique, not deterministic.
+   *
+   * Build ids are `img-<owner>-<repo>-<ts>`; a plain `id.slice(0, 32)` dropped
+   * the unique timestamp, collapsing every build for a repo to one name — so
+   * concurrent or sequential same-repo builds (and session re-spawns) collided
+   * on create. Appending a random suffix keeps names unique, within the same
+   * length budget, so no two stores ever share a name.
+   */
+  private buildSecretStoreName(id: string): string {
+    return `openinspect-${id.slice(0, 23)}-${crypto.randomUUID().slice(0, 8)}`;
   }
 
   private buildCheckpointName(sessionId: string, reason: string): string {

@@ -9,6 +9,7 @@ import type {
 import {
   OPENCOMPUTER_CHECKPOINT_KIND,
   OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
+  OpenComputerNotFoundError,
 } from "../opencomputer-rest-client";
 import type { CreateSandboxConfig } from "../provider";
 
@@ -146,7 +147,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1");
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-test");
     expect(client.createSecretStore).toHaveBeenCalledWith({
-      name: "openinspect-session-1",
+      name: expect.stringMatching(/^openinspect-session-1-[0-9a-f]{8}$/),
       egressAllowlist: ["*"],
     });
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 600);
@@ -222,6 +223,39 @@ describe("OpenComputerSandboxProvider", () => {
 
     expect(client.deleteSandbox).toHaveBeenCalledWith("oc-sandbox-1");
     expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
+  });
+
+  it("deletes a build sandbox, ignoring a missing sandbox", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.deleteSandbox("oc-build-1");
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-build-1");
+
+    vi.mocked(client.deleteSandbox).mockRejectedValueOnce(new OpenComputerNotFoundError("gone"));
+    await expect(provider.deleteSandbox("oc-build-2")).resolves.toBeUndefined();
+  });
+
+  it("derives a unique secret-store name per sandbox", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({ ...baseConfig, userEnvVars: { ANTHROPIC_API_KEY: "sk-test" } });
+    await provider.createSandbox({ ...baseConfig, userEnvVars: { ANTHROPIC_API_KEY: "sk-test" } });
+
+    const names = vi.mocked(client.createSecretStore).mock.calls.map((call) => call[0].name);
+    expect(names).toHaveLength(2);
+    expect(names[0]).toMatch(/^openinspect-/);
+    expect(names[1]).toMatch(/^openinspect-/);
+    // Names must be unique so concurrent or sequential same-repo builds never
+    // collide on create (which would otherwise risk reaping a live store).
+    expect(names[0]).not.toBe(names[1]);
   });
 
   it("forks from a repo image checkpoint when provided", async () => {

@@ -691,30 +691,15 @@ async function completeOpenComputerBuildFromSession(
   } finally {
     if (openComputerProvider) {
       try {
-        const stopResult = await openComputerProvider.stopSandbox({
-          providerObjectId: params.providerSessionId,
-          sessionId: params.buildId,
-          reason: "repo_image_build_complete",
-          correlation: {
-            request_id: params.requestId,
-            trace_id: params.traceId,
-            sandbox_id: params.providerSessionId,
-          },
-        });
-        if (!stopResult.success) {
-          logger.warn("repo_image.opencomputer_build_stop_failed", {
-            build_id: params.buildId,
-            provider_session_id: params.providerSessionId,
-            error: stopResult.error,
-            request_id: params.requestId,
-            trace_id: params.traceId,
-          });
-        }
-      } catch (stopError) {
-        logger.warn("repo_image.opencomputer_build_stop_failed", {
+        // The repo-image build sandbox is single-use — its checkpoint is the
+        // image. Delete it rather than hibernating (stopSandbox), which would
+        // leave it running/leaked after the build.
+        await openComputerProvider.deleteSandbox(params.providerSessionId);
+      } catch (cleanupError) {
+        logger.warn("repo_image.opencomputer_build_cleanup_failed", {
           build_id: params.buildId,
           provider_session_id: params.providerSessionId,
-          error: stopError instanceof Error ? stopError.message : String(stopError),
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
           request_id: params.requestId,
           trace_id: params.traceId,
         });
@@ -790,21 +775,14 @@ async function handleBuildFailed(
     if (backend === "opencomputer" && body.provider_session_id) {
       const cleanupPromise = (async () => {
         try {
-          await createConfiguredOpenComputerProvider(env).stopSandbox({
-            providerObjectId: body.provider_session_id!,
-            sessionId: buildId,
-            reason: "repo_image_build_failed",
-            correlation: {
-              request_id: ctx.request_id,
-              trace_id: ctx.trace_id,
-              sandbox_id: body.provider_session_id!,
-            },
-          });
-        } catch (stopError) {
-          logger.warn("repo_image.opencomputer_build_stop_failed", {
+          // Single-use build sandbox: delete it rather than hibernating so a
+          // failed build doesn't leave the sandbox running/leaked.
+          await createConfiguredOpenComputerProvider(env).deleteSandbox(body.provider_session_id!);
+        } catch (cleanupError) {
+          logger.warn("repo_image.opencomputer_build_cleanup_failed", {
             build_id: buildId,
             provider_session_id: body.provider_session_id,
-            error: stopError instanceof Error ? stopError.message : String(stopError),
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
             request_id: ctx.request_id,
             trace_id: ctx.trace_id,
           });
