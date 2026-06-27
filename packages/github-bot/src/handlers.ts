@@ -9,6 +9,7 @@ import type {
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
+import { createSessionResponseSchema, sendPromptResponseSchema } from "./control-plane-responses";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 
 export type HandlerResult =
@@ -65,8 +66,11 @@ async function createSession(
     const body = await response.text();
     throw new Error(`Session creation failed: ${response.status} ${body}`);
   }
-  const result = (await response.json()) as { sessionId: string };
-  return result.sessionId;
+  const result = createSessionResponseSchema.safeParse(await response.json());
+  if (!result.success) {
+    throw new Error("Session creation failed: invalid response");
+  }
+  return result.data.sessionId;
 }
 
 async function sendPrompt(
@@ -84,8 +88,11 @@ async function sendPrompt(
     const body = await response.text();
     throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
   }
-  const result = (await response.json()) as { messageId: string };
-  return result.messageId;
+  const result = sendPromptResponseSchema.safeParse(await response.json());
+  if (!result.success) {
+    throw new Error("Prompt delivery failed: invalid response");
+  }
+  return result.data.messageId;
 }
 
 function stripMention(body: string, botUsername: string): string {
