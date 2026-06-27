@@ -30,7 +30,7 @@ const QUERY_PATTERNS = {
   UPDATE_CALLBACK_USED:
     /^UPDATE repo_images SET callback_token_used_at = \? WHERE id = \? AND provider = \? AND status = 'building' AND callback_token_hash = \? AND callback_token_used_at IS NULL$/,
   SELECT_READY_FOR_REPO:
-    /^SELECT id, provider_image_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready'$/,
+    /^SELECT id, provider_image_id, provider_session_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready'$/,
   UPDATE_READY:
     /^UPDATE repo_images SET status = 'ready', provider_image_id = \?, base_sha = \?, build_duration_seconds = \? WHERE id = \? AND provider = \? AND status = 'building'$/,
   DELETE_BY_ID: /^DELETE FROM repo_images WHERE id = \?$/,
@@ -111,7 +111,11 @@ class FakeD1Database {
           row.base_branch === branch &&
           row.status === "ready"
         ) {
-          return { id: row.id, provider_image_id: row.provider_image_id };
+          return {
+            id: row.id,
+            provider_image_id: row.provider_image_id,
+            provider_session_id: row.provider_session_id,
+          };
         }
       }
       return null;
@@ -509,6 +513,9 @@ describe("RepoImageStore", () => {
         provider: "modal",
         baseBranch: "main",
       });
+      await expect(
+        store.bindProviderSession("img-old", "modal", "modal-build-session-old")
+      ).resolves.toBe(true);
       await store.markReady("img-old", "modal", "modal-img-old", "sha-old", 30);
 
       vi.advanceTimersByTime(60000);
@@ -523,6 +530,7 @@ describe("RepoImageStore", () => {
       const result = await store.markReady("img-new", "modal", "modal-img-new", "sha-new", 40);
 
       expect(result.replacedImageId).toBe("modal-img-old");
+      expect(result.replacedProviderSessionId).toBe("modal-build-session-old");
 
       const ready = await store.getLatestReady("acme", "repo", "modal");
       expect(ready).not.toBeNull();

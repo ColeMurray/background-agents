@@ -12,16 +12,20 @@ import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import {
   DEFAULT_MODEL,
+  clientMessageSchema,
   isValidReasoningEffort,
   resolveAppName,
+  sandboxEventSchema,
   timingSafeEqual,
 } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
+import { createOpenComputerRestClient } from "../sandbox/opencomputer-rest-client";
 import { createVercelSandboxClient } from "../sandbox/providers/vercel/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
+import { createOpenComputerProvider } from "../sandbox/providers/opencomputer-provider";
 import { createVercelProvider } from "../sandbox/providers/vercel/provider";
 import { resolveSandboxBackendName, supportsRepoImageBackend } from "../sandbox/provider-name";
 import { createLogger, parseLogLevel } from "../logger";
@@ -43,6 +47,7 @@ import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
+import type { RepoImageProvider } from "../db/repo-images";
 import {
   createSourceControlProviderFromEnv,
   resolveScmProviderFromEnv,
@@ -52,7 +57,6 @@ import {
 import type {
   Env,
   ClientInfo,
-  ClientMessage,
   ServerMessage,
   SandboxEvent,
   SessionState,
@@ -122,6 +126,12 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+
+type BoundarySchema<T> = {
+  safeParse(
+    input: unknown
+  ): { success: true; data: T } | { success: false; error: { issues: unknown } };
+};
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -633,6 +643,34 @@ export class SessionDO extends DurableObject<Env> {
         });
       }
 
+      if (sandboxBackend === "opencomputer") {
+        if (
+          !this.env.OPENCOMPUTER_API_URL ||
+          !this.env.OPENCOMPUTER_API_KEY ||
+          !this.env.OPENCOMPUTER_TEMPLATE
+        ) {
+          throw new Error(
+            "OPENCOMPUTER_API_URL, OPENCOMPUTER_API_KEY, and OPENCOMPUTER_TEMPLATE are required when SANDBOX_PROVIDER=opencomputer"
+          );
+        }
+
+        const openComputerClient = createOpenComputerRestClient({
+          apiUrl: this.env.OPENCOMPUTER_API_URL,
+          apiKey: this.env.OPENCOMPUTER_API_KEY,
+          template: this.env.OPENCOMPUTER_TEMPLATE,
+          projectId: this.env.OPENCOMPUTER_PROJECT_ID,
+          target: this.env.OPENCOMPUTER_TARGET,
+        });
+
+        return createOpenComputerProvider(openComputerClient, {
+          scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+          codeServerPasswordSecret: this.env.OPENCOMPUTER_API_KEY,
+          llmEnvVars: {
+            ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY,
+          },
+        });
+      }
+
       if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
         throw new Error(
           "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
@@ -779,7 +817,7 @@ export class SessionDO extends DurableObject<Env> {
     let repoImageLookup: RepoImageLookup | undefined;
     if (this.env.DB && supportsRepoImageBackend(sandboxBackend)) {
       const repoImageStore = new RepoImageStore(this.env.DB);
-      const repoImageProvider = sandboxBackend === "vercel" ? "vercel" : "modal";
+      const repoImageProvider = sandboxBackend as RepoImageProvider;
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>
           repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
@@ -1122,8 +1160,10 @@ export class SessionDO extends DurableObject<Env> {
    * Handle messages from sandbox.
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
+    const event = this.parseWebSocketMessage(message, "sandbox", sandboxEventSchema);
+    if (!event) return;
+
     try {
-      const event = JSON.parse(message) as SandboxEvent;
       await this.processSandboxEvent(event);
     } catch (e) {
       this.log.error("Error processing sandbox message", {
@@ -1137,7 +1177,15 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleClientMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const data = JSON.parse(message) as ClientMessage;
+      const data = this.parseWebSocketMessage(message, "client", clientMessageSchema);
+      if (!data) {
+        this.safeSend(ws, {
+          type: "error",
+          code: "INVALID_MESSAGE",
+          message: "Failed to process message",
+        });
+        return;
+      }
 
       switch (data.type) {
         case "ping":
@@ -1178,6 +1226,34 @@ export class SessionDO extends DurableObject<Env> {
         message: "Failed to process message",
       });
     }
+  }
+
+  private parseWebSocketMessage<T>(
+    message: string,
+    boundary: "client" | "sandbox",
+    schema: BoundarySchema<T>
+  ): T | null {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(message);
+    } catch (e) {
+      this.log.error("Invalid WebSocket JSON", {
+        boundary,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+
+    const result = schema.safeParse(raw);
+    if (!result.success) {
+      this.log.warn("Invalid WebSocket message", {
+        boundary,
+        issues: result.error.issues,
+      });
+      return null;
+    }
+
+    return result.data;
   }
 
   /**

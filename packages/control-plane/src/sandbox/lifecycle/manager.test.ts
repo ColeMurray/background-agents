@@ -1296,6 +1296,43 @@ describe("SandboxLifecycleManager", () => {
       expect(storage.calls).toContain("clearSandboxCodeServer");
     });
 
+    it("does not explicitly stop providers when the capability is disabled", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager(false, 0);
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: false, supportsPersistentResume: false },
+        stopSandbox,
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(provider.takeSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
+    });
+
     it("stops resumable provider-managed sandboxes without snapshotting", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({

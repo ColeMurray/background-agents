@@ -127,7 +127,7 @@ describe("SlackNotifyEvent", () => {
     expect(screen.getByText(/rate-limited/i)).toBeInTheDocument();
   });
 
-  it("surfaces the concrete retryAfter for rate_limited when provided", () => {
+  it("surfaces the concrete retryAfterSeconds for rate_limited when provided", () => {
     const event: ToolCallEvent = {
       ...BASE,
       status: "completed",
@@ -136,7 +136,7 @@ describe("SlackNotifyEvent", () => {
         ok: false,
         reason: "rate_limited",
         agentMessage: "Slack rate-limited the request.",
-        retryAfter: 30,
+        retryAfterSeconds: 30,
       }),
     };
     renderExpanded(event);

@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "@open-inspect/shared";
 
-export type RepoImageProvider = "modal" | "vercel";
+export type RepoImageProvider = "modal" | "vercel" | "opencomputer";
 
 export interface RepoImageBuild {
   id: string;
@@ -141,7 +141,11 @@ export class RepoImageStore {
     providerImageId: string,
     baseSha: string,
     buildDurationSeconds: number
-  ): Promise<{ updated: boolean; replacedImageId: string | null }> {
+  ): Promise<{
+    updated: boolean;
+    replacedImageId: string | null;
+    replacedProviderSessionId: string | null;
+  }> {
     const build = await this.db
       .prepare(
         "SELECT repo_owner, repo_name, provider, base_branch FROM repo_images WHERE id = ? AND provider = ? AND status = 'building'"
@@ -154,30 +158,37 @@ export class RepoImageStore {
         base_branch: string;
       }>();
 
-    if (!build) return { updated: false, replacedImageId: null };
+    if (!build) {
+      return { updated: false, replacedImageId: null, replacedProviderSessionId: null };
+    }
 
     const oldReady = await this.db
       .prepare(
-        "SELECT id, provider_image_id FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND provider = ? AND base_branch = ? AND status = 'ready'"
+        "SELECT id, provider_image_id, provider_session_id FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND provider = ? AND base_branch = ? AND status = 'ready'"
       )
       .bind(build.repo_owner, build.repo_name, build.provider, build.base_branch)
-      .first<{ id: string; provider_image_id: string }>();
+      .first<{ id: string; provider_image_id: string; provider_session_id: string | null }>();
 
-    const statements: D1PreparedStatement[] = [
-      this.db
-        .prepare(
-          "UPDATE repo_images SET status = 'ready', provider_image_id = ?, base_sha = ?, build_duration_seconds = ? WHERE id = ? AND provider = ? AND status = 'building'"
-        )
-        .bind(providerImageId, baseSha, buildDurationSeconds, buildId, provider),
-    ];
+    const updateResult = await this.db
+      .prepare(
+        "UPDATE repo_images SET status = 'ready', provider_image_id = ?, base_sha = ?, build_duration_seconds = ? WHERE id = ? AND provider = ? AND status = 'building'"
+      )
+      .bind(providerImageId, baseSha, buildDurationSeconds, buildId, provider)
+      .run();
 
-    if (oldReady) {
-      statements.push(this.db.prepare("DELETE FROM repo_images WHERE id = ?").bind(oldReady.id));
+    if ((updateResult.meta?.changes ?? 0) === 0) {
+      return { updated: false, replacedImageId: null, replacedProviderSessionId: null };
     }
 
-    await this.db.batch(statements);
+    if (oldReady) {
+      await this.db.prepare("DELETE FROM repo_images WHERE id = ?").bind(oldReady.id).run();
+    }
 
-    return { updated: true, replacedImageId: oldReady?.provider_image_id ?? null };
+    return {
+      updated: true,
+      replacedImageId: oldReady?.provider_image_id ?? null,
+      replacedProviderSessionId: oldReady?.provider_session_id ?? null,
+    };
   }
 
   async markFailed(buildId: string, provider: RepoImageProvider, error: string): Promise<boolean> {

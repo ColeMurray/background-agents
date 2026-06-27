@@ -3,6 +3,9 @@
  */
 
 import { z } from "zod";
+import type { Attachment } from "./websocket";
+export { attachmentSchema, clientMessageSchema } from "./websocket";
+export type { Attachment, ClientMessage } from "./websocket";
 
 // Session states
 export type SessionStatus =
@@ -104,15 +107,6 @@ export interface SessionMessage {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
-}
-
-// Attachment to a message
-export interface Attachment {
-  type: "file" | "image" | "url";
-  name: string;
-  url?: string;
-  content?: string;
-  mimeType?: string;
 }
 
 // Agent event
@@ -316,21 +310,6 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
 
 // WebSocket message types
-export type ClientMessage =
-  | { type: "ping" }
-  | { type: "subscribe"; token: string; clientId: string }
-  | {
-      type: "prompt";
-      content: string;
-      model?: string;
-      reasoningEffort?: string;
-      attachments?: Attachment[];
-    }
-  | { type: "stop" }
-  | { type: "typing" }
-  | { type: "presence"; status: "active" | "idle"; cursor?: { line: number; file: string } }
-  | { type: "fetch_history"; cursor: { timestamp: number; id: string }; limit?: number };
-
 export type ServerMessage =
   | { type: "pong"; timestamp: number }
   | {
