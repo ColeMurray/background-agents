@@ -235,6 +235,13 @@ jobs:
           TF_VAR_vercel_base_snapshot_id: ${{ secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
+          # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
+          # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
+          TF_VAR_opencomputer_api_url: ${{ secrets.OPENCOMPUTER_API_URL }}
+          TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
+          TF_VAR_opencomputer_template: ${{ secrets.OPENCOMPUTER_TEMPLATE }}
+          TF_VAR_opencomputer_project_id: ${{ secrets.OPENCOMPUTER_PROJECT_ID }}
+          TF_VAR_opencomputer_target: ${{ secrets.OPENCOMPUTER_TARGET }}
 
       - name: Post Plan Results
         uses: actions/github-script@v8
@@ -379,6 +386,13 @@ jobs:
           TF_VAR_vercel_base_snapshot_id: ${{ secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
+          # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
+          # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
+          TF_VAR_opencomputer_api_url: ${{ secrets.OPENCOMPUTER_API_URL }}
+          TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
+          TF_VAR_opencomputer_template: ${{ secrets.OPENCOMPUTER_TEMPLATE }}
+          TF_VAR_opencomputer_project_id: ${{ secrets.OPENCOMPUTER_PROJECT_ID }}
+          TF_VAR_opencomputer_target: ${{ secrets.OPENCOMPUTER_TARGET }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
