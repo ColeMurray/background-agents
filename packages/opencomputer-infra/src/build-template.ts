@@ -6,11 +6,15 @@ import { Image, Snapshots } from "@opencomputer/sdk/node";
 const OPENCODE_VERSION = "1.14.41";
 const CODE_SERVER_VERSION = "4.109.5";
 const PYTHON_VERSION = "3.12";
+const AGENT_BROWSER_VERSION = "0.21.2";
+const TTYD_VERSION = "1.7.7";
+const TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55";
 const SANDBOX_HOME = "/home/sandbox";
 const SANDBOX_APP_DIR = `${SANDBOX_HOME}/app`;
 const NPM_PREFIX = `${SANDBOX_HOME}/.npm-global`;
 const NPM_CACHE = `${SANDBOX_HOME}/.npm-cache`;
 const USER_BIN = `${SANDBOX_HOME}/.local/bin`;
+const BUN_INSTALL_DIR = `${SANDBOX_HOME}/.bun`;
 const PYTHON_VENV = `${SANDBOX_HOME}/.venv`;
 const UV_CACHE = `${SANDBOX_HOME}/.cache/uv`;
 const UV_PYTHON_INSTALL_DIR = `${SANDBOX_HOME}/.local/share/uv/python`;
@@ -148,7 +152,24 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       `ln -sf ${PYTHON_VENV}/bin/python ${USER_BIN}/python`,
       `HOME=${SANDBOX_HOME} UV_CACHE_DIR=${UV_CACHE} uv pip install --python ${PYTHON_VENV}/bin/python httpx websockets "pydantic>=2.0" "PyJWT[crypto]"`,
       `sudo rm -rf /app && sudo ln -s ${SANDBOX_APP_DIR} /app`,
-      `sudo env npm_config_cache=${NPM_CACHE} npm install -g --prefix ${NPM_PREFIX} pnpm@10 opencode-ai@${OPENCODE_VERSION} @opencode-ai/plugin@${OPENCODE_VERSION} zod@4.4.3`
+      `sudo env npm_config_cache=${NPM_CACHE} npm install -g --prefix ${NPM_PREFIX} pnpm@10 opencode-ai@${OPENCODE_VERSION} @opencode-ai/plugin@${OPENCODE_VERSION} zod@4.4.3 agent-browser@${AGENT_BROWSER_VERSION}`
+    )
+    .runCommands(
+      // GitHub CLI — installed to /usr/bin/gh (the path the runtime's gh wrapper expects).
+      "sudo mkdir -p -m 755 /etc/apt/keyrings",
+      "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null",
+      "sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg",
+      'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null',
+      "sudo apt-get update && sudo apt-get install -y gh || true",
+      // ttyd (terminal) — pinned binary, checksum-verified (matches the Vercel base image).
+      `curl -fsSL -o /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64`,
+      `echo "${TTYD_SHA256}  /tmp/ttyd" | sha256sum -c -`,
+      "sudo mv /tmp/ttyd /usr/local/bin/ttyd",
+      "sudo chmod 0755 /usr/local/bin/ttyd",
+      // bun — used by agent-browser and some opencode tooling.
+      `curl -fsSL https://bun.sh/install | sudo env BUN_INSTALL=${BUN_INSTALL_DIR} bash || true`,
+      // agent-browser Chromium download (best-effort; the shared libs are installed via aptInstall above).
+      `sudo env HOME=${SANDBOX_HOME} PATH=${NPM_PREFIX}/bin:${BUN_INSTALL_DIR}/bin:${USER_BIN}:/usr/local/bin:/usr/bin:/bin agent-browser install || true`
     )
     .runCommands(
       `curl -fsSL -o /tmp/code-server.deb https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_amd64.deb`,
@@ -169,6 +190,11 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       "sudo git config --system credential.useHttpPath true",
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates || true`,
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo git config --system http.sslCAInfo ${OPENSANDBOX_PROXY_CA} || true`
+    )
+    .runCommands(
+      // The npm/bun/agent-browser steps above run as root (sudo) and write under the sandbox
+      // user's HOME. Re-own HOME so the non-root runtime can read/write those caches.
+      `sudo chown -R sandbox:sandbox ${SANDBOX_HOME} || true`
     );
 
   image = addRuntimeDir(image, runtimeDir);
@@ -184,7 +210,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       UV_PYTHON_INSTALL_DIR,
       VIRTUAL_ENV: PYTHON_VENV,
       PNPM_HOME: `${SANDBOX_HOME}/.local/share/pnpm`,
-      PATH: `${PYTHON_VENV}/bin:${NPM_PREFIX}/bin:${USER_BIN}:${SANDBOX_HOME}/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin`,
+      PATH: `${PYTHON_VENV}/bin:${NPM_PREFIX}/bin:${USER_BIN}:${BUN_INSTALL_DIR}/bin:${SANDBOX_HOME}/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin`,
       PYTHONPATH: "/app",
       NODE_PATH: `${NPM_PREFIX}/lib/node_modules:/usr/lib/node_modules`,
       SSL_CERT_FILE: SYSTEM_CA_BUNDLE,
@@ -196,7 +222,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       OPENINSPECT_BIN_INSTALL_DIR: USER_BIN,
       NO_PROXY: LOCAL_NO_PROXY,
       no_proxy: LOCAL_NO_PROXY,
-      SANDBOX_VERSION: "opencomputer-v1",
+      SANDBOX_VERSION: "opencomputer-v2",
     })
     .workdir(`${SANDBOX_HOME}/workspace`)
     .builderMemory(options.builderMemoryMb);
