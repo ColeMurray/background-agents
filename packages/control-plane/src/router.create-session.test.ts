@@ -119,6 +119,67 @@ describe("handleCreateSession D1 ordering", () => {
     expect(resolveRepoOrError).not.toHaveBeenCalled();
   });
 
+  it("rejects no-repository public session creation before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest(
+      JSON.stringify({
+        title: "No repo",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "No-repository sessions can only be created by automations",
+    });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-only no-repository public session creation before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest(
+      JSON.stringify({
+        repoOwner: "   ",
+        repoName: "\t",
+        title: "No repo",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "No-repository sessions can only be created by automations",
+    });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("rejects partial repository payloads as invalid before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest(
+      JSON.stringify({
+        repoOwner: "Acme",
+        title: "Partial repo",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid session request body" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("rejects one-sided blank repository payloads as invalid before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest(
+      JSON.stringify({
+        repoOwner: "Acme",
+        repoName: " ",
+        title: "Partial repo",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid session request body" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
   it("creates the D1 session index before initializing the SessionDO", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
     vi.mocked(SessionIndexStore).mockImplementation(function () {

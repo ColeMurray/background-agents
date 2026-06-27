@@ -5,8 +5,8 @@ import type { SessionEntry } from "./session-index";
 type SessionRow = {
   id: string;
   title: string | null;
-  repo_owner: string;
-  repo_name: string;
+  repo_owner: string | null;
+  repo_name: string | null;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -143,8 +143,8 @@ class FakeD1Database {
       ] = args as [
         string,
         string | null,
-        string,
-        string,
+        string | null,
+        string | null,
         string,
         string | null,
         string | null,
@@ -386,13 +386,22 @@ describe("SessionIndexStore", () => {
       });
     });
 
-    it("normalizes repoOwner and repoName to lowercase", async () => {
-      const session = makeSession({ repoOwner: "Owner", repoName: "Repo" });
+    it("trims and lowercases repoOwner and repoName", async () => {
+      const session = makeSession({ repoOwner: "  Owner  ", repoName: "  Repo  " });
       await store.create(session);
 
       const result = await store.get("test-id");
       expect(result?.repoOwner).toBe("owner");
       expect(result?.repoName).toBe("repo");
+    });
+
+    it("stores blank repoOwner and repoName as null", async () => {
+      const session = makeSession({ repoOwner: "   ", repoName: "" });
+      await store.create(session);
+
+      const result = await store.get("test-id");
+      expect(result?.repoOwner).toBeNull();
+      expect(result?.repoName).toBeNull();
     });
 
     it("ignores duplicate inserts (INSERT OR IGNORE)", async () => {
@@ -494,6 +503,17 @@ describe("SessionIndexStore", () => {
       expect(result.sessions.map((s) => s.id)).toEqual(["alice-new", "alice-old"]);
       expect(result.total).toBe(2);
       expect(result.hasMore).toBe(false);
+    });
+
+    it("trims and lowercases repo filters", async () => {
+      await store.create(makeSession({ id: "match", repoOwner: "Owner", repoName: "Repo" }));
+      await store.create(makeSession({ id: "other", repoOwner: "Other", repoName: "Repo" }));
+
+      const result = await store.list({ repoOwner: "  OWNER  ", repoName: "  REPO  " });
+
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0].id).toBe("match");
+      expect(result.total).toBe(1);
     });
 
     it("supports multiple creator user ids", async () => {

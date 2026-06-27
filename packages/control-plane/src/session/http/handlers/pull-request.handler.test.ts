@@ -111,6 +111,33 @@ describe("createPullRequestHandler", () => {
     expect(await response.json()).toEqual({ error: "No active prompt found" });
   });
 
+  it("returns repository target error before participant lookup for no-repo sessions", async () => {
+    const {
+      handler,
+      getSession,
+      getPromptingParticipantForPR,
+      resolveAuthForPR,
+      createPullRequest,
+    } = createHandler();
+    getSession.mockReturnValue(
+      createSession({ repo_owner: null, repo_name: null, repo_id: null, base_branch: null })
+    );
+
+    const response = await handler.createPr(
+      new Request("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "PR", body: "desc" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Pull requests require a repository target" });
+    expect(getPromptingParticipantForPR).not.toHaveBeenCalled();
+    expect(resolveAuthForPR).not.toHaveBeenCalled();
+    expect(createPullRequest).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for malformed create PR bodies", async () => {
     const { handler, getSession, createPullRequest } = createHandler();
     getSession.mockReturnValue(createSession());
@@ -188,6 +215,46 @@ describe("createPullRequestHandler", () => {
       baseBranch: "develop",
       promptingUserId: "user-123",
       promptingAuth: { authType: "oauth", token: "token" },
+      sessionUrl: "https://app.example.com/session/public-session-1",
+    });
+  });
+
+  it("allows repo sessions with null base branch to use service fallback", async () => {
+    const {
+      handler,
+      getSession,
+      getPromptingParticipantForPR,
+      resolveAuthForPR,
+      getSessionUrl,
+      createPullRequest,
+    } = createHandler();
+    const participant = createParticipant({ user_id: "user-123" });
+    getSession.mockReturnValue(createSession({ base_branch: null }));
+    getPromptingParticipantForPR.mockResolvedValue({ participant });
+    resolveAuthForPR.mockResolvedValue({ auth: null });
+    getSessionUrl.mockReturnValue("https://app.example.com/session/public-session-1");
+    createPullRequest.mockResolvedValue({
+      kind: "created",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      state: "open",
+    });
+
+    const response = await handler.createPr(
+      new Request("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "PR", body: "desc" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPullRequest).toHaveBeenCalledWith({
+      title: "PR",
+      body: "desc",
+      baseBranch: undefined,
+      promptingUserId: "user-123",
+      promptingAuth: null,
       sessionUrl: "https://app.example.com/session/public-session-1",
     });
   });

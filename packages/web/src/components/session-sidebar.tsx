@@ -39,6 +39,7 @@ import {
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { APP_SHORT_NAME } from "@/lib/site-config";
+import { formatRepoLabel } from "@/lib/repo-label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -58,13 +59,18 @@ const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 type SessionCreatorFilter = "all" | "mine";
 
 export function buildSessionHref(session: SessionItem) {
+  const query: Record<string, string> = {};
+  if (session.repoOwner && session.repoName) {
+    query.repoOwner = session.repoOwner;
+    query.repoName = session.repoName;
+  }
+  if (session.title) {
+    query.title = session.title;
+  }
+
   return {
     pathname: `/session/${session.id}`,
-    query: {
-      repoOwner: session.repoOwner,
-      repoName: session.repoName,
-      ...(session.title ? { title: session.title } : {}),
-    },
+    query,
   };
 }
 
@@ -213,7 +219,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         if (!searchQuery) return true;
         const query = searchQuery.toLowerCase();
         const title = session.title?.toLowerCase() || "";
-        const repo = `${session.repoOwner}/${session.repoName}`.toLowerCase();
+        const repo = formatRepoLabel(session.repoOwner, session.repoName).toLowerCase();
         return title.includes(query) || repo.includes(query);
       });
 
@@ -639,8 +645,8 @@ function SessionListItem({
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
-  const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
-  const repoInfo = `${session.repoOwner}/${session.repoName}`;
+  const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
+  const displayTitle = session.title || repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);

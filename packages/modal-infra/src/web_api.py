@@ -121,12 +121,16 @@ async def api_create_sandbox(
 
         snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
-        fallback_clone_token = resolve_clone_token() if snapshot_id else None
+        repo_owner = request.get("repo_owner")
+        repo_name = request.get("repo_name")
+        fallback_clone_token = (
+            resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
+        )
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             branch=request.get("branch"),
             opencode_session_id=request.get("opencode_session_id"),
             provider=request.get("provider", "anthropic"),
@@ -135,8 +139,8 @@ async def api_create_sandbox(
         )
 
         config = SandboxConfig(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
             snapshot_id=snapshot_id,
             session_config=session_config,
@@ -430,9 +434,11 @@ async def api_restore_sandbox(
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
+        repo_owner = session_config.get("repo_owner") if isinstance(session_config, dict) else None
+        repo_name = session_config.get("repo_name") if isinstance(session_config, dict) else None
 
         manager = SandboxManager()
-        clone_token = resolve_clone_token()
+        clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
         code_server_enabled = bool(request.get("code_server_enabled", False))
         agent_slack_notify_enabled = bool(request.get("agent_slack_notify_enabled", False))

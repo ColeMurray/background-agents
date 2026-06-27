@@ -17,9 +17,10 @@ import type {
 export interface AutomationRow {
   id: string;
   name: string;
-  repo_owner: string;
-  repo_name: string;
-  base_branch: string;
+  target_mode?: string | null;
+  repo_owner: string | null;
+  repo_name: string | null;
+  base_branch: string | null;
   repo_id: number | null;
   instructions: string;
   trigger_type: string;
@@ -65,17 +66,24 @@ export interface EnrichedRunRow extends AutomationRunRow {
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
+function automationTargetMode(row: AutomationRow): "fixed_single_repo" | "no_repository" {
+  if (row.target_mode == null || row.target_mode === "fixed_single_repo") {
+    return "fixed_single_repo";
+  }
+  if (row.target_mode === "no_repository") {
+    return "no_repository";
+  }
+  throw new Error(`Unsupported automation target mode: ${row.target_mode}`);
+}
+
 export function toAutomation(row: AutomationRow): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)
     : null;
-  return {
+  const targetMode = automationTargetMode(row);
+  const base = {
     id: row.id,
     name: row.name,
-    repoOwner: row.repo_owner,
-    repoName: row.repo_name,
-    baseBranch: row.base_branch,
-    repoId: row.repo_id,
     instructions: row.instructions,
     triggerType: row.trigger_type as Automation["triggerType"],
     scheduleCron: row.schedule_cron,
@@ -91,6 +99,30 @@ export function toAutomation(row: AutomationRow): Automation {
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
     triggerConfig,
+  };
+
+  if (targetMode === "no_repository") {
+    return {
+      ...base,
+      targetMode,
+      repoOwner: null,
+      repoName: null,
+      baseBranch: null,
+      repoId: null,
+    };
+  }
+
+  if (!row.repo_owner || !row.repo_name) {
+    throw new Error("Fixed repository automation is missing repository");
+  }
+
+  return {
+    ...base,
+    targetMode,
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    baseBranch: row.base_branch,
+    repoId: row.repo_id,
   };
 }
 
@@ -128,15 +160,16 @@ export class AutomationStore {
     return this.db
       .prepare(
         `INSERT INTO automations
-         (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+         (id, name, target_mode, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
           event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
         row.name,
+        row.target_mode ?? "fixed_single_repo",
         row.repo_owner,
         row.repo_name,
         row.base_branch,

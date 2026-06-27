@@ -53,6 +53,12 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       if (!owner) {
         return Response.json({ error: "No owner participant found" }, { status: 404 });
       }
+      if (!session.repo_owner || !session.repo_name) {
+        return Response.json(
+          { error: "Child sessions require a repository target" },
+          { status: 400 }
+        );
+      }
 
       const context: SpawnContext = {
         repoOwner: session.repo_owner,

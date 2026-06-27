@@ -19,25 +19,25 @@ import type { McpServerConfig } from "@open-inspect/shared";
 /** Canonical `SESSION_CONFIG` payload handed to the sandbox runtime. */
 export interface SessionConfigPayload {
   session_id: string;
-  repo_owner: string;
-  repo_name: string;
+  repo_owner: string | null;
+  repo_name: string | null;
   provider: string;
   model: string;
   /** Omitted from the serialized payload when undefined. */
   mcp_servers?: McpServerConfig[];
   /** Omitted from the serialized payload when undefined. */
-  branch?: string;
+  branch?: string | null;
 }
 
 /** Provider-agnostic inputs needed to assemble a {@link SessionConfigPayload}. */
 export interface SessionConfigInput {
   sessionId: string;
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   provider: string;
   model: string;
   mcpServers?: McpServerConfig[];
-  branch?: string;
+  branch?: string | null;
 }
 
 /**

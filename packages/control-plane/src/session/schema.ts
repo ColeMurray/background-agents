@@ -11,10 +11,10 @@ CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
   session_name TEXT,                                -- External session name for WebSocket routing
   title TEXT,                                       -- Session/PR title
-  repo_owner TEXT NOT NULL,                         -- e.g., "acme-corp"
-  repo_name TEXT NOT NULL,                          -- e.g., "web-app"
+  repo_owner TEXT,                                  -- e.g., "acme-corp"; NULL for no-repo sessions
+  repo_name TEXT,                                   -- e.g., "web-app"; NULL for no-repo sessions
   repo_id INTEGER,                                  -- GitHub repository ID (stable)
-  base_branch TEXT NOT NULL DEFAULT 'main',          -- Base branch for PRs
+  base_branch TEXT,                                 -- Base branch for PRs; NULL for no-repo sessions
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
@@ -382,6 +382,75 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 30,
     description: "Add total_cost to session",
     run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 31,
+    description: "Allow session rows without a repository target",
+    run: (sql) => {
+      const columns = sql.exec("PRAGMA table_info(session)").toArray() as Array<{
+        name: string;
+        notnull: number;
+      }>;
+      const columnMap = new Map(columns.map((column) => [column.name, column]));
+      if (
+        columnMap.get("repo_owner")?.notnull === 0 &&
+        columnMap.get("repo_name")?.notnull === 0 &&
+        columnMap.get("base_branch")?.notnull === 0
+      ) {
+        return;
+      }
+
+      sql.exec("BEGIN");
+      try {
+        sql.exec(`DROP TABLE IF EXISTS session_new`);
+        sql.exec(`
+        CREATE TABLE session_new (
+          id TEXT PRIMARY KEY,
+          session_name TEXT,
+          title TEXT,
+          repo_owner TEXT,
+          repo_name TEXT,
+          repo_id INTEGER,
+          base_branch TEXT,
+          branch_name TEXT,
+          base_sha TEXT,
+          current_sha TEXT,
+          opencode_session_id TEXT,
+          model TEXT DEFAULT 'anthropic/claude-haiku-4-5',
+          reasoning_effort TEXT,
+          status TEXT DEFAULT 'created',
+          parent_session_id TEXT,
+          spawn_source TEXT NOT NULL DEFAULT 'user',
+          spawn_depth INTEGER NOT NULL DEFAULT 0,
+          code_server_enabled INTEGER NOT NULL DEFAULT 0,
+          total_cost REAL NOT NULL DEFAULT 0,
+          sandbox_settings TEXT DEFAULT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+        sql.exec(`
+        INSERT INTO session_new (
+          id, session_name, title, repo_owner, repo_name, repo_id, base_branch,
+          branch_name, base_sha, current_sha, opencode_session_id, model,
+          reasoning_effort, status, parent_session_id, spawn_source, spawn_depth,
+          code_server_enabled, total_cost, sandbox_settings, created_at, updated_at
+        )
+        SELECT
+          id, session_name, title, repo_owner, repo_name, repo_id, base_branch,
+          branch_name, base_sha, current_sha, opencode_session_id, model,
+          reasoning_effort, status, parent_session_id, spawn_source, spawn_depth,
+          code_server_enabled, total_cost, sandbox_settings, created_at, updated_at
+        FROM session
+      `);
+        sql.exec(`DROP TABLE session`);
+        sql.exec(`ALTER TABLE session_new RENAME TO session`);
+        sql.exec("COMMIT");
+      } catch (error) {
+        sql.exec("ROLLBACK");
+        throw error;
+      }
+    },
   },
 ];
 

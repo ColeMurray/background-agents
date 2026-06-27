@@ -46,6 +46,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
+import { resolveAutomationTarget } from "../automation/target-resolution";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -69,6 +70,17 @@ const RECOVERY_SWEEP_LIMIT = 50;
  * does not slide — a reply after the window forks a fresh run.
  */
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function formatAutomationTargetLabel(
+  automation: Pick<AutomationRow, "target_mode" | "repo_owner" | "repo_name"> | null | undefined
+): string {
+  if (automation?.target_mode === "no_repository") {
+    return "No repository";
+  }
+  return automation?.repo_owner && automation?.repo_name
+    ? `${automation.repo_owner}/${automation.repo_name}`
+    : "No repository";
+}
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -732,7 +744,7 @@ export class SchedulerDO extends DurableObject<Env> {
         messageId: body.messageId ?? "",
         success: body.success,
         error: body.error,
-        repoFullName: automation ? `${automation.repo_owner}/${automation.repo_name}` : "",
+        repoFullName: formatAutomationTargetLabel(automation),
         model: automation?.model ?? "",
         reasoningEffort: automation?.reasoning_effort ?? undefined,
       });
@@ -872,6 +884,7 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
+    const target = await resolveAutomationTarget(this.env, automation);
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -893,19 +906,21 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
+    const { repoOwner, repoName, repoId, baseBranch } = target;
+
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
-      resolveCodeServerEnabled(this.env.DB, automation.repo_owner, automation.repo_name),
-      resolveSandboxSettings(this.env.DB, automation.repo_owner, automation.repo_name),
+      resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),
+      resolveSandboxSettings(this.env.DB, repoOwner, repoName),
     ]);
 
     await initializeSession(
       this.env,
       {
         sessionId,
-        repoOwner: automation.repo_owner,
-        repoName: automation.repo_name,
-        repoId: automation.repo_id,
-        defaultBranch: automation.base_branch,
+        repoOwner,
+        repoName,
+        repoId,
+        defaultBranch: baseBranch,
         title: `[Auto] ${automation.name}`,
         model: automation.model,
         reasoningEffort: automation.reasoning_effort,
@@ -973,7 +988,7 @@ export class SchedulerDO extends DurableObject<Env> {
       threadTs: event.threadTs ?? event.ts,
       // React on (and later clear) the follow-up message itself.
       reactionMessageTs: event.ts,
-      repoFullName: `${automation.repo_owner}/${automation.repo_name}`,
+      repoFullName: formatAutomationTargetLabel(automation),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
     };

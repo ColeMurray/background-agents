@@ -142,14 +142,16 @@ export class AnalyticsStore {
     by: AnalyticsBreakdownBy
   ): Promise<AnalyticsBreakdownResponse> {
     const isUserBreakdown = by === "user";
+    const repoGroupExpression =
+      "CASE WHEN s.repo_owner IS NULL OR s.repo_name IS NULL THEN '__no_repository__' ELSE s.repo_owner || '/' || s.repo_name END";
 
     const groupExpression = isUserBreakdown
       ? "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')"
-      : "s.repo_owner || '/' || s.repo_name";
+      : repoGroupExpression;
 
     const displayNameSelect = isUserBreakdown
       ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
-      : "";
+      : `CASE WHEN ${repoGroupExpression} = '__no_repository__' THEN 'No repository' ELSE NULL END AS display_name,`;
 
     const joinClause = isUserBreakdown ? "LEFT JOIN users u ON s.user_id = u.id" : "";
 

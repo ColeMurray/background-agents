@@ -456,6 +456,66 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
     });
 
+    it("spawns no-repository sessions without repo-only sandbox features", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(
+        createMockSession({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+          code_server_enabled: 1,
+        }),
+        sandbox
+      );
+      const provider = createMockProvider();
+      const mcpServerLookup = {
+        getDecryptedForSession: vi.fn(async () => []),
+      };
+      const slackAgentNotifyLookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => true),
+      };
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => ({
+          provider_image_id: "repo-image-1",
+          base_sha: "abc123",
+        })),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        {
+          ...createTestConfig(),
+          mcpServerLookup,
+          slackAgentNotifyLookup,
+        },
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoOwner: null,
+          repoName: null,
+          branch: null,
+          codeServerEnabled: false,
+          agentSlackNotifyEnabled: false,
+          repoImageId: null,
+          repoImageSha: null,
+        })
+      );
+      expect(mcpServerLookup.getDecryptedForSession).toHaveBeenCalledWith(null, null);
+      expect(slackAgentNotifyLookup.isEnabledForRepo).not.toHaveBeenCalled();
+      expect(repoImageLookup.getLatestReady).not.toHaveBeenCalled();
+    });
+
     it("respects circuit breaker blocking", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({

@@ -246,6 +246,24 @@ describe("DaytonaSandboxProvider", () => {
       });
     });
 
+    it("omits repo label for no-repository sandboxes", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await provider.createSandbox({
+        ...baseCreateConfig,
+        repoOwner: null,
+        repoName: null,
+      });
+
+      const labels = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].labels;
+      expect(labels).toEqual({
+        openinspect_framework: "open-inspect",
+        openinspect_session_id: "session-123",
+        openinspect_expected_sandbox_id: "sandbox-456",
+      });
+    });
+
     it("passes target to create params when set", async () => {
       const client = createMockClient({}, { target: "us-east-1" });
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);

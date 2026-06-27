@@ -72,7 +72,16 @@ async function handleSpawnChild(
   );
 
   if (!spawnContextRes.ok) {
-    return error("Failed to get parent session context", 500);
+    let message = "Failed to get parent session context";
+    try {
+      const body = (await spawnContextRes.json()) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.length > 0) {
+        message = body.error;
+      }
+    } catch {
+      // Keep the generic fallback when the session runtime did not return JSON.
+    }
+    return error(message, spawnContextRes.status);
   }
 
   const spawnContext = (await spawnContextRes.json()) as SpawnContext;

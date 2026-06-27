@@ -154,8 +154,10 @@ async function handleCreateAutomation(
   if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
-  if (!body.repoOwner || !body.repoName) {
-    return error("repoOwner and repoName are required", 400);
+
+  const targetMode = body.targetMode ?? "fixed_single_repo";
+  if (targetMode !== "fixed_single_repo" && targetMode !== "no_repository") {
+    return error("targetMode must be one of: fixed_single_repo, no_repository", 400);
   }
 
   // Validate trigger type
@@ -170,6 +172,15 @@ async function handleCreateAutomation(
   ];
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
+  }
+  if (
+    targetMode === "no_repository" &&
+    (triggerType === "github_event" || triggerType === "linear_event")
+  ) {
+    return error("no_repository automations are not supported for repo-scoped triggers", 400);
+  }
+  if (targetMode === "fixed_single_repo" && (!body.repoOwner || !body.repoName)) {
+    return error("repoOwner and repoName are required", 400);
   }
 
   const isSchedule = triggerType === "schedule";
@@ -229,15 +240,21 @@ async function handleCreateAutomation(
     return error("Invalid reasoning effort for selected model", 400);
   }
 
-  // Resolve repository
-  const repoOwner = body.repoOwner.toLowerCase();
-  const repoName = body.repoName.toLowerCase();
+  let repoOwner: string | null = null;
+  let repoName: string | null = null;
+  let repoId: number | null = null;
+  let baseBranch: string | null = null;
 
-  const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-  if (resolved instanceof Response) return resolved;
+  if (targetMode === "fixed_single_repo") {
+    repoOwner = body.repoOwner!.toLowerCase();
+    repoName = body.repoName!.toLowerCase();
 
-  const { repoId, defaultBranch } = resolved;
-  const baseBranch = body.baseBranch || defaultBranch;
+    const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
+    if (resolved instanceof Response) return resolved;
+
+    repoId = resolved.repoId;
+    baseBranch = body.baseBranch || resolved.defaultBranch;
+  }
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -290,6 +307,7 @@ async function handleCreateAutomation(
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
+    target_mode: targetMode,
     repo_owner: repoOwner,
     repo_name: repoName,
     base_branch: baseBranch,
@@ -332,7 +350,8 @@ async function handleCreateAutomation(
   logger.info("automation.created", {
     event: "automation.created",
     automation_id: id,
-    repo: `${repoOwner}/${repoName}`,
+    target_mode: targetMode,
+    repo: repoOwner && repoName ? `${repoOwner}/${repoName}` : null,
     trigger_type: triggerType,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,

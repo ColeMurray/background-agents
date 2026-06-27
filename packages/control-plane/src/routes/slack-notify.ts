@@ -60,12 +60,13 @@ export async function handleSlackNotify(
     return failureResponse("invalid_input", "Session not found.");
   }
 
-  const repo = `${session.repoOwner}/${session.repoName}`;
+  const repoScope =
+    session.repoOwner && session.repoName ? `${session.repoOwner}/${session.repoName}` : null;
   const audit: AuditFields = {
     prompt_author_user_id: session.userId ?? null,
     trigger_source: session.spawnSource ?? null,
     parent_session_id: session.parentSessionId ?? null,
-    repo,
+    repo: repoScope ?? "No repository",
   };
 
   const token = env.SLACK_BOT_TOKEN;
@@ -84,7 +85,9 @@ export async function handleSlackNotify(
   }
 
   const settingsStore = new IntegrationSettingsStore(env.DB);
-  const { settings } = await settingsStore.getResolvedConfig("slack", repo);
+  const settings = repoScope
+    ? (await settingsStore.getResolvedConfig("slack", repoScope)).settings
+    : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
   const { agentNotificationsEnabled, mentionsPolicy } = resolveSlackSettings(
     settings as Partial<SlackGlobalSettings>
   );
@@ -92,7 +95,9 @@ export async function handleSlackNotify(
     logDenial(sessionId, ctx, parsed, audit, "feature_disabled");
     return failureResponse(
       "feature_disabled",
-      "Slack agent notifications are disabled for this repository."
+      repoScope
+        ? "Slack agent notifications are disabled for this repository."
+        : "Slack agent notifications are disabled globally."
     );
   }
 

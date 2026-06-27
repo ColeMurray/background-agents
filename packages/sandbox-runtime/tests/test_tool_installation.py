@@ -229,6 +229,38 @@ class TestInstallTools:
         js_files = list(tool_dest.glob("*.js"))
         assert len(js_files) == 3
 
+    def test_repository_tools_skipped_without_repository(self, tmp_path):
+        """Repo-only PR and child-task tools should not be installed for no-repo sessions."""
+        sup = _make_supervisor()
+        sup.repo_owner = ""
+        sup.repo_name = ""
+        sup.has_repository = False
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+
+        legacy_tool = tmp_path / "app" / "sandbox" / "inspect-plugin.js"
+        legacy_tool.parent.mkdir(parents=True)
+        legacy_tool.write_text("// legacy")
+
+        tools_dir = tmp_path / "app" / "sandbox" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "_bridge-client.js").write_text("// bridge")
+        (tools_dir / "spawn-task.js").write_text("// spawn")
+        (tools_dir / "get-task-status.js").write_text("// get")
+        (tools_dir / "get-task-status-format.js").write_text("// format")
+        (tools_dir / "cancel-task.js").write_text("// cancel")
+
+        with _patch_paths(legacy=legacy_tool, tools=tools_dir):
+            sup._install_tools(workdir)
+
+        tool_dest = workdir / ".opencode" / "tool"
+        assert (tool_dest / "_bridge-client.js").exists()
+        assert not (tool_dest / "create-pull-request.js").exists()
+        assert not (tool_dest / "spawn-task.js").exists()
+        assert not (tool_dest / "get-task-status.js").exists()
+        assert not (tool_dest / "get-task-status-format.js").exists()
+        assert not (tool_dest / "cancel-task.js").exists()
+
     def test_slack_notify_installed_when_enabled(self, tmp_path):
         """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true."""
         sup = _make_supervisor()

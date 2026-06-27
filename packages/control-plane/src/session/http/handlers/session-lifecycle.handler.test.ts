@@ -151,6 +151,34 @@ function createHandler() {
 }
 
 describe("createSessionLifecycleHandler", () => {
+  it.each([
+    ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
+    ["repoId without repo target", { repoOwner: null, repoName: null, repoId: 123 }],
+  ])("rejects partial repository targets during init: %s", async (_name, repoFields) => {
+    const { handler, repository, scheduleWarmSandbox } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          ...repoFields,
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Repository target must include repoOwner and repoName together",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+  });
+
   it("initializes session, sandbox, and owner participant", async () => {
     const {
       handler,

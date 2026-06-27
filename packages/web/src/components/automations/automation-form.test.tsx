@@ -142,6 +142,71 @@ describe("automation cron submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("submits no_repository automations without repo fields", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Check incidents",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Inspect recent alerts and send a summary.",
+        }}
+      />
+    );
+
+    expect(screen.getByText("Select repository")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("No repository"));
+
+    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      name: "Check incidents",
+      targetMode: "no_repository",
+      instructions: "Inspect recent alerts and send a summary.",
+    });
+    expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].repoName).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].baseBranch).toBeUndefined();
+  });
+
+  it("disables no_repository for GitHub event automations", () => {
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Review new PRs",
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+        }}
+      />
+    );
+    const noRepositoryRadio = () =>
+      container.querySelector<HTMLInputElement>('input[value="no_repository"]')!;
+    const singleRepositoryRadio = () =>
+      container.querySelector<HTMLInputElement>('input[value="fixed_single_repo"]')!;
+
+    fireEvent.click(screen.getByText("No repository"));
+    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /GitHub Event/ }));
+
+    expect(noRepositoryRadio()).toBeDisabled();
+    expect(singleRepositoryRadio()).toBeChecked();
+    expect(screen.getByText("Select repository")).toBeInTheDocument();
+  });
+
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
     const onSubmit = vi.fn();
     const { container } = render(

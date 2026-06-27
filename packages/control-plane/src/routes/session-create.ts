@@ -3,7 +3,10 @@ import { encryptTokenPair, generateId } from "../auth/crypto";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
-import { parseCreateSessionInput } from "../session/create-session-input";
+import {
+  NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR,
+  parseCreateSessionInput,
+} from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import {
   deriveParticipantUserId,
@@ -25,6 +28,11 @@ import {
 } from "./shared";
 
 const logger = createLogger("router:session-create");
+const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
+
+function normalizeRepoIdentifier(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
 
 async function handleCreateSession(
   request: Request,
@@ -36,18 +44,22 @@ async function handleCreateSession(
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
 
-  if (!body.repoOwner || !body.repoName) {
-    return error("repoOwner and repoName are required");
+  const repoOwner = normalizeRepoIdentifier(body.repoOwner);
+  const repoName = normalizeRepoIdentifier(body.repoName);
+  const repoOwnerMissing = repoOwner.length === 0;
+  const repoNameMissing = repoName.length === 0;
+
+  if (repoOwnerMissing && repoNameMissing) {
+    return error(NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR);
+  }
+  if (repoOwnerMissing || repoNameMissing) {
+    return error(INVALID_SESSION_REQUEST_BODY_ERROR);
   }
 
   // Validate branch name if provided (defense in depth)
   if (body.branch && !/^[\w.\-/]+$/.test(body.branch)) {
     return error("Invalid branch name");
   }
-
-  // Normalize repo identifiers to lowercase for consistent storage
-  const repoOwner = body.repoOwner.toLowerCase();
-  const repoName = body.repoName.toLowerCase();
 
   const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
   if (resolved instanceof Response) return resolved;

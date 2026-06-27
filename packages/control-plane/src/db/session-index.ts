@@ -3,8 +3,8 @@ import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
 export interface SessionEntry {
   id: string;
   title: string | null;
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   model: string;
   reasoningEffort: string | null;
   baseBranch: string | null;
@@ -27,8 +27,8 @@ export interface SessionEntry {
 interface SessionRow {
   id: string;
   title: string | null;
-  repo_owner: string;
-  repo_name: string;
+  repo_owner: string | null;
+  repo_name: string | null;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -90,6 +90,11 @@ function toEntry(row: SessionRow): SessionEntry {
   };
 }
 
+function normalizeRepoIdentifier(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.toLowerCase() : null;
+}
+
 export class SessionIndexStore {
   constructor(private readonly db: D1Database) {}
 
@@ -102,8 +107,8 @@ export class SessionIndexStore {
       .bind(
         session.id,
         session.title,
-        session.repoOwner.toLowerCase(),
-        session.repoName.toLowerCase(),
+        normalizeRepoIdentifier(session.repoOwner),
+        normalizeRepoIdentifier(session.repoName),
         session.model,
         session.reasoningEffort,
         session.baseBranch,
@@ -154,14 +159,16 @@ export class SessionIndexStore {
       params.push(excludeStatus);
     }
 
-    if (repoOwner) {
+    const normalizedRepoOwner = normalizeRepoIdentifier(repoOwner);
+    if (normalizedRepoOwner) {
       conditions.push("repo_owner = ?");
-      params.push(repoOwner.toLowerCase());
+      params.push(normalizedRepoOwner);
     }
 
-    if (repoName) {
+    const normalizedRepoName = normalizeRepoIdentifier(repoName);
+    if (normalizedRepoName) {
       conditions.push("repo_name = ?");
-      params.push(repoName.toLowerCase());
+      params.push(normalizedRepoName);
     }
 
     if (createdByUserIds?.length) {
