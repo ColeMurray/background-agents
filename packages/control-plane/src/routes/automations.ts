@@ -588,12 +588,15 @@ async function handleUpdateAutomation(
 
   const existingTargetMode = existing.target_mode ?? "fixed_single_repo";
   const nextTargetMode = body.targetMode ?? existingTargetMode;
+  const targetModeChangeRequested =
+    body.targetMode !== undefined && body.targetMode !== existingTargetMode;
+  const singleRepoTargetChangeRequested =
+    nextTargetMode === "fixed_single_repo" &&
+    (body.repoOwner !== undefined || body.repoName !== undefined || body.baseBranch !== undefined);
+  const multiRepoTargetChangeRequested =
+    nextTargetMode === "fixed_multi_repo" && body.targets !== undefined;
   const targetChangeRequested =
-    body.targetMode !== undefined ||
-    body.repoOwner !== undefined ||
-    body.repoName !== undefined ||
-    body.targets !== undefined ||
-    (body.baseBranch !== undefined && existingTargetMode !== "no_repository");
+    targetModeChangeRequested || singleRepoTargetChangeRequested || multiRepoTargetChangeRequested;
 
   let targetRowsForUpdate: AutomationTargetRow[] | null = null;
   let targetFieldUpdates: Partial<AutomationRow> = {};
@@ -719,9 +722,6 @@ async function handleUpdateAutomation(
   if (body.model !== undefined) updateFields.model = nextModel;
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
-  }
-  if (body.baseBranch !== undefined && !targetChangeRequested) {
-    updateFields.base_branch = body.baseBranch;
   }
 
   // Update event type — only for non-schedule types
@@ -1007,9 +1007,10 @@ async function handleListRuns(
 
   if (automation.target_mode === "fixed_multi_repo") {
     const result = await store.listRunGroupsForAutomation(automationId, { limit, offset });
+    const groups = result.groups.map(toAutomationRunGroup);
     return json({
-      runs: [],
-      groups: result.groups.map(toAutomationRunGroup),
+      runs: groups.flatMap((group) => group.runs),
+      groups,
       total: result.total,
     });
   }

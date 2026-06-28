@@ -129,6 +129,7 @@ describe("OpenComputerSandboxProvider", () => {
           SANDBOX_ID: "sandbox-acme-repo-1",
           CONTROL_PLANE_URL: "https://control.example",
           SANDBOX_AUTH_TOKEN: "sandbox-token",
+          REPOSITORY_MODE: "single",
           REPO_OWNER: "acme",
           REPO_NAME: "repo",
           VCS_HOST: "github.com",
@@ -137,6 +138,7 @@ describe("OpenComputerSandboxProvider", () => {
         labels: expect.objectContaining({
           openinspect_provider: "opencomputer",
           openinspect_session_id: "session-1",
+          openinspect_repo: "acme/repo",
         }),
         secretStore: "openinspect-session-1",
       })
@@ -163,6 +165,39 @@ describe("OpenComputerSandboxProvider", () => {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
       branch: "main",
+    });
+  });
+
+  it("normalizes runtime env and labels for no-repository sandboxes", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      repoOwner: null,
+      repoName: null,
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toEqual(
+      expect.objectContaining({
+        REPOSITORY_MODE: "none",
+        REPO_OWNER: "",
+        REPO_NAME: "",
+      })
+    );
+    expect(createCall.labels).toEqual({
+      openinspect_framework: "open-inspect",
+      openinspect_provider: "opencomputer",
+      openinspect_session_id: "session-1",
+      openinspect_expected_sandbox_id: "sandbox-acme-repo-1",
+    });
+    expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toMatchObject({
+      repo_owner: null,
+      repo_name: null,
     });
   });
 
@@ -276,6 +311,41 @@ describe("OpenComputerSandboxProvider", () => {
     );
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 600);
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("normalizes runtime env and labels when restoring no-repository sandboxes", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.restoreFromSnapshot({
+      ...baseConfig,
+      repoOwner: null,
+      repoName: null,
+      snapshotImageId: "checkpoint-session-1",
+    });
+
+    const forkCall = vi.mocked(client.forkFromCheckpoint).mock.calls[0][0];
+    expect(forkCall.env).toEqual(
+      expect.objectContaining({
+        RESTORED_FROM_SNAPSHOT: "true",
+        REPOSITORY_MODE: "none",
+        REPO_OWNER: "",
+        REPO_NAME: "",
+      })
+    );
+    expect(forkCall.labels).toEqual({
+      openinspect_framework: "open-inspect",
+      openinspect_provider: "opencomputer",
+      openinspect_session_id: "session-1",
+      openinspect_expected_sandbox_id: "sandbox-acme-repo-1",
+    });
+    expect(JSON.parse(forkCall.env!.SESSION_CONFIG)).toMatchObject({
+      repo_owner: null,
+      repo_name: null,
+    });
   });
 
   it("creates checkpoints for snapshots", async () => {

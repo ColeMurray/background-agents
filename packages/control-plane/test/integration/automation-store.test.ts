@@ -77,6 +77,7 @@ function makeRunGroup(
     created_at: now,
     updated_at: now,
     failure_counted_at: null,
+    expected_runs: 0,
     ...overrides,
   };
 }
@@ -389,6 +390,113 @@ describe("AutomationStore (D1 integration)", () => {
       expect(run!.started_at).toBe(now + 1000);
     });
 
+    it("updates resolved target metadata on a run", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-r3-target" }));
+
+      await store.insertRun(
+        makeRun("auto-r3-target", {
+          id: "run-u-target",
+          target_repo_owner: "acme",
+          target_repo_name: "api",
+          target_repo_id: null,
+          target_base_branch: null,
+        })
+      );
+
+      await store.updateRun("run-u-target", {
+        target_repo_owner: "acme",
+        target_repo_name: "api",
+        target_repo_id: 67890,
+        target_base_branch: "develop",
+      });
+
+      const run = await store.getRunById("auto-r3-target", "run-u-target");
+      expect(run).toMatchObject({
+        target_repo_owner: "acme",
+        target_repo_name: "api",
+        target_repo_id: 67890,
+        target_base_branch: "develop",
+      });
+    });
+
+    it("materializes grouped child runs with an expected run count", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-r3-group" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-r3-group", {
+          id: "group-r3-materialize",
+          expected_runs: 0,
+          created_at: now,
+        })
+      );
+
+      await store.materializeRunGroupChildren("group-r3-materialize", 2, [
+        makeRun("auto-r3-group", {
+          id: "run-r3-web",
+          group_id: "group-r3-materialize",
+          target_repo_owner: "acme",
+          target_repo_name: "web-app",
+          scheduled_at: now,
+        }),
+        makeRun("auto-r3-group", {
+          id: "run-r3-api",
+          group_id: "group-r3-materialize",
+          target_repo_owner: "acme",
+          target_repo_name: "api",
+          scheduled_at: now + 1,
+        }),
+      ]);
+
+      const group = await store.getRunGroupSummary("group-r3-materialize");
+      expect(group).toMatchObject({
+        expected_runs: 2,
+        total_runs: 2,
+        starting_runs: 2,
+      });
+      await expect(store.listRunsForGroup("group-r3-materialize")).resolves.toHaveLength(2);
+    });
+
+    it("uses expected child count for group totals while preserving observed status counts", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-r3-incomplete" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-r3-incomplete", {
+          id: "group-r3-incomplete",
+          expected_runs: 3,
+          created_at: now,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-r3-incomplete", {
+          id: "run-r3-done-1",
+          group_id: "group-r3-incomplete",
+          status: "completed",
+          completed_at: now,
+          scheduled_at: now,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-r3-incomplete", {
+          id: "run-r3-done-2",
+          group_id: "group-r3-incomplete",
+          status: "completed",
+          completed_at: now,
+          scheduled_at: now + 1,
+        })
+      );
+
+      const group = await store.getRunGroupSummary("group-r3-incomplete");
+      expect(group).toMatchObject({
+        expected_runs: 3,
+        materialized_runs: 2,
+        total_runs: 3,
+        completed_runs: 2,
+      });
+    });
+
     it("detects active runs (starting or running)", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -614,6 +722,44 @@ describe("AutomationStore (D1 integration)", () => {
       expect(timedOut).toHaveLength(0);
     });
 
+    it("finds old active groups with fewer child runs than expected", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      const tenMinutesAgo = now - 10 * 60 * 1000;
+      await store.create(makeAutomation({ id: "auto-rec-incomplete-group" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-rec-incomplete-group", {
+          id: "group-rec-incomplete",
+          status: "starting",
+          expected_runs: 3,
+          created_at: tenMinutesAgo,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-rec-incomplete-group", {
+          id: "run-rec-child-1",
+          group_id: "group-rec-incomplete",
+          status: "completed",
+          completed_at: now,
+          scheduled_at: tenMinutesAgo,
+          created_at: tenMinutesAgo,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-rec-incomplete-group", {
+          id: "run-rec-child-2",
+          group_id: "group-rec-incomplete",
+          status: "completed",
+          completed_at: now,
+          created_at: tenMinutesAgo + 1,
+          scheduled_at: tenMinutesAgo + 1,
+        })
+      );
+
+      const orphaned = await store.getOrphanedActiveRunGroups(5 * 60 * 1000, 50);
+      expect(orphaned.map((group) => group.id)).toContain("group-rec-incomplete");
+    });
+
     it("drains oldest orphaned runs first when LIMIT is hit", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -756,6 +902,35 @@ describe("AutomationStore (D1 integration)", () => {
         completed_at: completedAt,
       });
       await expect(store.getActiveRunGroupForAutomation("auto-f4")).resolves.toBeNull();
+    });
+
+    it("summarizes run groups using expected child count when rows are missing", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-f5" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-f5", {
+          id: "group-f5",
+          expected_runs: 3,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-f5", {
+          id: "run-f5-one",
+          status: "completed",
+          completed_at: Date.now(),
+          group_id: "group-f5",
+          target_repo_owner: "acme",
+          target_repo_name: "web-app",
+        })
+      );
+
+      const group = await store.getRunGroupSummary("group-f5");
+      expect(group).toMatchObject({
+        materialized_runs: 1,
+        total_runs: 3,
+        completed_runs: 1,
+        expected_runs: 3,
+      });
     });
   });
 

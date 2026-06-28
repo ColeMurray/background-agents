@@ -437,11 +437,46 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("started_at = ?");
     });
 
+    it("updates resolved target metadata fields", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+      await store.updateRun("run_test1", {
+        target_repo_owner: "acme",
+        target_repo_name: "api",
+        target_repo_id: 67890,
+        target_base_branch: "develop",
+      });
+
+      expect(statements[0].sql).toContain("target_repo_owner = ?");
+      expect(statements[0].sql).toContain("target_repo_name = ?");
+      expect(statements[0].sql).toContain("target_repo_id = ?");
+      expect(statements[0].sql).toContain("target_base_branch = ?");
+    });
+
     it("skips update when no fields provided", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
       await store.updateRun("run_test1", {});
       expect(statements).toHaveLength(0);
+    });
+  });
+
+  describe("materializeRunGroupChildren", () => {
+    it("updates expected run count and inserts child runs in one batch", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.materializeRunGroupChildren("group_test1", 2, [
+        sampleRunRow,
+        { ...sampleRunRow, id: "run_test2" },
+      ]);
+
+      expect(statements).toHaveLength(3);
+      expect(statements[0].sql).toContain("UPDATE automation_run_groups");
+      expect(statements[0].sql).toContain("expected_runs = ?");
+      expect(statements[0].params).toContain(2);
+      expect(statements[1].sql).toContain("INSERT INTO automation_runs");
+      expect(statements[2].sql).toContain("INSERT INTO automation_runs");
     });
   });
 

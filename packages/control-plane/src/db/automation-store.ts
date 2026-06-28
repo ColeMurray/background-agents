@@ -94,9 +94,11 @@ export interface AutomationRunGroupRow {
   created_at: number;
   updated_at: number;
   failure_counted_at: number | null;
+  expected_runs: number;
 }
 
 export interface EnrichedRunGroupRow extends AutomationRunGroupRow {
+  materialized_runs: number;
   total_runs: number;
   starting_runs: number;
   running_runs: number;
@@ -626,8 +628,8 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automation_run_groups
          (id, automation_id, status, skip_reason, failure_reason, scheduled_at, started_at,
-          completed_at, created_at, updated_at, failure_counted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          completed_at, created_at, updated_at, failure_counted_at, expected_runs)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         group.id,
@@ -640,7 +642,8 @@ export class AutomationStore {
         group.completed_at,
         group.created_at,
         group.updated_at,
-        group.failure_counted_at
+        group.failure_counted_at,
+        group.expected_runs
       );
   }
 
@@ -693,6 +696,10 @@ export class AutomationStore {
       "skip_reason",
       "started_at",
       "completed_at",
+      "target_repo_owner",
+      "target_repo_name",
+      "target_repo_id",
+      "target_base_branch",
     ];
 
     for (const field of allowedFields) {
@@ -712,7 +719,10 @@ export class AutomationStore {
       .run();
   }
 
-  async updateRunGroup(id: string, fields: Partial<AutomationRunGroupRow>): Promise<void> {
+  private bindRunGroupUpdate(
+    id: string,
+    fields: Partial<AutomationRunGroupRow>
+  ): D1PreparedStatement | null {
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -723,6 +733,7 @@ export class AutomationStore {
       "started_at",
       "completed_at",
       "failure_counted_at",
+      "expected_runs",
     ];
 
     for (const field of allowedFields) {
@@ -732,15 +743,31 @@ export class AutomationStore {
       }
     }
 
-    if (setClauses.length === 0) return;
+    if (setClauses.length === 0) return null;
 
     setClauses.push("updated_at = ?");
     params.push(Date.now(), id);
 
-    await this.db
+    return this.db
       .prepare(`UPDATE automation_run_groups SET ${setClauses.join(", ")} WHERE id = ?`)
-      .bind(...params)
-      .run();
+      .bind(...params);
+  }
+
+  async updateRunGroup(id: string, fields: Partial<AutomationRunGroupRow>): Promise<void> {
+    const statement = this.bindRunGroupUpdate(id, fields);
+    if (statement) await statement.run();
+  }
+
+  async materializeRunGroupChildren(
+    groupId: string,
+    expectedRuns: number,
+    runs: AutomationRunRow[]
+  ): Promise<void> {
+    const updateGroup = this.bindRunGroupUpdate(groupId, { expected_runs: expectedRuns });
+    await this.db.batch([
+      ...(updateGroup ? [updateGroup] : []),
+      ...runs.map((run) => this.bindRunInsert(run)),
+    ]);
   }
 
   async getActiveRunGroupForAutomation(
@@ -914,7 +941,11 @@ export class AutomationStore {
          )
          SELECT
            page.*,
-           COUNT(r.id) as total_runs,
+           COUNT(r.id) as materialized_runs,
+           CASE
+             WHEN page.expected_runs > COUNT(r.id) THEN page.expected_runs
+             ELSE COUNT(r.id)
+           END as total_runs,
            COALESCE(SUM(CASE WHEN r.status = 'starting' THEN 1 ELSE 0 END), 0) as starting_runs,
            COALESCE(SUM(CASE WHEN r.status = 'running' THEN 1 ELSE 0 END), 0) as running_runs,
            COALESCE(SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END), 0) as completed_runs,
@@ -938,7 +969,11 @@ export class AutomationStore {
       .prepare(
         `SELECT
            g.*,
-           COUNT(r.id) as total_runs,
+           COUNT(r.id) as materialized_runs,
+           CASE
+             WHEN g.expected_runs > COUNT(r.id) THEN g.expected_runs
+             ELSE COUNT(r.id)
+           END as total_runs,
            COALESCE(SUM(CASE WHEN r.status = 'starting' THEN 1 ELSE 0 END), 0) as starting_runs,
            COALESCE(SUM(CASE WHEN r.status = 'running' THEN 1 ELSE 0 END), 0) as running_runs,
            COALESCE(SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END), 0) as completed_runs,
@@ -1113,8 +1148,18 @@ export class AutomationStore {
   static readonly ORPHANED_ACTIVE_RUN_GROUPS_SQL = `SELECT * FROM automation_run_groups g
      WHERE (g.status IN ('starting', 'running') OR (g.status = 'partial_failed' AND g.completed_at IS NULL))
        AND g.created_at < ?
-       AND NOT EXISTS (
-         SELECT 1 FROM automation_runs r WHERE r.group_id = g.id
+       AND (
+         NOT EXISTS (
+           SELECT 1 FROM automation_runs r WHERE r.group_id = g.id
+         )
+         OR (
+           g.expected_runs > 0
+           AND (
+             SELECT COUNT(*)
+             FROM automation_runs r
+             WHERE r.group_id = g.id
+           ) < g.expected_runs
+         )
        )`;
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {

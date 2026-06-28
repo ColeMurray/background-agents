@@ -242,56 +242,14 @@ request.
 
 ### How should migration 0030 partial-apply recovery work?
 
-Answer: document an explicit repair path. Do not add special-case migration-runner logic for this
-single migration.
+Answer: make the migration replay-safe. Do not add special-case migration-runner logic for this
+single migration, and do not manually mark it applied after a failed run unless a separate schema
+inspection shows the database is already correct.
 
 Reasoning: `scripts/d1-migrate.sh` applies each SQL file and then records the version in
-`_schema_migrations`. If migration `0030` applies successfully but the marker insert fails, a rerun
-can fail at the bare `ALTER TABLE automation_runs ADD COLUMN ...` statements. This is an operational
-repair case, not a reason to complicate the runner now.
+`_schema_migrations`. Migration `0030` is safe to rerun if the SQL file succeeds but the marker
+insert fails, if an older attempt added only some `automation_runs` columns, or if the replay resumes
+after `automation_runs` was dropped and the populated shadow table is still present.
 
-Recovery checklist:
-
-1. Verify the schema objects from `0030` exist before marking the migration applied:
-
-   ```bash
-   npx wrangler d1 execute "$D1_DATABASE_NAME" --remote --command "
-   SELECT name FROM sqlite_master
-   WHERE name IN (
-     'automation_targets',
-     'automation_run_groups',
-     'idx_automation_targets_repo',
-     'idx_run_groups_automation_created',
-     'idx_run_groups_active_lookup',
-     'idx_run_groups_idempotency',
-     'idx_runs_idempotency',
-     'idx_runs_group',
-     'idx_runs_group_target'
-   )
-   ORDER BY name;
-
-   SELECT name FROM pragma_table_info('automation_runs')
-   WHERE name IN (
-     'group_id',
-     'target_repo_owner',
-     'target_repo_name',
-     'target_repo_id',
-     'target_base_branch'
-   )
-   ORDER BY name;
-   "
-   ```
-
-2. If every expected table, index, and column is present, mark `0030` applied:
-
-   ```bash
-   npx wrangler d1 execute "$D1_DATABASE_NAME" --remote --command "
-   INSERT INTO _schema_migrations (version, name)
-   VALUES ('0030', '0030_multi_repo_automation_targets.sql');
-   "
-   ```
-
-3. Rerun `terraform apply`.
-
-Do not insert the marker if any `0030` table, index, or column is missing. In that case, inspect the
-failed D1 apply and repair the missing object first.
+Recovery checklist: rerun `terraform apply` with the replay-safe migration. If the rerun still fails,
+inspect the D1 error and the current schema before inserting anything into `_schema_migrations`.

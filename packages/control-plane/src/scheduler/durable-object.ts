@@ -92,6 +92,7 @@ function formatAutomationTargetLabel(
 function deriveGroupStatus(
   summary: Pick<
     EnrichedRunGroupRow,
+    | "expected_runs"
     | "total_runs"
     | "starting_runs"
     | "running_runs"
@@ -100,6 +101,21 @@ function deriveGroupStatus(
     | "skipped_runs"
   >
 ): AutomationRunGroupRow["status"] {
+  const observedRuns =
+    summary.starting_runs +
+    summary.running_runs +
+    summary.completed_runs +
+    summary.failed_runs +
+    summary.skipped_runs;
+  const materializationIncomplete =
+    summary.expected_runs > 0 && observedRuns < summary.expected_runs;
+
+  if (materializationIncomplete) {
+    if (summary.failed_runs + summary.skipped_runs > 0) return "partial_failed";
+    if (summary.starting_runs > 0 || summary.running_runs > 0) return "running";
+    return "starting";
+  }
+
   if (summary.total_runs === 0) return "starting";
   if (summary.completed_runs === summary.total_runs) return "completed";
   if (summary.failed_runs + summary.skipped_runs === summary.total_runs) {
@@ -114,8 +130,23 @@ function deriveGroupStatus(
 
 function groupStatusIsTerminal(
   status: AutomationRunGroupRow["status"],
-  summary: Pick<EnrichedRunGroupRow, "starting_runs" | "running_runs">
+  summary: Pick<
+    EnrichedRunGroupRow,
+    | "expected_runs"
+    | "starting_runs"
+    | "running_runs"
+    | "completed_runs"
+    | "failed_runs"
+    | "skipped_runs"
+  >
 ): boolean {
+  const observedRuns =
+    summary.starting_runs +
+    summary.running_runs +
+    summary.completed_runs +
+    summary.failed_runs +
+    summary.skipped_runs;
+  if (summary.expected_runs > 0 && observedRuns < summary.expected_runs) return false;
   if (summary.starting_runs > 0 || summary.running_runs > 0) return false;
   return (
     status === "completed" ||
@@ -357,6 +388,7 @@ export class SchedulerDO extends DurableObject<Env> {
           created_at: now,
           updated_at: now,
           failure_counted_at: null,
+          expected_runs: 0,
         },
         automation.id,
         nextRunAt
@@ -377,6 +409,7 @@ export class SchedulerDO extends DurableObject<Env> {
       created_at: now,
       updated_at: now,
       failure_counted_at: null,
+      expected_runs: 0,
     };
 
     await store.createRunGroupAndAdvanceSchedule(group, automation.id, nextRunAt);
@@ -412,24 +445,36 @@ export class SchedulerDO extends DurableObject<Env> {
       throw new Error("fixed_multi_repo automation must have 2-10 targets");
     }
 
+    const childRuns = targets.map((target) => ({
+      target,
+      run: this.buildMultiRepoChildRunRow(automation.id, group, target),
+    }));
+
+    await store.materializeRunGroupChildren(
+      group.id,
+      targets.length,
+      childRuns.map(({ run }) => run)
+    );
+
     await Promise.all(
-      targets.map((target) => this.startMultiRepoChildRun(store, automation, group, target))
+      childRuns.map(({ target, run }) =>
+        this.startMultiRepoChildRun(store, automation, run.id, target)
+      )
     );
     await this.refreshRunGroupStatus(store, automation.id, group.id);
   }
 
-  private async startMultiRepoChildRun(
-    store: AutomationStore,
-    automation: AutomationRow,
+  private buildMultiRepoChildRunRow(
+    automationId: string,
     group: AutomationRunGroupRow,
     targetRow: AutomationTargetRow
-  ): Promise<void> {
+  ): AutomationRunRow {
     const runId = generateId();
     const now = Date.now();
 
-    await store.insertRun({
+    return {
       id: runId,
-      automation_id: automation.id,
+      automation_id: automationId,
       session_id: null,
       status: "starting",
       skip_reason: null,
@@ -445,10 +490,23 @@ export class SchedulerDO extends DurableObject<Env> {
       target_repo_name: targetRow.repo_name,
       target_repo_id: targetRow.repo_id,
       target_base_branch: targetRow.base_branch,
-    });
+    };
+  }
 
+  private async startMultiRepoChildRun(
+    store: AutomationStore,
+    automation: AutomationRow,
+    runId: string,
+    targetRow: AutomationTargetRow
+  ): Promise<void> {
     try {
       const target = await resolveAutomationTargetRow(this.env, targetRow);
+      await store.updateRun(runId, {
+        target_repo_owner: target.repoOwner,
+        target_repo_name: target.repoName,
+        target_repo_id: target.repoId,
+        target_base_branch: target.baseBranch,
+      });
       const { sessionId } = await this.createSessionForAutomation(automation, runId, target);
       await this.sendPromptToSession(
         sessionId,
@@ -1003,6 +1061,7 @@ export class SchedulerDO extends DurableObject<Env> {
       created_at: now,
       updated_at: now,
       failure_counted_at: null,
+      expected_runs: 0,
     };
 
     await store.insertRunGroup(group);

@@ -52,8 +52,9 @@ export function RunHistory({
 }: RunHistoryProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const hasGroups = groups.length > 0;
+  const displayedRuns = hasGroups ? [] : runs;
 
-  if (!loading && runs.length === 0 && groups.length === 0) {
+  if (!loading && displayedRuns.length === 0 && groups.length === 0) {
     return (
       <div className="border border-border-muted rounded-md bg-card p-6 text-center">
         <p className="text-sm text-muted-foreground">No runs yet.</p>
@@ -156,7 +157,7 @@ export function RunHistory({
             </div>
           );
         })}
-        {runs.map((run) => {
+        {displayedRuns.map((run) => {
           const duration = formatDuration(run.startedAt, run.completedAt);
           return (
             <div key={run.id} className="px-4 py-3">
@@ -205,7 +206,7 @@ export function RunHistory({
       {hasMore && !loading && onLoadMore && (
         <div className="mt-3 text-center">
           <Button variant="ghost" size="sm" onClick={onLoadMore}>
-            Load more ({hasGroups ? groups.length : runs.length} of {total})
+            Load more ({hasGroups ? groups.length : displayedRuns.length} of {total})
           </Button>
         </div>
       )}

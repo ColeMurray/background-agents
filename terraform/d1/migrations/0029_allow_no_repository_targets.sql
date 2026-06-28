@@ -5,6 +5,9 @@
 -- table has been renamed.
 -- Temp tables are intentionally kept if present: after a partial failure they
 -- may be the only copy left, so re-runs use IF NOT EXISTS + INSERT OR REPLACE.
+-- Missing source tables are recreated empty before copy steps. That lets a
+-- rerun resume after a previous attempt dropped the source table but failed
+-- before renaming the populated shadow table back into place.
 
 CREATE TABLE IF NOT EXISTS automation_runs_backup (
   id              TEXT    PRIMARY KEY,
@@ -22,6 +25,23 @@ CREATE TABLE IF NOT EXISTS automation_runs_backup (
   trigger_run_metadata TEXT
 );
 
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id              TEXT    PRIMARY KEY,
+  automation_id   TEXT    NOT NULL,
+  session_id      TEXT,
+  status          TEXT    NOT NULL DEFAULT 'starting',
+  skip_reason     TEXT,
+  failure_reason  TEXT,
+  scheduled_at    INTEGER NOT NULL,
+  started_at      INTEGER,
+  completed_at    INTEGER,
+  created_at      INTEGER NOT NULL,
+  trigger_key     TEXT,
+  concurrency_key TEXT,
+  trigger_run_metadata TEXT,
+  FOREIGN KEY (automation_id) REFERENCES automations(id)
+);
+
 INSERT OR REPLACE INTO automation_runs_backup (
   id, automation_id, session_id, status, skip_reason, failure_reason,
   scheduled_at, started_at, completed_at, created_at, trigger_key,
@@ -33,7 +53,7 @@ SELECT
   concurrency_key, trigger_run_metadata
 FROM automation_runs;
 
-DROP TABLE automation_runs;
+DROP TABLE IF EXISTS automation_runs;
 
 CREATE TABLE IF NOT EXISTS automations_new (
   id              TEXT    PRIMARY KEY,
@@ -62,6 +82,38 @@ CREATE TABLE IF NOT EXISTS automations_new (
   target_mode     TEXT    NOT NULL DEFAULT 'fixed_single_repo'
 );
 
+CREATE TABLE IF NOT EXISTS automations (
+  id              TEXT    PRIMARY KEY,
+  name            TEXT    NOT NULL,
+  repo_owner      TEXT,
+  repo_name       TEXT,
+  base_branch     TEXT,
+  repo_id         INTEGER,
+  instructions    TEXT    NOT NULL,
+  trigger_type    TEXT    NOT NULL DEFAULT 'schedule',
+  schedule_cron   TEXT,
+  schedule_tz     TEXT    NOT NULL DEFAULT 'UTC',
+  model           TEXT    NOT NULL,
+  enabled         INTEGER NOT NULL DEFAULT 1,
+  next_run_at     INTEGER,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  created_by      TEXT    NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  deleted_at      INTEGER,
+  reasoning_effort TEXT,
+  event_type      TEXT,
+  trigger_config  TEXT,
+  trigger_auth_data TEXT,
+  user_id         TEXT,
+  target_mode     TEXT    NOT NULL DEFAULT 'fixed_single_repo'
+);
+
+DROP VIEW IF EXISTS automations_0029_source;
+CREATE VIEW automations_0029_source AS
+SELECT *, 'fixed_single_repo' AS target_mode
+FROM automations;
+
 INSERT OR REPLACE INTO automations_new (
   id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
   trigger_type, schedule_cron, schedule_tz, model, enabled, next_run_at,
@@ -74,10 +126,11 @@ SELECT
   trigger_type, schedule_cron, schedule_tz, model, enabled, next_run_at,
   consecutive_failures, created_by, created_at, updated_at, deleted_at,
   reasoning_effort, event_type, trigger_config, trigger_auth_data, user_id,
-  'fixed_single_repo'
-FROM automations;
+  COALESCE(target_mode, 'fixed_single_repo')
+FROM automations_0029_source;
 
-DROP TABLE automations;
+DROP VIEW IF EXISTS automations_0029_source;
+DROP TABLE IF EXISTS automations;
 ALTER TABLE automations_new RENAME TO automations;
 
 CREATE TABLE automation_runs (
@@ -184,6 +237,30 @@ CREATE TABLE IF NOT EXISTS sessions_new (
   user_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+  id          TEXT    PRIMARY KEY,
+  title       TEXT,
+  repo_owner  TEXT,
+  repo_name   TEXT,
+  model       TEXT    NOT NULL DEFAULT 'claude-haiku-4-5',
+  status      TEXT    NOT NULL DEFAULT 'created',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  reasoning_effort TEXT,
+  base_branch TEXT,
+  parent_session_id TEXT,
+  spawn_source TEXT NOT NULL DEFAULT 'user',
+  spawn_depth INTEGER NOT NULL DEFAULT 0,
+  automation_id TEXT,
+  automation_run_id TEXT,
+  scm_login TEXT,
+  total_cost REAL NOT NULL DEFAULT 0,
+  active_duration_ms INTEGER NOT NULL DEFAULT 0,
+  message_count INTEGER NOT NULL DEFAULT 0,
+  pr_count INTEGER NOT NULL DEFAULT 0,
+  user_id TEXT
+);
+
 INSERT OR REPLACE INTO sessions_new (
   id, title, repo_owner, repo_name, model, status, created_at, updated_at,
   reasoning_effort, base_branch, parent_session_id, spawn_source, spawn_depth,
@@ -197,7 +274,7 @@ SELECT
   message_count, pr_count, user_id
 FROM sessions;
 
-DROP TABLE sessions;
+DROP TABLE IF EXISTS sessions;
 ALTER TABLE sessions_new RENAME TO sessions;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status_updated

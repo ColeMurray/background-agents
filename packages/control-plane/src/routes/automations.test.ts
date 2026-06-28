@@ -41,6 +41,7 @@ vi.mock("../db/automation-store", () => ({
   }),
   toAutomation: vi.fn((row: unknown) => row),
   toAutomationRun: vi.fn((row: unknown) => row),
+  toAutomationRunGroup: vi.fn((row: unknown) => row),
 }));
 
 const mockUserStore = {
@@ -722,6 +723,58 @@ describe("automation route handlers", () => {
       );
     });
 
+    it("ignores baseBranch-only updates for existing fixed_multi_repo automations", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        target_mode: "fixed_multi_repo",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.update.mockResolvedValue(multiRepoRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { baseBranch: "main" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.getActiveRunGroupForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
+      expect(mockStore.update).toHaveBeenCalledWith("auto-1", {});
+    });
+
+    it("accepts legacy fixed_multi_repo update payloads without requiring targets", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        target_mode: "fixed_multi_repo",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.update.mockResolvedValue({ ...multiRepoRow, name: "Updated" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          name: "Updated",
+          targetMode: "fixed_multi_repo",
+          repoOwner: null,
+          repoName: null,
+          baseBranch: "main",
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.getActiveRunGroupForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
+      expect(mockStore.update).toHaveBeenCalledWith("auto-1", { name: "Updated" });
+    });
+
     it("returns 404 when automation not found", async () => {
       mockStore.getById.mockResolvedValue(null);
 
@@ -919,6 +972,47 @@ describe("automation route handlers", () => {
         limit: 100,
         offset: 0,
       });
+    });
+
+    it("returns grouped runs with flattened child runs for fixed_multi_repo automations", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        target_mode: "fixed_multi_repo",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      const childRuns = [
+        { id: "run-1", status: "completed", target_repo_name: "web-app" },
+        { id: "run-2", status: "failed", target_repo_name: "api" },
+      ];
+      const group = {
+        id: "group-1",
+        status: "partial_failed",
+        runs: childRuns,
+        total_runs: 2,
+      };
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.listRunGroupsForAutomation.mockResolvedValue({
+        groups: [group],
+        total: 1,
+      });
+
+      const res = await callRoute("GET", "/automations/auto-1/runs", {
+        query: { limit: "5", offset: "10" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.listRunGroupsForAutomation).toHaveBeenCalledWith("auto-1", {
+        limit: 5,
+        offset: 10,
+      });
+      expect(mockStore.listRunsForAutomation).not.toHaveBeenCalled();
+      const body = await res.json<{ runs: unknown[]; groups: unknown[]; total: number }>();
+      expect(body.groups).toEqual([group]);
+      expect(body.runs).toEqual(childRuns);
+      expect(body.total).toBe(1);
     });
   });
 

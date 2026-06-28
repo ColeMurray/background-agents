@@ -1,9 +1,15 @@
 "use client";
 
-import { useState, use } from "react";
+import { useEffect, useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { describeCron, getReasoningConfig } from "@open-inspect/shared";
+import {
+  describeCron,
+  getReasoningConfig,
+  type AutomationRun,
+  type AutomationRunGroup,
+  type ListAutomationRunsResponse,
+} from "@open-inspect/shared";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationRuns } from "@/hooks/use-automations";
 import { RunHistory } from "@/components/automations/run-history";
@@ -36,20 +42,80 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { isOpen, toggle } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
-  const [runsOffset, setRunsOffset] = useState(0);
   const {
     runs,
     groups,
     total: totalRuns,
     loading: loadingRuns,
     mutate: mutateRuns,
-  } = useAutomationRuns(id, RUNS_PAGE_SIZE + runsOffset, 0);
+  } = useAutomationRuns(id, RUNS_PAGE_SIZE, 0);
+  const [extraRuns, setExtraRuns] = useState<AutomationRun[]>([]);
+  const [extraGroups, setExtraGroups] = useState<AutomationRunGroup[]>([]);
+  const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
+  const [effectiveTotalRuns, setEffectiveTotalRuns] = useState(totalRuns);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const visibleRuns = [...runs, ...extraRuns];
+  const visibleGroups = [...groups, ...extraGroups];
+  const hasGroupedRunHistory = visibleGroups.length > 0;
+  const visibleRunHistoryCount = hasGroupedRunHistory ? visibleGroups.length : visibleRuns.length;
   const reasoningLabel = automation
     ? (automation.reasoningEffort ??
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
     : null;
+
+  useEffect(() => {
+    setExtraRuns([]);
+    setExtraGroups([]);
+  }, [id]);
+
+  useEffect(() => {
+    setEffectiveTotalRuns(totalRuns);
+  }, [totalRuns]);
+
+  const refreshRuns = () => {
+    setExtraRuns([]);
+    setExtraGroups([]);
+    mutateRuns();
+  };
+
+  const handleLoadMoreRuns = async () => {
+    if (!id || loadingMoreRuns) return;
+    setLoadingMoreRuns(true);
+    setActionError(null);
+
+    const params = new URLSearchParams({
+      limit: String(RUNS_PAGE_SIZE),
+      offset: String(visibleRunHistoryCount),
+    });
+
+    try {
+      const res = await fetch(`/api/automations/${id}/runs?${params.toString()}`);
+      if (!res.ok) {
+        setActionError("Failed to load more runs");
+        return;
+      }
+
+      const data = (await res.json()) as ListAutomationRunsResponse;
+      const nextRuns = data.runs ?? [];
+      const nextGroups = data.groups ?? [];
+      setEffectiveTotalRuns(data.total);
+
+      setExtraRuns((prev) => {
+        const seen = new Set([...runs, ...prev].map((run) => run.id));
+        return [...prev, ...nextRuns.filter((run) => !seen.has(run.id))];
+      });
+      setExtraGroups((prev) => {
+        const seen = new Set([...groups, ...prev].map((group) => group.id));
+        return [...prev, ...nextGroups.filter((group) => !seen.has(group.id))];
+      });
+    } catch (error) {
+      console.error("Failed to load more automation runs:", error);
+      setActionError("Failed to load more runs");
+    } finally {
+      setLoadingMoreRuns(false);
+    }
+  };
 
   const handleAction = async (action: "pause" | "resume" | "trigger") => {
     setActionError(null);
@@ -60,7 +126,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
         return;
       }
       mutate();
-      mutateRuns();
+      refreshRuns();
     } catch (error) {
       console.error(`Failed to ${action} automation:`, error);
       setActionError(`Failed to ${action} automation`);
@@ -294,12 +360,12 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
           <div>
             <h2 className="text-lg font-medium text-foreground mb-3">Run History</h2>
             <RunHistory
-              runs={runs}
-              groups={groups}
-              total={totalRuns}
-              loading={loadingRuns}
-              hasMore={(groups.length > 0 ? groups.length : runs.length) < totalRuns}
-              onLoadMore={() => setRunsOffset((prev) => prev + RUNS_PAGE_SIZE)}
+              runs={visibleRuns}
+              groups={visibleGroups}
+              total={effectiveTotalRuns}
+              loading={loadingRuns || loadingMoreRuns}
+              hasMore={visibleRunHistoryCount < effectiveTotalRuns}
+              onLoadMore={handleLoadMoreRuns}
             />
           </div>
         </div>
