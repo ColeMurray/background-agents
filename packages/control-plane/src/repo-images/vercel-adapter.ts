@@ -6,22 +6,20 @@ import type {
   FinalizeRepoImageBuildInput,
   FinalizeRepoImageBuildResult,
   RepoImageBuildAdapter,
-  RepoImageBuildPlan,
   RepoImageBuildStartCallbacks,
   VercelRepoImageBuildPlan,
 } from "./types";
 
 const logger = createLogger("repo-images:vercel-adapter");
+const MS_PER_SECOND = 1000;
 
-export class VercelRepoImageBuildAdapter implements RepoImageBuildAdapter {
+export class VercelRepoImageBuildAdapter implements RepoImageBuildAdapter<VercelRepoImageBuildPlan> {
   constructor(private readonly provider: VercelSandboxProvider) {}
 
   async startBuild(
-    plan: RepoImageBuildPlan,
+    vercelPlan: VercelRepoImageBuildPlan,
     callbacks: RepoImageBuildStartCallbacks
   ): Promise<void> {
-    const vercelPlan = requireVercelPlan(plan);
-
     await this.provider.triggerRepoImageBuild({
       repoOwner: vercelPlan.repoOwner,
       repoName: vercelPlan.repoName,
@@ -32,7 +30,7 @@ export class VercelRepoImageBuildAdapter implements RepoImageBuildAdapter {
       userEnvVars: vercelPlan.userEnvVars,
       cloneToken:
         vercelPlan.cloneAuth.type === "credential_helper" ? vercelPlan.cloneAuth.token : undefined,
-      buildTimeoutSeconds: vercelPlan.buildTimeoutSeconds,
+      buildTimeoutSeconds: Math.ceil(vercelPlan.buildTimeoutMs / MS_PER_SECOND),
       onProviderSessionCreated: callbacks.bindProviderSession,
       correlation: vercelPlan.correlation,
     });
@@ -81,11 +79,21 @@ export class VercelRepoImageBuildAdapter implements RepoImageBuildAdapter {
 
   async cleanupFailedBuild(input: FailedRepoImageBuildInput): Promise<void> {
     if (input.kind !== "provider_session") return;
-    await this.stopBuildSandbox({
-      buildId: input.buildId,
-      providerSessionId: input.providerSessionId,
-      correlation: input.correlation,
-    });
+    try {
+      await this.stopBuildSandbox({
+        buildId: input.buildId,
+        providerSessionId: input.providerSessionId,
+        correlation: input.correlation,
+      });
+    } catch (error) {
+      logger.warn("repo_image.vercel_build_stop_failed", {
+        build_id: input.buildId,
+        provider_session_id: input.providerSessionId,
+        error: error instanceof Error ? error.message : String(error),
+        request_id: input.correlation.request_id,
+        trace_id: input.correlation.trace_id,
+      });
+    }
   }
 
   async deleteImage(input: DeleteRepoImageInput): Promise<void> {
@@ -113,11 +121,4 @@ export class VercelRepoImageBuildAdapter implements RepoImageBuildAdapter {
       throw new Error(stopResult.error || "Failed to stop Vercel build sandbox");
     }
   }
-}
-
-function requireVercelPlan(plan: RepoImageBuildPlan): VercelRepoImageBuildPlan {
-  if (plan.provider !== "vercel") {
-    throw new Error(`Vercel adapter received ${plan.provider} repo image build plan`);
-  }
-  return plan;
 }

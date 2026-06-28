@@ -4,6 +4,7 @@ export type RepoImageCallbackMode = "provider_image" | "provider_session";
 export type RepoImageWorkflowContext = CorrelationContext;
 
 export interface ReplacedRepoImage {
+  repoImageId: string;
   providerImageId: string;
   providerSessionId: string | null;
 }
@@ -32,7 +33,7 @@ interface BaseRepoImageBuildPlan {
   repoName: string;
   baseBranch: string;
   callbackUrl: string;
-  buildTimeoutSeconds: number;
+  buildTimeoutMs: number;
   userEnvVars?: Record<string, string>;
   correlation: CorrelationContext;
 }
@@ -68,6 +69,21 @@ export type RepoImageBuildPlan =
   | VercelRepoImageBuildPlan
   | OpenComputerRepoImageBuildPlan;
 
+export type RepoImageCallbackAuth =
+  | { type: "none" }
+  | { type: "bearer_token"; tokenHash: string; expiresAt: number };
+
+export type PlannedRepoImageBuild =
+  | { plan: ModalRepoImageBuildPlan; callbackAuth: { type: "none" } }
+  | {
+      plan: VercelRepoImageBuildPlan;
+      callbackAuth: Extract<RepoImageCallbackAuth, { type: "bearer_token" }>;
+    }
+  | {
+      plan: OpenComputerRepoImageBuildPlan;
+      callbackAuth: Extract<RepoImageCallbackAuth, { type: "bearer_token" }>;
+    };
+
 export interface RepoImageBuildStartCallbacks {
   bindProviderSession(providerSessionId: string): Promise<void>;
 }
@@ -77,7 +93,7 @@ export interface CompleteProviderImageBuild {
   buildId: string;
   providerImageId: string;
   baseSha: string;
-  buildDurationSeconds: number;
+  buildDurationMs: number;
 }
 
 export interface CompleteProviderSessionBuild {
@@ -85,7 +101,7 @@ export interface CompleteProviderSessionBuild {
   buildId: string;
   providerSessionId: string;
   baseSha: string;
-  buildDurationSeconds: number;
+  buildDurationMs: number;
 }
 
 export type CompleteRepoImageBuild = CompleteProviderImageBuild | CompleteProviderSessionBuild;
@@ -118,20 +134,38 @@ export type FailedRepoImageBuildInput = FailRepoImageBuild & {
   correlation: CorrelationContext;
 };
 
+export interface CleanupCompletedProviderSessionBuildInput {
+  kind: "provider_session";
+  buildId: string;
+  providerSessionId: string;
+  correlation: CorrelationContext;
+}
+
 export interface DeleteRepoImageInput {
   providerImageId: string;
   providerSessionId?: string | null;
   correlation?: CorrelationContext;
 }
 
-export interface RepoImageBuildAdapter {
-  startBuild(plan: RepoImageBuildPlan, callbacks: RepoImageBuildStartCallbacks): Promise<void>;
-
+export interface RepoImageBuildFinalizer {
   finalizeSuccessfulBuild(
     input: FinalizeRepoImageBuildInput
   ): Promise<FinalizeRepoImageBuildResult>;
 
   cleanupFailedBuild?(input: FailedRepoImageBuildInput): Promise<void>;
 
+  cleanupCompletedBuild?(input: CleanupCompletedProviderSessionBuildInput): Promise<void>;
+
   deleteImage(input: DeleteRepoImageInput): Promise<void>;
 }
+
+export interface RepoImageBuildAdapter<
+  Plan extends RepoImageBuildPlan,
+> extends RepoImageBuildFinalizer {
+  startBuild(plan: Plan, callbacks: RepoImageBuildStartCallbacks): Promise<void>;
+}
+
+export type AnyRepoImageBuildAdapter =
+  | RepoImageBuildAdapter<ModalRepoImageBuildPlan>
+  | RepoImageBuildAdapter<VercelRepoImageBuildPlan>
+  | RepoImageBuildAdapter<OpenComputerRepoImageBuildPlan>;

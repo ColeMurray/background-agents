@@ -1,10 +1,16 @@
 import type { RepoImageProvider } from "../db/repo-images";
-import { resolveSandboxBackendName, supportsRepoImageBackend } from "../sandbox/provider-name";
+import { resolveSandboxBackendName, type SandboxBackendName } from "../sandbox/provider-name";
 import type { Env } from "../types";
 import type { RepoImageCallbackMode } from "./types";
 
+const REPO_IMAGE_CALLBACK_MODES = {
+  modal: "provider_image",
+  vercel: "provider_session",
+  opencomputer: "provider_session",
+} satisfies Record<RepoImageProvider, RepoImageCallbackMode>;
+
 export function getRepoImagesUnsupportedMessage(env: Env): string | null {
-  if (supportsRepoImageBackend(env.SANDBOX_PROVIDER)) {
+  if (resolveRepoImageBackend(env.SANDBOX_PROVIDER)) {
     return null;
   }
 
@@ -13,7 +19,7 @@ export function getRepoImagesUnsupportedMessage(env: Env): string | null {
 
 export function resolveRepoImageBackend(value: string | undefined): RepoImageProvider | null {
   const backend = resolveSandboxBackendName(value);
-  return backend === "modal" || backend === "vercel" || backend === "opencomputer" ? backend : null;
+  return isRepoImageBackend(backend) ? backend : null;
 }
 
 export function getRepoImageBackend(env: Env): RepoImageProvider {
@@ -25,5 +31,9 @@ export function getRepoImageBackend(env: Env): RepoImageProvider {
 }
 
 export function getRepoImageCallbackMode(backend: RepoImageProvider): RepoImageCallbackMode {
-  return backend === "modal" ? "provider_image" : "provider_session";
+  return REPO_IMAGE_CALLBACK_MODES[backend];
+}
+
+function isRepoImageBackend(backend: SandboxBackendName): backend is RepoImageProvider {
+  return backend in REPO_IMAGE_CALLBACK_MODES;
 }

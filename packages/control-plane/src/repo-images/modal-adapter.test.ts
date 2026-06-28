@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModalRepoImageBuildProvider } from "../sandbox/providers/modal-provider";
 import { ModalRepoImageBuildAdapter } from "./modal-adapter";
-import type { RepoImageBuildPlan } from "./types";
+import type { ModalRepoImageBuildPlan } from "./types";
 
 function createProvider(): ModalRepoImageBuildProvider {
   return {
@@ -10,7 +10,7 @@ function createProvider(): ModalRepoImageBuildProvider {
   };
 }
 
-function createPlan(): RepoImageBuildPlan {
+function createPlan(): ModalRepoImageBuildPlan {
   return {
     provider: "modal",
     callbackMode: "provider_image",
@@ -19,7 +19,7 @@ function createPlan(): RepoImageBuildPlan {
     repoName: "repo",
     baseBranch: "develop",
     callbackUrl: "https://worker.test/repo-images/build-complete",
-    buildTimeoutSeconds: 1800,
+    buildTimeoutMs: 1_800_000,
     userEnvVars: { FOO: "bar" },
     correlation: {
       request_id: "request-1",
@@ -42,7 +42,7 @@ describe("ModalRepoImageBuildAdapter", () => {
       repoName: "repo",
       defaultBranch: "develop",
       callbackUrl: "https://worker.test/repo-images/build-complete",
-      buildTimeoutSeconds: 1800,
+      buildTimeoutMs: 1_800_000,
       userEnvVars: { FOO: "bar" },
       correlation: {
         request_id: "request-1",

@@ -50,7 +50,11 @@ function createVercelProviderFromEnv(env: Env): VercelSandboxProvider {
     baseSnapshotId: env.VERCEL_BASE_SNAPSHOT_ID,
     baseSnapshotName: env.VERCEL_BASE_SNAPSHOT_NAME,
     runtime: env.VERCEL_RUNTIME,
-    snapshotExpirationMs: parseInt(env.VERCEL_SNAPSHOT_EXPIRATION_MS || "0", 10),
+    snapshotExpirationMs: parseNumericEnv(
+      "VERCEL_SNAPSHOT_EXPIRATION_MS",
+      env.VERCEL_SNAPSHOT_EXPIRATION_MS,
+      0
+    ),
     codeServerPasswordSecret: env.VERCEL_TOKEN,
   });
 }
@@ -91,8 +95,16 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
     apiKey: env.DAYTONA_API_KEY,
     target: env.DAYTONA_TARGET,
     baseSnapshot: env.DAYTONA_BASE_SNAPSHOT,
-    autoStopIntervalMinutes: parseInt(env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES || "120", 10),
-    autoArchiveIntervalMinutes: parseInt(env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES || "10080", 10),
+    autoStopIntervalMinutes: parseNumericEnv(
+      "DAYTONA_AUTO_STOP_INTERVAL_MINUTES",
+      env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES,
+      120
+    ),
+    autoArchiveIntervalMinutes: parseNumericEnv(
+      "DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES",
+      env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES,
+      10080
+    ),
   });
 
   return createDaytonaProvider(client, {
@@ -127,4 +139,15 @@ export function createSandboxProviderFromEnv(
     case "modal":
       return createModalProviderFromEnv(env);
   }
+}
+
+function parseNumericEnv(name: string, value: string | undefined, defaultValue: number): number {
+  const raw = value?.trim();
+  if (!raw) return defaultValue;
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${name} must be a valid number`);
+  }
+  return parsed;
 }

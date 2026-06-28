@@ -21,6 +21,8 @@ import {
   type SnapshotResult,
 } from "../provider";
 
+const MS_PER_SECOND = 1000;
+
 export interface TriggerModalRepoImageBuildConfig {
   buildId: string;
   repoOwner: string;
@@ -29,11 +31,10 @@ export interface TriggerModalRepoImageBuildConfig {
   callbackUrl: string;
   userEnvVars?: Record<string, string>;
   /**
-   * Build sandbox lifetime, in seconds. Already capped at
-   * MAX_BUILD_TIMEOUT_SECONDS by the trigger. Omitted -> Modal applies
-   * DEFAULT_BUILD_TIMEOUT_SECONDS.
+   * Build sandbox lifetime, in milliseconds. Already capped by the trigger.
+   * Omitted -> Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
    */
-  buildTimeoutSeconds?: number;
+  buildTimeoutMs?: number;
   correlation?: CorrelationContext;
 }
 
@@ -237,7 +238,10 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
           buildId: config.buildId,
           callbackUrl: config.callbackUrl,
           userEnvVars: config.userEnvVars,
-          buildTimeoutSeconds: config.buildTimeoutSeconds,
+          buildTimeoutSeconds:
+            config.buildTimeoutMs === undefined
+              ? undefined
+              : Math.ceil(config.buildTimeoutMs / MS_PER_SECOND),
         },
         config.correlation
       );

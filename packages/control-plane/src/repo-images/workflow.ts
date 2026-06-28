@@ -1,17 +1,23 @@
+import { generateId } from "../auth/crypto";
 import { RepoImageStore } from "../db/repo-images";
-import type { RepoImageProvider } from "../db/repo-images";
+import type { RepoImageBuild, RepoImageProvider } from "../db/repo-images";
 import { createLogger, type CorrelationContext } from "../logger";
 import type { Env } from "../types";
 import { hashRepoImageCallbackToken } from "./auth";
 import { getRepoImageBackend } from "./backend-policy";
 import { RepoImageBuildPlanner } from "./planner";
-import { createRepoImageBuildAdapter } from "./provider-factory";
+import {
+  createRepoImageBuildAdapterFactory,
+  type RepoImageBuildAdapterFactory,
+} from "./provider-factory";
 import type {
+  AnyRepoImageBuildAdapter,
   CompleteProviderSessionBuild,
   CompleteRepoImageBuild,
   FailRepoImageBuild,
   FinalizeRepoImageBuildResult,
-  RepoImageBuildAdapter,
+  PlannedRepoImageBuild,
+  RepoImageBuildFinalizer,
   RepoImageWorkflowContext,
   RepoImageWorkflowResult,
   ReplacedRepoImage,
@@ -19,14 +25,22 @@ import type {
 
 const logger = createLogger("repo-images:workflow");
 
-type RepoImageBuildAdapterFactory = () => RepoImageBuildAdapter;
 type PlanBuildInput = Parameters<RepoImageBuildPlanner["planBuild"]>[0];
-type AdapterResolution =
-  | { type: "ok"; adapter: RepoImageBuildAdapter }
+type AdapterResolution<TAdapter extends RepoImageBuildFinalizer> =
+  | { type: "ok"; adapter: TAdapter }
   | {
       type: "unconfigured";
       result: Extract<RepoImageWorkflowResult, { type: "repo_image_provider_unconfigured" }>;
     };
+type PlannedBuildStart =
+  | {
+      type: "ok";
+      adapter: AnyRepoImageBuildAdapter;
+      start(callbacks: {
+        bindProviderSession(providerSessionId: string): Promise<void>;
+      }): Promise<void>;
+    }
+  | Extract<AdapterResolution<AnyRepoImageBuildAdapter>, { type: "unconfigured" }>;
 
 interface RepoImageBuildPlannerLike {
   planBuild(params: PlanBuildInput): ReturnType<RepoImageBuildPlanner["planBuild"]>;
@@ -37,7 +51,7 @@ interface ReadyBuildCompletion {
   buildId: string;
   providerSessionId?: string;
   baseSha: string;
-  buildDurationSeconds: number;
+  buildDurationMs: number;
 }
 
 export interface AcceptBuildCompleteCommand {
@@ -56,7 +70,7 @@ export class RepoImageBuildWorkflow {
   constructor(
     private readonly env: Env,
     private readonly store: RepoImageStore,
-    private readonly createAdapter: RepoImageBuildAdapterFactory,
+    private readonly adapterFactory: RepoImageBuildAdapterFactory,
     private readonly backend: RepoImageProvider,
     private readonly planner: RepoImageBuildPlannerLike = new RepoImageBuildPlanner(env, backend)
   ) {}
@@ -71,7 +85,9 @@ export class RepoImageBuildWorkflow {
     }
 
     const now = Date.now();
-    const buildId = `img-${owner}-${name}-${now}`;
+    const buildId = createBuildId(owner, name, now);
+    let providerSessionIdForCleanup: string | null = null;
+    let adapterForCleanup: AnyRepoImageBuildAdapter | null = null;
 
     try {
       const planned = await this.planner.planBuild({
@@ -93,22 +109,23 @@ export class RepoImageBuildWorkflow {
         };
       }
 
-      const adapterResolution = this.createAdapterForOperation("trigger_build", ctx, buildId);
-      if (adapterResolution.type === "unconfigured") return adapterResolution.result;
-      const { adapter } = adapterResolution;
+      const build = planned.build;
+      const start = this.preparePlannedBuildStart(build, ctx);
+      if (start.type === "unconfigured") return start.result;
+      adapterForCleanup = start.adapter;
 
       await this.store.registerBuild({
         id: buildId,
         repoOwner: owner,
         repoName: name,
         provider: this.backend,
-        baseBranch: planned.registration.baseBranch,
-        callbackTokenHash: planned.registration.callbackTokenHash,
-        callbackTokenExpiresAt: planned.registration.callbackTokenExpiresAt,
+        baseBranch: build.plan.baseBranch,
+        ...callbackAuthRegistration(build),
       });
 
-      await adapter.startBuild(planned.plan, {
+      await start.start({
         bindProviderSession: async (providerSessionId) => {
+          providerSessionIdForCleanup = providerSessionId;
           const bound = await this.store.bindProviderSession(
             buildId,
             this.backend,
@@ -130,6 +147,26 @@ export class RepoImageBuildWorkflow {
 
       return { type: "build_triggered", buildId };
     } catch (e) {
+      if (providerSessionIdForCleanup && adapterForCleanup?.cleanupFailedBuild) {
+        await adapterForCleanup
+          .cleanupFailedBuild({
+            kind: "provider_session",
+            buildId,
+            providerSessionId: providerSessionIdForCleanup,
+            errorMessage: errorMessage(e),
+            correlation: ctx,
+          })
+          .catch((cleanupError) => {
+            logger.warn(`repo_image.${this.backend}_trigger_cleanup_failed`, {
+              build_id: buildId,
+              provider_session_id: providerSessionIdForCleanup,
+              error: errorMessage(cleanupError),
+              request_id: ctx.request_id,
+              trace_id: ctx.trace_id,
+            });
+          });
+      }
+
       try {
         await this.store.markBuildFailed(buildId, this.backend, errorMessage(e));
       } catch (markFailedError) {
@@ -194,8 +231,9 @@ export class RepoImageBuildWorkflow {
     if (adapterResolution.type === "unconfigured") return adapterResolution.result;
     const { adapter } = adapterResolution;
 
+    let finalized: FinalizeRepoImageBuildResult | null = null;
     try {
-      const finalized = await adapter.finalizeSuccessfulBuild({
+      finalized = await adapter.finalizeSuccessfulBuild({
         ...completion,
         correlation: ctx,
       });
@@ -214,6 +252,14 @@ export class RepoImageBuildWorkflow {
         ? { type: "build_ready", replacedImages: result.replacedImages, cleanup: result.cleanup }
         : { type: "build_ready", replacedImages: result.replacedImages };
     } catch (e) {
+      if (finalized) {
+        await this.deleteImageBestEffort(
+          finalized.providerImageId,
+          finalized.providerSessionId,
+          ctx,
+          adapter
+        );
+      }
       logger.error("repo_image.build_complete_error", {
         error: errorMessage(e),
         build_id: completion.buildId,
@@ -279,9 +325,35 @@ export class RepoImageBuildWorkflow {
     operation: string,
     ctx: RepoImageWorkflowContext,
     buildId?: string
-  ): AdapterResolution {
+  ): AdapterResolution<AnyRepoImageBuildAdapter> {
+    switch (this.backend) {
+      case "modal":
+        return this.createAdapter(operation, ctx, () => this.adapterFactory.createModal(), buildId);
+      case "vercel":
+        return this.createAdapter(
+          operation,
+          ctx,
+          () => this.adapterFactory.createVercel(),
+          buildId
+        );
+      case "opencomputer":
+        return this.createAdapter(
+          operation,
+          ctx,
+          () => this.adapterFactory.createOpenComputer(),
+          buildId
+        );
+    }
+  }
+
+  private createAdapter<TAdapter extends RepoImageBuildFinalizer>(
+    operation: string,
+    ctx: RepoImageWorkflowContext,
+    create: () => TAdapter,
+    buildId?: string
+  ): AdapterResolution<TAdapter> {
     try {
-      return { type: "ok", adapter: this.createAdapter() };
+      return { type: "ok", adapter: create() };
     } catch (e) {
       logger.error("repo_image.adapter_config_error", {
         operation,
@@ -301,24 +373,64 @@ export class RepoImageBuildWorkflow {
     }
   }
 
+  private preparePlannedBuildStart(
+    build: PlannedRepoImageBuild,
+    ctx: RepoImageWorkflowContext
+  ): PlannedBuildStart {
+    const plan = build.plan;
+    switch (plan.provider) {
+      case "modal": {
+        const adapterResolution = this.createAdapter(
+          "trigger_build",
+          ctx,
+          () => this.adapterFactory.createModal(),
+          plan.buildId
+        );
+        if (adapterResolution.type === "unconfigured") return adapterResolution;
+        return {
+          type: "ok",
+          adapter: adapterResolution.adapter,
+          start: (callbacks) => adapterResolution.adapter.startBuild(plan, callbacks),
+        };
+      }
+      case "vercel": {
+        const adapterResolution = this.createAdapter(
+          "trigger_build",
+          ctx,
+          () => this.adapterFactory.createVercel(),
+          plan.buildId
+        );
+        if (adapterResolution.type === "unconfigured") return adapterResolution;
+        return {
+          type: "ok",
+          adapter: adapterResolution.adapter,
+          start: (callbacks) => adapterResolution.adapter.startBuild(plan, callbacks),
+        };
+      }
+      case "opencomputer": {
+        const adapterResolution = this.createAdapter(
+          "trigger_build",
+          ctx,
+          () => this.adapterFactory.createOpenComputer(),
+          plan.buildId
+        );
+        if (adapterResolution.type === "unconfigured") return adapterResolution;
+        return {
+          type: "ok",
+          adapter: adapterResolution.adapter,
+          start: (callbacks) => adapterResolution.adapter.startBuild(plan, callbacks),
+        };
+      }
+    }
+  }
+
   private createAdapterForBestEffortCleanup(
     buildId: string,
     providerSessionId: string | null | undefined,
     ctx: RepoImageWorkflowContext
-  ): RepoImageBuildAdapter | null {
-    try {
-      return this.createAdapter();
-    } catch (e) {
-      logger.warn("repo_image.cleanup_adapter_unavailable", {
-        build_id: buildId,
-        provider_session_id: providerSessionId,
-        provider: this.backend,
-        error: errorMessage(e),
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return null;
-    }
+  ): AnyRepoImageBuildAdapter | null {
+    const adapterResolution = this.createAdapterForOperation("cleanup", ctx, buildId);
+    return adapterResolution.type === "ok" ? adapterResolution.adapter : null;
   }
 
   private async requireTokenBuildCallbackAuth(
@@ -379,11 +491,19 @@ export class RepoImageBuildWorkflow {
     ctx: RepoImageWorkflowContext
   ): Promise<void> {
     const startedAt = Date.now();
-    let finalizedProviderImageId: string | null = null;
-    let adapter: RepoImageBuildAdapter | null = null;
+    let finalized: FinalizeRepoImageBuildResult | null = null;
+    let adapter: AnyRepoImageBuildAdapter | null = null;
 
     try {
-      adapter = this.createAdapter();
+      const adapterResolution = this.createAdapterForOperation(
+        "build_complete",
+        ctx,
+        input.buildId
+      );
+      if (adapterResolution.type === "unconfigured") {
+        throw new Error(adapterResolution.result.message);
+      }
+      adapter = adapterResolution.adapter;
       logger.info(`repo_image.${this.backend}_finalize_start`, {
         build_id: input.buildId,
         provider_session_id: input.providerSessionId,
@@ -391,8 +511,7 @@ export class RepoImageBuildWorkflow {
         trace_id: ctx.trace_id,
       });
 
-      const finalized = await adapter.finalizeSuccessfulBuild(input);
-      finalizedProviderImageId = finalized.providerImageId;
+      finalized = await adapter.finalizeSuccessfulBuild(input);
 
       const result = await this.markFinalizedBuildReady({
         adapter,
@@ -403,15 +522,19 @@ export class RepoImageBuildWorkflow {
         deleteFinalizedImageOnReject: true,
       });
       await result.cleanup;
+      await this.cleanupCompletedBuild(adapter, input, ctx);
     } catch (e) {
       const message = errorMessage(e);
-      if (finalizedProviderImageId && adapter) {
+      if (finalized && adapter) {
         await this.deleteImageBestEffort(
-          finalizedProviderImageId,
-          input.providerSessionId,
+          finalized.providerImageId,
+          finalized.providerSessionId,
           ctx,
           adapter
         );
+      }
+      if (adapter) {
+        await this.cleanupCompletedBuild(adapter, input, ctx);
       }
       try {
         await this.store.markBuildFailed(input.buildId, this.backend, message);
@@ -435,21 +558,39 @@ export class RepoImageBuildWorkflow {
   }
 
   private deleteReplacedImages(
-    adapter: RepoImageBuildAdapter,
+    adapter: RepoImageBuildFinalizer,
     replacedImages: ReplacedRepoImage[],
     ctx: RepoImageWorkflowContext
   ): Promise<void> | undefined {
     if (replacedImages.length === 0) return undefined;
 
     return Promise.all(
-      replacedImages.map((image) =>
-        this.deleteImageBestEffort(image.providerImageId, image.providerSessionId, ctx, adapter)
-      )
+      replacedImages.map(async (image) => {
+        const deleted = await this.deleteImageBestEffort(
+          image.providerImageId,
+          image.providerSessionId,
+          ctx,
+          adapter
+        );
+        if (deleted) {
+          try {
+            await this.store.deleteSupersededImage(image.repoImageId);
+          } catch (e) {
+            logger.warn("repo_image.delete_superseded_row_failed", {
+              repo_image_id: image.repoImageId,
+              provider_image_id: image.providerImageId,
+              error: errorMessage(e),
+              request_id: ctx.request_id,
+              trace_id: ctx.trace_id,
+            });
+          }
+        }
+      })
     ).then(() => undefined);
   }
 
   private async markFinalizedBuildReady(params: {
-    adapter: RepoImageBuildAdapter;
+    adapter: RepoImageBuildFinalizer;
     completion: ReadyBuildCompletion;
     finalized: FinalizeRepoImageBuildResult;
     ctx: RepoImageWorkflowContext;
@@ -467,7 +608,7 @@ export class RepoImageBuildWorkflow {
       this.backend,
       params.finalized.providerImageId,
       params.completion.baseSha,
-      params.completion.buildDurationSeconds
+      params.completion.buildDurationMs
     );
 
     if (!result.updated) {
@@ -539,18 +680,45 @@ export class RepoImageBuildWorkflow {
     providerImageId: string,
     providerSessionId: string | null | undefined,
     ctx: RepoImageWorkflowContext,
-    adapter: RepoImageBuildAdapter
-  ): Promise<void> {
+    adapter: RepoImageBuildFinalizer
+  ): Promise<boolean> {
     try {
       await adapter.deleteImage({
         providerImageId,
         providerSessionId,
         correlation: ctx,
       });
+      return true;
     } catch (e) {
       logger.warn("repo_image.delete_old_failed", {
         provider_image_id: providerImageId,
         error: errorMessage(e),
+      });
+      return false;
+    }
+  }
+
+  private async cleanupCompletedBuild(
+    adapter: RepoImageBuildFinalizer,
+    input: CompleteProviderSessionBuild & { correlation: CorrelationContext },
+    ctx: RepoImageWorkflowContext
+  ): Promise<void> {
+    if (!adapter.cleanupCompletedBuild) return;
+
+    try {
+      await adapter.cleanupCompletedBuild({
+        kind: "provider_session",
+        buildId: input.buildId,
+        providerSessionId: input.providerSessionId,
+        correlation: ctx,
+      });
+    } catch (e) {
+      logger.warn(`repo_image.${this.backend}_completed_build_cleanup_failed`, {
+        build_id: input.buildId,
+        provider_session_id: input.providerSessionId,
+        error: errorMessage(e),
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
       });
     }
   }
@@ -560,9 +728,24 @@ export function createRepoImageBuildWorkflowFromEnv(env: Env): RepoImageBuildWor
   return new RepoImageBuildWorkflow(
     env,
     new RepoImageStore(env.DB),
-    () => createRepoImageBuildAdapter(env),
+    createRepoImageBuildAdapterFactory(env),
     getRepoImageBackend(env)
   );
+}
+
+function createBuildId(owner: string, name: string, now: number): string {
+  return `img-${owner}-${name}-${now}-${generateId(4)}`;
+}
+
+function callbackAuthRegistration(
+  build: PlannedRepoImageBuild
+): Partial<Pick<RepoImageBuild, "callbackTokenHash" | "callbackTokenExpiresAt">> {
+  return build.callbackAuth.type === "bearer_token"
+    ? {
+        callbackTokenHash: build.callbackAuth.tokenHash,
+        callbackTokenExpiresAt: build.callbackAuth.expiresAt,
+      }
+    : {};
 }
 
 function errorMessage(errorValue: unknown): string {

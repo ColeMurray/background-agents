@@ -497,7 +497,7 @@ describe("ModalSandboxProvider", () => {
         defaultBranch: "develop",
         callbackUrl: "https://worker.test/repo-images/build-complete",
         userEnvVars: { FOO: "bar" },
-        buildTimeoutSeconds: 1800,
+        buildTimeoutMs: 1_800_000,
         correlation,
       });
 

@@ -1,27 +1,26 @@
 import { createLogger } from "../logger";
 import type { OpenComputerSandboxProvider } from "../sandbox/providers/opencomputer-provider";
 import type {
+  CleanupCompletedProviderSessionBuildInput,
   DeleteRepoImageInput,
   FailedRepoImageBuildInput,
   FinalizeRepoImageBuildInput,
   FinalizeRepoImageBuildResult,
   OpenComputerRepoImageBuildPlan,
   RepoImageBuildAdapter,
-  RepoImageBuildPlan,
   RepoImageBuildStartCallbacks,
 } from "./types";
 
 const logger = createLogger("repo-images:opencomputer-adapter");
+const MS_PER_SECOND = 1000;
 
-export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter {
+export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter<OpenComputerRepoImageBuildPlan> {
   constructor(private readonly provider: OpenComputerSandboxProvider) {}
 
   async startBuild(
-    plan: RepoImageBuildPlan,
+    openComputerPlan: OpenComputerRepoImageBuildPlan,
     callbacks: RepoImageBuildStartCallbacks
   ): Promise<void> {
-    const openComputerPlan = requireOpenComputerPlan(plan);
-
     await this.provider.triggerRepoImageBuild({
       repoOwner: openComputerPlan.repoOwner,
       repoName: openComputerPlan.repoName,
@@ -30,7 +29,7 @@ export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter 
       callbackUrl: openComputerPlan.callbackUrl,
       callbackToken: openComputerPlan.callbackToken,
       userEnvVars: openComputerPlan.userEnvVars,
-      buildTimeoutSeconds: openComputerPlan.buildTimeoutSeconds,
+      buildTimeoutSeconds: Math.ceil(openComputerPlan.buildTimeoutMs / MS_PER_SECOND),
       onProviderSessionCreated: callbacks.bindProviderSession,
     });
   }
@@ -42,28 +41,28 @@ export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter 
       throw new Error("provider_session_id is required for OpenComputer repo image completion");
     }
 
-    try {
-      const snapshot = await this.provider.takeSnapshot({
-        providerObjectId: input.providerSessionId,
-        sessionId: input.buildId,
-        reason: "repo_image_build",
-        correlation: {
-          ...input.correlation,
-          sandbox_id: input.providerSessionId,
-        },
-      });
+    const snapshot = await this.provider.takeSnapshot({
+      providerObjectId: input.providerSessionId,
+      sessionId: input.buildId,
+      reason: "repo_image_build",
+      correlation: {
+        ...input.correlation,
+        sandbox_id: input.providerSessionId,
+      },
+    });
 
-      if (!snapshot.success || !snapshot.imageId) {
-        throw new Error(snapshot.error || "OpenComputer checkpoint did not return an image id");
-      }
-
-      return {
-        providerImageId: snapshot.imageId,
-        providerSessionId: input.providerSessionId,
-      };
-    } finally {
-      await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
+    if (!snapshot.success || !snapshot.imageId) {
+      throw new Error(snapshot.error || "OpenComputer checkpoint did not return an image id");
     }
+
+    return {
+      providerImageId: snapshot.imageId,
+      providerSessionId: input.providerSessionId,
+    };
+  }
+
+  async cleanupCompletedBuild(input: CleanupCompletedProviderSessionBuildInput): Promise<void> {
+    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
   }
 
   async cleanupFailedBuild(input: FailedRepoImageBuildInput): Promise<void> {
@@ -93,11 +92,4 @@ export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter 
       });
     }
   }
-}
-
-function requireOpenComputerPlan(plan: RepoImageBuildPlan): OpenComputerRepoImageBuildPlan {
-  if (plan.provider !== "opencomputer") {
-    throw new Error(`OpenComputer adapter received ${plan.provider} repo image build plan`);
-  }
-  return plan;
 }

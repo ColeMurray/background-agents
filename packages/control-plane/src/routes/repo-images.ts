@@ -39,6 +39,9 @@ import {
 } from "./repo-image-callback-auth";
 
 const logger = createLogger("router:repo-images");
+const MS_PER_SECOND = 1000;
+const DEFAULT_STALE_BUILD_MAX_AGE_MS = 4200 * MS_PER_SECOND;
+const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * MS_PER_SECOND;
 
 interface RepoImageBuildCompleteBody {
   build_id?: unknown;
@@ -147,6 +150,7 @@ function buildCompleteCommand(
     "build_duration_seconds"
   );
   if (buildDurationSeconds instanceof Response) return buildDurationSeconds;
+  const buildDurationMs = buildDurationSeconds * MS_PER_SECOND;
 
   if (getRepoImageCallbackMode(backend) === "provider_session") {
     const providerSessionId = requireStringField(body.provider_session_id, "provider_session_id");
@@ -156,7 +160,7 @@ function buildCompleteCommand(
       buildId,
       providerSessionId,
       baseSha,
-      buildDurationSeconds,
+      buildDurationMs,
     };
   }
 
@@ -167,7 +171,7 @@ function buildCompleteCommand(
     buildId,
     providerImageId,
     baseSha,
-    buildDurationSeconds,
+    buildDurationMs,
   };
 }
 
@@ -361,10 +365,11 @@ async function handleMarkStale(
     body = {};
   }
 
-  // Body-less fallback only; the scheduler always sends max_age_seconds explicitly.
-  // Mirrors STALE_BUILD_THRESHOLD_SECONDS in the Modal scheduler (image_builder.py).
-  const maxAgeSeconds = body.max_age_seconds ?? 4200;
-  const maxAgeMs = maxAgeSeconds * 1000;
+  const maxAgeMs =
+    body.max_age_seconds === undefined
+      ? DEFAULT_STALE_BUILD_MAX_AGE_MS
+      : body.max_age_seconds * MS_PER_SECOND;
+  const maxAgeSeconds = maxAgeMs / MS_PER_SECOND;
 
   const store = new RepoImageStore(env.DB);
 
@@ -413,8 +418,11 @@ async function handleCleanup(
     body = {};
   }
 
-  const maxAgeSeconds = body.max_age_seconds ?? 86400;
-  const maxAgeMs = maxAgeSeconds * 1000;
+  const maxAgeMs =
+    body.max_age_seconds === undefined
+      ? DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS
+      : body.max_age_seconds * MS_PER_SECOND;
+  const maxAgeSeconds = maxAgeMs / MS_PER_SECOND;
 
   const store = new RepoImageStore(env.DB);
 

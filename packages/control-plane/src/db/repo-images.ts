@@ -1,6 +1,8 @@
 import { timingSafeEqual } from "@open-inspect/shared";
+import type { ReplacedRepoImage } from "../repo-images/types";
 
 export type RepoImageProvider = "modal" | "vercel" | "opencomputer";
+const MS_PER_SECOND = 1000;
 
 export interface RepoImageBuild {
   id: string;
@@ -21,7 +23,7 @@ export interface RepoImage {
   provider_image_id: string;
   base_sha: string;
   base_branch: string;
-  status: "building" | "ready" | "failed";
+  status: "building" | "ready" | "failed" | "superseded";
   build_duration_seconds: number | null;
   error_message: string | null;
   callback_token_hash: string | null;
@@ -34,11 +36,6 @@ export interface RepoImageCallbackBuild {
   id: string;
   provider: RepoImageProvider;
   provider_session_id: string | null;
-}
-
-export interface ReplacedRepoImage {
-  providerImageId: string;
-  providerSessionId: string | null;
 }
 
 export class RepoImageStore {
@@ -155,7 +152,7 @@ export class RepoImageStore {
     provider: RepoImageProvider,
     providerImageId: string,
     baseSha: string,
-    buildDurationSeconds: number
+    buildDurationMs: number
   ): Promise<{
     updated: boolean;
     replacedImageId: string | null;
@@ -205,7 +202,7 @@ export class RepoImageStore {
       .bind(
         providerImageId,
         baseSha,
-        buildDurationSeconds,
+        buildDurationMs / MS_PER_SECOND,
         buildId,
         provider,
         build.repo_owner,
@@ -255,6 +252,7 @@ export class RepoImageStore {
       .all<{ id: string; provider_image_id: string; provider_session_id: string | null }>();
 
     const replacedImages = (superseded.results || []).map((image) => ({
+      repoImageId: image.id,
       providerImageId: image.provider_image_id,
       providerSessionId: image.provider_session_id,
     }));
@@ -262,7 +260,11 @@ export class RepoImageStore {
     if (superseded.results?.length) {
       await this.db.batch(
         superseded.results.map((image) =>
-          this.db.prepare("DELETE FROM repo_images WHERE id = ?").bind(image.id)
+          this.db
+            .prepare(
+              "UPDATE repo_images SET status = 'superseded' WHERE id = ? AND status = 'ready'"
+            )
+            .bind(image.id)
         )
       );
     }
@@ -273,6 +275,15 @@ export class RepoImageStore {
       replacedProviderSessionId: replacedImages[0]?.providerSessionId ?? null,
       replacedImages,
     };
+  }
+
+  async deleteSupersededImage(repoImageId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM repo_images WHERE id = ? AND status = 'superseded'")
+      .bind(repoImageId)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async markBuildFailed(
@@ -346,7 +357,7 @@ export class RepoImageStore {
   async getStatus(repoOwner: string, repoName: string): Promise<RepoImage[]> {
     const result = await this.db
       .prepare(
-        "SELECT * FROM repo_images WHERE repo_owner = ? AND repo_name = ? ORDER BY created_at DESC LIMIT 10"
+        "SELECT * FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10"
       )
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase())
       .all<RepoImage>();
@@ -356,7 +367,9 @@ export class RepoImageStore {
 
   async getAllStatus(): Promise<RepoImage[]> {
     const result = await this.db
-      .prepare("SELECT * FROM repo_images ORDER BY created_at DESC LIMIT 100")
+      .prepare(
+        "SELECT * FROM repo_images WHERE status <> 'superseded' ORDER BY created_at DESC LIMIT 100"
+      )
       .all<RepoImage>();
 
     return result.results || [];

@@ -52,7 +52,7 @@ describe("D1 RepoImageStore", () => {
       baseBranch: "main",
     });
 
-    const result = await store.markBuildReady("img-1", "modal", "modal-img-abc", "abc123", 42.5);
+    const result = await store.markBuildReady("img-1", "modal", "modal-img-abc", "abc123", 42_500);
     expect(result.replacedImageId).toBeNull();
 
     const ready = await store.getLatestReady("acme", "repo", "modal");
@@ -72,7 +72,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-old", "modal", "modal-img-old", "sha-old", 30);
+    await store.markBuildReady("img-old", "modal", "modal-img-old", "sha-old", 30_000);
 
     await store.registerBuild({
       id: "img-new",
@@ -81,17 +81,26 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    const result = await store.markBuildReady("img-new", "modal", "modal-img-new", "sha-new", 40);
+    const result = await store.markBuildReady(
+      "img-new",
+      "modal",
+      "modal-img-new",
+      "sha-new",
+      40_000
+    );
 
     expect(result.replacedImageId).toBe("modal-img-old");
 
     const ready = await store.getLatestReady("acme", "repo", "modal");
     expect(ready!.id).toBe("img-new");
 
-    // Old image row should be deleted
+    // Old image row is hidden from normal status while retained for cleanup retry.
     const status = await store.getStatus("acme", "repo");
     const ids = status.map((r) => r.id);
     expect(ids).not.toContain("img-old");
+
+    await expect(store.deleteSupersededImage("img-old")).resolves.toBe(true);
+    await expect(store.deleteSupersededImage("img-old")).resolves.toBe(false);
   });
 
   it("markBuildFailed sets error message", async () => {
@@ -146,7 +155,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30_000);
 
     const result = await store.getLatestReady("ACME", "REPO", "modal");
     expect(result).not.toBeNull();
@@ -162,7 +171,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30_000);
 
     const result = await store.getLatestReady("acme", "repo", "modal");
     expect(result).toBeNull();
@@ -177,7 +186,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30_000);
 
     // Disable — image should not be returned
     await metadataStore.setImageBuildEnabled("acme", "repo", false);
@@ -272,7 +281,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-a", "modal", "modal-a", "sha-a", 30);
+    await store.markBuildReady("img-a", "modal", "modal-a", "sha-a", 30_000);
 
     await store.registerBuild({
       id: "img-b",
@@ -281,7 +290,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-b", "modal", "modal-b", "sha-b", 40);
+    await store.markBuildReady("img-b", "modal", "modal-b", "sha-b", 40_000);
 
     const readyA = await store.getLatestReady("acme", "repo-a", "modal");
     const readyB = await store.getLatestReady("acme", "repo-b", "modal");
@@ -299,7 +308,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-modal", "modal", "modal-img", "sha-modal", 30);
+    await store.markBuildReady("img-modal", "modal", "modal-img", "sha-modal", 30_000);
 
     await store.registerBuild({
       id: "img-vercel",
@@ -308,7 +317,7 @@ describe("D1 RepoImageStore", () => {
       provider: "vercel",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-vercel", "vercel", "vercel-snapshot", "sha-vercel", 40);
+    await store.markBuildReady("img-vercel", "vercel", "vercel-snapshot", "sha-vercel", 40_000);
 
     const modalImage = await store.getLatestReady("acme", "repo", "modal", "main");
     const vercelImage = await store.getLatestReady("acme", "repo", "vercel", "main");
@@ -636,7 +645,7 @@ describe("Repo image HTTP routes", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markBuildReady("img-s1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-s1", "modal", "modal-img-1", "sha1", 30_000);
 
     const headers = await authHeaders();
     delete (headers as Record<string, string | undefined>)["Content-Type"];

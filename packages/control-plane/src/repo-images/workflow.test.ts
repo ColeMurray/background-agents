@@ -2,8 +2,9 @@ import { computeHmacHex } from "@open-inspect/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepoImageStore } from "../db/repo-images";
 import type { Env } from "../types";
+import type { RepoImageBuildAdapterFactory } from "./provider-factory";
 import type {
-  RepoImageBuildAdapter,
+  AnyRepoImageBuildAdapter,
   RepoImageWorkflowContext,
   RepoImageWorkflowResult,
 } from "./types";
@@ -40,11 +41,14 @@ function createStore(overrides: Partial<RepoImageStore> = {}): RepoImageStore {
     getAllStatus: vi.fn(),
     markStaleBuildsAsFailed: vi.fn(),
     deleteOldFailedBuilds: vi.fn(),
+    deleteSupersededImage: vi.fn(async () => true),
     ...overrides,
   } as unknown as RepoImageStore;
 }
 
-function createAdapter(overrides: Partial<RepoImageBuildAdapter> = {}): RepoImageBuildAdapter {
+function createAdapter(
+  overrides: Partial<AnyRepoImageBuildAdapter> = {}
+): AnyRepoImageBuildAdapter {
   return {
     startBuild: vi.fn(),
     finalizeSuccessfulBuild: vi.fn(async () => ({
@@ -54,7 +58,45 @@ function createAdapter(overrides: Partial<RepoImageBuildAdapter> = {}): RepoImag
     cleanupFailedBuild: vi.fn(async () => undefined),
     deleteImage: vi.fn(),
     ...overrides,
-  } as RepoImageBuildAdapter;
+  } as AnyRepoImageBuildAdapter;
+}
+
+function createAdapterFactory(adapter: AnyRepoImageBuildAdapter): RepoImageBuildAdapterFactory & {
+  createModal: ReturnType<typeof vi.fn>;
+  createVercel: ReturnType<typeof vi.fn>;
+  createOpenComputer: ReturnType<typeof vi.fn>;
+} {
+  return {
+    createModal: vi.fn(() => adapter),
+    createVercel: vi.fn(() => adapter),
+    createOpenComputer: vi.fn(() => adapter),
+  } as unknown as RepoImageBuildAdapterFactory & {
+    createModal: ReturnType<typeof vi.fn>;
+    createVercel: ReturnType<typeof vi.fn>;
+    createOpenComputer: ReturnType<typeof vi.fn>;
+  };
+}
+
+function createThrowingAdapterFactory(error: Error): RepoImageBuildAdapterFactory & {
+  createModal: ReturnType<typeof vi.fn>;
+  createVercel: ReturnType<typeof vi.fn>;
+  createOpenComputer: ReturnType<typeof vi.fn>;
+} {
+  return {
+    createModal: vi.fn(() => {
+      throw error;
+    }),
+    createVercel: vi.fn(() => {
+      throw error;
+    }),
+    createOpenComputer: vi.fn(() => {
+      throw error;
+    }),
+  } as unknown as RepoImageBuildAdapterFactory & {
+    createModal: ReturnType<typeof vi.fn>;
+    createVercel: ReturnType<typeof vi.fn>;
+    createOpenComputer: ReturnType<typeof vi.fn>;
+  };
 }
 
 async function tokenHash(): Promise<string> {
@@ -107,23 +149,25 @@ describe("RepoImageBuildWorkflow", () => {
           correlation: { request_id: string; trace_id: string };
         }) => ({
           type: "ok" as const,
-          plan: {
-            provider: "vercel" as const,
-            callbackMode: "provider_session" as const,
-            buildId: params.buildId,
-            repoOwner: "acme",
-            repoName: "repo",
-            baseBranch: "develop",
-            callbackUrl: "https://worker.test/repo-images/build-complete",
-            callbackToken: CALLBACK_TOKEN,
-            cloneAuth: { type: "unavailable" as const },
-            buildTimeoutSeconds: 1800,
-            correlation: { request_id: "request-1", trace_id: "trace-1" },
-          },
-          registration: {
-            baseBranch: "develop",
-            callbackTokenHash: "token-hash",
-            callbackTokenExpiresAt: 456,
+          build: {
+            plan: {
+              provider: "vercel" as const,
+              callbackMode: "provider_session" as const,
+              buildId: params.buildId,
+              repoOwner: "acme",
+              repoName: "repo",
+              baseBranch: "develop",
+              callbackUrl: "https://worker.test/repo-images/build-complete",
+              callbackToken: CALLBACK_TOKEN,
+              cloneAuth: { type: "unavailable" as const },
+              buildTimeoutMs: 1_800_000,
+              correlation: { request_id: "request-1", trace_id: "trace-1" },
+            },
+            callbackAuth: {
+              type: "bearer_token" as const,
+              tokenHash: "token-hash",
+              expiresAt: 456,
+            },
           },
         })
       ),
@@ -131,7 +175,7 @@ describe("RepoImageBuildWorkflow", () => {
     const workflow = new RepoImageBuildWorkflow(
       { ...env, WORKER_URL: "https://worker.test" } as Env,
       store,
-      () => adapter,
+      createAdapterFactory(adapter),
       "vercel",
       planner
     );
@@ -167,6 +211,65 @@ describe("RepoImageBuildWorkflow", () => {
     );
   });
 
+  it("cleans up provider-session builds when trigger binding fails after provider start", async () => {
+    const store = createStore({
+      registerBuild: vi.fn(async () => undefined),
+      bindProviderSession: vi.fn(async () => false),
+    });
+    const adapter = createAdapter({
+      startBuild: vi.fn(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("provider-session-1");
+      }),
+    });
+    const planner = {
+      planBuild: vi.fn(async (params: { buildId: string }) => ({
+        type: "ok" as const,
+        build: {
+          plan: {
+            provider: "vercel" as const,
+            callbackMode: "provider_session" as const,
+            buildId: params.buildId,
+            repoOwner: "acme",
+            repoName: "repo",
+            baseBranch: "develop",
+            callbackUrl: "https://worker.test/repo-images/build-complete",
+            callbackToken: CALLBACK_TOKEN,
+            cloneAuth: { type: "unavailable" as const },
+            buildTimeoutMs: 1_800_000,
+            correlation: { request_id: "request-1", trace_id: "trace-1" },
+          },
+          callbackAuth: {
+            type: "bearer_token" as const,
+            tokenHash: "token-hash",
+            expiresAt: 456,
+          },
+        },
+      })),
+    };
+    const workflow = new RepoImageBuildWorkflow(
+      { ...env, WORKER_URL: "https://worker.test" } as Env,
+      store,
+      createAdapterFactory(adapter),
+      "vercel",
+      planner
+    );
+
+    const result = await workflow.triggerBuild("acme", "repo", createContext());
+
+    expect(result).toEqual({
+      type: "workflow_failed",
+      operation: "trigger_build",
+      message: "Failed to trigger build",
+    });
+    expect(adapter.cleanupFailedBuild).toHaveBeenCalledWith({
+      kind: "provider_session",
+      buildId: expect.stringContaining("img-acme-repo-"),
+      providerSessionId: "provider-session-1",
+      errorMessage: "Failed to bind vercel build session",
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    });
+  });
+
   it("maps a planner repo access miss without creating a build", async () => {
     const store = createStore();
     const adapter = createAdapter();
@@ -179,7 +282,7 @@ describe("RepoImageBuildWorkflow", () => {
     const workflow = new RepoImageBuildWorkflow(
       { ...env, WORKER_URL: "https://worker.test" } as Env,
       store,
-      () => adapter,
+      createAdapterFactory(adapter),
       "modal",
       planner
     );
@@ -204,7 +307,7 @@ describe("RepoImageBuildWorkflow", () => {
         return { providerImageId: input.providerImageId };
       }),
     });
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "modal");
+    const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
 
     const result = await workflow.acceptBuildComplete({
       completion: {
@@ -212,7 +315,7 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerImageId: "modal-image-1",
         baseSha: "abc123",
-        buildDurationSeconds: 4.5,
+        buildDurationMs: 4_500,
       },
       context: createContext(),
     });
@@ -232,7 +335,7 @@ describe("RepoImageBuildWorkflow", () => {
       "modal",
       "modal-image-1",
       "abc123",
-      4.5
+      4_500
     );
   });
 
@@ -242,7 +345,9 @@ describe("RepoImageBuildWorkflow", () => {
         updated: true,
         replacedImageId: "old-modal-image",
         replacedProviderSessionId: null,
-        replacedImages: [{ providerImageId: "old-modal-image", providerSessionId: null }],
+        replacedImages: [
+          { repoImageId: "old-row-1", providerImageId: "old-modal-image", providerSessionId: null },
+        ],
       })),
     });
     const adapter = createAdapter({
@@ -253,7 +358,7 @@ describe("RepoImageBuildWorkflow", () => {
         return { providerImageId: input.providerImageId };
       }),
     });
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "modal");
+    const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
 
     const result = await workflow.acceptBuildComplete({
       completion: {
@@ -261,14 +366,16 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerImageId: "modal-image-1",
         baseSha: "abc123",
-        buildDurationSeconds: 4.5,
+        buildDurationMs: 4_500,
       },
       context: createContext(),
     });
 
     expect(result).toMatchObject({
       type: "build_ready",
-      replacedImages: [{ providerImageId: "old-modal-image", providerSessionId: null }],
+      replacedImages: [
+        { repoImageId: "old-row-1", providerImageId: "old-modal-image", providerSessionId: null },
+      ],
     });
     if (result.type !== "build_ready") {
       throw new Error(`Expected build_ready, got ${result.type}`);
@@ -280,6 +387,7 @@ describe("RepoImageBuildWorkflow", () => {
       providerSessionId: null,
       correlation: { request_id: "request-1", trace_id: "trace-1" },
     });
+    expect(store.deleteSupersededImage).toHaveBeenCalledWith("old-row-1");
   });
 
   it("deletes a newly finalized provider image when Modal completion is rejected", async () => {
@@ -299,7 +407,7 @@ describe("RepoImageBuildWorkflow", () => {
         return { providerImageId: input.providerImageId };
       }),
     });
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "modal");
+    const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
 
     const result = await workflow.acceptBuildComplete({
       completion: {
@@ -307,7 +415,7 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerImageId: "modal-image-1",
         baseSha: "abc123",
-        buildDurationSeconds: 4.5,
+        buildDurationMs: 4_500,
       },
       context: createContext(),
     });
@@ -323,17 +431,67 @@ describe("RepoImageBuildWorkflow", () => {
     });
   });
 
+  it("deletes a newly finalized provider image when the ready commit throws", async () => {
+    const store = createStore({
+      markBuildReady: vi.fn(async () => {
+        throw new Error("D1 write failed");
+      }),
+    });
+    const adapter = createAdapter({
+      finalizeSuccessfulBuild: vi.fn(async (input) => {
+        if (input.kind !== "provider_image") {
+          throw new Error("expected provider image completion");
+        }
+        return { providerImageId: input.providerImageId };
+      }),
+    });
+    const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
+
+    const result = await workflow.acceptBuildComplete({
+      completion: {
+        kind: "provider_image",
+        buildId: "build-1",
+        providerImageId: "modal-image-1",
+        baseSha: "abc123",
+        buildDurationMs: 4_500,
+      },
+      context: createContext(),
+    });
+
+    expect(result).toEqual({
+      type: "workflow_failed",
+      operation: "build_complete",
+      message: "Failed to mark build as ready",
+    });
+    expect(adapter.deleteImage).toHaveBeenCalledWith({
+      providerImageId: "modal-image-1",
+      providerSessionId: undefined,
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    });
+  });
+
   it("finalizes a provider-session callback, commits ready, and deletes a superseded image", async () => {
     const store = createStore({
       markBuildReady: vi.fn(async () => ({
         updated: true,
         replacedImageId: "old-image-1",
         replacedProviderSessionId: "old-session-1",
-        replacedImages: [{ providerImageId: "old-image-1", providerSessionId: "old-session-1" }],
+        replacedImages: [
+          {
+            repoImageId: "old-row-1",
+            providerImageId: "old-image-1",
+            providerSessionId: "old-session-1",
+          },
+        ],
       })),
     });
     const adapter = createAdapter();
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "vercel");
+    const workflow = new RepoImageBuildWorkflow(
+      env,
+      store,
+      createAdapterFactory(adapter),
+      "vercel"
+    );
 
     const result = await workflow.acceptBuildComplete({
       callbackToken: CALLBACK_TOKEN,
@@ -342,7 +500,7 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerSessionId: "provider-session-1",
         baseSha: "abc123",
-        buildDurationSeconds: 12.5,
+        buildDurationMs: 12_500,
       },
       context: createContext(),
     });
@@ -361,7 +519,7 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerSessionId: "provider-session-1",
         baseSha: "abc123",
-        buildDurationSeconds: 12.5,
+        buildDurationMs: 12_500,
       })
     );
     expect(store.markBuildReady).toHaveBeenCalledWith(
@@ -369,13 +527,63 @@ describe("RepoImageBuildWorkflow", () => {
       "vercel",
       "provider-image-1",
       "abc123",
-      12.5
+      12_500
     );
     expect(adapter.deleteImage).toHaveBeenCalledWith({
       providerImageId: "old-image-1",
       providerSessionId: "old-session-1",
       correlation: { request_id: "request-1", trace_id: "trace-1" },
     });
+    expect(store.deleteSupersededImage).toHaveBeenCalledWith("old-row-1");
+  });
+
+  it("does not fail a ready provider-session build when superseded row cleanup fails", async () => {
+    const store = createStore({
+      markBuildReady: vi.fn(async () => ({
+        updated: true,
+        replacedImageId: "old-image-1",
+        replacedProviderSessionId: "old-session-1",
+        replacedImages: [
+          {
+            repoImageId: "old-row-1",
+            providerImageId: "old-image-1",
+            providerSessionId: "old-session-1",
+          },
+        ],
+      })),
+      deleteSupersededImage: vi.fn(async () => {
+        throw new Error("D1 delete failed");
+      }),
+    });
+    const adapter = createAdapter();
+    const workflow = new RepoImageBuildWorkflow(
+      env,
+      store,
+      createAdapterFactory(adapter),
+      "vercel"
+    );
+
+    const result = await workflow.acceptBuildComplete({
+      callbackToken: CALLBACK_TOKEN,
+      completion: {
+        kind: "provider_session",
+        buildId: "build-1",
+        providerSessionId: "provider-session-1",
+        baseSha: "abc123",
+        buildDurationMs: 12_500,
+      },
+      context: createContext(),
+    });
+
+    await expectCompletionAccepted(result);
+
+    expect(adapter.deleteImage).toHaveBeenCalledWith({
+      providerImageId: "old-image-1",
+      providerSessionId: "old-session-1",
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    });
+    expect(store.deleteSupersededImage).toHaveBeenCalledWith("old-row-1");
+    expect(store.markBuildFailed).not.toHaveBeenCalled();
   });
 
   it("deletes a newly finalized orphan image when the build no longer accepts completion", async () => {
@@ -388,7 +596,12 @@ describe("RepoImageBuildWorkflow", () => {
       })),
     });
     const adapter = createAdapter();
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "vercel");
+    const workflow = new RepoImageBuildWorkflow(
+      env,
+      store,
+      createAdapterFactory(adapter),
+      "vercel"
+    );
 
     const result = await workflow.acceptBuildComplete({
       callbackToken: CALLBACK_TOKEN,
@@ -397,7 +610,7 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerSessionId: "provider-session-1",
         baseSha: "",
-        buildDurationSeconds: 0,
+        buildDurationMs: 0,
       },
       context: createContext(),
     });
@@ -411,6 +624,55 @@ describe("RepoImageBuildWorkflow", () => {
     });
   });
 
+  it("runs completed provider-session cleanup after rejected image cleanup", async () => {
+    const store = createStore({
+      markBuildReady: vi.fn(async () => ({
+        updated: false,
+        replacedImageId: null,
+        replacedProviderSessionId: null,
+        replacedImages: [],
+      })),
+    });
+    const deleteImage = vi.fn(async () => undefined);
+    const cleanupCompletedBuild = vi.fn(async () => undefined);
+    const adapter = createAdapter({ deleteImage, cleanupCompletedBuild });
+    const workflow = new RepoImageBuildWorkflow(
+      env,
+      store,
+      createAdapterFactory(adapter),
+      "opencomputer"
+    );
+
+    const result = await workflow.acceptBuildComplete({
+      callbackToken: CALLBACK_TOKEN,
+      completion: {
+        kind: "provider_session",
+        buildId: "build-1",
+        providerSessionId: "provider-session-1",
+        baseSha: "abc123",
+        buildDurationMs: 12_500,
+      },
+      context: createContext(),
+    });
+
+    await expectCompletionAccepted(result);
+
+    expect(deleteImage).toHaveBeenCalledWith({
+      providerImageId: "provider-image-1",
+      providerSessionId: "provider-session-1",
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    });
+    expect(cleanupCompletedBuild).toHaveBeenCalledWith({
+      kind: "provider_session",
+      buildId: "build-1",
+      providerSessionId: "provider-session-1",
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    });
+    expect(deleteImage.mock.invocationCallOrder[0]).toBeLessThan(
+      cleanupCompletedBuild.mock.invocationCallOrder[0]
+    );
+  });
+
   it("marks the build failed when provider finalization fails after token acceptance", async () => {
     const store = createStore();
     const adapter = createAdapter({
@@ -418,7 +680,12 @@ describe("RepoImageBuildWorkflow", () => {
         throw new Error("snapshot failed");
       }),
     });
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "vercel");
+    const workflow = new RepoImageBuildWorkflow(
+      env,
+      store,
+      createAdapterFactory(adapter),
+      "vercel"
+    );
 
     const result = await workflow.acceptBuildComplete({
       callbackToken: CALLBACK_TOKEN,
@@ -427,7 +694,7 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerSessionId: "provider-session-1",
         baseSha: "",
-        buildDurationSeconds: 0,
+        buildDurationMs: 0,
       },
       context: createContext(),
     });
@@ -442,7 +709,12 @@ describe("RepoImageBuildWorkflow", () => {
       consumeCallbackToken: vi.fn(async () => null),
     });
     const adapter = createAdapter();
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "vercel");
+    const workflow = new RepoImageBuildWorkflow(
+      env,
+      store,
+      createAdapterFactory(adapter),
+      "vercel"
+    );
 
     const result = await workflow.acceptBuildComplete({
       callbackToken: CALLBACK_TOKEN,
@@ -451,7 +723,7 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerSessionId: "provider-session-1",
         baseSha: "",
-        buildDurationSeconds: 0,
+        buildDurationMs: 0,
       },
       context: createContext(),
     });
@@ -464,10 +736,10 @@ describe("RepoImageBuildWorkflow", () => {
     const store = createStore({
       consumeCallbackToken: vi.fn(async () => null),
     });
-    const createAdapter = vi.fn(() => {
-      throw new Error("Vercel configuration not available");
-    });
-    const workflow = new RepoImageBuildWorkflow(env, store, createAdapter, "vercel");
+    const adapterFactory = createThrowingAdapterFactory(
+      new Error("Vercel configuration not available")
+    );
+    const workflow = new RepoImageBuildWorkflow(env, store, adapterFactory, "vercel");
 
     const result = await workflow.acceptBuildComplete({
       callbackToken: CALLBACK_TOKEN,
@@ -476,21 +748,21 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerSessionId: "provider-session-1",
         baseSha: "",
-        buildDurationSeconds: 0,
+        buildDurationMs: 0,
       },
       context: createContext(),
     });
 
     expect(result).toEqual({ type: "callback_auth_rejected", message: "Unauthorized" });
-    expect(createAdapter).not.toHaveBeenCalled();
+    expect(adapterFactory.createVercel).not.toHaveBeenCalled();
   });
 
   it("marks valid completions failed when provider configuration is unavailable", async () => {
     const store = createStore();
-    const createAdapter = vi.fn(() => {
-      throw new Error("Vercel configuration not available");
-    });
-    const workflow = new RepoImageBuildWorkflow(env, store, createAdapter, "vercel");
+    const adapterFactory = createThrowingAdapterFactory(
+      new Error("Vercel configuration not available")
+    );
+    const workflow = new RepoImageBuildWorkflow(env, store, adapterFactory, "vercel");
 
     const result = await workflow.acceptBuildComplete({
       callbackToken: CALLBACK_TOKEN,
@@ -499,25 +771,30 @@ describe("RepoImageBuildWorkflow", () => {
         buildId: "build-1",
         providerSessionId: "provider-session-1",
         baseSha: "",
-        buildDurationSeconds: 0,
+        buildDurationMs: 0,
       },
       context: createContext(),
     });
 
     await expectCompletionAccepted(result);
 
-    expect(createAdapter).toHaveBeenCalledOnce();
+    expect(adapterFactory.createVercel).toHaveBeenCalledOnce();
     expect(store.markBuildFailed).toHaveBeenCalledWith(
       "build-1",
       "vercel",
-      "Vercel configuration not available"
+      "Repo image provider is not configured"
     );
   });
 
   it("marks failed callbacks and asks the adapter to clean up provider-session sandboxes", async () => {
     const store = createStore();
     const adapter = createAdapter();
-    const workflow = new RepoImageBuildWorkflow(env, store, () => adapter, "vercel");
+    const workflow = new RepoImageBuildWorkflow(
+      env,
+      store,
+      createAdapterFactory(adapter),
+      "vercel"
+    );
 
     const result = await workflow.acceptBuildFailed({
       callbackToken: CALLBACK_TOKEN,
@@ -544,10 +821,10 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("does not require provider cleanup configuration to accept failed callbacks", async () => {
     const store = createStore();
-    const createAdapter = vi.fn(() => {
-      throw new Error("Vercel configuration not available");
-    });
-    const workflow = new RepoImageBuildWorkflow(env, store, createAdapter, "vercel");
+    const adapterFactory = createThrowingAdapterFactory(
+      new Error("Vercel configuration not available")
+    );
+    const workflow = new RepoImageBuildWorkflow(env, store, adapterFactory, "vercel");
 
     const result = await workflow.acceptBuildFailed({
       callbackToken: CALLBACK_TOKEN,
@@ -562,6 +839,6 @@ describe("RepoImageBuildWorkflow", () => {
 
     expect(result).toEqual({ type: "build_failed" });
     expect(store.markBuildFailed).toHaveBeenCalledWith("build-1", "vercel", "setup failed");
-    expect(createAdapter).toHaveBeenCalledOnce();
+    expect(adapterFactory.createVercel).toHaveBeenCalledOnce();
   });
 });

@@ -31,7 +31,7 @@ interface RepoImageRow {
   provider_session_id: string | null;
   base_branch: string;
   provider_image_id: string;
-  status: "building" | "ready" | "failed";
+  status: "building" | "ready" | "failed" | "superseded";
   base_sha: string;
   build_duration_seconds: number | null;
   error_message: string | null;

@@ -13,23 +13,30 @@ import {
   REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
 } from "./auth";
 import { getRepoImageCallbackMode } from "./backend-policy";
-import type { RepoImageBuildPlan, VercelCloneAuth } from "./types";
+import type { PlannedRepoImageBuild, VercelCloneAuth } from "./types";
 
 const logger = createLogger("repo-images:planner");
+const MS_PER_SECOND = 1000;
 
 type PlannedCallbackAuth =
   | { kind: "none" }
   | { kind: "bearer_token"; token: string; tokenHash: string; expiresAt: number };
 
+interface BaseRepoImageBuildPlanInput {
+  buildId: string;
+  repoOwner: string;
+  repoName: string;
+  baseBranch: string;
+  callbackUrl: string;
+  buildTimeoutMs: number;
+  userEnvVars?: Record<string, string>;
+  correlation: CorrelationContext;
+}
+
 export type RepoImageBuildPlanningResult =
   | {
       type: "ok";
-      plan: RepoImageBuildPlan;
-      registration: {
-        baseBranch: string;
-        callbackTokenHash?: string;
-        callbackTokenExpiresAt?: number;
-      };
+      build: PlannedRepoImageBuild;
     }
   | { type: "repo_not_installed"; message: string }
   | { type: "failed"; message: string };
@@ -71,28 +78,17 @@ export class RepoImageBuildPlanner {
       repoName: params.repoName,
       baseBranch: resolved.defaultBranch,
       callbackUrl: params.callbackUrl,
-      buildTimeoutSeconds: resolveBuildTimeoutSeconds(sandboxSettings),
+      buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
       userEnvVars,
       correlation: {
         trace_id: params.correlation.trace_id,
         request_id: params.correlation.request_id,
       },
     };
-    const plan = this.createPlanForBackend(basePlan, callbackAuth, cloneAuth);
 
     return {
       type: "ok",
-      plan,
-      registration:
-        callbackAuth.kind === "bearer_token"
-          ? {
-              baseBranch: resolved.defaultBranch,
-              callbackTokenHash: callbackAuth.tokenHash,
-              callbackTokenExpiresAt: callbackAuth.expiresAt,
-            }
-          : {
-              baseBranch: resolved.defaultBranch,
-            },
+      build: this.createPlannedBuildForBackend(basePlan, callbackAuth, cloneAuth),
     };
   }
 
@@ -147,16 +143,19 @@ export class RepoImageBuildPlanner {
     };
   }
 
-  private createPlanForBackend(
-    basePlan: Omit<RepoImageBuildPlan, "provider" | "callbackMode" | "callbackToken" | "cloneAuth">,
+  private createPlannedBuildForBackend(
+    basePlan: BaseRepoImageBuildPlanInput,
     callbackAuth: PlannedCallbackAuth,
     cloneAuth: VercelCloneAuth
-  ): RepoImageBuildPlan {
+  ): PlannedRepoImageBuild {
     if (this.backend === "modal") {
       return {
-        ...basePlan,
-        provider: "modal",
-        callbackMode: "provider_image",
+        plan: {
+          ...basePlan,
+          provider: "modal",
+          callbackMode: "provider_image",
+        },
+        callbackAuth: { type: "none" },
       };
     }
 
@@ -166,19 +165,33 @@ export class RepoImageBuildPlanner {
 
     if (this.backend === "vercel") {
       return {
-        ...basePlan,
-        provider: "vercel",
-        callbackMode: "provider_session",
-        callbackToken: callbackAuth.token,
-        cloneAuth,
+        plan: {
+          ...basePlan,
+          provider: "vercel",
+          callbackMode: "provider_session",
+          callbackToken: callbackAuth.token,
+          cloneAuth,
+        },
+        callbackAuth: {
+          type: "bearer_token",
+          tokenHash: callbackAuth.tokenHash,
+          expiresAt: callbackAuth.expiresAt,
+        },
       };
     }
 
     return {
-      ...basePlan,
-      provider: "opencomputer",
-      callbackMode: "provider_session",
-      callbackToken: callbackAuth.token,
+      plan: {
+        ...basePlan,
+        provider: "opencomputer",
+        callbackMode: "provider_session",
+        callbackToken: callbackAuth.token,
+      },
+      callbackAuth: {
+        type: "bearer_token",
+        tokenHash: callbackAuth.tokenHash,
+        expiresAt: callbackAuth.expiresAt,
+      },
     };
   }
 
