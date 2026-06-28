@@ -503,8 +503,7 @@ export interface AgentResponse {
 
 export interface UserPreferences {
   userId: string;
-  model: string;
-  appHomeModelOverride?: boolean;
+  model?: string;
   reasoningEffort?: string;
   branch?: string;
   updatedAt: number;

@@ -49,9 +49,11 @@ describe("updateUserPreferences", () => {
 
     const prefs = await getUserPreferences(env, "U123");
     expect(prefs?.model).toBe("anthropic/claude-haiku-4-5");
-    expect(prefs?.appHomeModelOverride).toBe(true);
-    expect(prefs?.reasoningEffort).toBe(getDefaultReasoningEffort("anthropic/claude-haiku-4-5"));
+    expect(prefs?.reasoningEffort).toBeUndefined();
     expect(prefs?.branch).toBe("staging");
+
+    const resolved = resolveUserPreferences(prefs, env.DEFAULT_MODEL);
+    expect(resolved.reasoningEffort).toBe(getDefaultReasoningEffort("anthropic/claude-haiku-4-5"));
   });
 
   it("distinguishes an omitted branch from an explicit clear", async () => {
@@ -75,25 +77,58 @@ describe("updateUserPreferences", () => {
     expect(prefs?.branch).toBeUndefined();
   });
 
-  it("does not mark the model as overridden when only branch is changed", async () => {
+  it("does not persist a model when only branch is changed", async () => {
     const env = makeEnv();
 
     await updateUserPreferences(env, "U123", { branch: "feature/test" });
 
     const prefs = await getUserPreferences(env, "U123");
-    expect(prefs?.model).toBe("anthropic/claude-haiku-4-5");
-    expect(prefs?.appHomeModelOverride).toBe(false);
+    expect(prefs?.model).toBeUndefined();
     expect(prefs?.branch).toBe("feature/test");
+  });
+
+  it("preserves an existing stored model when only branch is changed", async () => {
+    const env = makeEnv();
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        model: "openai/gpt-5.2",
+        updatedAt: 1,
+      })
+    );
+
+    await updateUserPreferences(env, "U123", { branch: "feature/test" });
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBe("openai/gpt-5.2");
+    expect(prefs?.branch).toBe("feature/test");
+  });
+
+  it("does not persist a model when only reasoning effort is changed", async () => {
+    const env = makeEnv();
+
+    await updateUserPreferences(
+      env,
+      "U123",
+      { reasoningEffort: "none" },
+      {
+        defaultModel: "openai/gpt-5.2",
+        enabledModels: ["openai/gpt-5.2"],
+      }
+    );
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBeUndefined();
+    expect(prefs?.reasoningEffort).toBe("none");
   });
 });
 
 describe("resolveUserPreferences", () => {
-  it("uses the Slack default model when App Home has not overridden model", () => {
+  it("uses the Slack default model when no model is stored", () => {
     const resolved = resolveUserPreferences(
       {
         userId: "U123",
-        model: "anthropic/claude-haiku-4-5",
-        appHomeModelOverride: false,
         updatedAt: 1,
       },
       "anthropic/claude-sonnet-4-6",
@@ -103,7 +138,7 @@ describe("resolveUserPreferences", () => {
     expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
-  it("treats legacy preferences without an override flag as inheriting Slack defaults", () => {
+  it("uses a stored model before the Slack default", () => {
     const resolved = resolveUserPreferences(
       {
         userId: "U123",
@@ -111,11 +146,10 @@ describe("resolveUserPreferences", () => {
         updatedAt: 1,
       },
       "anthropic/claude-sonnet-4-6",
-      ["anthropic/claude-sonnet-4-6"]
+      ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"]
     );
 
-    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
-    expect(resolved.appHomeModelOverride).toBe(false);
+    expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
   });
 
   it("uses the Slack default before the shared default for invalid stored models", () => {
@@ -123,7 +157,6 @@ describe("resolveUserPreferences", () => {
       {
         userId: "U123",
         model: "not-a-real-model",
-        appHomeModelOverride: true,
         updatedAt: 1,
       },
       "openai/gpt-5.2",
@@ -138,7 +171,6 @@ describe("resolveUserPreferences", () => {
       {
         userId: "U123",
         model: "anthropic/claude-haiku-4-5",
-        appHomeModelOverride: true,
         updatedAt: 1,
       },
       "anthropic/claude-sonnet-4-6",
@@ -153,7 +185,6 @@ describe("resolveUserPreferences", () => {
       {
         userId: "U123",
         model: "anthropic/claude-haiku-4-5",
-        appHomeModelOverride: true,
         updatedAt: 1,
       },
       "anthropic/claude-sonnet-4-6",
@@ -161,5 +192,20 @@ describe("resolveUserPreferences", () => {
     );
 
     expect(resolved.model).toBe("openai/gpt-5.2");
+  });
+
+  it("validates stored reasoning effort against the resolved Slack default model", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        reasoningEffort: "none",
+        updatedAt: 1,
+      },
+      "openai/gpt-5.2",
+      ["openai/gpt-5.2"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.2");
+    expect(resolved.reasoningEffort).toBe("none");
   });
 });
