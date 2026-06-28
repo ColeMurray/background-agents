@@ -105,6 +105,33 @@ describe("updateUserPreferences", () => {
     expect(prefs?.branch).toBe("feature/test");
   });
 
+  it("preserves reasoning effort on branch updates using the Slack default model context", async () => {
+    const env = makeEnv();
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        reasoningEffort: "none",
+        updatedAt: 1,
+      })
+    );
+
+    await updateUserPreferences(
+      env,
+      "U123",
+      { branch: "feature/test" },
+      {
+        defaultModel: "openai/gpt-5.2",
+        enabledModels: ["openai/gpt-5.2"],
+      }
+    );
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBeUndefined();
+    expect(prefs?.reasoningEffort).toBe("none");
+    expect(prefs?.branch).toBe("feature/test");
+  });
+
   it("does not persist a model when only reasoning effort is changed", async () => {
     const env = makeEnv();
 

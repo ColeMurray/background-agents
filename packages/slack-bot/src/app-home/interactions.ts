@@ -246,7 +246,8 @@ async function handleBranchSubmission(
   const branch = getSubmittedBranch(payload);
 
   if (payload.view?.callback_id === BRANCH_MODAL_CALLBACK_ID) {
-    await updateUserPreferences(env, userId, { branch });
+    const options = await getPreferenceResolutionOptions(env, traceId);
+    await updateUserPreferences(env, userId, { branch }, options);
     await publishAppHome(env, userId);
     return;
   }
@@ -412,12 +413,14 @@ async function handleClearRepoBranch({
 
 async function handleClearBranchPreference({
   env,
+  traceId,
   userId,
 }: AppHomeBlockActionContext): Promise<void> {
   if (!userId) {
     return;
   }
 
-  await updateUserPreferences(env, userId, { branch: undefined });
+  const options = await getPreferenceResolutionOptions(env, traceId);
+  await updateUserPreferences(env, userId, { branch: undefined }, options);
   await publishAppHome(env, userId);
 }
