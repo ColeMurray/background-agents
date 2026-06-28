@@ -65,18 +65,22 @@ function createRepoImageDb(row: RepoImageRow): D1Database {
                 repo_name: row.repo_name,
                 provider: row.provider,
                 base_branch: row.base_branch,
+                created_at: row.created_at,
               }
             : null;
         }
-        if (sql.includes("SELECT id, provider_image_id")) {
-          return null;
-        }
         return null;
+      },
+      all: async () => {
+        if (sql.includes("SELECT id, provider_image_id")) {
+          return { results: [] };
+        }
+        return { results: [] };
       },
       run: async () => {
         if (sql.includes("UPDATE repo_images SET callback_token_used_at")) {
           row.callback_token_used_at = Number(args[0]);
-        } else if (sql.includes("UPDATE repo_images SET status = 'ready'")) {
+        } else if (sql.includes("SET status = 'ready'")) {
           row.status = "ready";
           row.provider_image_id = String(args[0]);
           row.base_sha = String(args[1]);

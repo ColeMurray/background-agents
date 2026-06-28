@@ -8,238 +8,194 @@
  * - Maintenance operations (stale builds, cleanup)
  */
 
-import { computeHmacHex, resolveBuildTimeoutSeconds } from "@open-inspect/shared";
-import { RepoImageStore } from "../db/repo-images";
-import { resolveSandboxSettings } from "../session/integration-settings-resolution";
-import { verifyInternalToken } from "../auth/internal";
+import { RepoImageStore, type RepoImageProvider } from "../db/repo-images";
 import { RepoMetadataStore } from "../db/repo-metadata";
-import { GlobalSecretsStore } from "../db/global-secrets";
-import { RepoSecretsStore } from "../db/repo-secrets";
-import { mergeSecrets } from "../db/secrets-validation";
-import { createModalClient } from "../sandbox/client";
-import { createVercelSandboxClient } from "../sandbox/providers/vercel/client";
-import { createVercelProvider } from "../sandbox/providers/vercel/provider";
-import { createOpenComputerRestClient } from "../sandbox/opencomputer-rest-client";
-import { createOpenComputerProvider } from "../sandbox/providers/opencomputer-provider";
-import { resolveSandboxBackendName, supportsRepoImageBackend } from "../sandbox/provider-name";
-import { resolveScmProviderFromEnv } from "../source-control";
 import { createLogger } from "../logger";
+import {
+  getRepoImageBackend,
+  getRepoImageCallbackMode,
+  getRepoImagesUnsupportedMessage,
+} from "../repo-images/backend-policy";
+import { createRepoImageBuildWorkflowFromEnv } from "../repo-images/workflow";
+import type {
+  CompleteRepoImageBuild,
+  FailRepoImageBuild,
+  RepoImageWorkflowContext,
+  RepoImageWorkflowResult,
+} from "../repo-images/types";
 import type { Env } from "../types";
 import {
-  type Route,
   type RequestContext,
-  parsePattern,
-  json,
+  type Route,
   error,
-  parseJsonBody,
   extractRepoParams,
-  createRouteSourceControlProvider,
-  resolveRepoOrError,
+  json,
+  parseJsonBody,
+  parsePattern,
 } from "./shared";
+import {
+  getRepoImageCallbackBearerToken,
+  requireCallbackPreParseGate,
+} from "./repo-image-callback-auth";
 
 const logger = createLogger("router:repo-images");
-const REPO_IMAGE_CALLBACK_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
-const REPO_IMAGE_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+
+interface RepoImageBuildCompleteBody {
+  build_id?: unknown;
+  provider_image_id?: unknown;
+  provider_session_id?: unknown;
+  base_sha?: unknown;
+  build_duration_seconds?: unknown;
+}
+
+interface RepoImageBuildFailedBody {
+  build_id?: unknown;
+  provider_session_id?: unknown;
+  error?: unknown;
+}
 
 function requireRepoImages(env: Env): Response | null {
-  if (supportsRepoImageBackend(env.SANDBOX_PROVIDER)) {
-    return null;
-  }
-
-  return error(
-    "Repo images are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
-    501
-  );
+  const message = getRepoImagesUnsupportedMessage(env);
+  return message ? error(message, 501) : null;
 }
 
-function getRepoImageBackend(env: Env): "modal" | "vercel" | "opencomputer" {
-  const backend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
-  if (backend !== "modal" && backend !== "vercel" && backend !== "opencomputer") {
-    throw new Error(`Repo images are not supported for SANDBOX_PROVIDER=${backend}`);
-  }
-  return backend;
-}
-
-async function requireBuildCallbackAuth(
-  request: Request,
-  env: Env,
-  ctx: RequestContext
-): Promise<Response | null> {
-  if (!env.INTERNAL_CALLBACK_SECRET) {
-    logger.error("repo_image.callback_auth_misconfigured", {
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Internal authentication not configured", 500);
-  }
-
-  const authorized = await verifyInternalToken(
-    request.headers.get("Authorization"),
-    env.INTERNAL_CALLBACK_SECRET
-  );
-
-  if (!authorized) {
-    logger.warn("repo_image.callback_auth_failed", {
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Unauthorized", 401);
-  }
-
-  return null;
-}
-
-function createConfiguredVercelProvider(env: Env) {
-  if (!env.VERCEL_TOKEN || !env.VERCEL_PROJECT_ID) {
-    throw new Error("Vercel configuration not available");
-  }
-
-  const client = createVercelSandboxClient({
-    token: env.VERCEL_TOKEN,
-    projectId: env.VERCEL_PROJECT_ID,
-    teamId: env.VERCEL_TEAM_ID,
-    apiBaseUrl: env.VERCEL_SANDBOX_API_BASE_URL,
-  });
-
-  return createVercelProvider(client, {
-    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    token: env.VERCEL_TOKEN,
-    teamId: env.VERCEL_TEAM_ID,
-    apiBaseUrl: env.VERCEL_SANDBOX_API_BASE_URL,
-    baseSnapshotId: env.VERCEL_BASE_SNAPSHOT_ID,
-    baseSnapshotName: env.VERCEL_BASE_SNAPSHOT_NAME,
-    runtime: env.VERCEL_RUNTIME,
-    snapshotExpirationMs: parseInt(env.VERCEL_SNAPSHOT_EXPIRATION_MS || "0", 10),
-    codeServerPasswordSecret: env.VERCEL_TOKEN,
-  });
-}
-
-function createConfiguredOpenComputerProvider(env: Env) {
-  if (!env.OPENCOMPUTER_API_URL || !env.OPENCOMPUTER_API_KEY || !env.OPENCOMPUTER_TEMPLATE) {
-    throw new Error("OpenComputer configuration not available");
-  }
-
-  const client = createOpenComputerRestClient({
-    apiUrl: env.OPENCOMPUTER_API_URL,
-    apiKey: env.OPENCOMPUTER_API_KEY,
-    template: env.OPENCOMPUTER_TEMPLATE,
-    projectId: env.OPENCOMPUTER_PROJECT_ID,
-    target: env.OPENCOMPUTER_TARGET,
-  });
-
-  return createOpenComputerProvider(client, {
-    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    codeServerPasswordSecret: env.OPENCOMPUTER_API_KEY,
-    llmEnvVars: {
-      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-    },
-  });
-}
-
-function generateRepoImageCallbackToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function hashRepoImageCallbackToken(token: string, env: Env): Promise<string> {
-  if (!env.INTERNAL_CALLBACK_SECRET) {
-    throw new Error("INTERNAL_CALLBACK_SECRET is required for repo image callback hashing");
-  }
-  return computeHmacHex(`repo-image-callback:${token}`, env.INTERNAL_CALLBACK_SECRET);
-}
-
-function getBearerToken(request: Request): string | null {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7).trim();
-  return token || null;
-}
-
-function getRepoImageCallbackBearerToken(request: Request): string | null {
-  const token = getBearerToken(request);
-  if (!token || !REPO_IMAGE_CALLBACK_TOKEN_PATTERN.test(token)) return null;
-  return token;
-}
-
-function requireRepoImageCallbackBearerAuth(
-  request: Request,
-  ctx: RequestContext
-): Response | null {
-  if (getRepoImageCallbackBearerToken(request)) return null;
-
-  logger.warn("repo_image.callback_auth_failed", {
+function workflowContext(ctx: RequestContext): RepoImageWorkflowContext {
+  return {
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
-  });
-  return error("Unauthorized", 401);
+  };
 }
 
-async function requireCallbackPreParseAuth(
-  request: Request,
-  env: Env,
-  backend: "modal" | "vercel" | "opencomputer",
+async function workflowResultToResponse(
+  result: RepoImageWorkflowResult,
   ctx: RequestContext
-): Promise<Response | null> {
-  if (backend === "modal") {
-    return requireBuildCallbackAuth(request, env, ctx);
+): Promise<Response> {
+  if (result.type === "completion_accepted") {
+    await scheduleWorkflowTask(result.finalization, ctx);
+  } else if ((result.type === "build_ready" || result.type === "build_failed") && result.cleanup) {
+    await scheduleWorkflowTask(result.cleanup, ctx);
   }
 
-  return requireRepoImageCallbackBearerAuth(request, ctx);
+  switch (result.type) {
+    case "build_triggered":
+      return json({ buildId: result.buildId, status: "building" });
+    case "completion_accepted":
+      return json({ ok: true, snapshotPending: true });
+    case "build_ready":
+      return json({
+        ok: true,
+        replacedImageId: result.replacedImages[0]?.providerImageId ?? null,
+      });
+    case "build_failed":
+      return json({ ok: true });
+    case "callback_auth_rejected":
+      return error(result.message, 401);
+    case "callback_auth_unavailable":
+      return error(result.message, 500);
+    case "repository_not_installed":
+      return error(result.message, 404);
+    case "repo_image_workflow_unavailable":
+    case "repo_image_provider_unconfigured":
+      return error(result.message, 503);
+    case "completion_not_accepted":
+    case "failure_not_accepted":
+      return error(result.message, 409);
+    case "workflow_failed":
+      return error(result.message, 500);
+    default: {
+      const exhaustive: never = result;
+      return error(`Unhandled workflow result: ${String(exhaustive)}`, 500);
+    }
+  }
 }
 
-async function requireTokenBuildCallbackAuth(
-  request: Request,
-  env: Env,
-  store: RepoImageStore,
-  params: { buildId: string; provider: "vercel" | "opencomputer"; providerSessionId: string },
-  ctx: RequestContext
-): Promise<Response | null> {
-  const token = getRepoImageCallbackBearerToken(request);
-  if (!token) {
-    logger.warn("repo_image.callback_auth_failed", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Unauthorized", 401);
+async function scheduleWorkflowTask(task: Promise<void>, ctx: RequestContext): Promise<void> {
+  if (ctx.executionCtx) {
+    ctx.executionCtx.waitUntil(task);
+    return;
   }
 
-  let tokenHash: string;
-  try {
-    tokenHash = await hashRepoImageCallbackToken(token, env);
-  } catch (e) {
-    logger.error("repo_image.callback_auth_misconfigured", {
-      build_id: params.buildId,
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Internal authentication not configured", 500);
+  await task;
+}
+
+function requireStringField(value: unknown, field: string): string | Response {
+  return typeof value === "string" && value.length > 0 ? value : error(`${field} is required`, 400);
+}
+
+function requireNumberField(value: unknown, field: string): number | Response {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : error(`${field} is required`, 400);
+}
+
+function optionalStringField(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function buildCompleteCommand(
+  body: RepoImageBuildCompleteBody,
+  backend: RepoImageProvider
+): CompleteRepoImageBuild | Response {
+  const buildId = requireStringField(body.build_id, "build_id");
+  if (buildId instanceof Response) return buildId;
+
+  const baseSha = requireStringField(body.base_sha, "base_sha");
+  if (baseSha instanceof Response) return baseSha;
+
+  const buildDurationSeconds = requireNumberField(
+    body.build_duration_seconds,
+    "build_duration_seconds"
+  );
+  if (buildDurationSeconds instanceof Response) return buildDurationSeconds;
+
+  if (getRepoImageCallbackMode(backend) === "provider_session") {
+    const providerSessionId = requireStringField(body.provider_session_id, "provider_session_id");
+    if (providerSessionId instanceof Response) return providerSessionId;
+    return {
+      kind: "provider_session",
+      buildId,
+      providerSessionId,
+      baseSha,
+      buildDurationSeconds,
+    };
   }
 
-  const build = await store.consumeCallbackToken({
-    buildId: params.buildId,
-    provider: params.provider,
-    providerSessionId: params.providerSessionId,
-    tokenHash,
-    now: Date.now(),
-  });
+  const providerImageId = requireStringField(body.provider_image_id, "provider_image_id");
+  if (providerImageId instanceof Response) return providerImageId;
+  return {
+    kind: "provider_image",
+    buildId,
+    providerImageId,
+    baseSha,
+    buildDurationSeconds,
+  };
+}
 
-  if (!build) {
-    logger.warn("repo_image.callback_auth_failed", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Unauthorized", 401);
+function buildFailedCommand(
+  body: RepoImageBuildFailedBody,
+  backend: RepoImageProvider
+): FailRepoImageBuild | Response {
+  const buildId = requireStringField(body.build_id, "build_id");
+  if (buildId instanceof Response) return buildId;
+
+  const errorMessage = optionalStringField(body.error, "Unknown error");
+
+  if (getRepoImageCallbackMode(backend) === "provider_session") {
+    const providerSessionId = requireStringField(body.provider_session_id, "provider_session_id");
+    if (providerSessionId instanceof Response) return providerSessionId;
+    return {
+      kind: "provider_session",
+      buildId,
+      providerSessionId,
+      errorMessage,
+    };
   }
 
-  return null;
+  return {
+    kind: "provider_image",
+    buildId,
+    errorMessage,
+  };
 }
 
 /**
@@ -260,452 +216,21 @@ async function handleBuildComplete(
   }
 
   const backend = getRepoImageBackend(env);
-  const preParseAuthError = await requireCallbackPreParseAuth(request, env, backend, ctx);
+  const preParseAuthError = await requireCallbackPreParseGate(request, env, backend, ctx, logger);
   if (preParseAuthError) return preParseAuthError;
 
-  const body = await parseJsonBody<{
-    build_id?: string;
-    provider_image_id?: string;
-    provider_session_id?: string;
-    base_sha?: string;
-    build_duration_seconds?: number;
-  }>(request);
+  const body = await parseJsonBody<RepoImageBuildCompleteBody>(request);
   if (body instanceof Response) return body;
 
-  const buildId = body.build_id;
-  const providerImageId = body.provider_image_id;
-  const providerSessionId = body.provider_session_id;
-  const baseSha = body.base_sha;
-  const buildDurationSeconds = body.build_duration_seconds;
+  const completion = buildCompleteCommand(body, backend);
+  if (completion instanceof Response) return completion;
 
-  if (!buildId) {
-    return error("build_id is required", 400);
-  }
-
-  const store = new RepoImageStore(env.DB);
-
-  if (backend === "vercel" || backend === "opencomputer") {
-    if (!providerSessionId) {
-      return error("provider_session_id is required", 400);
-    }
-
-    const authError = await requireTokenBuildCallbackAuth(
-      request,
-      env,
-      store,
-      { buildId, provider: backend, providerSessionId },
-      ctx
-    );
-    if (authError) return authError;
-
-    logger.info("repo_image.build_complete_received", {
-      build_id: buildId,
-      provider_session_id: providerSessionId,
-      base_sha: baseSha,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    const completion =
-      backend === "vercel"
-        ? completeVercelBuildFromSession(env, {
-            buildId,
-            providerSessionId,
-            baseSha: baseSha || "",
-            buildDurationSeconds: buildDurationSeconds ?? 0,
-            requestId: ctx.request_id,
-            traceId: ctx.trace_id,
-          })
-        : completeOpenComputerBuildFromSession(env, {
-            buildId,
-            providerSessionId,
-            baseSha: baseSha || "",
-            buildDurationSeconds: buildDurationSeconds ?? 0,
-            requestId: ctx.request_id,
-            traceId: ctx.trace_id,
-          });
-
-    if (ctx.executionCtx) {
-      ctx.executionCtx.waitUntil(completion);
-    } else {
-      await completion;
-    }
-
-    return json({ ok: true, snapshotPending: true });
-  }
-
-  if (!providerImageId) {
-    return error("provider_image_id is required", 400);
-  }
-
-  try {
-    const result = await store.markReady(
-      buildId,
-      backend,
-      providerImageId,
-      baseSha || "",
-      buildDurationSeconds ?? 0
-    );
-    if (!result.updated) {
-      return error("Build is not accepting completion", 409);
-    }
-
-    logger.info("repo_image.build_complete", {
-      build_id: buildId,
-      provider_image_id: providerImageId,
-      base_sha: baseSha,
-      replaced_image_id: result.replacedImageId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    // Fire-and-forget: delete the replaced provider image if one was replaced.
-    if (result.replacedImageId) {
-      ctx.executionCtx?.waitUntil(
-        (async () => {
-          try {
-            if (getRepoImageBackend(env) === "vercel") {
-              await createConfiguredVercelProvider(env).deleteProviderImage(
-                result.replacedImageId!
-              );
-            } else if (env.MODAL_API_SECRET && env.MODAL_WORKSPACE) {
-              const client = createModalClient(
-                env.MODAL_API_SECRET,
-                env.MODAL_WORKSPACE,
-                env.MODAL_ENVIRONMENT_WEB_SUFFIX
-              );
-              await client.deleteProviderImage({ providerImageId: result.replacedImageId! });
-            }
-          } catch (e) {
-            logger.warn("repo_image.delete_old_failed", {
-              provider_image_id: result.replacedImageId,
-              error: e instanceof Error ? e.message : String(e),
-            });
-          }
-        })()
-      );
-    }
-
-    return json({ ok: true, replacedImageId: result.replacedImageId });
-  } catch (e) {
-    logger.error("repo_image.build_complete_error", {
-      error: e instanceof Error ? e.message : String(e),
-      build_id: buildId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to mark build as ready", 500);
-  }
-}
-
-async function completeVercelBuildFromSession(
-  env: Env,
-  params: {
-    buildId: string;
-    providerSessionId: string;
-    baseSha: string;
-    buildDurationSeconds: number;
-    requestId: string;
-    traceId: string;
-  }
-): Promise<void> {
-  if (!env.DB) {
-    logger.error("repo_image.vercel_snapshot_error", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      error: "Database not configured",
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-    return;
-  }
-
-  const snapshotStart = Date.now();
-  const store = new RepoImageStore(env.DB);
-  let vercelProvider: ReturnType<typeof createConfiguredVercelProvider> | null = null;
-
-  try {
-    logger.info("repo_image.vercel_snapshot_start", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-
-    vercelProvider = createConfiguredVercelProvider(env);
-    const snapshot = await vercelProvider.takeSnapshot({
-      providerObjectId: params.providerSessionId,
-      sessionId: params.buildId,
-      reason: "repo_image_build",
-      correlation: {
-        request_id: params.requestId,
-        trace_id: params.traceId,
-        sandbox_id: params.providerSessionId,
-      },
-    });
-
-    if (!snapshot.success || !snapshot.imageId) {
-      const message = snapshot.error || "Vercel snapshot did not return an image id";
-      await store.markFailed(params.buildId, "vercel", message);
-      logger.error("repo_image.vercel_snapshot_failed", {
-        build_id: params.buildId,
-        provider_session_id: params.providerSessionId,
-        error: message,
-        duration_ms: Date.now() - snapshotStart,
-        request_id: params.requestId,
-        trace_id: params.traceId,
-      });
-      return;
-    }
-
-    const result = await store.markReady(
-      params.buildId,
-      "vercel",
-      snapshot.imageId,
-      params.baseSha,
-      params.buildDurationSeconds
-    );
-    if (!result.updated) {
-      logger.warn("repo_image.vercel_snapshot_not_applied", {
-        build_id: params.buildId,
-        provider_session_id: params.providerSessionId,
-        provider_image_id: snapshot.imageId,
-        duration_ms: Date.now() - snapshotStart,
-        request_id: params.requestId,
-        trace_id: params.traceId,
-      });
-      return;
-    }
-
-    logger.info("repo_image.build_complete", {
-      build_id: params.buildId,
-      provider_image_id: snapshot.imageId,
-      provider_session_id: params.providerSessionId,
-      base_sha: params.baseSha,
-      replaced_image_id: result.replacedImageId,
-      snapshot_duration_ms: Date.now() - snapshotStart,
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-
-    if (result.replacedImageId) {
-      try {
-        await vercelProvider.deleteProviderImage(result.replacedImageId);
-      } catch (e) {
-        logger.warn("repo_image.delete_old_failed", {
-          provider_image_id: result.replacedImageId,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    try {
-      await store.markFailed(params.buildId, "vercel", message);
-    } catch (markFailedError) {
-      logger.error("repo_image.mark_failed_after_snapshot_error", {
-        build_id: params.buildId,
-        error: markFailedError instanceof Error ? markFailedError.message : String(markFailedError),
-        request_id: params.requestId,
-        trace_id: params.traceId,
-      });
-    }
-    logger.error("repo_image.vercel_snapshot_error", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      error: message,
-      duration_ms: Date.now() - snapshotStart,
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-  } finally {
-    if (vercelProvider) {
-      try {
-        const stopResult = await vercelProvider.stopSandbox({
-          providerObjectId: params.providerSessionId,
-          sessionId: params.buildId,
-          reason: "repo_image_build_complete",
-          correlation: {
-            request_id: params.requestId,
-            trace_id: params.traceId,
-            sandbox_id: params.providerSessionId,
-          },
-        });
-        if (!stopResult.success) {
-          logger.warn("repo_image.vercel_build_stop_failed", {
-            build_id: params.buildId,
-            provider_session_id: params.providerSessionId,
-            error: stopResult.error,
-            request_id: params.requestId,
-            trace_id: params.traceId,
-          });
-        }
-      } catch (stopError) {
-        logger.warn("repo_image.vercel_build_stop_failed", {
-          build_id: params.buildId,
-          provider_session_id: params.providerSessionId,
-          error: stopError instanceof Error ? stopError.message : String(stopError),
-          request_id: params.requestId,
-          trace_id: params.traceId,
-        });
-      }
-    }
-  }
-}
-
-async function completeOpenComputerBuildFromSession(
-  env: Env,
-  params: {
-    buildId: string;
-    providerSessionId: string;
-    baseSha: string;
-    buildDurationSeconds: number;
-    requestId: string;
-    traceId: string;
-  }
-): Promise<void> {
-  if (!env.DB) {
-    logger.error("repo_image.opencomputer_checkpoint_error", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      error: "Database not configured",
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-    return;
-  }
-
-  const checkpointStart = Date.now();
-  const store = new RepoImageStore(env.DB);
-  let openComputerProvider: ReturnType<typeof createConfiguredOpenComputerProvider> | null = null;
-
-  try {
-    logger.info("repo_image.opencomputer_checkpoint_start", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-
-    openComputerProvider = createConfiguredOpenComputerProvider(env);
-    const snapshot = await openComputerProvider.takeSnapshot({
-      providerObjectId: params.providerSessionId,
-      sessionId: params.buildId,
-      reason: "repo_image_build",
-      correlation: {
-        request_id: params.requestId,
-        trace_id: params.traceId,
-        sandbox_id: params.providerSessionId,
-      },
-    });
-
-    if (!snapshot.success || !snapshot.imageId) {
-      const message = snapshot.error || "OpenComputer checkpoint did not return an image id";
-      await store.markFailed(params.buildId, "opencomputer", message);
-      logger.error("repo_image.opencomputer_checkpoint_failed", {
-        build_id: params.buildId,
-        provider_session_id: params.providerSessionId,
-        error: message,
-        duration_ms: Date.now() - checkpointStart,
-        request_id: params.requestId,
-        trace_id: params.traceId,
-      });
-      return;
-    }
-
-    const result = await store.markReady(
-      params.buildId,
-      "opencomputer",
-      snapshot.imageId,
-      params.baseSha,
-      params.buildDurationSeconds
-    );
-    if (!result.updated) {
-      try {
-        await openComputerProvider.deleteProviderImage(snapshot.imageId, params.providerSessionId);
-      } catch (cleanupError) {
-        logger.warn("repo_image.opencomputer_checkpoint_cleanup_failed", {
-          build_id: params.buildId,
-          provider_session_id: params.providerSessionId,
-          provider_image_id: snapshot.imageId,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          request_id: params.requestId,
-          trace_id: params.traceId,
-        });
-      }
-      logger.warn("repo_image.opencomputer_checkpoint_not_applied", {
-        build_id: params.buildId,
-        provider_session_id: params.providerSessionId,
-        provider_image_id: snapshot.imageId,
-        duration_ms: Date.now() - checkpointStart,
-        request_id: params.requestId,
-        trace_id: params.traceId,
-      });
-      return;
-    }
-
-    logger.info("repo_image.build_complete", {
-      build_id: params.buildId,
-      provider_image_id: snapshot.imageId,
-      provider_session_id: params.providerSessionId,
-      base_sha: params.baseSha,
-      replaced_image_id: result.replacedImageId,
-      snapshot_duration_ms: Date.now() - checkpointStart,
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-
-    if (result.replacedImageId) {
-      try {
-        await openComputerProvider.deleteProviderImage(
-          result.replacedImageId,
-          result.replacedProviderSessionId
-        );
-      } catch (e) {
-        logger.warn("repo_image.delete_old_failed", {
-          provider_image_id: result.replacedImageId,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    try {
-      await store.markFailed(params.buildId, "opencomputer", message);
-    } catch (markFailedError) {
-      logger.error("repo_image.mark_failed_after_checkpoint_error", {
-        build_id: params.buildId,
-        error: markFailedError instanceof Error ? markFailedError.message : String(markFailedError),
-        request_id: params.requestId,
-        trace_id: params.traceId,
-      });
-    }
-    logger.error("repo_image.opencomputer_checkpoint_error", {
-      build_id: params.buildId,
-      provider_session_id: params.providerSessionId,
-      error: message,
-      duration_ms: Date.now() - checkpointStart,
-      request_id: params.requestId,
-      trace_id: params.traceId,
-    });
-  } finally {
-    if (openComputerProvider) {
-      try {
-        // The repo-image build sandbox is single-use — its checkpoint is the
-        // image. Delete it rather than hibernating (stopSandbox), which would
-        // leave it running/leaked after the build.
-        await openComputerProvider.deleteSandbox(params.providerSessionId);
-      } catch (cleanupError) {
-        logger.warn("repo_image.opencomputer_build_cleanup_failed", {
-          build_id: params.buildId,
-          provider_session_id: params.providerSessionId,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          request_id: params.requestId,
-          trace_id: params.traceId,
-        });
-      }
-    }
-  }
+  const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildComplete({
+    completion,
+    callbackToken: getRepoImageCallbackBearerToken(request),
+    context: workflowContext(ctx),
+  });
+  return workflowResultToResponse(result, ctx);
 }
 
 /**
@@ -726,85 +251,21 @@ async function handleBuildFailed(
   }
 
   const backend = getRepoImageBackend(env);
-  const preParseAuthError = await requireCallbackPreParseAuth(request, env, backend, ctx);
+  const preParseAuthError = await requireCallbackPreParseGate(request, env, backend, ctx, logger);
   if (preParseAuthError) return preParseAuthError;
 
-  const body = await parseJsonBody<{
-    build_id?: string;
-    provider_session_id?: string;
-    error?: string;
-  }>(request);
+  const body = await parseJsonBody<RepoImageBuildFailedBody>(request);
   if (body instanceof Response) return body;
 
-  const buildId = body.build_id;
-  if (!buildId) {
-    return error("build_id is required", 400);
-  }
+  const failure = buildFailedCommand(body, backend);
+  if (failure instanceof Response) return failure;
 
-  const store = new RepoImageStore(env.DB);
-
-  if (backend === "vercel" || backend === "opencomputer") {
-    if (!body.provider_session_id) {
-      return error("provider_session_id is required", 400);
-    }
-
-    const authError = await requireTokenBuildCallbackAuth(
-      request,
-      env,
-      store,
-      { buildId, provider: backend, providerSessionId: body.provider_session_id },
-      ctx
-    );
-    if (authError) return authError;
-  }
-
-  try {
-    const updated = await store.markFailed(buildId, backend, body.error || "Unknown error");
-    if (!updated) {
-      return error("Build is not accepting failure", 409);
-    }
-
-    logger.info("repo_image.build_failed", {
-      build_id: buildId,
-      error_message: body.error,
-      provider_session_id: body.provider_session_id,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    if (backend === "opencomputer" && body.provider_session_id) {
-      const cleanupPromise = (async () => {
-        try {
-          // Single-use build sandbox: delete it rather than hibernating so a
-          // failed build doesn't leave the sandbox running/leaked.
-          await createConfiguredOpenComputerProvider(env).deleteSandbox(body.provider_session_id!);
-        } catch (cleanupError) {
-          logger.warn("repo_image.opencomputer_build_cleanup_failed", {
-            build_id: buildId,
-            provider_session_id: body.provider_session_id,
-            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-            request_id: ctx.request_id,
-            trace_id: ctx.trace_id,
-          });
-        }
-      })();
-      if (ctx.executionCtx) {
-        ctx.executionCtx.waitUntil(cleanupPromise);
-      } else {
-        await cleanupPromise;
-      }
-    }
-
-    return json({ ok: true });
-  } catch (e) {
-    logger.error("repo_image.build_failed_error", {
-      error: e instanceof Error ? e.message : String(e),
-      build_id: buildId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to mark build as failed", 500);
-  }
+  const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildFailed({
+    failure,
+    callbackToken: getRepoImageCallbackBearerToken(request),
+    context: workflowContext(ctx),
+  });
+  return workflowResultToResponse(result, ctx);
 }
 
 /**
@@ -823,218 +284,16 @@ async function handleTriggerBuild(
   if (!env.DB) {
     return error("Database not configured", 503);
   }
-  if (!env.WORKER_URL) {
-    return error("WORKER_URL not configured", 503);
-  }
 
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
-  const { owner, name } = params;
 
-  // Resolve the repo to get its actual default branch — never assume "main".
-  // The same resolution yields repoId, reused below for repo-scoped secrets.
-  const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
-  if (resolved instanceof Response) return resolved;
-  const { repoId, defaultBranch } = resolved;
-
-  const store = new RepoImageStore(env.DB);
-  const backend = getRepoImageBackend(env);
-  const now = Date.now();
-  const buildId = `img-${owner}-${name}-${now}`;
-
-  try {
-    const callbackToken =
-      backend === "vercel" || backend === "opencomputer"
-        ? generateRepoImageCallbackToken()
-        : undefined;
-    const callbackTokenHash = callbackToken
-      ? await hashRepoImageCallbackToken(callbackToken, env)
-      : undefined;
-
-    // Register the build in D1
-    await store.registerBuild({
-      id: buildId,
-      repoOwner: owner,
-      repoName: name,
-      provider: backend,
-      baseBranch: defaultBranch,
-      callbackTokenHash,
-      callbackTokenExpiresAt: callbackToken ? now + REPO_IMAGE_CALLBACK_TOKEN_TTL_MS : undefined,
-    });
-
-    // Construct callback URL
-    const callbackUrl = `${env.WORKER_URL}/repo-images/build-complete`;
-
-    const sandboxSettings = await resolveSandboxSettings(env.DB, owner, name);
-    const buildTimeoutSeconds = resolveBuildTimeoutSeconds(sandboxSettings);
-
-    // Best-effort: fetch user secrets for the build sandbox
-    let userEnvVars: Record<string, string> | undefined;
-    if (env.REPO_SECRETS_ENCRYPTION_KEY) {
-      let globalSecrets: Record<string, string> = {};
-      try {
-        const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-        globalSecrets = await globalStore.getDecryptedSecrets();
-      } catch (e) {
-        logger.warn("repo_image.global_secrets_failed", {
-          error: e instanceof Error ? e.message : String(e),
-          repo_owner: owner,
-          repo_name: name,
-        });
-      }
-
-      let repoSecrets: Record<string, string> = {};
-      try {
-        const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-        repoSecrets = await repoStore.getDecryptedSecrets(repoId);
-      } catch (e) {
-        logger.warn("repo_image.repo_secrets_failed", {
-          error: e instanceof Error ? e.message : String(e),
-          repo_owner: owner,
-          repo_name: name,
-        });
-      }
-
-      const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
-      if (Object.keys(merged).length > 0) {
-        userEnvVars = merged;
-        const logLevel = exceedsLimit ? "warn" : "info";
-        logger[logLevel]("repo_image.secrets_loaded", {
-          global_count: Object.keys(globalSecrets).length,
-          repo_count: Object.keys(repoSecrets).length,
-          merged_count: Object.keys(merged).length,
-          payload_bytes: totalBytes,
-          exceeds_limit: exceedsLimit,
-          repo_owner: owner,
-          repo_name: name,
-        });
-      }
-    }
-
-    switch (backend) {
-      case "modal": {
-        if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
-          return error("Modal configuration not available", 503);
-        }
-        const client = createModalClient(
-          env.MODAL_API_SECRET,
-          env.MODAL_WORKSPACE,
-          env.MODAL_ENVIRONMENT_WEB_SUFFIX
-        );
-        await client.buildRepoImage(
-          {
-            repoOwner: owner,
-            repoName: name,
-            defaultBranch,
-            buildId,
-            callbackUrl,
-            userEnvVars,
-            buildTimeoutSeconds,
-          },
-          { trace_id: ctx.trace_id, request_id: ctx.request_id }
-        );
-        break;
-      }
-      case "vercel": {
-        if (!callbackToken) {
-          throw new Error("Vercel callback token was not generated");
-        }
-
-        let cloneToken: string | undefined;
-        try {
-          const provider = createRouteSourceControlProvider(env);
-          const auth = await provider.generateCredentialHelperAuth();
-          cloneToken = auth.password;
-        } catch (e) {
-          logger.warn("repo_image.clone_token_failed", {
-            error: e instanceof Error ? e.message : String(e),
-            repo_owner: owner,
-            repo_name: name,
-          });
-        }
-        await createConfiguredVercelProvider(env).triggerRepoImageBuild({
-          repoOwner: owner,
-          repoName: name,
-          defaultBranch,
-          buildId,
-          callbackUrl,
-          callbackToken,
-          userEnvVars,
-          cloneToken,
-          buildTimeoutSeconds,
-          onProviderSessionCreated: async (providerSessionId) => {
-            const bound = await store.bindProviderSession(buildId, "vercel", providerSessionId);
-            if (!bound) {
-              throw new Error("Failed to bind Vercel build session");
-            }
-          },
-          correlation: { trace_id: ctx.trace_id, request_id: ctx.request_id },
-        });
-        break;
-      }
-      case "opencomputer": {
-        if (!callbackToken) {
-          throw new Error("OpenComputer callback token was not generated");
-        }
-
-        await createConfiguredOpenComputerProvider(env).triggerRepoImageBuild({
-          repoOwner: owner,
-          repoName: name,
-          defaultBranch,
-          buildId,
-          callbackUrl,
-          callbackToken,
-          userEnvVars,
-          buildTimeoutSeconds,
-          onProviderSessionCreated: async (providerSessionId) => {
-            const bound = await store.bindProviderSession(
-              buildId,
-              "opencomputer",
-              providerSessionId
-            );
-            if (!bound) {
-              throw new Error("Failed to bind OpenComputer build session");
-            }
-          },
-        });
-        break;
-      }
-      default: {
-        const unsupportedBackend: never = backend;
-        return error(`Repo image builds are not supported for provider ${unsupportedBackend}`, 501);
-      }
-    }
-
-    logger.info("repo_image.build_triggered", {
-      build_id: buildId,
-      repo_owner: owner,
-      repo_name: name,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ buildId, status: "building" });
-  } catch (e) {
-    try {
-      await store.markFailed(buildId, backend, e instanceof Error ? e.message : String(e));
-    } catch (markFailedError) {
-      logger.warn("repo_image.trigger_mark_failed_error", {
-        error: markFailedError instanceof Error ? markFailedError.message : String(markFailedError),
-        build_id: buildId,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-    }
-
-    logger.error("repo_image.trigger_error", {
-      error: e instanceof Error ? e.message : String(e),
-      repo_owner: owner,
-      repo_name: name,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to trigger build", 500);
-  }
+  const result = await createRepoImageBuildWorkflowFromEnv(env).triggerBuild(
+    params.owner,
+    params.name,
+    workflowContext(ctx)
+  );
+  return workflowResultToResponse(result, ctx);
 }
 
 /**
@@ -1066,7 +325,6 @@ async function handleGetStatus(
       return json({ images });
     }
 
-    // Return all status (for scheduler use)
     const images = await store.getAllStatus();
     return json({ images });
   } catch (e) {
@@ -1155,7 +413,7 @@ async function handleCleanup(
     body = {};
   }
 
-  const maxAgeSeconds = body.max_age_seconds ?? 86400; // 24 hours default
+  const maxAgeSeconds = body.max_age_seconds ?? 86400;
   const maxAgeMs = maxAgeSeconds * 1000;
 
   const store = new RepoImageStore(env.DB);

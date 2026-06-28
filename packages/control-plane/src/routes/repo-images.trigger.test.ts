@@ -149,7 +149,7 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     registerBuildSpy.mockResolvedValue(undefined);
-    modalClient.buildRepoImage.mockResolvedValue(undefined);
+    modalClient.buildRepoImage.mockResolvedValue({ buildId: "build-1", status: "building" });
     vercelProvider.triggerRepoImageBuild.mockResolvedValue(undefined);
     integrationSettings.resolveSandboxSettings.mockResolvedValue({});
     scmProvider.generateCredentialHelperAuth.mockResolvedValue({
