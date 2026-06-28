@@ -2,34 +2,38 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 from daytona import CreateSnapshotParams, Daytona, Image
 
-# OpenCode version to install.
-#
-# Pinned to 1.14.41 — the last release before opencode's Hono → Effect Schema
-# migration (landed across v1.14.42+, released 2026-05-09 onward) broke event
-# publishing on the legacy `/event` SSE endpoint. With newer versions the
-# bridge connects, posts the prompt, opencode processes it and records the
-# assistant response in the session store, but no `message.updated` /
-# `message.part.updated` / `session.idle` events are streamed back — so the
-# session shows execution_complete with no reply.
-#
-# Symptom in bridge logs: `prompt.run outcome=success duration_ms=35-367`,
-# which means `_stream_opencode_response_sse` returned with zero yielded
-# events. Tracked in #567.
-OPENCODE_VERSION = "1.14.41"
-CODE_SERVER_VERSION = "4.109.5"
-AGENT_BROWSER_VERSION = "0.21.2"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-# daytona-v2: install the SCM credential-helper shim and configure
-# git system-wide so per-request token brokerage matches the Modal base image.
-SANDBOX_VERSION = "daytona-v2-credential-helper"
+# daytona-v3: align ttyd and OpenCode dependency staging with Modal/Vercel.
+SANDBOX_VERSION = "daytona-v3-opencode-deps-ttyd"
+
+
+def load_toolchain_contract(repo_root: Path) -> ModuleType:
+    """Load the canonical sandbox-runtime toolchain contract from this checkout."""
+    toolchain_path = (
+        repo_root
+        / "packages"
+        / "sandbox-runtime"
+        / "src"
+        / "sandbox_runtime"
+        / "toolchain.py"
+    )
+    spec = importlib.util.spec_from_file_location("sandbox_runtime.toolchain", toolchain_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load sandbox toolchain contract from {toolchain_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def build_base_image(repo_root: Path) -> Image:
     """Build the Open-Inspect Daytona base image."""
+    toolchain = load_toolchain_contract(repo_root)
     sandbox_runtime_dir = (
         repo_root / "packages" / "sandbox-runtime" / "src" / "sandbox_runtime"
     )
@@ -63,29 +67,23 @@ def build_base_image(repo_root: Path) -> Image:
             "PyJWT[crypto]",
         )
         .run_commands(
-            f"npm install -g opencode-ai@{OPENCODE_VERSION}",
-            f"npm install -g @opencode-ai/plugin@{OPENCODE_VERSION} zod",
+            f"npm install -g opencode-ai@{toolchain.OPENCODE_VERSION}",
+            f"npm install -g @opencode-ai/plugin@{toolchain.OPENCODE_VERSION} zod",
+            *toolchain.opencode_deps_staging_commands(),
             f"curl -fsSL -o /tmp/code-server.deb "
-            f"https://github.com/coder/code-server/releases/download/v{CODE_SERVER_VERSION}/"
-            f"code-server_{CODE_SERVER_VERSION}_amd64.deb",
+            f"https://github.com/coder/code-server/releases/download/v{toolchain.CODE_SERVER_VERSION}/"
+            f"code-server_{toolchain.CODE_SERVER_VERSION}_amd64.deb",
             "dpkg -i /tmp/code-server.deb",
             "rm /tmp/code-server.deb",
-            f"npm install -g agent-browser@{AGENT_BROWSER_VERSION}",
+            *toolchain.ttyd_install_commands(),
+            f"npm install -g agent-browser@{toolchain.AGENT_BROWSER_VERSION}",
             "agent-browser install",
-            "mkdir -p /workspace /app /tmp/opencode",
+            "mkdir -p /workspace /app/plugins /tmp/opencode",
             # Install the SCM credential-helper shim and configure git
             # system-wide. The shim delegates to the Python helper module
             # under sandbox_runtime, baked in at build time via add_local_dir
             # below. Mirror packages/modal-infra/src/images/base.py.
-            "printf '%s\\n'"
-            " '#!/bin/sh'"
-            ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
-            " > /usr/local/bin/oi-git-credentials",
-            "chmod 0755 /usr/local/bin/oi-git-credentials",
-            "git config --system credential.helper /usr/local/bin/oi-git-credentials",
-            # Pass the repo path to the helper so it can scope credentials to
-            # the session repo, not just the host.
-            "git config --system credential.useHttpPath true",
+            *toolchain.git_credential_helper_commands(),
         )
         .env(
             {
