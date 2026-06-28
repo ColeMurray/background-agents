@@ -326,24 +326,12 @@ export class RepoImageBuildWorkflow {
     ctx: RepoImageWorkflowContext,
     buildId?: string
   ): AdapterResolution<AnyRepoImageBuildAdapter> {
-    switch (this.backend) {
-      case "modal":
-        return this.createAdapter(operation, ctx, () => this.adapterFactory.createModal(), buildId);
-      case "vercel":
-        return this.createAdapter(
-          operation,
-          ctx,
-          () => this.adapterFactory.createVercel(),
-          buildId
-        );
-      case "opencomputer":
-        return this.createAdapter(
-          operation,
-          ctx,
-          () => this.adapterFactory.createOpenComputer(),
-          buildId
-        );
-    }
+    return this.createAdapter(
+      operation,
+      ctx,
+      () => this.adapterFactory.create(this.backend),
+      buildId
+    );
   }
 
   private createAdapter<TAdapter extends RepoImageBuildFinalizer>(
@@ -383,7 +371,7 @@ export class RepoImageBuildWorkflow {
         const adapterResolution = this.createAdapter(
           "trigger_build",
           ctx,
-          () => this.adapterFactory.createModal(),
+          () => this.adapterFactory.create(plan.provider),
           plan.buildId
         );
         if (adapterResolution.type === "unconfigured") return adapterResolution;
@@ -397,7 +385,7 @@ export class RepoImageBuildWorkflow {
         const adapterResolution = this.createAdapter(
           "trigger_build",
           ctx,
-          () => this.adapterFactory.createVercel(),
+          () => this.adapterFactory.create(plan.provider),
           plan.buildId
         );
         if (adapterResolution.type === "unconfigured") return adapterResolution;
@@ -411,7 +399,7 @@ export class RepoImageBuildWorkflow {
         const adapterResolution = this.createAdapter(
           "trigger_build",
           ctx,
-          () => this.adapterFactory.createOpenComputer(),
+          () => this.adapterFactory.create(plan.provider),
           plan.buildId
         );
         if (adapterResolution.type === "unconfigured") return adapterResolution;

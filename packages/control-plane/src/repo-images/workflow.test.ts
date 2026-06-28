@@ -62,40 +62,24 @@ function createAdapter(
 }
 
 function createAdapterFactory(adapter: AnyRepoImageBuildAdapter): RepoImageBuildAdapterFactory & {
-  createModal: ReturnType<typeof vi.fn>;
-  createVercel: ReturnType<typeof vi.fn>;
-  createOpenComputer: ReturnType<typeof vi.fn>;
+  create: ReturnType<typeof vi.fn>;
 } {
   return {
-    createModal: vi.fn(() => adapter),
-    createVercel: vi.fn(() => adapter),
-    createOpenComputer: vi.fn(() => adapter),
+    create: vi.fn(() => adapter),
   } as unknown as RepoImageBuildAdapterFactory & {
-    createModal: ReturnType<typeof vi.fn>;
-    createVercel: ReturnType<typeof vi.fn>;
-    createOpenComputer: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
   };
 }
 
 function createThrowingAdapterFactory(error: Error): RepoImageBuildAdapterFactory & {
-  createModal: ReturnType<typeof vi.fn>;
-  createVercel: ReturnType<typeof vi.fn>;
-  createOpenComputer: ReturnType<typeof vi.fn>;
+  create: ReturnType<typeof vi.fn>;
 } {
   return {
-    createModal: vi.fn(() => {
-      throw error;
-    }),
-    createVercel: vi.fn(() => {
-      throw error;
-    }),
-    createOpenComputer: vi.fn(() => {
+    create: vi.fn(() => {
       throw error;
     }),
   } as unknown as RepoImageBuildAdapterFactory & {
-    createModal: ReturnType<typeof vi.fn>;
-    createVercel: ReturnType<typeof vi.fn>;
-    createOpenComputer: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -754,7 +738,7 @@ describe("RepoImageBuildWorkflow", () => {
     });
 
     expect(result).toEqual({ type: "callback_auth_rejected", message: "Unauthorized" });
-    expect(adapterFactory.createVercel).not.toHaveBeenCalled();
+    expect(adapterFactory.create).not.toHaveBeenCalled();
   });
 
   it("marks valid completions failed when provider configuration is unavailable", async () => {
@@ -778,7 +762,7 @@ describe("RepoImageBuildWorkflow", () => {
 
     await expectCompletionAccepted(result);
 
-    expect(adapterFactory.createVercel).toHaveBeenCalledOnce();
+    expect(adapterFactory.create).toHaveBeenCalledWith("vercel");
     expect(store.markBuildFailed).toHaveBeenCalledWith(
       "build-1",
       "vercel",
@@ -839,6 +823,6 @@ describe("RepoImageBuildWorkflow", () => {
 
     expect(result).toEqual({ type: "build_failed" });
     expect(store.markBuildFailed).toHaveBeenCalledWith("build-1", "vercel", "setup failed");
-    expect(adapterFactory.createVercel).toHaveBeenCalledOnce();
+    expect(adapterFactory.create).toHaveBeenCalledWith("vercel");
   });
 });
