@@ -3,7 +3,9 @@ import {
   createKvCacheStore,
   getDefaultReasoningEffort,
   getValidModelOrDefault,
+  isValidModel,
   isValidReasoningEffort,
+  normalizeModelId,
 } from "@open-inspect/shared";
 import type { Env, UserPreferences } from "./types";
 import {
@@ -57,8 +59,19 @@ function normalizeResolvedPreferences(
     model,
     reasoningEffort,
     branch,
-    appHomeModelOverride: preferences.appHomeModelOverride,
+    appHomeModelOverride: preferences.appHomeModelOverride === true,
   };
+}
+
+function getValidModelOrFallback(
+  model: string | undefined | null,
+  fallback: string | undefined
+): string {
+  if (model && isValidModel(model)) {
+    return normalizeModelId(model);
+  }
+
+  return getValidModelOrDefault(fallback ?? DEFAULT_MODEL);
 }
 
 function resolveEnabledModel(
@@ -66,8 +79,8 @@ function resolveEnabledModel(
   defaultModel: string | undefined,
   enabledModels: string[] | undefined
 ): string {
-  const desired = getValidModelOrDefault(model ?? defaultModel ?? DEFAULT_MODEL);
   const fallback = getValidModelOrDefault(defaultModel ?? DEFAULT_MODEL);
+  const desired = getValidModelOrFallback(model, fallback);
   if (!enabledModels || enabledModels.length === 0) {
     return desired;
   }
@@ -125,7 +138,7 @@ export function resolveUserPreferences(
   defaultModel: string | undefined,
   enabledModels?: string[]
 ): ResolvedUserPreferences {
-  const appHomeModelOverride = prefs ? prefs.appHomeModelOverride !== false : false;
+  const appHomeModelOverride = prefs?.appHomeModelOverride === true;
   return normalizeResolvedPreferences(
     {
       model: appHomeModelOverride && prefs ? prefs.model : (defaultModel ?? DEFAULT_MODEL),

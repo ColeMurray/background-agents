@@ -287,6 +287,19 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
             )}
           </SelectContent>
         </Select>
+        {model && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="mt-2 h-auto px-0 text-xs"
+            onClick={() => {
+              setModel("");
+              setDirty(true);
+            }}
+          >
+            Use system default
+          </Button>
+        )}
         {!selectedModelEnabled && selectedModelLabel && (
           <p className="text-xs text-destructive mt-2">
             {selectedModelLabel} is disabled in model settings. Slack will use the first enabled
@@ -336,9 +349,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
           <AlertDialogHeader>
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
-              Reset Slack defaults? The master switch will turn off and mentions policy will return
-              to <strong>allow</strong>. Per-repository overrides and routing rules are not
-              affected.
+              Reset Slack defaults? The master switch will turn off, the default model will use the
+              system default, and mentions policy will return to <strong>allow</strong>.
+              Per-repository overrides and routing rules are not affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

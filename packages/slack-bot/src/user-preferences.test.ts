@@ -103,6 +103,36 @@ describe("resolveUserPreferences", () => {
     expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("treats legacy preferences without an override flag as inheriting Slack defaults", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["anthropic/claude-sonnet-4-6"]
+    );
+
+    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(resolved.appHomeModelOverride).toBe(false);
+  });
+
+  it("uses the Slack default before the shared default for invalid stored models", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "not-a-real-model",
+        appHomeModelOverride: true,
+        updatedAt: 1,
+      },
+      "openai/gpt-5.2",
+      ["anthropic/claude-sonnet-4-6", "openai/gpt-5.2"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.2");
+  });
+
   it("falls back when the App Home model is no longer enabled", () => {
     const resolved = resolveUserPreferences(
       {
