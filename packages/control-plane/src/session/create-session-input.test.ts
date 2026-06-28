@@ -45,15 +45,10 @@ describe("parseCreateSessionInput", () => {
     });
   });
 
-  it("keeps partial repository fields available for route-level validation", async () => {
+  it("rejects partial repository metadata", async () => {
     const result = await parseCreateSessionInput(jsonRequest({ repoOwner: "open-inspect" }));
 
-    expect(result).toEqual({
-      ok: true,
-      input: {
-        repoOwner: "open-inspect",
-      },
-    });
+    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
   });
 
   it("keeps no-repository requests available for route-level validation", async () => {

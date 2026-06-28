@@ -561,7 +561,22 @@ export type CallbackContext =
   | AutomationCallbackContext;
 
 // API response types
-export const createSessionRequestSchema = z.object({
+function validateSessionRepoPair(
+  value: { repoOwner?: string; repoName?: string },
+  ctx: z.RefinementCtx
+): void {
+  const repoOwnerMissing = value.repoOwner == null || value.repoOwner === "";
+  const repoNameMissing = value.repoName == null || value.repoName === "";
+  if (repoOwnerMissing !== repoNameMissing) {
+    ctx.addIssue({
+      code: "custom",
+      message: "repoOwner and repoName must be provided together",
+      path: repoOwnerMissing ? ["repoOwner"] : ["repoName"],
+    });
+  }
+}
+
+const createSessionRequestBaseSchema = z.object({
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
   title: z.string().optional(),
@@ -570,29 +585,34 @@ export const createSessionRequestSchema = z.object({
   branch: z.string().optional(),
 });
 
+export const createSessionRequestSchema =
+  createSessionRequestBaseSchema.superRefine(validateSessionRepoPair);
+
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
-export const createSessionInputSchema = createSessionRequestSchema.extend({
-  userId: z.string().optional(),
-  spawnSource: spawnSourceSchema.optional(),
-  authProvider: z.enum(["github", "google"]).optional(),
-  authUserId: z.string().optional(),
-  authEmail: z.string().optional(),
-  authName: z.string().optional(),
-  authAvatarUrl: z.string().optional(),
-  scmUserId: z.string().optional(),
-  scmLogin: z.string().optional(),
-  scmName: z.string().optional(),
-  scmEmail: z.string().optional(),
-  scmAvatarUrl: z.string().optional(),
-  actorUserId: z.string().optional(),
-  actorDisplayName: z.string().optional(),
-  actorEmail: z.string().optional(),
-  actorAvatarUrl: z.string().optional(),
-  scmToken: z.string().optional(),
-  scmRefreshToken: z.string().optional(),
-  scmTokenExpiresAt: z.number().optional(),
-});
+export const createSessionInputSchema = createSessionRequestBaseSchema
+  .extend({
+    userId: z.string().optional(),
+    spawnSource: spawnSourceSchema.optional(),
+    authProvider: z.enum(["github", "google"]).optional(),
+    authUserId: z.string().optional(),
+    authEmail: z.string().optional(),
+    authName: z.string().optional(),
+    authAvatarUrl: z.string().optional(),
+    scmUserId: z.string().optional(),
+    scmLogin: z.string().optional(),
+    scmName: z.string().optional(),
+    scmEmail: z.string().optional(),
+    scmAvatarUrl: z.string().optional(),
+    actorUserId: z.string().optional(),
+    actorDisplayName: z.string().optional(),
+    actorEmail: z.string().optional(),
+    actorAvatarUrl: z.string().optional(),
+    scmToken: z.string().optional(),
+    scmRefreshToken: z.string().optional(),
+    scmTokenExpiresAt: z.number().optional(),
+  })
+  .superRefine(validateSessionRepoPair);
 
 export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 

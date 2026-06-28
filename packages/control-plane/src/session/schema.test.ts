@@ -201,4 +201,27 @@ describe("applyMigrations", () => {
     );
     expect(transactionControlStatements).toEqual([]);
   });
+
+  it("normalizes partial session repository pairs during migration 31", () => {
+    applyMigrations(mock.sql);
+
+    const sessionRepoMigration = mock.calls.find(
+      (c) =>
+        c.query.includes("session_0031_new") &&
+        c.query.includes(
+          "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_owner END"
+        )
+    );
+
+    expect(sessionRepoMigration).toBeDefined();
+    expect(sessionRepoMigration!.query).toContain(
+      "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_name END"
+    );
+    expect(sessionRepoMigration!.query).toContain(
+      "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_id END"
+    );
+    expect(sessionRepoMigration!.query).toContain(
+      "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE base_branch END"
+    );
+  });
 });

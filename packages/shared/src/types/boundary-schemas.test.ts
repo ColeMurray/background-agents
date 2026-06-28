@@ -29,6 +29,18 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("rejects partial repository metadata", () => {
+      const ownerOnly = createSessionRequestSchema.safeParse({
+        repoOwner: "open-inspect",
+      });
+      const nameOnly = createSessionRequestSchema.safeParse({
+        repoName: "background-agents",
+      });
+
+      expect(ownerOnly.success).toBe(false);
+      expect(nameOnly.success).toBe(false);
+    });
+
     it("rejects malformed session creation field types", () => {
       const result = createSessionRequestSchema.safeParse({
         repoOwner: 123,

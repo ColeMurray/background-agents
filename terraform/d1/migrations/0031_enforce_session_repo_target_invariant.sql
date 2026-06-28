@@ -1,6 +1,6 @@
 -- Enforce session repository target consistency in the D1 session index.
--- Repository-backed rows must carry owner/name/base_branch together; no-repo
--- rows must leave all three fields null.
+-- Repository-backed rows must carry owner/name together. No-repo rows must
+-- leave owner/name/base_branch null.
 
 CREATE TABLE IF NOT EXISTS sessions_0031_new (
   id          TEXT    PRIMARY KEY,
@@ -24,10 +24,8 @@ CREATE TABLE IF NOT EXISTS sessions_0031_new (
   message_count INTEGER NOT NULL DEFAULT 0,
   pr_count INTEGER NOT NULL DEFAULT 0,
   user_id TEXT,
-  CHECK (
-    (repo_owner IS NULL AND repo_name IS NULL AND base_branch IS NULL)
-    OR (repo_owner IS NOT NULL AND repo_name IS NOT NULL AND base_branch IS NOT NULL)
-  )
+  CHECK ((repo_owner IS NULL) = (repo_name IS NULL)),
+  CHECK (repo_owner IS NOT NULL OR base_branch IS NULL)
 );
 
 INSERT OR REPLACE INTO sessions_0031_new (
@@ -39,14 +37,14 @@ INSERT OR REPLACE INTO sessions_0031_new (
 SELECT
   id,
   title,
-  repo_owner,
-  repo_name,
+  CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_owner END,
+  CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_name END,
   model,
   status,
   created_at,
   updated_at,
   reasoning_effort,
-  CASE WHEN repo_owner IS NULL AND repo_name IS NULL THEN NULL ELSE COALESCE(base_branch, 'main') END,
+  CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE base_branch END,
   parent_session_id,
   spawn_source,
   spawn_depth,
