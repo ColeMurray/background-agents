@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateInternalToken } from "../auth/internal";
 import type { RepoImageStore } from "../db/repo-images";
 import type { Env } from "../types";
+import type {
+  MarkRepoImageReadyResult,
+  RepoImageCallbackBuild,
+  SupersededRepoImage,
+} from "./model";
 import type { RepoImageBuildAdapterFactory } from "./provider-factory";
 import type {
   AnyRepoImageBuildAdapter,
@@ -20,24 +25,37 @@ function createContext(): RepoImageWorkflowContext {
   };
 }
 
+function callbackBuild(overrides: Partial<RepoImageCallbackBuild> = {}): RepoImageCallbackBuild {
+  return {
+    id: "build-1",
+    provider: "vercel",
+    providerSessionId: "provider-session-1",
+    status: "building",
+    ...overrides,
+  };
+}
+
+function markedReady(
+  supersededImages: SupersededRepoImage[] = []
+): Extract<MarkRepoImageReadyResult, { type: "marked_ready" }> {
+  return {
+    type: "marked_ready",
+    supersededImages,
+  };
+}
+
+function notAcceptingCompletion(): Extract<
+  MarkRepoImageReadyResult,
+  { type: "not_accepting_completion" }
+> {
+  return { type: "not_accepting_completion" };
+}
+
 function createStore(overrides: Partial<RepoImageStore> = {}): RepoImageStore {
   return {
-    getCallbackBuild: vi.fn(async () => ({
-      id: "build-1",
-      provider: "vercel",
-      providerSessionId: "provider-session-1",
-      status: "building",
-    })),
-    consumeCallbackToken: vi.fn(async () => ({
-      id: "build-1",
-      provider: "vercel",
-      providerSessionId: "provider-session-1",
-      status: "building",
-    })),
-    tryMarkRepoImageReady: vi.fn(async () => ({
-      type: "marked_ready",
-      supersededImages: [],
-    })),
+    getCallbackBuild: vi.fn(async () => callbackBuild()),
+    consumeCallbackToken: vi.fn(async () => callbackBuild()),
+    tryMarkRepoImageReady: vi.fn(async () => markedReady()),
     markBuildFailed: vi.fn(async () => true),
     registerBuild: vi.fn(),
     bindProviderSession: vi.fn(),
@@ -293,12 +311,13 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("marks Modal provider-image completions ready without callback-token auth", async () => {
     const store = createStore({
-      getCallbackBuild: vi.fn(async () => ({
-        id: "build-1",
-        provider: "modal",
-        providerSessionId: null,
-        status: "building",
-      })),
+      getCallbackBuild: vi.fn(async () =>
+        callbackBuild({
+          provider: "modal",
+          providerSessionId: null,
+          status: "building",
+        })
+      ),
     });
     const adapter = createAdapter({
       finalizeSuccessfulBuild: vi.fn(async (input) => {
@@ -342,21 +361,21 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("returns a cleanup task for superseded provider-image completions", async () => {
     const store = createStore({
-      getCallbackBuild: vi.fn(async () => ({
-        id: "build-1",
-        provider: "modal",
-        providerSessionId: null,
-        status: "building",
-      })),
-      tryMarkRepoImageReady: vi.fn(async () => ({
-        type: "marked_ready",
-        supersededImages: [
+      getCallbackBuild: vi.fn(async () =>
+        callbackBuild({
+          provider: "modal",
+          providerSessionId: null,
+          status: "building",
+        })
+      ),
+      tryMarkRepoImageReady: vi.fn(async () =>
+        markedReady([
           {
             repoImageId: "old-row-1",
             image: { providerImageId: "old-modal-image", providerSessionId: null },
           },
-        ],
-      })),
+        ])
+      ),
     });
     const adapter = createAdapter({
       finalizeSuccessfulBuild: vi.fn(async (input) => {
@@ -402,15 +421,14 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("does not delete a provider-image callback image when Modal completion is rejected", async () => {
     const store = createStore({
-      getCallbackBuild: vi.fn(async () => ({
-        id: "build-1",
-        provider: "modal",
-        providerSessionId: null,
-        status: "building",
-      })),
-      tryMarkRepoImageReady: vi.fn(async () => ({
-        type: "not_accepting_completion",
-      })),
+      getCallbackBuild: vi.fn(async () =>
+        callbackBuild({
+          provider: "modal",
+          providerSessionId: null,
+          status: "building",
+        })
+      ),
+      tryMarkRepoImageReady: vi.fn(async () => notAcceptingCompletion()),
     });
     const adapter = createAdapter({
       finalizeSuccessfulBuild: vi.fn(async (input) => {
@@ -442,12 +460,13 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("rejects duplicate provider-image completions before finalization", async () => {
     const store = createStore({
-      getCallbackBuild: vi.fn(async () => ({
-        id: "build-1",
-        provider: "modal",
-        providerSessionId: null,
-        status: "ready",
-      })),
+      getCallbackBuild: vi.fn(async () =>
+        callbackBuild({
+          provider: "modal",
+          providerSessionId: null,
+          status: "ready",
+        })
+      ),
     });
     const adapter = createAdapter();
     const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
@@ -474,12 +493,13 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("does not delete a finalized provider image when the ready state is unknown", async () => {
     const store = createStore({
-      getCallbackBuild: vi.fn(async () => ({
-        id: "build-1",
-        provider: "modal",
-        providerSessionId: null,
-        status: "building",
-      })),
+      getCallbackBuild: vi.fn(async () =>
+        callbackBuild({
+          provider: "modal",
+          providerSessionId: null,
+          status: "building",
+        })
+      ),
       tryMarkRepoImageReady: vi.fn(async () => {
         throw new Error("D1 write failed");
       }),
@@ -515,15 +535,14 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("finalizes a provider-session callback, commits ready, and deletes a superseded image", async () => {
     const store = createStore({
-      tryMarkRepoImageReady: vi.fn(async () => ({
-        type: "marked_ready",
-        supersededImages: [
+      tryMarkRepoImageReady: vi.fn(async () =>
+        markedReady([
           {
             repoImageId: "old-row-1",
             image: { providerImageId: "old-image-1", providerSessionId: "old-session-1" },
           },
-        ],
-      })),
+        ])
+      ),
     });
     const adapter = createAdapter();
     const workflow = new RepoImageBuildWorkflow(
@@ -674,15 +693,14 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("does not fail a ready provider-session build when superseded row cleanup fails", async () => {
     const store = createStore({
-      tryMarkRepoImageReady: vi.fn(async () => ({
-        type: "marked_ready",
-        supersededImages: [
+      tryMarkRepoImageReady: vi.fn(async () =>
+        markedReady([
           {
             repoImageId: "old-row-1",
             image: { providerImageId: "old-image-1", providerSessionId: "old-session-1" },
           },
-        ],
-      })),
+        ])
+      ),
       deleteSupersededImage: vi.fn(async () => {
         throw new Error("D1 delete failed");
       }),
@@ -718,9 +736,7 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("deletes a newly finalized orphan image when the build no longer accepts completion", async () => {
     const store = createStore({
-      tryMarkRepoImageReady: vi.fn(async () => ({
-        type: "not_accepting_completion",
-      })),
+      tryMarkRepoImageReady: vi.fn(async () => notAcceptingCompletion()),
     });
     const adapter = createAdapter();
     const workflow = new RepoImageBuildWorkflow(
@@ -751,21 +767,21 @@ describe("RepoImageBuildWorkflow", () => {
 
   it("runs completed provider-session cleanup after rejected image cleanup", async () => {
     const store = createStore({
-      getCallbackBuild: vi.fn(async () => ({
-        id: "build-1",
-        provider: "opencomputer",
-        providerSessionId: "provider-session-1",
-        status: "building",
-      })),
-      consumeCallbackToken: vi.fn(async () => ({
-        id: "build-1",
-        provider: "opencomputer",
-        providerSessionId: "provider-session-1",
-        status: "building",
-      })),
-      tryMarkRepoImageReady: vi.fn(async () => ({
-        type: "not_accepting_completion",
-      })),
+      getCallbackBuild: vi.fn(async () =>
+        callbackBuild({
+          provider: "opencomputer",
+          providerSessionId: "provider-session-1",
+          status: "building",
+        })
+      ),
+      consumeCallbackToken: vi.fn(async () =>
+        callbackBuild({
+          provider: "opencomputer",
+          providerSessionId: "provider-session-1",
+          status: "building",
+        })
+      ),
+      tryMarkRepoImageReady: vi.fn(async () => notAcceptingCompletion()),
     });
     const deleteImage = vi.fn(async () => undefined);
     const cleanupCompletedBuild = vi.fn(async () => undefined);
