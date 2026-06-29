@@ -53,6 +53,16 @@ describe("sandbox-provider", () => {
     expect(supportsRepoImages()).toBe(false);
   });
 
+  it("supports opencomputer with repo images", async () => {
+    delete process.env.NEXT_PUBLIC_SANDBOX_PROVIDER;
+    process.env.SANDBOX_PROVIDER = "opencomputer";
+
+    const { getPublicSandboxProvider, supportsRepoImages } = await loadProvider();
+
+    expect(getPublicSandboxProvider()).toBe("opencomputer");
+    expect(supportsRepoImages()).toBe(true);
+  });
+
   it("throws for unsupported providers", async () => {
     process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "fly";
 

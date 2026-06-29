@@ -503,7 +503,7 @@ export interface AgentResponse {
 
 export interface UserPreferences {
   userId: string;
-  model: string;
+  model?: string;
   reasoningEffort?: string;
   branch?: string;
   updatedAt: number;

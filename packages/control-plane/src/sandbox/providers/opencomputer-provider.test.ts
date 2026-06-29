@@ -9,6 +9,7 @@ import type {
 import {
   OPENCOMPUTER_CHECKPOINT_KIND,
   OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
+  OpenComputerNotFoundError,
 } from "../opencomputer-rest-client";
 import type { CreateSandboxConfig } from "../provider";
 
@@ -146,7 +147,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1");
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-test");
     expect(client.createSecretStore).toHaveBeenCalledWith({
-      name: "openinspect-session-1",
+      name: expect.stringMatching(/^openinspect-session-1-[0-9a-f]{8}$/),
       egressAllowlist: ["*"],
     });
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 600);
@@ -224,6 +225,39 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
   });
 
+  it("deletes a build sandbox, ignoring a missing sandbox", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.deleteSandbox("oc-build-1");
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-build-1");
+
+    vi.mocked(client.deleteSandbox).mockRejectedValueOnce(new OpenComputerNotFoundError("gone"));
+    await expect(provider.deleteSandbox("oc-build-2")).resolves.toBeUndefined();
+  });
+
+  it("derives a unique secret-store name per sandbox", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({ ...baseConfig, userEnvVars: { ANTHROPIC_API_KEY: "sk-test" } });
+    await provider.createSandbox({ ...baseConfig, userEnvVars: { ANTHROPIC_API_KEY: "sk-test" } });
+
+    const names = vi.mocked(client.createSecretStore).mock.calls.map((call) => call[0].name);
+    expect(names).toHaveLength(2);
+    expect(names[0]).toMatch(/^openinspect-/);
+    expect(names[1]).toMatch(/^openinspect-/);
+    // Names must be unique so concurrent or sequential same-repo builds never
+    // collide on create (which would otherwise risk reaping a live store).
+    expect(names[0]).not.toBe(names[1]);
+  });
+
   it("forks from a repo image checkpoint when provided", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
@@ -248,6 +282,12 @@ describe("OpenComputerSandboxProvider", () => {
         env: expect.objectContaining({
           FROM_REPO_IMAGE: "true",
           REPO_IMAGE_SHA: "abc123",
+          // Build-mode markers inherited from the build sandbox's checkpoint
+          // must be neutralized so the fork boots as a session, not a build.
+          IMAGE_BUILD_MODE: "false",
+          OI_REPO_IMAGE_BUILD_ID: "",
+          OI_REPO_IMAGE_CALLBACK_URL: "",
+          OI_REPO_IMAGE_CALLBACK_TOKEN: "",
         }),
       })
     );
@@ -271,11 +311,33 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.forkFromCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
         checkpointId: "checkpoint-session-1",
-        env: expect.objectContaining({ RESTORED_FROM_SNAPSHOT: "true" }),
+        env: expect.objectContaining({
+          RESTORED_FROM_SNAPSHOT: "true",
+          IMAGE_BUILD_MODE: "false",
+        }),
       })
     );
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 600);
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("never marks a runtime session as an image build", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox(baseConfig);
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      IMAGE_BUILD_MODE: "false",
+      OI_REPO_IMAGE_PROVIDER_SESSION_ID: "",
+      OI_REPO_IMAGE_BUILD_ID: "",
+      OI_REPO_IMAGE_CALLBACK_URL: "",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "",
+    });
   });
 
   it("creates checkpoints for snapshots", async () => {

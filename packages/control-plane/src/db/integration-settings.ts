@@ -351,7 +351,7 @@ export class IntegrationSettingsStore {
   ): SlackGlobalSettings {
     const allowedKeys =
       level === "global"
-        ? new Set(["agentNotificationsEnabled", "mentionsPolicy", "routingRules"])
+        ? new Set(["agentNotificationsEnabled", "model", "mentionsPolicy", "routingRules"])
         : new Set(["agentNotificationsEnabled"]);
 
     for (const key of Object.keys(settings)) {
@@ -366,6 +366,8 @@ export class IntegrationSettingsStore {
     ) {
       throw new IntegrationSettingsValidationError("agentNotificationsEnabled must be a boolean");
     }
+
+    this.validateModelAndEffort(settings);
 
     if (
       settings.mentionsPolicy !== undefined &&

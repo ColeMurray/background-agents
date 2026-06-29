@@ -42,7 +42,7 @@ describe("D1 RepoImageStore", () => {
     expect(status[0].created_at).toBeGreaterThan(0);
   });
 
-  it("markReady updates build with provider image details", async () => {
+  it("markBuildReady updates build with provider image details", async () => {
     await metadataStore.setImageBuildEnabled("acme", "repo", true);
     await store.registerBuild({
       id: "img-1",
@@ -52,7 +52,7 @@ describe("D1 RepoImageStore", () => {
       baseBranch: "main",
     });
 
-    const result = await store.markReady("img-1", "modal", "modal-img-abc", "abc123", 42.5);
+    const result = await store.markBuildReady("img-1", "modal", "modal-img-abc", "abc123", 42_500);
     expect(result.replacedImageId).toBeNull();
 
     const ready = await store.getLatestReady("acme", "repo", "modal");
@@ -63,7 +63,7 @@ describe("D1 RepoImageStore", () => {
     expect(ready!.status).toBe("ready");
   });
 
-  it("markReady replaces previous ready image", async () => {
+  it("markBuildReady replaces previous ready image", async () => {
     await metadataStore.setImageBuildEnabled("acme", "repo", true);
     await store.registerBuild({
       id: "img-old",
@@ -72,7 +72,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-old", "modal", "modal-img-old", "sha-old", 30);
+    await store.markBuildReady("img-old", "modal", "modal-img-old", "sha-old", 30_000);
 
     await store.registerBuild({
       id: "img-new",
@@ -81,20 +81,29 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    const result = await store.markReady("img-new", "modal", "modal-img-new", "sha-new", 40);
+    const result = await store.markBuildReady(
+      "img-new",
+      "modal",
+      "modal-img-new",
+      "sha-new",
+      40_000
+    );
 
     expect(result.replacedImageId).toBe("modal-img-old");
 
     const ready = await store.getLatestReady("acme", "repo", "modal");
     expect(ready!.id).toBe("img-new");
 
-    // Old image row should be deleted
+    // Old image row is hidden from normal status while retained for cleanup retry.
     const status = await store.getStatus("acme", "repo");
     const ids = status.map((r) => r.id);
     expect(ids).not.toContain("img-old");
+
+    await expect(store.deleteSupersededImage("img-old")).resolves.toBe(true);
+    await expect(store.deleteSupersededImage("img-old")).resolves.toBe(false);
   });
 
-  it("markFailed sets error message", async () => {
+  it("markBuildFailed sets error message", async () => {
     await store.registerBuild({
       id: "img-1",
       repoOwner: "acme",
@@ -102,7 +111,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markFailed("img-1", "modal", "npm install failed");
+    await store.markBuildFailed("img-1", "modal", "npm install failed");
 
     const status = await store.getStatus("acme", "repo");
     expect(status[0].status).toBe("failed");
@@ -131,7 +140,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markFailed("img-failed", "modal", "error");
+    await store.markBuildFailed("img-failed", "modal", "error");
 
     const result = await store.getLatestReady("acme", "repo", "modal");
     expect(result).toBeNull();
@@ -146,7 +155,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30_000);
 
     const result = await store.getLatestReady("ACME", "REPO", "modal");
     expect(result).not.toBeNull();
@@ -162,7 +171,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30_000);
 
     const result = await store.getLatestReady("acme", "repo", "modal");
     expect(result).toBeNull();
@@ -177,7 +186,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-1", "modal", "modal-img-1", "sha1", 30_000);
 
     // Disable — image should not be returned
     await metadataStore.setImageBuildEnabled("acme", "repo", false);
@@ -272,7 +281,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-a", "modal", "modal-a", "sha-a", 30);
+    await store.markBuildReady("img-a", "modal", "modal-a", "sha-a", 30_000);
 
     await store.registerBuild({
       id: "img-b",
@@ -281,7 +290,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-b", "modal", "modal-b", "sha-b", 40);
+    await store.markBuildReady("img-b", "modal", "modal-b", "sha-b", 40_000);
 
     const readyA = await store.getLatestReady("acme", "repo-a", "modal");
     const readyB = await store.getLatestReady("acme", "repo-b", "modal");
@@ -299,7 +308,7 @@ describe("D1 RepoImageStore", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-modal", "modal", "modal-img", "sha-modal", 30);
+    await store.markBuildReady("img-modal", "modal", "modal-img", "sha-modal", 30_000);
 
     await store.registerBuild({
       id: "img-vercel",
@@ -308,7 +317,7 @@ describe("D1 RepoImageStore", () => {
       provider: "vercel",
       baseBranch: "main",
     });
-    await store.markReady("img-vercel", "vercel", "vercel-snapshot", "sha-vercel", 40);
+    await store.markBuildReady("img-vercel", "vercel", "vercel-snapshot", "sha-vercel", 40_000);
 
     const modalImage = await store.getLatestReady("acme", "repo", "modal", "main");
     const vercelImage = await store.getLatestReady("acme", "repo", "vercel", "main");
@@ -329,6 +338,10 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 function vercelEnv(): Env {
   return { ...(env as unknown as Env), SANDBOX_PROVIDER: "vercel" };
+}
+
+function modalEnvWithVercelConfig(): Env {
+  return { ...vercelEnv(), SANDBOX_PROVIDER: "modal" };
 }
 
 async function repoImageCallbackTokenHash(token: string): Promise<string> {
@@ -399,14 +412,40 @@ describe("Repo image HTTP routes", () => {
     expect(status[0].status).toBe("building");
   });
 
-  it("POST /repo-images/build-complete rejects unauthenticated Modal callbacks before parsing body", async () => {
+  it("POST /repo-images/build-complete rejects missing completion metadata", async () => {
+    await store.registerBuild({
+      id: "img-missing-metadata",
+      repoOwner: "acme",
+      repoName: "repo",
+      provider: "modal",
+      baseBranch: "main",
+    });
+
+    const response = await SELF.fetch("https://test.local/repo-images/build-complete", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({
+        build_id: "img-missing-metadata",
+        provider_image_id: "modal-img-missing-metadata",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.json<{ error: string }>();
+    expect(body.error).toBe("base_sha is required");
+
+    const status = await store.getStatus("acme", "repo");
+    expect(status[0].status).toBe("building");
+  });
+
+  it("POST /repo-images/build-complete rejects malformed callback bodies before auth", async () => {
     const response = await SELF.fetch("https://test.local/repo-images/build-complete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
   });
 
   it("POST /repo-images/build-failed marks build as failed", async () => {
@@ -437,14 +476,14 @@ describe("Repo image HTTP routes", () => {
     expect(failed!.error_message).toBe("npm install failed");
   });
 
-  it("POST /repo-images/build-failed rejects unauthenticated Modal callbacks before parsing body", async () => {
+  it("POST /repo-images/build-failed rejects malformed callback bodies before auth", async () => {
     const response = await SELF.fetch("https://test.local/repo-images/build-failed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
   });
 
   it("POST /repo-images/build-failed accepts Vercel per-build callback auth through the full router", async () => {
@@ -484,6 +523,43 @@ describe("Repo image HTTP routes", () => {
     expect(failed!.callback_token_used_at).toEqual(expect.any(Number));
   });
 
+  it("POST /repo-images/build-failed uses the stored provider after SANDBOX_PROVIDER changes", async () => {
+    const token = VERCEL_CALLBACK_TOKEN;
+    await store.registerBuild({
+      id: "img-vercel-provider-flip",
+      repoOwner: "acme",
+      repoName: "repo",
+      provider: "vercel",
+      baseBranch: "main",
+      callbackTokenHash: await repoImageCallbackTokenHash(token),
+      callbackTokenExpiresAt: Date.now() + 60_000,
+    });
+    await store.bindProviderSession("img-vercel-provider-flip", "vercel", "vercel-session-1");
+
+    const response = await handleRequest(
+      new Request("https://test.local/repo-images/build-failed", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          build_id: "img-vercel-provider-flip",
+          provider_session_id: "vercel-session-1",
+          error: "setup failed after provider flip",
+        }),
+      }),
+      modalEnvWithVercelConfig()
+    );
+
+    expect(response.status).toBe(200);
+    const status = await store.getStatus("acme", "repo");
+    const failed = status.find((row) => row.id === "img-vercel-provider-flip");
+    expect(failed!.status).toBe("failed");
+    expect(failed!.error_message).toBe("setup failed after provider flip");
+    expect(failed!.callback_token_used_at).toEqual(expect.any(Number));
+  });
+
   it("POST /repo-images/build-failed rejects missing Vercel callback token through the full router", async () => {
     await store.registerBuild({
       id: "img-vercel-missing-token",
@@ -516,7 +592,45 @@ describe("Repo image HTTP routes", () => {
     expect(build!.callback_token_used_at).toBeNull();
   });
 
-  it("POST /repo-images/build-failed rejects malformed Vercel callback auth before parsing body", async () => {
+  it("POST /repo-images/build-complete keeps Vercel callback token unused when metadata is invalid", async () => {
+    const token = VERCEL_CALLBACK_TOKEN;
+    await store.registerBuild({
+      id: "img-vercel-invalid-complete",
+      repoOwner: "acme",
+      repoName: "repo",
+      provider: "vercel",
+      baseBranch: "main",
+      callbackTokenHash: await repoImageCallbackTokenHash(token),
+      callbackTokenExpiresAt: Date.now() + 60_000,
+    });
+    await store.bindProviderSession("img-vercel-invalid-complete", "vercel", "vercel-session-1");
+
+    const response = await handleRequest(
+      new Request("https://test.local/repo-images/build-complete", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          build_id: "img-vercel-invalid-complete",
+          provider_session_id: "vercel-session-1",
+          build_duration_seconds: 12,
+        }),
+      }),
+      vercelEnv()
+    );
+
+    expect(response.status).toBe(400);
+    const body = await response.json<{ error: string }>();
+    expect(body.error).toBe("base_sha is required");
+    const status = await store.getStatus("acme", "repo");
+    const build = status.find((row) => row.id === "img-vercel-invalid-complete");
+    expect(build!.status).toBe("building");
+    expect(build!.callback_token_used_at).toBeNull();
+  });
+
+  it("POST /repo-images/build-failed rejects malformed Vercel callback bodies before auth", async () => {
     const response = await handleRequest(
       new Request("https://test.local/repo-images/build-failed", {
         method: "POST",
@@ -529,7 +643,7 @@ describe("Repo image HTTP routes", () => {
       vercelEnv()
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
   });
 
   it("POST /repo-images/build-failed rejects Vercel callback session mismatch through the full router", async () => {
@@ -610,7 +724,7 @@ describe("Repo image HTTP routes", () => {
       provider: "modal",
       baseBranch: "main",
     });
-    await store.markReady("img-s1", "modal", "modal-img-1", "sha1", 30);
+    await store.markBuildReady("img-s1", "modal", "modal-img-1", "sha1", 30_000);
 
     const headers = await authHeaders();
     delete (headers as Record<string, string | undefined>)["Content-Type"];

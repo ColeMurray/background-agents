@@ -211,6 +211,7 @@ export interface SlackRepoSettings {
 
 /** Global Slack defaults: per-repo fields plus workspace-wide policy controls. */
 export interface SlackGlobalSettings extends SlackRepoSettings {
+  model?: string;
   mentionsPolicy?: SlackMentionsPolicy;
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
   routingRules?: SlackRoutingRule[];

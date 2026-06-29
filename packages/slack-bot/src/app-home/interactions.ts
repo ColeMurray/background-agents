@@ -32,7 +32,12 @@ import type {
 } from "./slack-types";
 import type { SlackSelectOption } from "../slack-blocks";
 import { buildRepoBranchSelectOptions } from "./view";
-import { getResolvedUserPreferences, updateUserPreferences } from "../user-preferences";
+import {
+  getResolvedUserPreferences,
+  updateUserPreferences,
+  type UserPreferenceResolutionOptions,
+} from "../user-preferences";
+import { getAvailableModels, getSlackDefaultModel } from "./models";
 
 const log = createLogger("app-home");
 
@@ -98,6 +103,20 @@ function getAppHomeBlockAction(payload: SlackInteractionPayload): AppHomeBlockAc
 
   const handler = APP_HOME_BLOCK_ACTIONS[action.action_id];
   return handler ? { action, handler } : null;
+}
+
+async function getPreferenceResolutionOptions(
+  env: Env,
+  traceId: string | undefined
+): Promise<UserPreferenceResolutionOptions> {
+  const [availableModels, slackDefaultModel] = await Promise.all([
+    getAvailableModels(env, traceId),
+    getSlackDefaultModel(env, traceId),
+  ]);
+  return {
+    defaultModel: slackDefaultModel ?? env.DEFAULT_MODEL,
+    enabledModels: availableModels.map((model) => model.value),
+  };
 }
 
 function isAppHomeViewSubmission(payload: SlackInteractionPayload): boolean {
@@ -227,7 +246,8 @@ async function handleBranchSubmission(
   const branch = getSubmittedBranch(payload);
 
   if (payload.view?.callback_id === BRANCH_MODAL_CALLBACK_ID) {
-    await updateUserPreferences(env, userId, { branch });
+    const options = await getPreferenceResolutionOptions(env, traceId);
+    await updateUserPreferences(env, userId, { branch }, options);
     await publishAppHome(env, userId);
     return;
   }
@@ -300,6 +320,7 @@ async function handleSelectModel({
 async function handleSelectReasoningEffort({
   action,
   env,
+  traceId,
   userId,
 }: AppHomeBlockActionContext): Promise<void> {
   const selectedEffort = action.selected_option?.value;
@@ -307,13 +328,19 @@ async function handleSelectReasoningEffort({
     return;
   }
 
-  const updated = await updateUserPreferences(env, userId, (current) => {
-    if (!isValidReasoningEffort(current.model, selectedEffort)) {
-      return null;
-    }
+  const options = await getPreferenceResolutionOptions(env, traceId);
+  const updated = await updateUserPreferences(
+    env,
+    userId,
+    (current) => {
+      if (!isValidReasoningEffort(current.model, selectedEffort)) {
+        return null;
+      }
 
-    return { reasoningEffort: selectedEffort };
-  });
+      return { reasoningEffort: selectedEffort };
+    },
+    options
+  );
   if (!updated) {
     return;
   }
@@ -386,12 +413,14 @@ async function handleClearRepoBranch({
 
 async function handleClearBranchPreference({
   env,
+  traceId,
   userId,
 }: AppHomeBlockActionContext): Promise<void> {
   if (!userId) {
     return;
   }
 
-  await updateUserPreferences(env, userId, { branch: undefined });
+  const options = await getPreferenceResolutionOptions(env, traceId);
+  await updateUserPreferences(env, userId, { branch: undefined }, options);
   await publishAppHome(env, userId);
 }
