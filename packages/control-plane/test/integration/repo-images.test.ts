@@ -340,6 +340,10 @@ function vercelEnv(): Env {
   return { ...(env as unknown as Env), SANDBOX_PROVIDER: "vercel" };
 }
 
+function modalEnvWithVercelConfig(): Env {
+  return { ...vercelEnv(), SANDBOX_PROVIDER: "modal" };
+}
+
 async function repoImageCallbackTokenHash(token: string): Promise<string> {
   return computeHmacHex(`repo-image-callback:${token}`, env.INTERNAL_CALLBACK_SECRET!);
 }
@@ -434,14 +438,14 @@ describe("Repo image HTTP routes", () => {
     expect(status[0].status).toBe("building");
   });
 
-  it("POST /repo-images/build-complete rejects unauthenticated Modal callbacks before parsing body", async () => {
+  it("POST /repo-images/build-complete rejects malformed callback bodies before auth", async () => {
     const response = await SELF.fetch("https://test.local/repo-images/build-complete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
   });
 
   it("POST /repo-images/build-failed marks build as failed", async () => {
@@ -472,14 +476,14 @@ describe("Repo image HTTP routes", () => {
     expect(failed!.error_message).toBe("npm install failed");
   });
 
-  it("POST /repo-images/build-failed rejects unauthenticated Modal callbacks before parsing body", async () => {
+  it("POST /repo-images/build-failed rejects malformed callback bodies before auth", async () => {
     const response = await SELF.fetch("https://test.local/repo-images/build-failed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
   });
 
   it("POST /repo-images/build-failed accepts Vercel per-build callback auth through the full router", async () => {
@@ -519,6 +523,43 @@ describe("Repo image HTTP routes", () => {
     expect(failed!.callback_token_used_at).toEqual(expect.any(Number));
   });
 
+  it("POST /repo-images/build-failed uses the stored provider after SANDBOX_PROVIDER changes", async () => {
+    const token = VERCEL_CALLBACK_TOKEN;
+    await store.registerBuild({
+      id: "img-vercel-provider-flip",
+      repoOwner: "acme",
+      repoName: "repo",
+      provider: "vercel",
+      baseBranch: "main",
+      callbackTokenHash: await repoImageCallbackTokenHash(token),
+      callbackTokenExpiresAt: Date.now() + 60_000,
+    });
+    await store.bindProviderSession("img-vercel-provider-flip", "vercel", "vercel-session-1");
+
+    const response = await handleRequest(
+      new Request("https://test.local/repo-images/build-failed", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          build_id: "img-vercel-provider-flip",
+          provider_session_id: "vercel-session-1",
+          error: "setup failed after provider flip",
+        }),
+      }),
+      modalEnvWithVercelConfig()
+    );
+
+    expect(response.status).toBe(200);
+    const status = await store.getStatus("acme", "repo");
+    const failed = status.find((row) => row.id === "img-vercel-provider-flip");
+    expect(failed!.status).toBe("failed");
+    expect(failed!.error_message).toBe("setup failed after provider flip");
+    expect(failed!.callback_token_used_at).toEqual(expect.any(Number));
+  });
+
   it("POST /repo-images/build-failed rejects missing Vercel callback token through the full router", async () => {
     await store.registerBuild({
       id: "img-vercel-missing-token",
@@ -551,7 +592,45 @@ describe("Repo image HTTP routes", () => {
     expect(build!.callback_token_used_at).toBeNull();
   });
 
-  it("POST /repo-images/build-failed rejects malformed Vercel callback auth before parsing body", async () => {
+  it("POST /repo-images/build-complete keeps Vercel callback token unused when metadata is invalid", async () => {
+    const token = VERCEL_CALLBACK_TOKEN;
+    await store.registerBuild({
+      id: "img-vercel-invalid-complete",
+      repoOwner: "acme",
+      repoName: "repo",
+      provider: "vercel",
+      baseBranch: "main",
+      callbackTokenHash: await repoImageCallbackTokenHash(token),
+      callbackTokenExpiresAt: Date.now() + 60_000,
+    });
+    await store.bindProviderSession("img-vercel-invalid-complete", "vercel", "vercel-session-1");
+
+    const response = await handleRequest(
+      new Request("https://test.local/repo-images/build-complete", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          build_id: "img-vercel-invalid-complete",
+          provider_session_id: "vercel-session-1",
+          build_duration_seconds: 12,
+        }),
+      }),
+      vercelEnv()
+    );
+
+    expect(response.status).toBe(400);
+    const body = await response.json<{ error: string }>();
+    expect(body.error).toBe("base_sha is required");
+    const status = await store.getStatus("acme", "repo");
+    const build = status.find((row) => row.id === "img-vercel-invalid-complete");
+    expect(build!.status).toBe("building");
+    expect(build!.callback_token_used_at).toBeNull();
+  });
+
+  it("POST /repo-images/build-failed rejects malformed Vercel callback bodies before auth", async () => {
     const response = await handleRequest(
       new Request("https://test.local/repo-images/build-failed", {
         method: "POST",
@@ -564,7 +643,7 @@ describe("Repo image HTTP routes", () => {
       vercelEnv()
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
   });
 
   it("POST /repo-images/build-failed rejects Vercel callback session mismatch through the full router", async () => {

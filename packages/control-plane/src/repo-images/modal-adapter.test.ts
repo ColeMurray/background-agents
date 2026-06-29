@@ -57,7 +57,7 @@ describe("ModalRepoImageBuildAdapter", () => {
     const correlation = { request_id: "request-1", trace_id: "trace-1" };
 
     await adapter.deleteImage({
-      providerImageId: "modal-image-1",
+      image: { providerImageId: "modal-image-1" },
       correlation,
     });
 

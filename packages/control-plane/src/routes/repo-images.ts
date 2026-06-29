@@ -8,18 +8,14 @@
  * - Maintenance operations (stale builds, cleanup)
  */
 
-import { RepoImageStore, type RepoImageProvider } from "../db/repo-images";
+import { RepoImageStore } from "../db/repo-images";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
-import {
-  getRepoImageBackend,
-  getRepoImageCallbackMode,
-  getRepoImagesUnsupportedMessage,
-} from "../repo-images/backend-policy";
+import { getRepoImagesUnsupportedMessage } from "../repo-images/provider-policy";
 import { createRepoImageBuildWorkflowFromEnv } from "../repo-images/workflow";
 import type {
-  CompleteRepoImageBuild,
-  FailRepoImageBuild,
+  CompleteRepoImageBuildCallback,
+  FailRepoImageBuildCallback,
   RepoImageWorkflowContext,
   RepoImageWorkflowResult,
 } from "../repo-images/types";
@@ -33,10 +29,7 @@ import {
   parseJsonBody,
   parsePattern,
 } from "./shared";
-import {
-  getRepoImageCallbackBearerToken,
-  requireCallbackPreParseGate,
-} from "./repo-image-callback-auth";
+import { getRepoImageCallbackBearerToken } from "./repo-image-callback-auth";
 
 const logger = createLogger("router:repo-images");
 const MS_PER_SECOND = 1000;
@@ -75,7 +68,12 @@ async function workflowResultToResponse(
 ): Promise<Response> {
   if (result.type === "completion_accepted") {
     await scheduleWorkflowTask(result.finalization, ctx);
-  } else if ((result.type === "build_ready" || result.type === "build_failed") && result.cleanup) {
+  } else if (
+    (result.type === "build_ready" ||
+      result.type === "build_superseded" ||
+      result.type === "build_failed") &&
+    result.cleanup
+  ) {
     await scheduleWorkflowTask(result.cleanup, ctx);
   }
 
@@ -87,10 +85,14 @@ async function workflowResultToResponse(
     case "build_ready":
       return json({
         ok: true,
-        replacedImageId: result.replacedImages[0]?.providerImageId ?? null,
+        replacedImageId: result.replacedImages[0]?.image.providerImageId ?? null,
       });
+    case "build_superseded":
+      return json({ ok: true, superseded: true });
     case "build_failed":
       return json({ ok: true });
+    case "invalid_callback":
+      return error(result.message, 400);
     case "callback_auth_rejected":
       return error(result.message, 401);
     case "callback_auth_unavailable":
@@ -136,68 +138,49 @@ function optionalStringField(value: unknown, fallback: string): string {
 }
 
 function buildCompleteCommand(
-  body: RepoImageBuildCompleteBody,
-  backend: RepoImageProvider
-): CompleteRepoImageBuild | Response {
+  body: RepoImageBuildCompleteBody
+): CompleteRepoImageBuildCallback | Response {
   const buildId = requireStringField(body.build_id, "build_id");
   if (buildId instanceof Response) return buildId;
 
-  const baseSha = requireStringField(body.base_sha, "base_sha");
-  if (baseSha instanceof Response) return baseSha;
-
-  const buildDurationSeconds = requireNumberField(
-    body.build_duration_seconds,
-    "build_duration_seconds"
-  );
-  if (buildDurationSeconds instanceof Response) return buildDurationSeconds;
-  const buildDurationMs = buildDurationSeconds * MS_PER_SECOND;
-
-  if (getRepoImageCallbackMode(backend) === "provider_session") {
-    const providerSessionId = requireStringField(body.provider_session_id, "provider_session_id");
-    if (providerSessionId instanceof Response) return providerSessionId;
-    return {
-      kind: "provider_session",
-      buildId,
-      providerSessionId,
-      baseSha,
-      buildDurationMs,
-    };
+  let buildDurationMs: number | undefined;
+  if (body.build_duration_seconds !== undefined) {
+    const buildDurationSeconds = requireNumberField(
+      body.build_duration_seconds,
+      "build_duration_seconds"
+    );
+    if (buildDurationSeconds instanceof Response) return buildDurationSeconds;
+    buildDurationMs = buildDurationSeconds * MS_PER_SECOND;
   }
 
-  const providerImageId = requireStringField(body.provider_image_id, "provider_image_id");
-  if (providerImageId instanceof Response) return providerImageId;
   return {
-    kind: "provider_image",
     buildId,
-    providerImageId,
-    baseSha,
+    providerImageId:
+      typeof body.provider_image_id === "string" && body.provider_image_id.length > 0
+        ? body.provider_image_id
+        : undefined,
+    providerSessionId:
+      typeof body.provider_session_id === "string" && body.provider_session_id.length > 0
+        ? body.provider_session_id
+        : undefined,
+    baseSha:
+      typeof body.base_sha === "string" && body.base_sha.length > 0 ? body.base_sha : undefined,
     buildDurationMs,
   };
 }
 
-function buildFailedCommand(
-  body: RepoImageBuildFailedBody,
-  backend: RepoImageProvider
-): FailRepoImageBuild | Response {
+function buildFailedCommand(body: RepoImageBuildFailedBody): FailRepoImageBuildCallback | Response {
   const buildId = requireStringField(body.build_id, "build_id");
   if (buildId instanceof Response) return buildId;
 
   const errorMessage = optionalStringField(body.error, "Unknown error");
 
-  if (getRepoImageCallbackMode(backend) === "provider_session") {
-    const providerSessionId = requireStringField(body.provider_session_id, "provider_session_id");
-    if (providerSessionId instanceof Response) return providerSessionId;
-    return {
-      kind: "provider_session",
-      buildId,
-      providerSessionId,
-      errorMessage,
-    };
-  }
-
   return {
-    kind: "provider_image",
     buildId,
+    providerSessionId:
+      typeof body.provider_session_id === "string" && body.provider_session_id.length > 0
+        ? body.provider_session_id
+        : undefined,
     errorMessage,
   };
 }
@@ -212,25 +195,19 @@ async function handleBuildComplete(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireRepoImages(env);
-  if (providerError) return providerError;
-
   if (!env.DB) {
     return error("Database not configured", 503);
   }
 
-  const backend = getRepoImageBackend(env);
-  const preParseAuthError = await requireCallbackPreParseGate(request, env, backend, ctx, logger);
-  if (preParseAuthError) return preParseAuthError;
-
   const body = await parseJsonBody<RepoImageBuildCompleteBody>(request);
   if (body instanceof Response) return body;
 
-  const completion = buildCompleteCommand(body, backend);
+  const completion = buildCompleteCommand(body);
   if (completion instanceof Response) return completion;
 
   const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildComplete({
     completion,
+    authorizationHeader: request.headers.get("Authorization"),
     callbackToken: getRepoImageCallbackBearerToken(request),
     context: workflowContext(ctx),
   });
@@ -247,25 +224,19 @@ async function handleBuildFailed(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireRepoImages(env);
-  if (providerError) return providerError;
-
   if (!env.DB) {
     return error("Database not configured", 503);
   }
 
-  const backend = getRepoImageBackend(env);
-  const preParseAuthError = await requireCallbackPreParseGate(request, env, backend, ctx, logger);
-  if (preParseAuthError) return preParseAuthError;
-
   const body = await parseJsonBody<RepoImageBuildFailedBody>(request);
   if (body instanceof Response) return body;
 
-  const failure = buildFailedCommand(body, backend);
+  const failure = buildFailedCommand(body);
   if (failure instanceof Response) return failure;
 
   const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildFailed({
     failure,
+    authorizationHeader: request.headers.get("Authorization"),
     callbackToken: getRepoImageCallbackBearerToken(request),
     context: workflowContext(ctx),
   });

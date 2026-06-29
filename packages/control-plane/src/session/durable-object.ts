@@ -22,7 +22,7 @@ import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypt
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import { resolveRepoImageBackend } from "../repo-images/backend-policy";
+import { resolveRepoImageProvider } from "../repo-images/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -704,7 +704,7 @@ export class SessionDO extends DurableObject<Env> {
 
     // Create repo image lookup if D1 is available and the provider supports repo images.
     let repoImageLookup: RepoImageLookup | undefined;
-    const repoImageProvider = resolveRepoImageBackend(sandboxBackend);
+    const repoImageProvider = resolveRepoImageProvider(sandboxBackend);
     if (this.env.DB && repoImageProvider) {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {

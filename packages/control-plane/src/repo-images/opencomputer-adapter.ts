@@ -71,7 +71,10 @@ export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter<
   }
 
   async deleteImage(input: DeleteRepoImageInput): Promise<void> {
-    await this.provider.deleteProviderImage(input.providerImageId, input.providerSessionId);
+    await this.provider.deleteProviderImage(
+      input.image.providerImageId,
+      input.image.providerSessionId
+    );
   }
 
   private async deleteBuildSandbox(

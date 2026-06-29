@@ -37,6 +37,6 @@ export class ModalRepoImageBuildAdapter implements RepoImageBuildAdapter<ModalRe
   }
 
   async deleteImage(input: DeleteRepoImageInput): Promise<void> {
-    await this.provider.deleteProviderImage(input.providerImageId, input.correlation);
+    await this.provider.deleteProviderImage(input.image.providerImageId, input.correlation);
   }
 }

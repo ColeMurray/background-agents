@@ -1,7 +1,7 @@
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import type { RepoImageProvider } from "../db/repo-images";
 import type { Env } from "../types";
 import { ModalRepoImageBuildAdapter } from "./modal-adapter";
+import type { RepoImageProvider } from "./model";
 import { OpenComputerRepoImageBuildAdapter } from "./opencomputer-adapter";
 import { VercelRepoImageBuildAdapter } from "./vercel-adapter";
 import type {

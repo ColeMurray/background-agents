@@ -45,6 +45,20 @@ function createRepoImageDb(row: RepoImageRow): D1Database {
   const prepare = (sql: string) => ({
     bind: (...args: unknown[]) => ({
       first: async () => {
+        if (
+          sql.includes(
+            "SELECT id, provider, provider_session_id, status FROM repo_images WHERE id = ?"
+          )
+        ) {
+          return row.id === args[0]
+            ? {
+                id: row.id,
+                provider: row.provider,
+                provider_session_id: row.provider_session_id,
+                status: row.status,
+              }
+            : null;
+        }
         if (sql.includes("SELECT id, provider, provider_session_id")) {
           return row.id === args[0] && row.provider === args[1]
             ? {
@@ -58,12 +72,16 @@ function createRepoImageDb(row: RepoImageRow): D1Database {
               }
             : null;
         }
-        if (sql.includes("SELECT repo_owner, repo_name, provider, base_branch")) {
+        if (sql.includes("SELECT 1 FROM repo_images")) {
+          return null;
+        }
+        if (sql.includes("SELECT repo_owner, repo_name, provider, provider_session_id")) {
           return row.id === args[0] && row.provider === args[1] && row.status === "building"
             ? {
                 repo_owner: row.repo_owner,
                 repo_name: row.repo_name,
                 provider: row.provider,
+                provider_session_id: row.provider_session_id,
                 base_branch: row.base_branch,
                 created_at: row.created_at,
               }

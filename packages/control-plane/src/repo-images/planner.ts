@@ -1,6 +1,5 @@
 import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
 import { GlobalSecretsStore } from "../db/global-secrets";
-import type { RepoImageProvider } from "../db/repo-images";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { createLogger, type CorrelationContext } from "../logger";
@@ -12,7 +11,8 @@ import {
   hashRepoImageCallbackToken,
   REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
 } from "./auth";
-import { getRepoImageCallbackMode } from "./backend-policy";
+import type { RepoImageProvider } from "./model";
+import { getRepoImageCallbackMode } from "./provider-policy";
 import type { PlannedRepoImageBuild, VercelCloneAuth } from "./types";
 
 const logger = createLogger("repo-images:planner");
@@ -44,7 +44,7 @@ export type RepoImageBuildPlanningResult =
 export class RepoImageBuildPlanner {
   constructor(
     private readonly env: Env,
-    private readonly backend: RepoImageProvider
+    private readonly provider: RepoImageProvider
   ) {}
 
   async planBuild(params: {
@@ -88,7 +88,7 @@ export class RepoImageBuildPlanner {
 
     return {
       type: "ok",
-      build: this.createPlannedBuildForBackend(basePlan, callbackAuth, cloneAuth),
+      build: this.createPlannedBuildForProvider(basePlan, callbackAuth, cloneAuth),
     };
   }
 
@@ -130,7 +130,7 @@ export class RepoImageBuildPlanner {
   }
 
   private async createCallbackAuth(now: number): Promise<PlannedCallbackAuth> {
-    if (getRepoImageCallbackMode(this.backend) !== "provider_session") {
+    if (getRepoImageCallbackMode(this.provider) !== "provider_session") {
       return { kind: "none" };
     }
 
@@ -143,12 +143,12 @@ export class RepoImageBuildPlanner {
     };
   }
 
-  private createPlannedBuildForBackend(
+  private createPlannedBuildForProvider(
     basePlan: BaseRepoImageBuildPlanInput,
     callbackAuth: PlannedCallbackAuth,
     cloneAuth: VercelCloneAuth
   ): PlannedRepoImageBuild {
-    if (this.backend === "modal") {
+    if (this.provider === "modal") {
       return {
         plan: {
           ...basePlan,
@@ -160,10 +160,10 @@ export class RepoImageBuildPlanner {
     }
 
     if (callbackAuth.kind !== "bearer_token") {
-      throw new Error(`${this.backend} repo image builds require callback token auth`);
+      throw new Error(`${this.provider} repo image builds require callback token auth`);
     }
 
-    if (this.backend === "vercel") {
+    if (this.provider === "vercel") {
       return {
         plan: {
           ...basePlan,
@@ -247,7 +247,7 @@ export class RepoImageBuildPlanner {
     repoOwner: string;
     repoName: string;
   }): Promise<VercelCloneAuth> {
-    if (this.backend !== "vercel") return { type: "unavailable" };
+    if (this.provider !== "vercel") return { type: "unavailable" };
 
     try {
       const provider = createSourceControlProviderFromEnv(this.env);

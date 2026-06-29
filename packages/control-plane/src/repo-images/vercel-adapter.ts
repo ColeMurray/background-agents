@@ -97,7 +97,7 @@ export class VercelRepoImageBuildAdapter implements RepoImageBuildAdapter<Vercel
   }
 
   async deleteImage(input: DeleteRepoImageInput): Promise<void> {
-    await this.provider.deleteProviderImage(input.providerImageId);
+    await this.provider.deleteProviderImage(input.image.providerImageId);
   }
 
   private async stopBuildSandbox(input: {

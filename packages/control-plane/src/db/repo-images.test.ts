@@ -22,17 +22,23 @@ type RepoImageRow = {
 const QUERY_PATTERNS = {
   INSERT_BUILD: /^INSERT INTO repo_images/,
   SELECT_BY_ID:
-    /^SELECT repo_owner, repo_name, provider, base_branch, created_at FROM repo_images WHERE id = \? AND provider = \? AND status = 'building'$/,
+    /^SELECT repo_owner, repo_name, provider, provider_session_id, base_branch, created_at FROM repo_images WHERE id = \? AND provider = \? AND status = 'building'$/,
   UPDATE_PROVIDER_SESSION:
     /^UPDATE repo_images SET provider_session_id = \? WHERE id = \? AND provider = \? AND status = 'building'$/,
   SELECT_CALLBACK_BUILD:
     /^SELECT id, provider, provider_session_id, status, callback_token_hash, callback_token_expires_at, callback_token_used_at FROM repo_images WHERE id = \? AND provider = \?$/,
+  SELECT_CALLBACK_BUILD_BY_ID:
+    /^SELECT id, provider, provider_session_id, status FROM repo_images WHERE id = \?$/,
   UPDATE_CALLBACK_USED:
     /^UPDATE repo_images SET callback_token_used_at = \? WHERE id = \? AND provider = \? AND provider_session_id = \? AND status = 'building' AND callback_token_hash = \? AND callback_token_expires_at >= \? AND callback_token_used_at IS NULL$/,
+  SELECT_NEWER_READY:
+    /^SELECT 1 FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready' AND \( created_at > \? OR \(created_at = \? AND id > \?\) \) LIMIT 1$/,
   SELECT_READY_FOR_REPO:
     /^SELECT id, provider_image_id, provider_session_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready' AND id <> \? AND \( created_at < \? OR \(created_at = \? AND id < \?\) \) ORDER BY created_at DESC, id DESC$/,
   UPDATE_READY:
     /^UPDATE repo_images SET status = 'ready', provider_image_id = \?, base_sha = \?, build_duration_seconds = \? WHERE id = \? AND provider = \? AND status = 'building' AND NOT EXISTS \( SELECT 1 FROM repo_images newer WHERE newer\.repo_owner = \? AND newer\.repo_name = \? AND newer\.provider = \? AND newer\.base_branch = \? AND newer\.status = 'ready' AND \( newer\.created_at > \? OR \(newer\.created_at = \? AND newer\.id > \?\) \) \)$/,
+  UPDATE_COMPLETED_SUPERSEDED:
+    /^UPDATE repo_images SET status = 'superseded', provider_image_id = \?, base_sha = \?, build_duration_seconds = \? WHERE id = \? AND provider = \? AND status = 'building' AND EXISTS \( SELECT 1 FROM repo_images newer WHERE newer\.repo_owner = \? AND newer\.repo_name = \? AND newer\.provider = \? AND newer\.base_branch = \? AND newer\.status = 'ready' AND \( newer\.created_at > \? OR \(newer\.created_at = \? AND newer\.id > \?\) \) \)$/,
   UPDATE_SUPERSEDED:
     /^UPDATE repo_images SET status = 'superseded' WHERE id = \? AND status = 'ready'$/,
   DELETE_SUPERSEDED: /^DELETE FROM repo_images WHERE id = \? AND status = 'superseded'$/,
@@ -56,6 +62,7 @@ function normalizeQuery(query: string): string {
 class FakeD1Database {
   private rows = new Map<string, RepoImageRow>();
   private repoMetadata = new Map<string, { image_build_enabled: number }>();
+  private beforeReadyUpdate: (() => void) | null = null;
 
   setImageBuildEnabled(repoOwner: string, repoName: string, enabled: boolean) {
     this.repoMetadata.set(`${repoOwner.toLowerCase()}/${repoName.toLowerCase()}`, {
@@ -72,6 +79,14 @@ class FakeD1Database {
     return new FakePreparedStatement(this, query);
   }
 
+  seedRow(row: RepoImageRow) {
+    this.rows.set(row.id, { ...row });
+  }
+
+  onBeforeReadyUpdate(callback: () => void) {
+    this.beforeReadyUpdate = callback;
+  }
+
   first(query: string, args: unknown[]): Partial<RepoImageRow> | null {
     const normalized = normalizeQuery(query);
 
@@ -83,8 +98,22 @@ class FakeD1Database {
             repo_owner: row.repo_owner,
             repo_name: row.repo_name,
             provider: row.provider,
+            provider_session_id: row.provider_session_id,
             base_branch: row.base_branch,
             created_at: row.created_at,
+          }
+        : null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_CALLBACK_BUILD_BY_ID.test(normalized)) {
+      const [id] = args as [string];
+      const row = this.rows.get(id);
+      return row
+        ? {
+            id: row.id,
+            provider: row.provider,
+            provider_session_id: row.provider_session_id,
+            status: row.status,
           }
         : null;
     }
@@ -103,6 +132,32 @@ class FakeD1Database {
             callback_token_used_at: row.callback_token_used_at,
           }
         : null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_NEWER_READY.test(normalized)) {
+      const [owner, name, provider, branch, currentCreatedAt, sameCreatedAt, tieId] = args as [
+        string,
+        string,
+        string,
+        string,
+        number,
+        number,
+        string,
+      ];
+      for (const row of this.rows.values()) {
+        if (
+          row.repo_owner === owner &&
+          row.repo_name === name &&
+          row.provider === provider &&
+          row.base_branch === branch &&
+          row.status === "ready" &&
+          (row.created_at > currentCreatedAt ||
+            (row.created_at === sameCreatedAt && row.id > tieId))
+        ) {
+          return { "1": 1 };
+        }
+      }
+      return null;
     }
 
     if (QUERY_PATTERNS.SELECT_LATEST_READY.test(normalized)) {
@@ -292,6 +347,8 @@ class FakeD1Database {
         number,
         string,
       ];
+      this.beforeReadyUpdate?.();
+      this.beforeReadyUpdate = null;
       const row = this.rows.get(id);
       const hasNewerReady = Array.from(this.rows.values()).some(
         (candidate) =>
@@ -305,6 +362,55 @@ class FakeD1Database {
       );
       if (row && row.provider === provider && row.status === "building" && !hasNewerReady) {
         row.status = "ready";
+        row.provider_image_id = providerImageId;
+        row.base_sha = baseSha;
+        row.build_duration_seconds = buildDurationSeconds;
+        return { meta: { changes: 1 } };
+      }
+      return { meta: { changes: 0 } };
+    }
+
+    if (QUERY_PATTERNS.UPDATE_COMPLETED_SUPERSEDED.test(normalized)) {
+      const [
+        providerImageId,
+        baseSha,
+        buildDurationSeconds,
+        id,
+        provider,
+        owner,
+        name,
+        readyProvider,
+        branch,
+        currentCreatedAt,
+        sameCreatedAt,
+        tieId,
+      ] = args as [
+        string,
+        string,
+        number,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        number,
+        number,
+        string,
+      ];
+      const row = this.rows.get(id);
+      const hasNewerReady = Array.from(this.rows.values()).some(
+        (candidate) =>
+          candidate.repo_owner === owner &&
+          candidate.repo_name === name &&
+          candidate.provider === readyProvider &&
+          candidate.base_branch === branch &&
+          candidate.status === "ready" &&
+          (candidate.created_at > currentCreatedAt ||
+            (candidate.created_at === sameCreatedAt && candidate.id > tieId))
+      );
+      if (row && row.provider === provider && row.status === "building" && hasNewerReady) {
+        row.status = "superseded";
         row.provider_image_id = providerImageId;
         row.base_sha = baseSha;
         row.build_duration_seconds = buildDurationSeconds;
@@ -514,7 +620,8 @@ describe("RepoImageStore", () => {
       expect(consumed).toEqual({
         id: "img-vercel",
         provider: "vercel",
-        provider_session_id: "vercel-session-1",
+        providerSessionId: "vercel-session-1",
+        status: "building",
       });
 
       const replay = await store.consumeCallbackToken({
@@ -652,6 +759,102 @@ describe("RepoImageStore", () => {
 
       await expect(store.deleteSupersededImage("img-old")).resolves.toBe(true);
       await expect(store.deleteSupersededImage("img-old")).resolves.toBe(false);
+    });
+
+    it("records an older completed build as superseded when a newer image is already ready", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      await store.registerBuild({
+        id: "img-old",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+
+      vi.advanceTimersByTime(60000);
+
+      await store.registerBuild({
+        id: "img-new",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+      await store.markBuildReady("img-new", "modal", "modal-img-new", "sha-new", 40_000);
+
+      const result = await store.tryMarkRepoImageReady(
+        "img-old",
+        "modal",
+        "modal-img-old",
+        "sha-old",
+        30_000
+      );
+
+      expect(result).toEqual({
+        type: "superseded_by_newer_ready",
+        supersededImage: {
+          repoImageId: "img-old",
+          image: { providerImageId: "modal-img-old", providerSessionId: null },
+        },
+      });
+
+      const latest = await store.getLatestReady("acme", "repo", "modal");
+      expect(latest!.id).toBe("img-new");
+      const status = await store.getStatus("acme", "repo");
+      expect(status.map((image) => image.id)).not.toContain("img-old");
+    });
+
+    it("records an older completed build as superseded when a newer image appears during ready update", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      const oldCreatedAt = Date.now();
+      await store.registerBuild({
+        id: "img-old-race",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+
+      db.onBeforeReadyUpdate(() => {
+        db.seedRow({
+          id: "img-new-race",
+          repo_owner: "acme",
+          repo_name: "repo",
+          provider: "modal",
+          provider_session_id: null,
+          provider_image_id: "modal-img-new-race",
+          base_sha: "sha-new-race",
+          base_branch: "main",
+          status: "ready",
+          build_duration_seconds: 40,
+          error_message: null,
+          callback_token_hash: null,
+          callback_token_expires_at: null,
+          callback_token_used_at: null,
+          created_at: oldCreatedAt + 1,
+        });
+      });
+
+      const result = await store.tryMarkRepoImageReady(
+        "img-old-race",
+        "modal",
+        "modal-img-old-race",
+        "sha-old-race",
+        30_000
+      );
+
+      expect(result).toEqual({
+        type: "superseded_by_newer_ready",
+        supersededImage: {
+          repoImageId: "img-old-race",
+          image: { providerImageId: "modal-img-old-race", providerSessionId: null },
+        },
+      });
+
+      const latest = await store.getLatestReady("acme", "repo", "modal");
+      expect(latest!.id).toBe("img-new-race");
+      const status = await store.getStatus("acme", "repo");
+      expect(status.map((image) => image.id)).not.toContain("img-old-race");
     });
 
     it("returns null replacedImageId when no previous ready image", async () => {

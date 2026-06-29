@@ -1,19 +1,18 @@
 import type { CorrelationContext } from "../logger";
+import type { RepoImageProviderImageRef, SupersededRepoImage } from "./model";
 
 export type RepoImageCallbackMode = "provider_image" | "provider_session";
 export type RepoImageWorkflowContext = CorrelationContext;
 
-export interface ReplacedRepoImage {
-  repoImageId: string;
-  providerImageId: string;
-  providerSessionId: string | null;
-}
+export type ReplacedRepoImage = SupersededRepoImage;
 
 export type RepoImageWorkflowResult =
   | { type: "build_triggered"; buildId: string }
   | { type: "completion_accepted"; finalization: Promise<void> }
   | { type: "build_ready"; replacedImages: ReplacedRepoImage[]; cleanup?: Promise<void> }
+  | { type: "build_superseded"; cleanup?: Promise<void> }
   | { type: "build_failed"; cleanup?: Promise<void> }
+  | { type: "invalid_callback"; message: string }
   | { type: "callback_auth_rejected"; message: string }
   | { type: "callback_auth_unavailable"; message: string }
   | { type: "repository_not_installed"; message: string }
@@ -106,14 +105,19 @@ export interface CompleteProviderSessionBuild {
 
 export type CompleteRepoImageBuild = CompleteProviderImageBuild | CompleteProviderSessionBuild;
 
+export interface CompleteRepoImageBuildCallback {
+  buildId: string;
+  providerImageId?: string;
+  providerSessionId?: string;
+  baseSha?: string;
+  buildDurationMs?: number;
+}
+
 export type FinalizeRepoImageBuildInput = CompleteRepoImageBuild & {
   correlation: CorrelationContext;
 };
 
-export interface FinalizeRepoImageBuildResult {
-  providerImageId: string;
-  providerSessionId?: string;
-}
+export type FinalizeRepoImageBuildResult = RepoImageProviderImageRef;
 
 export interface FailProviderImageBuild {
   kind: "provider_image";
@@ -130,6 +134,12 @@ export interface FailProviderSessionBuild {
 
 export type FailRepoImageBuild = FailProviderImageBuild | FailProviderSessionBuild;
 
+export interface FailRepoImageBuildCallback {
+  buildId: string;
+  providerSessionId?: string;
+  errorMessage: string;
+}
+
 export type FailedRepoImageBuildInput = FailRepoImageBuild & {
   correlation: CorrelationContext;
 };
@@ -142,8 +152,7 @@ export interface CleanupCompletedProviderSessionBuildInput {
 }
 
 export interface DeleteRepoImageInput {
-  providerImageId: string;
-  providerSessionId?: string | null;
+  image: RepoImageProviderImageRef;
   correlation?: CorrelationContext;
 }
 
@@ -159,11 +168,9 @@ export interface RepoImageBuildFinalizer {
   deleteImage(input: DeleteRepoImageInput): Promise<void>;
 }
 
-export interface RepoImageBuildAdapter<
-  Plan extends RepoImageBuildPlan,
-> extends RepoImageBuildFinalizer {
+export type RepoImageBuildAdapter<Plan extends RepoImageBuildPlan> = RepoImageBuildFinalizer & {
   startBuild(plan: Plan, callbacks: RepoImageBuildStartCallbacks): Promise<void>;
-}
+};
 
 export type AnyRepoImageBuildAdapter =
   | RepoImageBuildAdapter<ModalRepoImageBuildPlan>
