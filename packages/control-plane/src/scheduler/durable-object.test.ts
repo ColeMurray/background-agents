@@ -919,6 +919,26 @@ describe("SchedulerDO", () => {
       expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
+    it("returns 400 for malformed run-complete callbacks", async () => {
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-1",
+            runId: "run-1",
+            sessionId: "sess-1",
+            success: "true",
+          }),
+        })
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockStore.getRunById).not.toHaveBeenCalled();
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
+    });
+
     it("marks run as failed and increments failures on failure", async () => {
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
@@ -1035,6 +1055,20 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(400);
     });
 
+    it("returns 400 when automationId is not a string", async () => {
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: 123 }),
+        })
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockStore.getById).not.toHaveBeenCalled();
+    });
+
     it("returns 404 when automation not found", async () => {
       mockStore.getById.mockResolvedValue(null);
 
@@ -1125,6 +1159,31 @@ describe("SchedulerDO", () => {
   });
 
   describe("/internal/event — slack thread continuity", () => {
+    it("returns 400 for malformed automation events", async () => {
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source: "slack",
+            eventType: "message.posted",
+            triggerKey: "slack:msg:C1:1700000000.000200",
+            concurrencyKey: "slack:C1:thread-root",
+            contextBlock: "A message was posted in #ops.",
+            meta: {},
+            channelId: "C1",
+            ts: "1700000000.000200",
+            actorUserId: "U1",
+          }),
+        })
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockGetSlackAutomationsForChannel).not.toHaveBeenCalled();
+      expect(mockStore.insertRun).not.toHaveBeenCalled();
+    });
+
     it("steers the thread session even when the follow-up fails trigger conditions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       mockStore.getLatestSteerableRunForThread.mockResolvedValue({
