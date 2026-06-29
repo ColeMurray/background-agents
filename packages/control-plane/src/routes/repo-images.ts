@@ -33,6 +33,7 @@ import { getRepoImageCallbackBearerToken } from "./repo-image-callback-auth";
 
 const logger = createLogger("router:repo-images");
 const MS_PER_SECOND = 1000;
+const MAX_REPO_IMAGE_CALLBACK_BODY_BYTES = 16 * 1024;
 const DEFAULT_STALE_BUILD_MAX_AGE_MS = 4200 * MS_PER_SECOND;
 const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * MS_PER_SECOND;
 
@@ -137,6 +138,31 @@ function optionalStringField(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
+async function parseRepoImageCallbackBody<T>(request: Request): Promise<T | Response> {
+  const contentLength = Number.parseInt(request.headers.get("content-length") ?? "", 10);
+  if (Number.isFinite(contentLength) && contentLength > MAX_REPO_IMAGE_CALLBACK_BODY_BYTES) {
+    return error("Payload too large", 413);
+  }
+
+  let bodyText: string;
+  try {
+    bodyText = await request.text();
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+
+  const bodyBytes = new TextEncoder().encode(bodyText).byteLength;
+  if (bodyBytes > MAX_REPO_IMAGE_CALLBACK_BODY_BYTES) {
+    return error("Payload too large", 413);
+  }
+
+  try {
+    return JSON.parse(bodyText) as T;
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+}
+
 function buildCompleteCommand(
   body: RepoImageBuildCompleteBody
 ): CompleteRepoImageBuildCallback | Response {
@@ -199,7 +225,7 @@ async function handleBuildComplete(
     return error("Database not configured", 503);
   }
 
-  const body = await parseJsonBody<RepoImageBuildCompleteBody>(request);
+  const body = await parseRepoImageCallbackBody<RepoImageBuildCompleteBody>(request);
   if (body instanceof Response) return body;
 
   const completion = buildCompleteCommand(body);
@@ -228,7 +254,7 @@ async function handleBuildFailed(
     return error("Database not configured", 503);
   }
 
-  const body = await parseJsonBody<RepoImageBuildFailedBody>(request);
+  const body = await parseRepoImageCallbackBody<RepoImageBuildFailedBody>(request);
   if (body instanceof Response) return body;
 
   const failure = buildFailedCommand(body);

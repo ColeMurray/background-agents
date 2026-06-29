@@ -636,6 +636,42 @@ describe("RepoImageBuildWorkflow", () => {
     expect(adapter.finalizeSuccessfulBuild).not.toHaveBeenCalled();
   });
 
+  for (const [label, buildDurationMs] of [
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["negative", -1],
+  ] as const) {
+    it(`rejects ${label} provider-session build durations before consuming the callback token`, async () => {
+      const store = createStore();
+      const adapter = createAdapter();
+      const workflow = new RepoImageBuildWorkflow(
+        env,
+        store,
+        createAdapterFactory(adapter),
+        "vercel"
+      );
+
+      const result = await workflow.acceptBuildComplete({
+        callbackToken: CALLBACK_TOKEN,
+        completion: {
+          buildId: "build-1",
+          providerSessionId: "provider-session-1",
+          baseSha: "abc123",
+          buildDurationMs,
+        },
+        context: createContext(),
+      });
+
+      expect(result).toEqual({
+        type: "invalid_callback",
+        message: "build_duration_seconds must be a non-negative finite number",
+      });
+      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
+      expect(adapter.finalizeSuccessfulBuild).not.toHaveBeenCalled();
+      expect(store.tryMarkRepoImageReady).not.toHaveBeenCalled();
+    });
+  }
+
   it("does not fail a ready provider-session build when superseded row cleanup fails", async () => {
     const store = createStore({
       tryMarkRepoImageReady: vi.fn(async () => ({

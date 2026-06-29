@@ -72,9 +72,6 @@ function createRepoImageDb(row: RepoImageRow): D1Database {
               }
             : null;
         }
-        if (sql.includes("SELECT 1 FROM repo_images")) {
-          return null;
-        }
         if (sql.includes("SELECT repo_owner, repo_name, provider, provider_session_id")) {
           return row.id === args[0] && row.provider === args[1] && row.status === "building"
             ? {
@@ -287,5 +284,46 @@ describe("repo image routes", () => {
     expect(vercelClient.snapshotSession).not.toHaveBeenCalled();
     expect(row.status).toBe("building");
     expect(row.callback_token_used_at).toBeNull();
+  });
+
+  it("rejects oversized build-complete callback bodies before parsing", async () => {
+    const row: RepoImageRow = {
+      id: "build-1",
+      repo_owner: "acme",
+      repo_name: "repo",
+      provider: "vercel",
+      provider_session_id: "vercel-session-1",
+      base_branch: "main",
+      provider_image_id: "",
+      status: "building",
+      base_sha: "",
+      build_duration_seconds: null,
+      error_message: null,
+      callback_token_hash: null,
+      callback_token_expires_at: null,
+      callback_token_used_at: null,
+      created_at: Date.now(),
+    };
+
+    const response = await buildCompleteRoute().handler(
+      new Request("https://test.local/repo-images/build-complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          build_id: "build-1",
+          padding: "x".repeat(20 * 1024),
+        }),
+      }),
+      createEnv(createRepoImageDb(row)),
+      [] as unknown as RegExpMatchArray,
+      createContext([])
+    );
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "Payload too large" });
+    expect(vercelClient.snapshotSession).not.toHaveBeenCalled();
+    expect(row.status).toBe("building");
   });
 });

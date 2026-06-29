@@ -31,8 +31,6 @@ const QUERY_PATTERNS = {
     /^SELECT id, provider, provider_session_id, status FROM repo_images WHERE id = \?$/,
   UPDATE_CALLBACK_USED:
     /^UPDATE repo_images SET callback_token_used_at = \? WHERE id = \? AND provider = \? AND provider_session_id = \? AND status = 'building' AND callback_token_hash = \? AND callback_token_expires_at >= \? AND callback_token_used_at IS NULL$/,
-  SELECT_NEWER_READY:
-    /^SELECT 1 FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready' AND \( created_at > \? OR \(created_at = \? AND id > \?\) \) LIMIT 1$/,
   SELECT_READY_FOR_REPO:
     /^SELECT id, provider_image_id, provider_session_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready' AND id <> \? AND \( created_at < \? OR \(created_at = \? AND id < \?\) \) ORDER BY created_at DESC, id DESC$/,
   UPDATE_READY:
@@ -132,32 +130,6 @@ class FakeD1Database {
             callback_token_used_at: row.callback_token_used_at,
           }
         : null;
-    }
-
-    if (QUERY_PATTERNS.SELECT_NEWER_READY.test(normalized)) {
-      const [owner, name, provider, branch, currentCreatedAt, sameCreatedAt, tieId] = args as [
-        string,
-        string,
-        string,
-        string,
-        number,
-        number,
-        string,
-      ];
-      for (const row of this.rows.values()) {
-        if (
-          row.repo_owner === owner &&
-          row.repo_name === name &&
-          row.provider === provider &&
-          row.base_branch === branch &&
-          row.status === "ready" &&
-          (row.created_at > currentCreatedAt ||
-            (row.created_at === sameCreatedAt && row.id > tieId))
-        ) {
-          return { "1": 1 };
-        }
-      }
-      return null;
     }
 
     if (QUERY_PATTERNS.SELECT_LATEST_READY.test(normalized)) {

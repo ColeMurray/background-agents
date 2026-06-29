@@ -22,7 +22,9 @@ import type {
   FailRepoImageBuildCallback,
   FinalizeRepoImageBuildResult,
   PlannedRepoImageBuild,
+  RepoImageBuildPlan,
   RepoImageBuildFinalizer,
+  RepoImageBuildStartCallbacks,
   RepoImageWorkflowContext,
   RepoImageWorkflowResult,
   ReplacedRepoImage,
@@ -63,6 +65,9 @@ type FinalizedReadyResult =
 type ReadyCompletionResult =
   | { type: "ok"; completion: CompleteRepoImageBuild }
   | { type: "invalid"; message: string };
+type BoundRepoImageBuildAdapter = RepoImageBuildFinalizer & {
+  startBuild(plan: RepoImageBuildPlan, callbacks: RepoImageBuildStartCallbacks): Promise<void>;
+};
 
 interface RepoImageBuildPlannerLike {
   planBuild(params: PlanBuildInput): ReturnType<RepoImageBuildPlanner["planBuild"]>;
@@ -462,6 +467,12 @@ export class RepoImageBuildWorkflow {
     if (typeof completion.buildDurationMs !== "number") {
       return { type: "invalid", message: "build_duration_seconds is required" };
     }
+    if (!Number.isFinite(completion.buildDurationMs) || completion.buildDurationMs < 0) {
+      return {
+        type: "invalid",
+        message: "build_duration_seconds must be a non-negative finite number",
+      };
+    }
 
     if (getRepoImageCallbackMode(provider) === "provider_session") {
       if (!completion.providerSessionId) {
@@ -540,53 +551,26 @@ export class RepoImageBuildWorkflow {
     ctx: RepoImageWorkflowContext
   ): PlannedBuildStart {
     const plan = build.plan;
-    switch (plan.provider) {
-      case "modal": {
-        const adapterResolution = this.createAdapter(
-          plan.provider,
-          "trigger_build",
-          ctx,
-          () => this.adapterFactory.create(plan.provider),
-          plan.buildId
-        );
-        if (adapterResolution.type === "unconfigured") return adapterResolution;
-        return {
-          type: "ok",
-          adapter: adapterResolution.adapter,
-          start: (callbacks) => adapterResolution.adapter.startBuild(plan, callbacks),
-        };
-      }
-      case "vercel": {
-        const adapterResolution = this.createAdapter(
-          plan.provider,
-          "trigger_build",
-          ctx,
-          () => this.adapterFactory.create(plan.provider),
-          plan.buildId
-        );
-        if (adapterResolution.type === "unconfigured") return adapterResolution;
-        return {
-          type: "ok",
-          adapter: adapterResolution.adapter,
-          start: (callbacks) => adapterResolution.adapter.startBuild(plan, callbacks),
-        };
-      }
-      case "opencomputer": {
-        const adapterResolution = this.createAdapter(
-          plan.provider,
-          "trigger_build",
-          ctx,
-          () => this.adapterFactory.create(plan.provider),
-          plan.buildId
-        );
-        if (adapterResolution.type === "unconfigured") return adapterResolution;
-        return {
-          type: "ok",
-          adapter: adapterResolution.adapter,
-          start: (callbacks) => adapterResolution.adapter.startBuild(plan, callbacks),
-        };
-      }
-    }
+    const adapterResolution = this.createAdapterForOperation(
+      plan.provider,
+      "trigger_build",
+      ctx,
+      plan.buildId
+    );
+    if (adapterResolution.type === "unconfigured") return adapterResolution;
+    return this.bindPlannedBuildStart(plan, adapterResolution.adapter);
+  }
+
+  private bindPlannedBuildStart(
+    plan: RepoImageBuildPlan,
+    adapter: AnyRepoImageBuildAdapter
+  ): PlannedBuildStart {
+    const boundAdapter = adapter as BoundRepoImageBuildAdapter;
+    return {
+      type: "ok",
+      adapter,
+      start: (callbacks) => boundAdapter.startBuild(plan, callbacks),
+    };
   }
 
   private createAdapterForBestEffortCleanup(

@@ -193,32 +193,6 @@ export class RepoImageStore {
       return { type: "not_accepting_completion" };
     }
 
-    if (
-      await this.hasNewerReadyImage({
-        repoOwner: build.repo_owner,
-        repoName: build.repo_name,
-        provider: build.provider,
-        baseBranch: build.base_branch,
-        createdAt: build.created_at,
-        buildId,
-      })
-    ) {
-      return (
-        (await this.tryMarkBuildingBuildSuperseded({
-          buildId,
-          provider,
-          providerImageId,
-          providerSessionId: build.provider_session_id,
-          baseSha,
-          buildDurationMs,
-          repoOwner: build.repo_owner,
-          repoName: build.repo_name,
-          baseBranch: build.base_branch,
-          createdAt: build.created_at,
-        })) ?? { type: "not_accepting_completion" }
-      );
-    }
-
     const updateResult = await this.db
       .prepare(
         `UPDATE repo_images
@@ -424,42 +398,6 @@ export class RepoImageStore {
           : null,
       replacedImages: result.type === "superseded_by_newer_ready" ? [result.supersededImage] : [],
     };
-  }
-
-  private async hasNewerReadyImage(params: {
-    repoOwner: string;
-    repoName: string;
-    provider: RepoImageProvider;
-    baseBranch: string;
-    createdAt: number;
-    buildId: string;
-  }): Promise<boolean> {
-    const newer = await this.db
-      .prepare(
-        `SELECT 1 FROM repo_images
-         WHERE repo_owner = ?
-           AND repo_name = ?
-           AND provider = ?
-           AND base_branch = ?
-           AND status = 'ready'
-           AND (
-             created_at > ?
-             OR (created_at = ? AND id > ?)
-           )
-         LIMIT 1`
-      )
-      .bind(
-        params.repoOwner,
-        params.repoName,
-        params.provider,
-        params.baseBranch,
-        params.createdAt,
-        params.createdAt,
-        params.buildId
-      )
-      .first();
-
-    return Boolean(newer);
   }
 
   async deleteSupersededImage(repoImageId: string): Promise<boolean> {
