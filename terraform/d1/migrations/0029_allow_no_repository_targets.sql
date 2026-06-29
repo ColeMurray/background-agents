@@ -115,11 +115,41 @@ INSERT OR REPLACE INTO automations_new (
   reasoning_effort, event_type, trigger_config, trigger_auth_data, user_id
 )
 SELECT
-  id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+  id,
+  name,
+  CASE
+    WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+    ELSE normalized_repo_owner
+  END,
+  CASE
+    WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+    ELSE normalized_repo_name
+  END,
+  CASE
+    WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+    ELSE base_branch
+  END,
+  CASE
+    WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+    ELSE repo_id
+  END,
+  instructions,
   trigger_type, schedule_cron, schedule_tz, model, enabled, next_run_at,
   consecutive_failures, created_by, created_at, updated_at, deleted_at,
   reasoning_effort, event_type, trigger_config, trigger_auth_data, user_id
-FROM automations;
+FROM (
+  SELECT
+    *,
+    NULLIF(
+      TRIM(repo_owner, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+      ''
+    ) AS normalized_repo_owner,
+    NULLIF(
+      TRIM(repo_name, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+      ''
+    ) AS normalized_repo_name
+  FROM automations
+);
 
 DROP TABLE IF EXISTS automations;
 ALTER TABLE automations_new RENAME TO automations;
