@@ -142,7 +142,7 @@ describe("automation cron submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("submits no_repository automations without repo fields", () => {
+  it("submits repo-less automations without repo fields", () => {
     const onSubmit = vi.fn();
     const { container } = render(
       <AutomationForm
@@ -171,7 +171,6 @@ describe("automation cron submission", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       name: "Check incidents",
-      targetMode: "no_repository",
       instructions: "Inspect recent alerts and send a summary.",
     });
     expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
@@ -179,7 +178,7 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0].baseBranch).toBeUndefined();
   });
 
-  it("disables no_repository for GitHub event automations", () => {
+  it("disables repo-less selection for GitHub event automations", () => {
     const { container } = render(
       <AutomationForm
         mode="create"
@@ -193,9 +192,9 @@ describe("automation cron submission", () => {
       />
     );
     const noRepositoryRadio = () =>
-      container.querySelector<HTMLInputElement>('input[value="no_repository"]')!;
+      container.querySelector<HTMLInputElement>('input[value="none"]')!;
     const singleRepositoryRadio = () =>
-      container.querySelector<HTMLInputElement>('input[value="fixed_single_repo"]')!;
+      container.querySelector<HTMLInputElement>('input[value="repository"]')!;
 
     fireEvent.click(screen.getByText("No repository"));
     expect(screen.queryByText("Select repository")).not.toBeInTheDocument();

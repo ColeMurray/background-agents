@@ -519,8 +519,7 @@ describe("Analytics API", () => {
         lastActive: apiActiveAt + 8_000,
       },
       {
-        key: "__no_repository__",
-        displayName: "No repository",
+        key: "No repository",
         sessions: 1,
         completed: 1,
         failed: 0,

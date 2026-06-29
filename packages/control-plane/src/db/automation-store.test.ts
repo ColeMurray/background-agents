@@ -81,7 +81,6 @@ const now = Date.now();
 const sampleRow: AutomationRow = {
   id: "auto_test1",
   name: "Daily sync",
-  target_mode: "fixed_single_repo",
   repo_owner: "acme",
   repo_name: "web-app",
   base_branch: "main",
@@ -126,7 +125,6 @@ describe("toAutomation", () => {
   it("converts row to camelCase Automation", () => {
     const automation = toAutomation(sampleRow);
     expect(automation.id).toBe("auto_test1");
-    expect(automation.targetMode).toBe("fixed_single_repo");
     expect(automation.repoOwner).toBe("acme");
     expect(automation.repoName).toBe("web-app");
     expect(automation.baseBranch).toBe("main");
@@ -146,48 +144,24 @@ describe("toAutomation", () => {
     expect(automation.enabled).toBe(false);
   });
 
-  it("maps no_repository automations with nullable legacy repo fields", () => {
+  it("maps repo-less automations with nullable repo fields", () => {
     const automation = toAutomation({
       ...sampleRow,
-      target_mode: "no_repository",
       repo_owner: null,
       repo_name: null,
       repo_id: null,
       base_branch: null,
     });
 
-    expect(automation.targetMode).toBe("no_repository");
-    expect(automation.repoOwner).toBeNull();
-    expect(automation.repoName).toBeNull();
-    expect(automation.baseBranch).toBeNull();
-  });
-
-  it("maps no_repository automations by ignoring stale legacy repo fields", () => {
-    const automation = toAutomation({
-      ...sampleRow,
-      target_mode: "no_repository",
-      repo_owner: "stale-owner",
-      repo_name: "stale-repo",
-      repo_id: 456,
-      base_branch: "stale-branch",
-    });
-
-    expect(automation.targetMode).toBe("no_repository");
     expect(automation.repoOwner).toBeNull();
     expect(automation.repoName).toBeNull();
     expect(automation.baseBranch).toBeNull();
     expect(automation.repoId).toBeNull();
   });
 
-  it("rejects fixed repository automations missing repository fields", () => {
+  it("rejects partial repository fields", () => {
     expect(() => toAutomation({ ...sampleRow, repo_name: null })).toThrow(
-      "Fixed repository automation is missing repository"
-    );
-  });
-
-  it("rejects unsupported target modes", () => {
-    expect(() => toAutomation({ ...sampleRow, target_mode: "unknown_mode" })).toThrow(
-      "Unsupported automation target mode: unknown_mode"
+      "Automation repository target must include repo_owner and repo_name together"
     );
   });
 });
@@ -221,7 +195,8 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("INSERT INTO automations");
       expect(statements[0].params[0]).toBe("auto_test1");
       expect(statements[0].params[1]).toBe("Daily sync");
-      expect(statements[0].params[2]).toBe("fixed_single_repo");
+      expect(statements[0].params[2]).toBe("acme");
+      expect(statements[0].params[3]).toBe("web-app");
     });
   });
 

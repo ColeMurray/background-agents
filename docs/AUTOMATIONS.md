@@ -58,9 +58,9 @@ For non-schedule automations, schedule fields are not used.
 
 ---
 
-## Automation Targets
+## Repository Context
 
-Automations currently support two target modes:
+Automations can run with or without repository context:
 
 - **Single repository**: clone one configured repository and branch for each run.
 - **No repository**: no repository is cloned. The agent still starts a normal session and can use

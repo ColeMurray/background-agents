@@ -59,22 +59,20 @@ CREATE TABLE IF NOT EXISTS automations_new (
   trigger_config  TEXT,
   trigger_auth_data TEXT,
   user_id         TEXT,
-  target_mode     TEXT    NOT NULL DEFAULT 'fixed_single_repo'
+  CHECK ((repo_owner IS NULL) = (repo_name IS NULL))
 );
 
 INSERT OR REPLACE INTO automations_new (
   id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
   trigger_type, schedule_cron, schedule_tz, model, enabled, next_run_at,
   consecutive_failures, created_by, created_at, updated_at, deleted_at,
-  reasoning_effort, event_type, trigger_config, trigger_auth_data, user_id,
-  target_mode
+  reasoning_effort, event_type, trigger_config, trigger_auth_data, user_id
 )
 SELECT
   id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
   trigger_type, schedule_cron, schedule_tz, model, enabled, next_run_at,
   consecutive_failures, created_by, created_at, updated_at, deleted_at,
-  reasoning_effort, event_type, trigger_config, trigger_auth_data, user_id,
-  'fixed_single_repo'
+  reasoning_effort, event_type, trigger_config, trigger_auth_data, user_id
 FROM automations;
 
 DROP TABLE automations;

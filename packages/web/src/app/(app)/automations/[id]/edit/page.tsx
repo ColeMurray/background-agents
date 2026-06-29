@@ -102,7 +102,6 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
             mode="edit"
             initialValues={{
               name: automation.name,
-              targetMode: automation.targetMode,
               repoOwner: automation.repoOwner ?? undefined,
               repoName: automation.repoName ?? undefined,
               baseBranch: automation.baseBranch ?? undefined,

@@ -19,7 +19,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Slack triage",
-    target_mode: "no_repository",
     repo_owner: null,
     repo_name: null,
     base_branch: null,

@@ -9,7 +9,6 @@ import {
   triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationTriggerType,
-  type AutomationTargetMode,
   type AutomationEventSource,
   type TriggerCondition,
   type TriggerConfig,
@@ -89,7 +88,6 @@ function FieldDescription({
 
 export interface AutomationFormValues {
   name: string;
-  targetMode?: AutomationTargetMode;
   repoOwner?: string;
   repoName?: string;
   baseBranch?: string;
@@ -116,8 +114,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
 
   const [name, setName] = useState(initialValues?.name ?? "");
-  const [targetMode, setTargetMode] = useState<AutomationTargetMode>(
-    initialValues?.targetMode ?? "fixed_single_repo"
+  const [usesRepository, setUsesRepository] = useState(
+    mode === "create" ? true : Boolean(initialValues?.repoOwner && initialValues?.repoName)
   );
   const [selectedRepo, setSelectedRepo] = useState(
     initialValues?.repoOwner && initialValues?.repoName
@@ -126,7 +124,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   );
   const repoOwner = selectedRepo.split("/")[0] ?? "";
   const repoName = selectedRepo.split("/")[1] ?? "";
-  const usesRepository = targetMode === "fixed_single_repo";
   const { branches, loading: loadingBranches } = useBranches(
     usesRepository ? repoOwner : "",
     usesRepository ? repoName : ""
@@ -192,10 +189,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   }, [showEventTypeSelector, eventType]);
 
   useEffect(() => {
-    if (repoTargetRequired && targetMode === "no_repository") {
-      setTargetMode("fixed_single_repo");
+    if (repoTargetRequired && !usesRepository) {
+      setUsesRepository(true);
     }
-  }, [repoTargetRequired, targetMode]);
+  }, [repoTargetRequired, usesRepository]);
 
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
@@ -206,11 +203,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     [repos]
   );
 
-  const handleTargetModeChange = useCallback(
-    (nextMode: AutomationTargetMode) => {
-      if (repoTargetRequired && nextMode === "no_repository") return;
-      setTargetMode(nextMode);
-      if (nextMode === "no_repository") {
+  const handleRepositorySelectionChange = useCallback(
+    (nextUsesRepository: boolean) => {
+      if (repoTargetRequired && !nextUsesRepository) return;
+      setUsesRepository(nextUsesRepository);
+      if (!nextUsesRepository) {
         setSelectedRepo("");
         setBaseBranch("");
       }
@@ -240,7 +237,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
     const values: AutomationFormValues = {
       name: name.trim(),
-      targetMode,
       model: resolvedModel,
       reasoningEffort:
         reasoningEffort && isValidReasoningEffort(resolvedModel, reasoningEffort)
@@ -272,7 +268,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     }
 
     if (mode === "edit") {
-      delete (values as Partial<AutomationFormValues>).targetMode;
       delete (values as Partial<AutomationFormValues>).repoOwner;
       delete (values as Partial<AutomationFormValues>).repoName;
     }
@@ -342,18 +337,18 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         {mode === "create" ? (
           <div className="grid gap-2 sm:grid-cols-2">
             <RadioCard
-              name="targetMode"
-              value="fixed_single_repo"
-              checked={targetMode === "fixed_single_repo"}
-              onChange={() => handleTargetModeChange("fixed_single_repo")}
+              name="repositoryContext"
+              value="repository"
+              checked={usesRepository}
+              onChange={() => handleRepositorySelectionChange(true)}
               label="Single repository"
               description="Clone one repository and branch for each run."
             />
             <RadioCard
-              name="targetMode"
-              value="no_repository"
-              checked={targetMode === "no_repository"}
-              onChange={() => handleTargetModeChange("no_repository")}
+              name="repositoryContext"
+              value="none"
+              checked={!usesRepository}
+              onChange={() => handleRepositorySelectionChange(false)}
               disabled={repoTargetRequired}
               label={NO_REPOSITORY_LABEL}
               description={
@@ -365,7 +360,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </div>
         ) : (
           <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
-            {targetMode === "no_repository" ? NO_REPOSITORY_LABEL : targetLabel}
+            {usesRepository ? targetLabel : NO_REPOSITORY_LABEL}
             <span className="text-xs ml-2">(cannot be changed)</span>
           </div>
         )}

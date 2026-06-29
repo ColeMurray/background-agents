@@ -21,9 +21,27 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("rejects a malformed session creation request", () => {
+    it("parses a valid repo-less session creation request", () => {
+      const result = createSessionRequestSchema.safeParse({
+        title: "Incident sweep",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a partial repository session creation request", () => {
       const result = createSessionRequestSchema.safeParse({
         repoOwner: "open-inspect",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a whitespace-only partial repository session creation request", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: "   ",
+        repoName: "background-agents",
       });
 
       expect(result.success).toBe(false);

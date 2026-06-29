@@ -202,7 +202,6 @@ describe("automation route handlers", () => {
       expect(mockStore.create).toHaveBeenCalledTimes(1);
       expect(mockStore.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          target_mode: "fixed_single_repo",
           repo_owner: "acme",
           repo_name: "web-app",
           repo_id: 12345,
@@ -211,10 +210,9 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("creates no_repository automation without repo fields", async () => {
+    it("creates repo-less automation without repo fields", async () => {
       const noRepoRow = {
         ...sampleRow,
-        target_mode: "no_repository",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
@@ -226,7 +224,6 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "Incident sweep",
-          targetMode: "no_repository",
           scheduleCron: "0 9 * * *",
           scheduleTz: "UTC",
           instructions: "Check recent incidents and summarize.",
@@ -236,7 +233,6 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(201);
       expect(mockStore.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          target_mode: "no_repository",
           repo_owner: null,
           repo_name: null,
           repo_id: null,
@@ -245,11 +241,10 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("rejects no_repository for repo-scoped triggers", async () => {
+    it("rejects repo-less repo-scoped triggers", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "PR review",
-          targetMode: "no_repository",
           instructions: "Review the PR.",
           triggerType: "github_event",
           eventType: "pull_request.opened",
@@ -258,7 +253,24 @@ describe("automation route handlers", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "no_repository automations are not supported for repo-scoped triggers",
+        error: "repoOwner and repoName are required for repo-scoped triggers",
+      });
+    });
+
+    it("rejects partial repository fields", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Partial repo",
+          repoOwner: "acme",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName must be provided together",
       });
     });
 

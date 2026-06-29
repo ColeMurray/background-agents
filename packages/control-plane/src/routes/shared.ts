@@ -61,6 +61,29 @@ export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+export type OptionalRepositoryTarget = { repoOwner: string; repoName: string } | null;
+
+export type OptionalRepositoryTargetResult =
+  | { ok: true; target: OptionalRepositoryTarget }
+  | { ok: false; message: string };
+
+export function normalizeOptionalRepositoryTarget(
+  input: { repoOwner?: string | null; repoName?: string | null },
+  partialMessage = "repoOwner and repoName must be provided together"
+): OptionalRepositoryTargetResult {
+  const repoOwner = input.repoOwner?.trim().toLowerCase() || null;
+  const repoName = input.repoName?.trim().toLowerCase() || null;
+
+  if ((repoOwner === null) !== (repoName === null)) {
+    return { ok: false, message: partialMessage };
+  }
+
+  return {
+    ok: true,
+    target: repoOwner && repoName ? { repoOwner, repoName } : null,
+  };
+}
+
 /**
  * Create a SourceControlProvider for use in Worker-level route handlers.
  * Cheap to construct (no I/O), so creating per-request is fine.

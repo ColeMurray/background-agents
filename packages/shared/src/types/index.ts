@@ -560,15 +560,27 @@ export type CallbackContext =
   | LinearCallbackContext
   | AutomationCallbackContext;
 
+function hasRepositoryIdentifier(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 // API response types
-export const createSessionRequestSchema = z.object({
-  repoOwner: z.string(),
-  repoName: z.string(),
-  title: z.string().optional(),
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-  branch: z.string().optional(),
-});
+export const createSessionRequestSchema = z
+  .object({
+    repoOwner: z.string().nullish(),
+    repoName: z.string().nullish(),
+    title: z.string().optional(),
+    model: z.string().optional(),
+    reasoningEffort: z.string().optional(),
+    branch: z.string().optional(),
+  })
+  .refine(
+    (data) => hasRepositoryIdentifier(data.repoOwner) === hasRepositoryIdentifier(data.repoName),
+    {
+      message: "repoOwner and repoName must be provided together",
+      path: ["repoName"],
+    }
+  );
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
@@ -747,8 +759,6 @@ export type AutomationTriggerType =
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
-export type AutomationTargetMode = "fixed_single_repo" | "no_repository";
-
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
 
@@ -770,23 +780,13 @@ export interface AutomationBase {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
+  repoId: number | null;
 }
 
-export type Automation =
-  | (AutomationBase & {
-      targetMode: "fixed_single_repo";
-      repoOwner: string;
-      repoName: string;
-      baseBranch: string | null;
-      repoId: number | null;
-    })
-  | (AutomationBase & {
-      targetMode: "no_repository";
-      repoOwner: null;
-      repoName: null;
-      baseBranch: null;
-      repoId: null;
-    });
+export type Automation = AutomationBase;
 
 export interface CreateAutomationRequestBase {
   name: string;
@@ -799,21 +799,12 @@ export interface CreateAutomationRequestBase {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  baseBranch?: string | null;
 }
 
-export type CreateAutomationRequest =
-  | (CreateAutomationRequestBase & {
-      targetMode?: "fixed_single_repo";
-      repoOwner: string;
-      repoName: string;
-      baseBranch?: string;
-    })
-  | (CreateAutomationRequestBase & {
-      targetMode: "no_repository";
-      repoOwner?: null;
-      repoName?: null;
-      baseBranch?: null;
-    });
+export type CreateAutomationRequest = CreateAutomationRequestBase;
 
 export interface UpdateAutomationRequest {
   name?: string;
@@ -822,7 +813,7 @@ export interface UpdateAutomationRequest {
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
-  baseBranch?: string;
+  baseBranch?: string | null;
   eventType?: string;
   triggerConfig?: TriggerConfig;
 }

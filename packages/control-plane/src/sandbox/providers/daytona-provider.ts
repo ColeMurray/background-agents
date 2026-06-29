@@ -202,7 +202,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       SANDBOX_ID: config.sandboxId,
       CONTROL_PLANE_URL: config.controlPlaneUrl,
       SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-      REPOSITORY_MODE: config.repoOwner && config.repoName ? "single" : "none",
       REPO_OWNER: config.repoOwner ?? "",
       REPO_NAME: config.repoName ?? "",
       SESSION_CONFIG: JSON.stringify(sessionConfig),

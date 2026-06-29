@@ -3,10 +3,7 @@ import { encryptTokenPair, generateId } from "../auth/crypto";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
-import {
-  NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR,
-  parseCreateSessionInput,
-} from "../session/create-session-input";
+import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import {
   deriveParticipantUserId,
@@ -21,6 +18,7 @@ import type { CreateSessionResponse, Env } from "../types";
 import {
   error,
   json,
+  normalizeOptionalRepositoryTarget,
   parsePattern,
   resolveRepoOrError,
   type RequestContext,
@@ -29,10 +27,6 @@ import {
 
 const logger = createLogger("router:session-create");
 const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
-
-function normalizeRepoIdentifier(value: string | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
-}
 
 async function handleCreateSession(
   request: Request,
@@ -44,27 +38,27 @@ async function handleCreateSession(
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
 
-  const repoOwner = normalizeRepoIdentifier(body.repoOwner);
-  const repoName = normalizeRepoIdentifier(body.repoName);
-  const repoOwnerMissing = repoOwner.length === 0;
-  const repoNameMissing = repoName.length === 0;
-
-  if (repoOwnerMissing && repoNameMissing) {
-    return error(NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR);
-  }
-  if (repoOwnerMissing || repoNameMissing) {
-    return error(INVALID_SESSION_REQUEST_BODY_ERROR);
-  }
+  const repoTarget = normalizeOptionalRepositoryTarget(body, INVALID_SESSION_REQUEST_BODY_ERROR);
+  if (!repoTarget.ok) return error(repoTarget.message, 400);
 
   // Validate branch name if provided (defense in depth)
   if (body.branch && !/^[\w.\-/]+$/.test(body.branch)) {
     return error("Invalid branch name");
   }
 
-  const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-  if (resolved instanceof Response) return resolved;
+  let repoId: number | null = null;
+  let defaultBranch: string | null = null;
+  let repoOwner: string | null = null;
+  let repoName: string | null = null;
+  if (repoTarget.target) {
+    repoOwner = repoTarget.target.repoOwner;
+    repoName = repoTarget.target.repoName;
+    const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
+    if (resolved instanceof Response) return resolved;
 
-  const { repoId, defaultBranch } = resolved;
+    repoId = resolved.repoId;
+    defaultBranch = resolved.defaultBranch;
+  }
 
   const participantUserId = deriveParticipantUserId(body);
 

@@ -416,10 +416,9 @@ describe("SchedulerDO", () => {
       );
     });
 
-    it("creates sessions with null repo fields for no_repository automations", async () => {
+    it("creates sessions with null repo fields for repo-less automations", async () => {
       const automation = {
         ...sampleAutomation,
-        target_mode: "no_repository",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
@@ -1081,9 +1080,8 @@ describe("SchedulerDO", () => {
       });
       mockStore.getById.mockResolvedValue({
         ...sampleSlackAutomation,
-        target_mode: "no_repository",
-        repo_owner: "stale-owner",
-        repo_name: "stale-repo",
+        repo_owner: null,
+        repo_name: null,
         repo_id: null,
         base_branch: null,
       });
@@ -1411,13 +1409,12 @@ describe("SchedulerDO", () => {
       expect(mockStore.getActiveRunForKey).not.toHaveBeenCalled();
     });
 
-    it("uses a no-repository label when steering a no-repo automation thread", async () => {
+    it("uses a no-repository label when steering a repo-less automation thread", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([
         {
           ...sampleSlackAutomation,
-          target_mode: "no_repository",
-          repo_owner: "stale-owner",
-          repo_name: "stale-repo",
+          repo_owner: null,
+          repo_name: null,
           repo_id: null,
           base_branch: null,
         },

@@ -46,7 +46,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
-import { resolveAutomationTarget } from "../automation/target-resolution";
+import { resolveAutomationSessionLaunches } from "../automation/target-resolution";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -72,11 +72,8 @@ const RECOVERY_SWEEP_LIMIT = 50;
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function formatAutomationTargetLabel(
-  automation: Pick<AutomationRow, "target_mode" | "repo_owner" | "repo_name"> | null | undefined
+  automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
 ): string {
-  if (automation?.target_mode === "no_repository") {
-    return "No repository";
-  }
   return automation?.repo_owner && automation?.repo_name
     ? `${automation.repo_owner}/${automation.repo_name}`
     : "No repository";
@@ -884,7 +881,15 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
-    const target = await resolveAutomationTarget(this.env, automation);
+    const [launch, ...additionalLaunches] = await resolveAutomationSessionLaunches(
+      this.env,
+      automation
+    );
+    // automation_runs still stores one session_id, so fail closed until run
+    // materialization is widened for multi-repository automations.
+    if (additionalLaunches.length > 0) {
+      throw new Error("Multiple automation session launches are not supported yet");
+    }
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -906,7 +911,7 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    const { repoOwner, repoName, repoId, baseBranch } = target;
+    const { repoOwner, repoName, repoId, baseBranch } = launch;
 
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
       resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),

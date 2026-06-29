@@ -557,7 +557,7 @@ async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
     await manager.create_sandbox(config)
 
     env = captured["env"]
-    assert env["REPOSITORY_MODE"] == "none"
+    assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
     assert "VCS_CLONE_TOKEN" not in env
@@ -670,7 +670,7 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
     )
 
     env = captured["env"]
-    assert env["REPOSITORY_MODE"] == "none"
+    assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
     assert "VCS_CLONE_TOKEN" not in env
