@@ -10,16 +10,17 @@
 
 import { DurableObject } from "cloudflare:workers";
 import {
+  automationEventSchema,
   nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
   computeHmacHex,
   type AutomationCallbackContext,
-  type AutomationEvent,
   type SlackAutomationEvent,
   type SlackCallbackContext,
   type TriggerConfig,
 } from "@open-inspect/shared";
+import { z } from "zod";
 import {
   AutomationStore,
   toAutomationRun,
@@ -69,6 +70,26 @@ const RECOVERY_SWEEP_LIMIT = 50;
  * does not slide — a reply after the window forks a fresh run.
  */
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const manualTriggerBodySchema = z.object({
+  automationId: z.string().min(1),
+});
+
+const runCompleteBodySchema = z.object({
+  automationId: z.string(),
+  runId: z.string(),
+  sessionId: z.string(),
+  messageId: z.string().optional(),
+  success: z.boolean(),
+  error: z.string().optional(),
+});
+
+function badJsonRequest(message: string): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status: 400,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -404,7 +425,12 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Event handler ───────────────────────────────────────────────────────
 
   private async handleEvent(request: Request): Promise<Response> {
-    const event = (await request.json()) as AutomationEvent;
+    const parsedEvent = automationEventSchema.safeParse(await request.json());
+    if (!parsedEvent.success) {
+      return badJsonRequest("Invalid automation event");
+    }
+
+    const event = parsedEvent.data;
     const store = new AutomationStore(this.env.DB);
 
     // 1. Find matching automations
@@ -570,15 +596,10 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
   private async handleTrigger(request: Request): Promise<Response> {
-    const body = (await request.json()) as { automationId: string };
-    const { automationId } = body;
+    const parsedBody = manualTriggerBodySchema.safeParse(await request.json());
+    if (!parsedBody.success) return badJsonRequest("automationId required");
 
-    if (!automationId) {
-      return new Response(JSON.stringify({ error: "automationId required" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    const { automationId } = parsedBody.data;
 
     const store = new AutomationStore(this.env.DB);
     const automation = await store.getById(automationId);
@@ -663,15 +684,10 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Run complete callback ───────────────────────────────────────────────
 
   private async handleRunComplete(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      automationId: string;
-      runId: string;
-      sessionId: string;
-      /** Optional for resilience to version skew; the bot falls back to a reaction clear. */
-      messageId?: string;
-      success: boolean;
-      error?: string;
-    };
+    const parsedBody = runCompleteBodySchema.safeParse(await request.json());
+    if (!parsedBody.success) return badJsonRequest("Invalid run-complete callback");
+
+    const body = parsedBody.data;
 
     const store = new AutomationStore(this.env.DB);
 
