@@ -435,6 +435,11 @@ describe("POST /events", () => {
       env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
     );
     expect(sessionBodies[0]).not.toHaveProperty("title");
+    expect((env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put).toHaveBeenCalledWith(
+      "thread:C123:111.222",
+      expect.any(String),
+      { expirationTtl: 7 * 24 * 60 * 60 }
+    );
 
     const updateBodies = slackApiBodies(slackFetch, "chat.update");
     expect(updateBodies).toEqual(

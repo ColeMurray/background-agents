@@ -64,11 +64,11 @@ const RECOVERY_SWEEP_LIMIT = 50;
 
 /**
  * How long after a slack run's first trigger that thread replies keep continuing
- * the same session (matches the interactive thread→session KV TTL of 24h). Steering
+ * the same session (matches the interactive thread→session KV TTL of 7 days). Steering
  * does not create new runs, so this is measured from the root run's `created_at` and
  * does not slide — a reply after the window forks a fresh run.
  */
-const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;

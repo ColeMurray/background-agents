@@ -1148,13 +1148,17 @@ describe("SchedulerDO", () => {
       const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
       expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
-      // The continuity lookup is scoped to the thread's concurrency key and a time
-      // window measured from now (24h back).
+      // The continuity lookup is scoped to the thread's concurrency key and a
+      // 7-day window measured from now.
       expect(mockStore.getLatestSteerableRunForThread).toHaveBeenCalledWith(
         "auto-slack",
         "slack:C1:thread-root",
         expect.any(Number)
       );
+      const sinceMs = mockStore.getLatestSteerableRunForThread.mock.calls[0]?.[2] as number;
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      expect(sinceMs).toBeGreaterThanOrEqual(Date.now() - sevenDaysMs - 1000);
+      expect(sinceMs).toBeLessThanOrEqual(Date.now() - sevenDaysMs + 1000);
 
       // The follow-up was enqueued onto the existing session as a slack-sourced
       // turn, so its reply posts back in-thread via /callbacks/complete.
