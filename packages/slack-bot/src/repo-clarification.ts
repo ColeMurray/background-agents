@@ -28,10 +28,26 @@ import type { Env, RepoConfig } from "./types";
 export const SELECT_REPO_ACTION_ID = "select_repo";
 
 /**
- * Action ID for the one-click quick-pick buttons that surface the classifier's
- * ranked alternatives. Routed through the same selection path as the picker.
+ * Action ID prefix for the one-click quick-pick buttons that surface the
+ * classifier's ranked alternatives. Routed through the same selection path as
+ * the picker; each button gets a unique suffix via {@link quickPickActionId}.
  */
 export const SELECT_REPO_QUICK_PICK_ACTION_ID = "select_repo_quick_pick";
+
+/** Unique per-button action_id; Slack requires action_id uniqueness within an actions block. */
+export function quickPickActionId(index: number): string {
+  return `${SELECT_REPO_QUICK_PICK_ACTION_ID}:${index}`;
+}
+
+/**
+ * Collapse a quick-pick's per-button action_id back to the bare constant so the
+ * interactions handler can match it; other action_ids pass through unchanged.
+ */
+export function baseActionId(actionId: string): string {
+  return actionId.startsWith(`${SELECT_REPO_QUICK_PICK_ACTION_ID}:`)
+    ? SELECT_REPO_QUICK_PICK_ACTION_ID
+    : actionId;
+}
 
 /**
  * Cap on quick-pick buttons in the clarification message. The classifier rarely
@@ -72,9 +88,9 @@ export function buildRepoQuickPickButtons(alternatives: RepoConfig[]): SlackButt
   const picks = alternatives.slice(0, MAX_REPO_QUICK_PICKS);
   const ambiguousNames = duplicateDisplayNames(picks);
 
-  return picks.map((repo) => ({
+  return picks.map((repo, index) => ({
     type: "button",
-    action_id: SELECT_REPO_QUICK_PICK_ACTION_ID,
+    action_id: quickPickActionId(index),
     // Two repos can share a displayName (e.g. the same repo name under different
     // owners); fall back to the unambiguous fullName for the colliding picks.
     text: plainTextOption(ambiguousNames.has(repo.displayName) ? repo.fullName : repo.displayName),

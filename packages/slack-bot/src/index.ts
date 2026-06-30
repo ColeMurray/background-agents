@@ -37,6 +37,7 @@ import { handleAppHomeInteractionRoute, publishAppHome } from "./app-home";
 import {
   SELECT_REPO_ACTION_ID,
   SELECT_REPO_QUICK_PICK_ACTION_ID,
+  baseActionId,
   getRepoClarificationOptions,
   buildRepoClarificationBlocks,
 } from "./repo-clarification";
@@ -1201,7 +1202,8 @@ async function handleSlackInteraction(
   const messageTs = payload.message?.ts;
   const threadTs = payload.message?.thread_ts;
 
-  switch (action.action_id) {
+  // Collapse a quick-pick's per-button action_id back to the bare constant before matching.
+  switch (baseActionId(action.action_id)) {
     case SELECT_REPO_ACTION_ID:
     case SELECT_REPO_QUICK_PICK_ACTION_ID: {
       if (!channel || !messageTs) return;

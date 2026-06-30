@@ -7,6 +7,8 @@ import {
   SELECT_REPO_QUICK_PICK_ACTION_ID,
   buildRepoClarificationBlocks,
   buildRepoQuickPickButtons,
+  baseActionId,
+  quickPickActionId,
 } from "./repo-clarification";
 
 function repo(fullName: string, displayName?: string): RepoConfig {
@@ -50,17 +52,29 @@ describe("buildRepoQuickPickButtons", () => {
     expect(buildRepoQuickPickButtons([repo("acme/web"), repo("acme/api")])).toEqual([
       {
         type: "button",
-        action_id: SELECT_REPO_QUICK_PICK_ACTION_ID,
+        action_id: quickPickActionId(0),
         text: { type: "plain_text", text: "web" },
         value: "acme/web",
       },
       {
         type: "button",
-        action_id: SELECT_REPO_QUICK_PICK_ACTION_ID,
+        action_id: quickPickActionId(1),
         text: { type: "plain_text", text: "api" },
         value: "acme/api",
       },
     ]);
+  });
+
+  it("gives each button a unique action_id so Slack accepts the block", () => {
+    // Slack requires action_id to be unique within an actions block.
+    const buttons = buildRepoQuickPickButtons(
+      Array.from({ length: MAX_REPO_QUICK_PICKS }, (_, idx) => repo(`acme/repo-${idx}`))
+    );
+    const actionIds = buttons.map((button) => button.action_id);
+    expect(new Set(actionIds).size).toBe(actionIds.length);
+    expect(actionIds.every((id) => baseActionId(id) === SELECT_REPO_QUICK_PICK_ACTION_ID)).toBe(
+      true
+    );
   });
 
   it("caps the number of buttons at MAX_REPO_QUICK_PICKS", () => {
@@ -84,6 +98,17 @@ describe("buildRepoQuickPickButtons", () => {
     ]);
 
     expect(buttons.map((button) => button.text.text)).toEqual(["acme/web", "other/web", "api"]);
+  });
+});
+
+describe("baseActionId", () => {
+  it("collapses indexed quick-pick ids to the bare constant, passing others through", () => {
+    expect(baseActionId(quickPickActionId(0))).toBe(SELECT_REPO_QUICK_PICK_ACTION_ID);
+    expect(baseActionId(quickPickActionId(4))).toBe(SELECT_REPO_QUICK_PICK_ACTION_ID);
+    // Messages posted before the per-button suffix existed stay clickable.
+    expect(baseActionId(SELECT_REPO_QUICK_PICK_ACTION_ID)).toBe(SELECT_REPO_QUICK_PICK_ACTION_ID);
+    expect(baseActionId(SELECT_REPO_ACTION_ID)).toBe(SELECT_REPO_ACTION_ID);
+    expect(baseActionId("view_session")).toBe("view_session");
   });
 });
 
@@ -120,8 +145,8 @@ describe("buildRepoClarificationBlocks", () => {
         type: "actions",
         block_id: "repo_quick_picks",
         elements: [
-          { type: "button", action_id: SELECT_REPO_QUICK_PICK_ACTION_ID, value: "acme/web" },
-          { type: "button", action_id: SELECT_REPO_QUICK_PICK_ACTION_ID, value: "acme/api" },
+          { type: "button", action_id: quickPickActionId(0), value: "acme/web" },
+          { type: "button", action_id: quickPickActionId(1), value: "acme/api" },
         ],
       },
       {
