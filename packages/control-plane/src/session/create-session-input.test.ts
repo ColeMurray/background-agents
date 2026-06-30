@@ -82,6 +82,8 @@ describe("parseCreateSessionInput", () => {
   it("rejects whitespace-only repository identifiers", async () => {
     const result = await parseCreateSessionInput(
       jsonRequest({
+        title: "Incident sweep",
+        model: "anthropic/claude-haiku-4-5",
         repoOwner: "   ",
         repoName: "\t",
       })
