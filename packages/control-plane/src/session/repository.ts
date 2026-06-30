@@ -255,6 +255,15 @@ export class SessionRepository {
   }
 
   upsertSession(data: UpsertSessionData): void {
+    const hasRepoOwner = data.repoOwner !== null;
+    const hasRepoName = data.repoName !== null;
+    if (hasRepoOwner !== hasRepoName) {
+      throw new Error("Session repository context must include repoOwner and repoName together");
+    }
+    if (!hasRepoOwner && (data.repoId != null || data.baseBranch != null)) {
+      throw new Error("No-repository sessions must not persist repoId or baseBranch");
+    }
+
     this.sql.exec(
       `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -264,7 +273,7 @@ export class SessionRepository {
       data.repoOwner,
       data.repoName,
       data.repoId ?? null,
-      data.baseBranch ?? (data.repoOwner && data.repoName ? "main" : null),
+      data.baseBranch ?? (hasRepoOwner ? "main" : null),
       data.model,
       data.reasoningEffort ?? null,
       data.status,

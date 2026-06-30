@@ -25,6 +25,7 @@ async function seedSession(
     id: string;
     repoOwner: string | null;
     repoName: string | null;
+    baseBranch?: string | null;
     scmLogin: string | null;
     userId?: string | null;
     spawnSource?: SpawnSource;
@@ -44,7 +45,8 @@ async function seedSession(
     repoName: input.repoName,
     model: "anthropic/claude-haiku-4-5",
     reasoningEffort: null,
-    baseBranch: "main",
+    baseBranch:
+      input.repoOwner !== null && input.repoName !== null ? (input.baseBranch ?? "main") : null,
     status: input.status,
     spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,

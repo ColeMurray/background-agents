@@ -3,10 +3,14 @@
 -- automation_runs references automations(id), so back it up without the foreign
 -- key before dropping automations and recreate the final table after the parent
 -- table has been renamed.
--- Temp tables are intentionally kept if present: after a partial failure they
--- may be the only copy left, so re-runs use IF NOT EXISTS + INSERT OR REPLACE.
+-- This migration has not been deployed yet, so it is intentionally a simple
+-- one-shot rebuild rather than a resumable partial-failure recovery script.
 
-CREATE TABLE IF NOT EXISTS automation_runs_backup (
+DROP TABLE IF EXISTS automation_runs_backup;
+DROP TABLE IF EXISTS automations_new;
+DROP TABLE IF EXISTS sessions_new;
+
+CREATE TABLE automation_runs_backup (
   id              TEXT    PRIMARY KEY,
   automation_id   TEXT    NOT NULL,
   session_id      TEXT,
@@ -22,7 +26,7 @@ CREATE TABLE IF NOT EXISTS automation_runs_backup (
   trigger_run_metadata TEXT
 );
 
-INSERT OR REPLACE INTO automation_runs_backup (
+INSERT INTO automation_runs_backup (
   id, automation_id, session_id, status, skip_reason, failure_reason,
   scheduled_at, started_at, completed_at, created_at, trigger_key,
   concurrency_key, trigger_run_metadata
@@ -35,7 +39,7 @@ FROM automation_runs;
 
 DROP TABLE automation_runs;
 
-CREATE TABLE IF NOT EXISTS automations_new (
+CREATE TABLE automations_new (
   id              TEXT    PRIMARY KEY,
   name            TEXT    NOT NULL,
   repo_owner      TEXT,
@@ -64,7 +68,7 @@ CREATE TABLE IF NOT EXISTS automations_new (
   CHECK (repo_owner IS NOT NULL OR repo_id IS NULL)
 );
 
-INSERT OR REPLACE INTO automations_new (
+INSERT INTO automations_new (
   id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
   trigger_type, schedule_cron, schedule_tz, model, enabled, next_run_at,
   consecutive_failures, created_by, created_at, updated_at, deleted_at,
@@ -160,7 +164,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_thread_continuity
   ON automation_runs (automation_id, concurrency_key, created_at DESC)
   WHERE concurrency_key IS NOT NULL AND session_id IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS sessions_new (
+CREATE TABLE sessions_new (
   id          TEXT    PRIMARY KEY,
   title       TEXT,
   repo_owner  TEXT,
@@ -186,7 +190,7 @@ CREATE TABLE IF NOT EXISTS sessions_new (
   CHECK (repo_owner IS NOT NULL OR base_branch IS NULL)
 );
 
-INSERT OR REPLACE INTO sessions_new (
+INSERT INTO sessions_new (
   id, title, repo_owner, repo_name, model, status, created_at, updated_at,
   reasoning_effort, base_branch, parent_session_id, spawn_source, spawn_depth,
   automation_id, automation_run_id, scm_login, total_cost, active_duration_ms,

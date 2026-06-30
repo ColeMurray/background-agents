@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
@@ -210,6 +211,32 @@ async def test_create_sandbox_snapshot_without_repo_does_not_resolve_clone_token
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_patch",
+    [
+        {"repo_owner": "acme"},
+        {"repo_name": "repo"},
+        {"repo_owner": "   ", "repo_name": "repo"},
+    ],
+)
+async def test_create_sandbox_rejects_partial_repo_context(monkeypatch, request_patch):
+    _patch_auth(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_create_sandbox(
+            {
+                "session_id": "sess-1",
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+                **request_patch,
+            }
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert "repo_owner and repo_name must be provided together" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_restore_sandbox_without_repo_does_not_resolve_clone_token(monkeypatch):
     """No-repository snapshot restores must not mint a repository clone token."""
     captured = {}
@@ -235,3 +262,33 @@ async def test_restore_sandbox_without_repo_does_not_resolve_clone_token(monkeyp
     assert result["success"] is True
     assert calls == []
     assert captured["restore"]["clone_token"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_config",
+    [
+        {"session_id": "sess-1", "repo_owner": "acme"},
+        {"session_id": "sess-1", "repo_name": "repo"},
+        {"session_id": "sess-1", "repo_owner": "", "repo_name": "repo"},
+    ],
+)
+async def test_restore_sandbox_rejects_partial_repo_context(monkeypatch, session_config):
+    _patch_auth(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_restore_sandbox(
+            {
+                "snapshot_image_id": "img-abc",
+                "session_config": {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-6",
+                    **session_config,
+                },
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+            }
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert "repo_owner and repo_name must be provided together" in str(exc_info.value.detail)

@@ -55,9 +55,7 @@ AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
     "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
 }
 
-AGENT_TOOLS_REQUIRING_REPOSITORY = {
-    "spawn-task.js",
-}
+AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
 # Wrapper installed at /usr/local/bin/gh (ahead of the real /usr/bin/gh in
 # PATH). The git credential helper can't authenticate the GitHub CLI — gh

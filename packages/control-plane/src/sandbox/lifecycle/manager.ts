@@ -224,11 +224,12 @@ export interface RepoImageLookup {
 // ==================== Slack Agent-Notify Lookup ====================
 
 /**
- * Resolves the spawn-time agent-slack-notify gate for a given repo.
+ * Resolves the spawn-time agent-slack-notify gate for a repository or the
+ * global no-repository scope.
  * False (or throwing) means do not install the tool in this sandbox.
  */
 export interface SlackAgentNotifyLookup {
-  isEnabledForRepo(repoOwner: string, repoName: string): Promise<boolean>;
+  isEnabledForRepo(repoOwner: string | null, repoName: string | null): Promise<boolean>;
 }
 
 // ==================== Callbacks ====================
@@ -531,11 +532,10 @@ export class SandboxLifecycleManager {
 
   private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
     if (!this.config.slackAgentNotifyLookup) return false;
-    if (!sessionHasRepository(session)) return false;
     try {
       return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
-        session.repo_owner,
-        session.repo_name
+        sessionHasRepository(session) ? session.repo_owner : null,
+        sessionHasRepository(session) ? session.repo_name : null
       );
     } catch (err) {
       this.log.warn("Failed to resolve agent slack-notify gate; treating as disabled", {

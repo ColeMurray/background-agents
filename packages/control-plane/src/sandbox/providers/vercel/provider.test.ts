@@ -221,6 +221,10 @@ describe("VercelSandboxProvider", () => {
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      REPO_OWNER: "",
+      REPO_NAME: "",
+    });
     expect(createCall.tags).toEqual({
       openinspect_framework: "open-inspect",
       openinspect_session_id: "session-123",

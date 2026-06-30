@@ -560,6 +560,8 @@ async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
+    assert "VCS_HOST" not in env
+    assert "VCS_CLONE_USERNAME" not in env
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env
@@ -673,6 +675,8 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
+    assert "VCS_HOST" not in env
+    assert "VCS_CLONE_USERNAME" not in env
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env

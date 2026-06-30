@@ -64,9 +64,19 @@ export async function initializeSession(
   input: SessionInitInput,
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
+  const hasRepoOwner = input.repoOwner !== null;
+  const hasRepoName = input.repoName !== null;
+  const hasRepoId = input.repoId != null;
+  if (
+    hasRepoOwner !== hasRepoName ||
+    (!hasRepoOwner && hasRepoId) ||
+    (hasRepoOwner && !hasRepoId)
+  ) {
+    throw new Error("Repository context must include repoOwner, repoName, and repoId together");
+  }
+
   const now = Date.now();
-  const baseBranch =
-    input.repoOwner && input.repoName ? input.branch || input.defaultBranch || "main" : null;
+  const baseBranch = hasRepoOwner ? input.branch || input.defaultBranch || "main" : null;
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(env.DB);

@@ -215,6 +215,38 @@ describe("AutomationStore", () => {
     });
   });
 
+  describe("update", () => {
+    it("rejects branch updates that would leave a repo-less row with branch metadata", async () => {
+      const { db } = createFakeD1({
+        firstResult: {
+          ...sampleRow,
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        },
+      });
+      const store = new AutomationStore(db);
+
+      await expect(store.update(sampleRow.id, { base_branch: "main" })).rejects.toThrow(
+        "Automation base_branch and repo_id require repository context"
+      );
+    });
+
+    it("rejects clearing repository fields while leaving the existing branch", async () => {
+      const { db } = createFakeD1({ firstResult: sampleRow });
+      const store = new AutomationStore(db);
+
+      await expect(
+        store.update(sampleRow.id, {
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+        })
+      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
+    });
+  });
+
   describe("getById", () => {
     it("returns row when found", async () => {
       const { db } = createFakeD1({ firstResult: sampleRow });

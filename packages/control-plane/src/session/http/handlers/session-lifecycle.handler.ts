@@ -108,9 +108,13 @@ export function createSessionLifecycleHandler(
       const hasRepoOwner = repoOwner !== null;
       const hasRepoName = repoName !== null;
       const hasRepoId = body.repoId != null;
-      if (hasRepoOwner !== hasRepoName || (!hasRepoOwner && hasRepoId)) {
+      if (
+        hasRepoOwner !== hasRepoName ||
+        (!hasRepoOwner && hasRepoId) ||
+        (hasRepoOwner && !hasRepoId)
+      ) {
         return Response.json(
-          { error: "Repository context must include repoOwner and repoName together" },
+          { error: "Repository context must include repoOwner, repoName, and repoId together" },
           { status: 400 }
         );
       }
@@ -144,7 +148,7 @@ export function createSessionLifecycleHandler(
         title: body.title ?? null,
         repoOwner,
         repoName,
-        repoId: hasRepoOwner ? (body.repoId ?? null) : null,
+        repoId: hasRepoOwner ? body.repoId : null,
         baseBranch,
         model,
         reasoningEffort,

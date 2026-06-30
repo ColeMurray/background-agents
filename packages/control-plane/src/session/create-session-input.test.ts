@@ -79,6 +79,17 @@ describe("parseCreateSessionInput", () => {
     expect(result).toEqual({ ok: false, message: "Invalid session request body" });
   });
 
+  it("rejects whitespace-only repository identifiers", async () => {
+    const result = await parseCreateSessionInput(
+      jsonRequest({
+        repoOwner: "   ",
+        repoName: "\t",
+      })
+    );
+
+    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
+  });
+
   it("rejects invalid JSON without throwing", async () => {
     const result = await parseCreateSessionInput(rawRequest("{"));
 

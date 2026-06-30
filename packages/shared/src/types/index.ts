@@ -567,8 +567,8 @@ function hasRepositoryIdentifier(value: string | null | undefined): boolean {
 // API response types
 export const createSessionRequestSchema = z
   .object({
-    repoOwner: z.string().nullish(),
-    repoName: z.string().nullish(),
+    repoOwner: z.string().trim().min(1).nullish(),
+    repoName: z.string().trim().min(1).nullish(),
     title: z.string().optional(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),

@@ -674,10 +674,11 @@ export class SessionDO extends DurableObject<Env> {
       slackAgentNotifyLookup = {
         isEnabledForRepo: async (repoOwner, repoName) => {
           if (!tokenPresent) return false;
-          const { settings } = await settingsStore.getResolvedConfig(
-            "slack",
-            `${repoOwner}/${repoName}`
-          );
+          const settings =
+            repoOwner && repoName
+              ? (await settingsStore.getResolvedConfig("slack", `${repoOwner}/${repoName}`))
+                  .settings
+              : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
           return resolveSlackSettings(settings).agentNotificationsEnabled;
         },
       };

@@ -154,6 +154,7 @@ describe("createSessionLifecycleHandler", () => {
   it.each([
     ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
     ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
+    ["repository context without repoId", { repoOwner: "acme", repoName: "repo", repoId: null }],
   ])("rejects partial repository contexts during init: %s", async (_name, repoFields) => {
     const { handler, repository, scheduleWarmSandbox } = createHandler();
 
@@ -171,7 +172,7 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "Repository context must include repoOwner and repoName together",
+      error: "Repository context must include repoOwner, repoName, and repoId together",
     });
     expect(repository.upsertSession).not.toHaveBeenCalled();
     expect(repository.createSandbox).not.toHaveBeenCalled();
@@ -283,6 +284,7 @@ describe("createSessionLifecycleHandler", () => {
           sessionName: "session-public-id",
           repoOwner: "acme",
           repoName: "repo",
+          repoId: 123,
           userId: "user-1",
           scmToken: "plain-scm-token",
           scmTokenEncrypted: "existing-encrypted-token",
@@ -315,6 +317,7 @@ describe("createSessionLifecycleHandler", () => {
           sessionName: "session-public-id",
           repoOwner: "acme",
           repoName: "repo",
+          repoId: 123,
           model: "invalid/model-name",
           userId: "user-1",
         }),

@@ -269,8 +269,15 @@ export class AutomationStore {
   }
 
   async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
-    if ("repo_owner" in fields || "repo_name" in fields || "repo_id" in fields) {
-      assertAutomationRepositoryFields(fields);
+    if (
+      "repo_owner" in fields ||
+      "repo_name" in fields ||
+      "repo_id" in fields ||
+      "base_branch" in fields
+    ) {
+      const current = await this.getById(id);
+      if (!current) return null;
+      assertAutomationRepositoryFields({ ...current, ...fields });
     }
 
     const statement = this.bindAutomationUpdate(id, fields);

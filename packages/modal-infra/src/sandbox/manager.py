@@ -418,12 +418,13 @@ class SandboxManager:
             }
         )
 
-        fallback_clone_token = config.fallback_clone_token if has_repository else None
-        self._inject_vcs_env_vars(
-            env_vars,
-            clone_token=fallback_clone_token,
-            include_github_cli_aliases=bool(fallback_clone_token),
-        )
+        if has_repository:
+            fallback_clone_token = config.fallback_clone_token
+            self._inject_vcs_env_vars(
+                env_vars,
+                clone_token=fallback_clone_token,
+                include_github_cli_aliases=bool(fallback_clone_token),
+            )
 
         code_server_password: str | None = None
         if config.code_server_enabled:

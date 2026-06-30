@@ -47,6 +47,15 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
+    it("rejects whitespace-only repository identifiers", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: "   ",
+        repoName: "\t",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
     it("rejects branch without repository context", () => {
       const result = createSessionRequestSchema.safeParse({
         title: "Incident sweep",

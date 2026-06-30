@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { applyMigrations, MIGRATIONS } from "./schema";
+import { applyMigrations, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlStorage, SqlResult } from "./repository";
 
 /**
@@ -197,8 +197,14 @@ describe("applyMigrations", () => {
     applyMigrations(mock.sql);
 
     const transactionControlStatements = mock.calls.filter((c) =>
-      /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(c.query.trim())
+      /\b(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(c.query.trim())
     );
     expect(transactionControlStatements).toEqual([]);
+  });
+
+  it("keeps repository context consistent at the session table boundary", () => {
+    expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
+    expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");
+    expect(SCHEMA_SQL).toContain("repo_id IS NULL AND base_branch IS NULL");
   });
 });

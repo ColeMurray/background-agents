@@ -29,7 +29,14 @@ CREATE TABLE IF NOT EXISTS session (
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  CHECK (
+    (repo_owner IS NULL) = (repo_name IS NULL)
+    AND (
+      repo_owner IS NOT NULL
+      OR (repo_id IS NULL AND base_branch IS NULL)
+    )
+  )
 );
 
 -- Participants in the session
