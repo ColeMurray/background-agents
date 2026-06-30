@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { APP_NAME } from "@/lib/site-config";
 import {
@@ -35,6 +36,17 @@ import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+const NO_REPOSITORY_VALUE = "__no_repository__";
+
+function isNoRepositoryTarget(value: string): boolean {
+  return value === NO_REPOSITORY_VALUE;
+}
+
+function parseSelectedRepository(value: string): { owner: string; name: string } | null {
+  if (!value || isNoRepositoryTarget(value)) return null;
+  const [owner, name] = value.split("/");
+  return owner && name ? { owner, name } : null;
+}
 
 export default function Home() {
   const { data: session } = useSession();
@@ -56,13 +68,16 @@ export default function Home() {
   const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
   const { enabledModels, enabledModelOptions } = useEnabledModels();
-  const selectedRepoOwner = selectedRepo.split("/")[0] ?? "";
-  const selectedRepoName = selectedRepo.split("/")[1] ?? "";
+  const selectedRepository = parseSelectedRepository(selectedRepo);
+  const selectedRepoOwner = selectedRepository?.owner ?? "";
+  const selectedRepoName = selectedRepository?.name ?? "";
   const { branches, loading: loadingBranches } = useBranches(selectedRepoOwner, selectedRepoName);
 
   // Auto-select repo when repos load
   useEffect(() => {
-    if (repos.length > 0 && !selectedRepo) {
+    if (selectedRepo) return;
+
+    if (repos.length > 0) {
       const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
       const hasLastSelectedRepo = repos.some((repo) => repo.fullName === lastSelectedRepo);
       const defaultRepo =
@@ -70,11 +85,16 @@ export default function Home() {
       setSelectedRepo(defaultRepo);
       const repo = repos.find((r) => r.fullName === defaultRepo);
       if (repo) setSelectedBranch(repo.defaultBranch);
+      return;
     }
-  }, [repos, selectedRepo]);
+
+    if (!loadingRepos) {
+      setSelectedRepo(NO_REPOSITORY_VALUE);
+    }
+  }, [loadingRepos, repos, selectedRepo]);
 
   useEffect(() => {
-    if (!selectedRepo) return;
+    if (!selectedRepo || isNoRepositoryTarget(selectedRepo)) return;
     localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, selectedRepo);
   }, [selectedRepo]);
 
@@ -128,8 +148,12 @@ export default function Home() {
     if (!selectedRepo) return null;
 
     setIsCreatingSession(true);
-    const [owner, name] = selectedRepo.split("/");
-    const currentConfig = { repo: selectedRepo, model: selectedModel, branch: selectedBranch };
+    const repository = parseSelectedRepository(selectedRepo);
+    const currentConfig = {
+      repo: selectedRepo,
+      model: selectedModel,
+      branch: repository ? selectedBranch : "",
+    };
     pendingConfigRef.current = currentConfig;
 
     const abortController = new AbortController();
@@ -141,11 +165,11 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            repoOwner: owner,
-            repoName: name,
+            repoOwner: repository?.owner ?? null,
+            repoName: repository?.name ?? null,
             model: selectedModel,
             reasoningEffort,
-            branch: selectedBranch || undefined,
+            ...(repository ? { branch: selectedBranch || undefined } : {}),
           }),
           signal: abortController.signal,
         });
@@ -201,6 +225,10 @@ export default function Home() {
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
       setSelectedRepo(repoFullName);
+      if (isNoRepositoryTarget(repoFullName)) {
+        setSelectedBranch("");
+        return;
+      }
       const repo = repos.find((r) => r.fullName === repoFullName);
       if (repo) setSelectedBranch(repo.defaultBranch);
     },
@@ -349,7 +377,23 @@ function HomeContent({
   };
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
-  const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
+  const displayRepoName = isNoRepositoryTarget(selectedRepo)
+    ? NO_REPOSITORY_LABEL
+    : selectedRepoObj
+      ? selectedRepoObj.name
+      : "Select repo";
+  const repositoryOptions = [
+    {
+      value: NO_REPOSITORY_VALUE,
+      label: NO_REPOSITORY_LABEL,
+      description: "Start without cloning a repository",
+    },
+    ...repos.map((repo) => ({
+      value: repo.fullName,
+      label: repo.name,
+      description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
+    })),
+  ];
 
   return (
     <div className="h-full flex flex-col">
@@ -431,11 +475,7 @@ function HomeContent({
                     <Combobox
                       value={selectedRepo}
                       onChange={(value) => setSelectedRepo(value)}
-                      items={repos.map((repo) => ({
-                        value: repo.fullName,
-                        label: repo.name,
-                        description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
-                      }))}
+                      items={repositoryOptions}
                       searchable
                       searchPlaceholder="Search repositories..."
                       filterFn={(option, query) =>
@@ -456,27 +496,29 @@ function HomeContent({
                     </Combobox>
 
                     {/* Branch selector */}
-                    <Combobox
-                      value={selectedBranch}
-                      onChange={(value) => setSelectedBranch(value)}
-                      items={branches.map((b) => ({
-                        value: b.name,
-                        label: b.name,
-                      }))}
-                      searchable
-                      searchPlaceholder="Search branches..."
-                      filterFn={(option, query) => option.label.toLowerCase().includes(query)}
-                      direction="up"
-                      dropdownWidth="w-56"
-                      disabled={creating || !selectedRepo || loadingBranches}
-                      triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                      <BranchIcon className="w-3.5 h-3.5" />
-                      <span className="truncate max-w-[9rem] sm:max-w-none">
-                        {loadingBranches ? "Loading..." : selectedBranch || "branch"}
-                      </span>
-                      <ChevronDownIcon className="w-3 h-3" />
-                    </Combobox>
+                    {selectedRepoObj && (
+                      <Combobox
+                        value={selectedBranch}
+                        onChange={(value) => setSelectedBranch(value)}
+                        items={branches.map((b) => ({
+                          value: b.name,
+                          label: b.name,
+                        }))}
+                        searchable
+                        searchPlaceholder="Search branches..."
+                        filterFn={(option, query) => option.label.toLowerCase().includes(query)}
+                        direction="up"
+                        dropdownWidth="w-56"
+                        disabled={creating || loadingBranches}
+                        triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                      >
+                        <BranchIcon className="w-3.5 h-3.5" />
+                        <span className="truncate max-w-[9rem] sm:max-w-none">
+                          {loadingBranches ? "Loading..." : selectedBranch || "branch"}
+                        </span>
+                        <ChevronDownIcon className="w-3 h-3" />
+                      </Combobox>
+                    )}
 
                     {/* Model selector */}
                     <Combobox
@@ -532,7 +574,8 @@ function HomeContent({
 
               {repos.length === 0 && !loadingRepos && (
                 <p className="mt-3 text-sm text-muted-foreground text-center">
-                  No repositories found. Make sure you have granted access to your repositories.
+                  No repositories found. You can start without a repository or grant repository
+                  access in settings.
                 </p>
               )}
             </form>
