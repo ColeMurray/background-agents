@@ -41,7 +41,7 @@ Fill in:
 - **Developer name:** Your org name
 - **Callback URL:** `https://<your-linear-bot-worker>/oauth/callback`
 - **Webhooks:** Enable, set URL to `https://<your-linear-bot-worker>/webhook`
-- **Webhook events:** Check **Agent session events**, **Issues**, **Comments**
+- **Webhook events:** Check **Agent session events**, **OAuth app**, and **Permission changes**
 - **Public:** OFF (unless distributing to other workspaces)
 
 Note the **Client ID**, **Client Secret**, and **Webhook Signing Secret**.

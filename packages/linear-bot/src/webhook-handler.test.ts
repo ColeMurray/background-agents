@@ -7,6 +7,7 @@ import {
   handleAgentSessionEvent,
 } from "./webhook-handler";
 import type { AgentSessionWebhook, Env } from "./types";
+import { getLinearAuthState } from "./kv-store";
 import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
 describe("escapeHtml", () => {
@@ -158,6 +159,103 @@ describe("buildFollowUpPrompt", () => {
   });
 });
 
+describe("handleAgentSessionEvent follow-ups", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("preserves Linear callback context when sending a follow-up prompt", async () => {
+    const { kv } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + 10 * 60 * 1000,
+      }),
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-1",
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        repoOwner: "ColeMurray",
+        repoName: "background-agents",
+        model: "anthropic/claude-haiku-4-5",
+        agentSessionId: "agent-session-previous",
+        createdAt: Date.now(),
+      }),
+    });
+    const controlPlaneFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/events?limit=20")) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ events: [] }),
+        };
+      }
+      if (url.endsWith("/prompt")) return { ok: true, init };
+      throw new Error(`Unexpected control-plane fetch to ${url}`);
+    });
+    const env = makeLinearBotEnv(kv, {
+      CONTROL_PLANE: { fetch: controlPlaneFetch } as unknown as Fetcher,
+      INTERNAL_CALLBACK_SECRET: "callback-secret",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { agentActivityCreate: { success: true } } }),
+      })
+    );
+
+    await handleAgentSessionEvent(
+      {
+        type: "AgentSessionEvent",
+        action: "prompted",
+        organizationId: "org-1",
+        webhookId: "webhook-prompted",
+        appUserId: "user-1",
+        agentSession: {
+          id: "agent-session-1",
+          issue: {
+            id: "issue-1",
+            identifier: "ORI-229",
+            title: "Fix OAuth silence",
+            description: "The Linear agent is silent.",
+            url: "https://linear.app/acme/issue/ORI-229/fix-oauth-silence",
+            priority: 0,
+            priorityLabel: "No priority",
+            team: { id: "team-1", key: "ORI", name: "Origin" },
+            labels: [],
+          },
+          comment: { body: "Please continue." },
+        },
+      },
+      env,
+      "trace-follow-up"
+    );
+
+    const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
+      String(input).endsWith("/prompt")
+    );
+    expect(promptCall).toBeDefined();
+    const body = JSON.parse(String((promptCall?.[1] as RequestInit).body)) as {
+      callbackContext?: Record<string, unknown>;
+    };
+    expect(body.callbackContext).toMatchObject({
+      source: "linear",
+      issueId: "issue-1",
+      issueIdentifier: "ORI-229",
+      issueUrl: "https://linear.app/acme/issue/ORI-229/fix-oauth-silence",
+      repoFullName: "ColeMurray/background-agents",
+      model: "anthropic/claude-haiku-4-5",
+      agentSessionId: "agent-session-1",
+      organizationId: "org-1",
+    });
+  });
+});
+
 describe("handleAgentSessionEvent auth failures", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -258,6 +356,21 @@ describe("handleAgentSessionEvent auth failures", () => {
     expect(body.variables.input.body).toContain("workspace authorization");
     expect(body.variables.input.body).toContain("https://linear-bot.example.test/oauth/authorize");
     expect(body.variables.input.body).toContain("Trace ID: trace-123");
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+      details: {
+        oauthStatus: 400,
+        oauthError: "invalid_grant",
+        oauthErrorDescription: "Refresh token has expired.",
+      },
+      lastNotification: {
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        agentSessionId: "agent-session-1",
+        outcome: "sent",
+      },
+    });
     expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
   });
 
@@ -291,6 +404,16 @@ describe("handleAgentSessionEvent auth failures", () => {
     };
     expect(body.variables.input.body).toContain("could not process this follow-up");
     expect(body.variables.input.body).toContain("https://linear-bot.example.test/oauth/authorize");
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+      lastNotification: {
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        agentSessionId: "agent-session-1",
+        outcome: "sent",
+      },
+    });
     expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
   });
 
@@ -317,5 +440,15 @@ describe("handleAgentSessionEvent auth failures", () => {
         auth_failure_reason: "refresh_invalid_grant",
       })
     );
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+      lastNotification: {
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        outcome: "unavailable",
+        failureReason: "missing_linear_api_key",
+      },
+    });
   });
 });

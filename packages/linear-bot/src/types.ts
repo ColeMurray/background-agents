@@ -50,6 +50,68 @@ export interface StoredTokenData {
   expires_at: number;
 }
 
+// ─── Linear Workspace Auth Health ───────────────────────────────────────────
+
+export type LinearWorkspaceAuthStatus =
+  | "connected"
+  | "reauthorization_required"
+  | "transient_failure";
+
+export type LinearAuthNotificationOutcome = "attempting" | "sent" | "unavailable" | "failed";
+
+export type LinearAuthNotificationFailureReason =
+  | "missing_linear_api_key"
+  | "linear_api_rejected"
+  | "post_exception";
+
+export interface LinearAuthNotificationState {
+  fingerprint: string;
+  issueId?: string;
+  issueIdentifier?: string;
+  agentSessionId?: string;
+  delivery: "comment_fallback";
+  outcome: LinearAuthNotificationOutcome;
+  failureReason?: LinearAuthNotificationFailureReason;
+  traceId?: string;
+  attemptedAt: number;
+  completedAt?: number;
+  lastSuppressedAt?: number;
+  suppressedCount?: number;
+  httpStatus?: number;
+}
+
+export interface LinearWorkspaceAuthState {
+  schemaVersion: 1;
+  orgId: string;
+  status: LinearWorkspaceAuthStatus;
+  reason: string;
+  updatedAt: number;
+  lastTraceId?: string;
+  details?: {
+    oauthStatus?: number;
+    oauthError?: string;
+    oauthErrorDescription?: string;
+    eventType?: string;
+    eventAction?: string;
+    canAccessAllPublicTeams?: boolean;
+    addedTeamIds?: string[];
+    removedTeamIds?: string[];
+  };
+  installation?: {
+    orgName?: string;
+    appUserId?: string;
+    appUserName?: string;
+    connectedAt?: number;
+    lastConnectedAt?: number;
+  };
+  lastNotification?: LinearAuthNotificationState;
+}
+
+export interface OAuthStateRecord {
+  state: string;
+  createdAt: number;
+}
+
 // ─── Repo / Config Types ─────────────────────────────────────────────────────
 
 /**

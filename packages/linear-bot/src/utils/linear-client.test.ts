@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchUser, getOAuthTokenResult } from "./linear-client";
+import {
+  exchangeCodeForToken,
+  fetchUser,
+  getLinearAuthContext,
+  getOAuthTokenResult,
+  postAuthFailureCommentFallback,
+} from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
+import { getLinearAuthState } from "../kv-store";
 
 const client: LinearApiClient = { accessToken: "test-token" };
 
@@ -261,6 +268,320 @@ describe("getOAuthTokenResult", () => {
     expect(JSON.parse(store.get("oauth:token:org-1") ?? "{}")).toMatchObject({
       access_token: "new-access-token",
       refresh_token: "new-refresh-token",
+    });
+  });
+});
+
+describe("getLinearAuthContext", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("records reauthorization-required auth health for invalid_grant refresh failures", async () => {
+    const { kv } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "expired-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 60 * 1000,
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              error: "invalid_grant",
+              error_description: "Refresh token has expired.",
+            })
+          ),
+      })
+    );
+
+    await expect(getLinearAuthContext(env, "org-1", "trace-1")).resolves.toMatchObject({
+      ok: false,
+      reason: "refresh_invalid_grant",
+      authStatus: "reauthorization_required",
+      reconnectUrl: "https://linear-bot.example.test/oauth/authorize",
+    });
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+      lastTraceId: "trace-1",
+      details: {
+        oauthStatus: 400,
+        oauthError: "invalid_grant",
+        oauthErrorDescription: "Refresh token has expired.",
+      },
+    });
+  });
+
+  it("records transient auth health for retryable refresh failures", async () => {
+    const { kv } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "expired-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 60 * 1000,
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        text: () => Promise.resolve("temporarily unavailable"),
+      })
+    );
+
+    await expect(getLinearAuthContext(env, "org-1", "trace-2")).resolves.toMatchObject({
+      ok: false,
+      reason: "refresh_failed",
+      authStatus: "transient_failure",
+    });
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "transient_failure",
+      reason: "refresh_failed",
+      lastTraceId: "trace-2",
+      details: { oauthStatus: 503 },
+    });
+  });
+
+  it.each([
+    {
+      name: "missing token",
+      initial: undefined,
+      expectedReason: "missing_token",
+    },
+    {
+      name: "malformed token",
+      initial: "{not-json",
+      expectedReason: "malformed_token",
+    },
+    {
+      name: "missing refresh token",
+      initial: JSON.stringify({
+        access_token: "expired-token",
+        expires_at: Date.now() - 60 * 1000,
+      }),
+      expectedReason: "missing_refresh_token",
+    },
+  ])(
+    "records reauthorization-required auth health for $name",
+    async ({ initial, expectedReason }) => {
+      const { kv } = createFakeKV(initial === undefined ? {} : { "oauth:token:org-1": initial });
+      const env = makeLinearBotEnv(kv);
+
+      await expect(getLinearAuthContext(env, "org-1", "trace-reauth")).resolves.toMatchObject({
+        ok: false,
+        reason: expectedReason,
+        authStatus: "reauthorization_required",
+      });
+      await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+        status: "reauthorization_required",
+        reason: expectedReason,
+        lastTraceId: "trace-reauth",
+      });
+    }
+  );
+
+  it("records transient auth health for refresh exceptions", async () => {
+    const { kv } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "expired-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 60 * 1000,
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+
+    await expect(getLinearAuthContext(env, "org-1", "trace-error")).resolves.toMatchObject({
+      ok: false,
+      reason: "refresh_error",
+      authStatus: "transient_failure",
+    });
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "transient_failure",
+      reason: "refresh_error",
+      lastTraceId: "trace-error",
+    });
+  });
+
+  it("keeps reauthorization-required health sticky until OAuth callback succeeds", async () => {
+    const { kv } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + 10 * 60 * 1000,
+      }),
+      "linear_auth:org-1": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-1",
+        status: "reauthorization_required",
+        reason: "oauth_app_revoked",
+        updatedAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getLinearAuthContext(env, "org-1", "trace-sticky")).resolves.toMatchObject({
+      ok: false,
+      reason: "oauth_app_revoked",
+      authStatus: "reauthorization_required",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "oauth_app_revoked",
+    });
+  });
+
+  it("marks a previously transient workspace connected when a fresh token is usable", async () => {
+    const { kv } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + 10 * 60 * 1000,
+      }),
+      "linear_auth:org-1": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-1",
+        status: "transient_failure",
+        reason: "refresh_error",
+        updatedAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getLinearAuthContext(env, "org-1", "trace-connected")).resolves.toMatchObject({
+      ok: true,
+      client: { accessToken: "fresh-token" },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "connected",
+      reason: "client_available",
+      lastTraceId: "trace-connected",
+    });
+  });
+});
+
+describe("postAuthFailureCommentFallback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("records rejected fallback comments as failed notifications with HTTP status", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
+    await getLinearAuthContext(env, "org-1", "trace-1");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+      })
+    );
+
+    await expect(
+      postAuthFailureCommentFallback(env, {
+        orgId: "org-1",
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        agentSessionId: "agent-session-1",
+        traceId: "trace-1",
+        status: "reauthorization_required",
+        reason: "missing_token",
+        body: "Reconnect Open-Inspect.",
+      })
+    ).resolves.toEqual({ outcome: "failed", success: false });
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      lastNotification: {
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        agentSessionId: "agent-session-1",
+        outcome: "failed",
+        failureReason: "linear_api_rejected",
+        httpStatus: 403,
+      },
+    });
+  });
+});
+
+describe("exchangeCodeForToken", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("stores connected auth health with app actor identity", async () => {
+    const { kv, store } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              access_token: "access-token",
+              token_type: "Bearer",
+              expires_in: 3600,
+              refresh_token: "refresh-token",
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                viewer: {
+                  id: "app-user-1",
+                  name: "Open-Inspect",
+                  organization: { id: "org-1", name: "Acme" },
+                },
+              },
+            }),
+        })
+    );
+
+    await expect(exchangeCodeForToken(env, "code-1", "trace-1")).resolves.toEqual({
+      orgId: "org-1",
+      orgName: "Acme",
+    });
+    expect(JSON.parse(store.get("oauth:token:org-1") ?? "{}")).toMatchObject({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+    });
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "connected",
+      reason: "oauth_callback",
+      lastTraceId: "trace-1",
+      installation: {
+        orgName: "Acme",
+        appUserId: "app-user-1",
+        appUserName: "Open-Inspect",
+      },
     });
   });
 });

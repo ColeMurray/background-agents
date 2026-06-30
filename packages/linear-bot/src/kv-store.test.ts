@@ -8,6 +8,13 @@ import {
   storeIssueSession,
   isDuplicateEvent,
   DEFAULT_TRIGGER_CONFIG,
+  beginLinearAuthNotification,
+  buildLinearAuthNotificationFingerprint,
+  completeLinearAuthNotification,
+  consumeOAuthState,
+  getLinearAuthState,
+  setLinearAuthState,
+  storeOAuthState,
 } from "./kv-store";
 import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
@@ -158,6 +165,211 @@ describe("storeIssueSession", () => {
     const { kv, putCalls } = createFakeKV();
     await storeIssueSession(makeLinearBotEnv(kv), "issue-1", session);
     expect(putCalls[0].options).toEqual({ expirationTtl: 86400 * 7 });
+  });
+});
+
+// ─── Linear Workspace Auth Health ───────────────────────────────────────────
+
+describe("linear auth health", () => {
+  it("returns null when no auth health exists", async () => {
+    const { kv } = createFakeKV();
+    expect(await getLinearAuthState(makeLinearBotEnv(kv), "org-1")).toBeNull();
+  });
+
+  it("returns null for malformed auth health", async () => {
+    const { kv } = createFakeKV({ "linear_auth:org-1": "{not-json" });
+    expect(await getLinearAuthState(makeLinearBotEnv(kv), "org-1")).toBeNull();
+  });
+
+  it("stores connected auth health without token material", async () => {
+    const { kv, store } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+
+    await setLinearAuthState(env, {
+      orgId: "org-1",
+      status: "connected",
+      reason: "oauth_callback",
+      traceId: "trace-1",
+      installation: { orgName: "Acme", appUserId: "app-user-1" },
+    });
+
+    const state = JSON.parse(store.get("linear_auth:org-1") ?? "{}");
+    expect(state).toMatchObject({
+      schemaVersion: 1,
+      orgId: "org-1",
+      status: "connected",
+      reason: "oauth_callback",
+      lastTraceId: "trace-1",
+      installation: {
+        orgName: "Acme",
+        appUserId: "app-user-1",
+      },
+    });
+    expect(JSON.stringify(state)).not.toContain("access_token");
+    expect(JSON.stringify(state)).not.toContain("refresh_token");
+  });
+
+  it("records unavailable fallback notification without changing auth status", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    await setLinearAuthState(env, {
+      orgId: "org-1",
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+    });
+    const fingerprint = buildLinearAuthNotificationFingerprint({
+      orgId: "org-1",
+      issueId: "issue-1",
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+    });
+
+    await beginLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      issueId: "issue-1",
+      issueIdentifier: "ENG-1",
+      agentSessionId: "agent-session-1",
+      traceId: "trace-1",
+    });
+    await completeLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      outcome: "unavailable",
+      failureReason: "missing_linear_api_key",
+    });
+
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+      lastNotification: {
+        fingerprint,
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+        agentSessionId: "agent-session-1",
+        outcome: "unavailable",
+        failureReason: "missing_linear_api_key",
+      },
+    });
+  });
+
+  it("does not suppress an unavailable fallback when retried later", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    const fingerprint = buildLinearAuthNotificationFingerprint({
+      orgId: "org-1",
+      issueId: "issue-1",
+      status: "reauthorization_required",
+      reason: "missing_token",
+    });
+
+    await beginLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      issueId: "issue-1",
+    });
+    await completeLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      outcome: "unavailable",
+      failureReason: "missing_linear_api_key",
+    });
+
+    await expect(
+      beginLinearAuthNotification(env, {
+        orgId: "org-1",
+        fingerprint,
+        issueId: "issue-1",
+      })
+    ).resolves.toEqual({ suppressed: false });
+  });
+
+  it("suppresses repeated fallback notification fingerprints", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    const fingerprint = buildLinearAuthNotificationFingerprint({
+      orgId: "org-1",
+      issueId: "issue-1",
+      status: "reauthorization_required",
+      reason: "missing_token",
+    });
+
+    await beginLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      issueId: "issue-1",
+    });
+    await completeLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      outcome: "sent",
+    });
+
+    await expect(
+      beginLinearAuthNotification(env, {
+        orgId: "org-1",
+        fingerprint,
+        issueId: "issue-1",
+      })
+    ).resolves.toEqual({ suppressed: true });
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      lastNotification: {
+        outcome: "sent",
+        suppressedCount: 1,
+      },
+    });
+  });
+
+  it("clears stale fallback notification state when auth reconnects", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    const fingerprint = buildLinearAuthNotificationFingerprint({
+      orgId: "org-1",
+      issueId: "issue-1",
+      status: "reauthorization_required",
+      reason: "missing_token",
+    });
+    await beginLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      issueId: "issue-1",
+    });
+    await completeLinearAuthNotification(env, {
+      orgId: "org-1",
+      fingerprint,
+      outcome: "sent",
+    });
+
+    await setLinearAuthState(env, {
+      orgId: "org-1",
+      status: "connected",
+      reason: "oauth_callback",
+    });
+
+    await expect(getLinearAuthState(env, "org-1")).resolves.not.toHaveProperty("lastNotification");
+  });
+});
+
+// ─── OAuth State ────────────────────────────────────────────────────────────
+
+describe("oauth state", () => {
+  it("stores OAuth state with short TTL", async () => {
+    const { kv, putCalls } = createFakeKV();
+    await storeOAuthState(makeLinearBotEnv(kv), "state-1");
+
+    expect(putCalls[0]).toMatchObject({
+      key: "oauth:state:state-1",
+      options: { expirationTtl: 600 },
+    });
+  });
+
+  it("consumes a matching OAuth state once", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    await storeOAuthState(env, "state-1");
+
+    await expect(consumeOAuthState(env, "state-1")).resolves.toBe(true);
+    await expect(consumeOAuthState(env, "state-1")).resolves.toBe(false);
   });
 });
 

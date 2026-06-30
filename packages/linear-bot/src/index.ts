@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import type { Env, UserPreferences, AgentSessionWebhook } from "./types";
 import {
   buildOAuthAuthorizeUrl,
+  deleteOAuthToken,
   exchangeCodeForToken,
   verifyLinearWebhook,
 } from "./utils/linear-client";
@@ -21,11 +22,15 @@ import {
 } from "@open-inspect/shared";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import {
+  consumeOAuthState,
+  getLinearAuthState,
   getTeamRepoMapping,
   getProjectRepoMapping,
   getTriggerConfig,
   getUserPreferences,
   isDuplicateEvent,
+  setLinearAuthState,
+  storeOAuthState,
 } from "./kv-store";
 
 // Re-export pure functions for existing test imports
@@ -36,6 +41,7 @@ export {
 } from "./model-resolution";
 
 const log = createLogger("handler");
+const WEBHOOK_TIMESTAMP_MAX_SKEW_MS = 60 * 1000;
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -44,6 +50,31 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 function readStringField(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === "string" ? value : null;
+}
+
+function readNumberField(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readBooleanField(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readStringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
+  const value = record[key];
+  if (!Array.isArray(value)) return undefined;
+  return value.every((item) => typeof item === "string") ? value : undefined;
+}
+
+function readNestedStringField(record: Record<string, unknown>, keys: string[]): string | null {
+  let current: unknown = record;
+  for (const key of keys) {
+    if (!isObjectRecord(current)) return null;
+    current = current[key];
+  }
+  return typeof current === "string" ? current : null;
 }
 
 export function buildOAuthSuccessHtml(appName: string, orgName: string): string {
@@ -75,6 +106,112 @@ function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSession
   return typeof agentSession.id === "string";
 }
 
+function readOrganizationId(payload: Record<string, unknown>): string | null {
+  return (
+    readStringField(payload, "organizationId") ||
+    readNestedStringField(payload, ["organization", "id"]) ||
+    readNestedStringField(payload, ["data", "organizationId"]) ||
+    readNestedStringField(payload, ["data", "organization", "id"])
+  );
+}
+
+function isAuthHealthWebhook(eventType: string, action: string): boolean {
+  return (
+    (eventType === "OAuthApp" && action === "revoked") ||
+    (eventType === "PermissionChange" && action === "teamAccessChanged")
+  );
+}
+
+function isWebhookTimestampStale(payload: Record<string, unknown>, now: number): boolean {
+  const timestamp = readNumberField(payload, "webhookTimestamp");
+  return timestamp !== null && Math.abs(now - timestamp) > WEBHOOK_TIMESTAMP_MAX_SKEW_MS;
+}
+
+function readPermissionChangeDetails(payload: Record<string, unknown>): {
+  canAccessAllPublicTeams?: boolean;
+  addedTeamIds?: string[];
+  removedTeamIds?: string[];
+  removedAccess: boolean;
+} {
+  const data = isObjectRecord(payload.data) ? payload.data : payload;
+  const removedTeamIds = readStringArrayField(data, "removedTeamIds") ?? [];
+  return {
+    canAccessAllPublicTeams: readBooleanField(data, "canAccessAllPublicTeams"),
+    addedTeamIds: readStringArrayField(data, "addedTeamIds") ?? [],
+    removedTeamIds,
+    removedAccess: removedTeamIds.length > 0,
+  };
+}
+
+async function handleAuthHealthWebhook(params: {
+  env: Env;
+  payload: Record<string, unknown>;
+  eventType: string;
+  action: string;
+  traceId: string;
+  deliveryId: string;
+}) {
+  const { env, payload, eventType, action, traceId, deliveryId } = params;
+  const orgId = readOrganizationId(payload);
+  if (!orgId) {
+    log.warn("webhook.invalid_payload", {
+      trace_id: traceId,
+      reason: "missing_organization_id",
+      type: eventType,
+      action,
+    });
+    return { error: "Invalid payload" as const, status: 400 };
+  }
+
+  if (await isDuplicateEvent(env, deliveryId)) {
+    log.info("webhook.deduplicated", { trace_id: traceId, event_key: deliveryId });
+    return { ok: true as const, skipped: true as const, reason: "duplicate" };
+  }
+
+  if (eventType === "OAuthApp") {
+    await deleteOAuthToken(env, orgId);
+    await setLinearAuthState(env, {
+      orgId,
+      status: "reauthorization_required",
+      reason: "oauth_app_revoked",
+      traceId,
+      details: { eventType, eventAction: action },
+    });
+  } else {
+    const existing = await getLinearAuthState(env, orgId);
+    const permissionDetails = readPermissionChangeDetails(payload);
+    const removedAccess = permissionDetails.removedAccess;
+    const preserveExistingReauth =
+      existing?.status === "reauthorization_required" &&
+      existing.reason !== "permission_team_access_removed";
+    await setLinearAuthState(env, {
+      orgId,
+      status: preserveExistingReauth || removedAccess ? "reauthorization_required" : "connected",
+      reason: preserveExistingReauth
+        ? existing.reason
+        : removedAccess
+          ? "permission_team_access_removed"
+          : "permission_change",
+      traceId,
+      details: {
+        eventType,
+        eventAction: action,
+        canAccessAllPublicTeams: permissionDetails.canAccessAllPublicTeams,
+        addedTeamIds: permissionDetails.addedTeamIds,
+        removedTeamIds: permissionDetails.removedTeamIds,
+      },
+    });
+  }
+
+  log.info("webhook.linear_auth_health", {
+    trace_id: traceId,
+    org_id: orgId,
+    type: eventType,
+    action,
+  });
+  return { ok: true as const };
+}
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 const app = new Hono<{ Bindings: Env }>();
@@ -85,11 +222,20 @@ app.get("/health", (c) => {
 
 // ─── OAuth Routes ────────────────────────────────────────────────────────────
 
-app.get("/oauth/authorize", (c) => {
-  return c.redirect(buildOAuthAuthorizeUrl(c.env), 302);
+app.get("/oauth/authorize", async (c) => {
+  const state = crypto.randomUUID();
+  await storeOAuthState(c.env, state);
+  return c.redirect(buildOAuthAuthorizeUrl(c.env, state), 302);
 });
 
 app.get("/oauth/callback", async (c) => {
+  const traceId = crypto.randomUUID();
+  const state = c.req.query("state");
+  if (!state || !(await consumeOAuthState(c.env, state))) {
+    log.warn("oauth.callback_invalid_state", { trace_id: traceId });
+    return c.text("Invalid OAuth state", 400);
+  }
+
   const error = c.req.query("error");
   if (error) return c.text(`OAuth Error: ${error}`, 400);
 
@@ -97,7 +243,7 @@ app.get("/oauth/callback", async (c) => {
   if (!code) return c.text("Missing required OAuth parameters", 400);
 
   try {
-    const { orgName } = await exchangeCodeForToken(c.env, code);
+    const { orgName } = await exchangeCodeForToken(c.env, code, traceId);
     return c.html(buildOAuthSuccessHtml(resolveAppName(c.env), orgName));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -127,14 +273,57 @@ app.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  const payload: unknown = JSON.parse(body);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "invalid_json" });
+    return c.json({ error: "Invalid payload" }, 400);
+  }
   if (!isObjectRecord(payload)) {
     log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "payload_not_object" });
     return c.json({ error: "Invalid payload" }, 400);
   }
 
+  if (isWebhookTimestampStale(payload, Date.now())) {
+    log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "stale_timestamp" });
+    return c.json({ error: "Stale webhook payload" }, 400);
+  }
+
   const eventType = readStringField(payload, "type") ?? "unknown";
   const action = readStringField(payload, "action") ?? "unknown";
+  const deliveryId = c.req.header("linear-delivery") ?? null;
+
+  if (isAuthHealthWebhook(eventType, action)) {
+    if (readNumberField(payload, "webhookTimestamp") === null) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "missing_or_invalid_webhook_timestamp",
+        type: eventType,
+        action,
+      });
+      return c.json({ error: "Invalid payload" }, 400);
+    }
+    if (!deliveryId) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "missing_linear_delivery_header",
+        type: eventType,
+        action,
+      });
+      return c.json({ error: "Missing Linear-Delivery header" }, 400);
+    }
+    const result = await handleAuthHealthWebhook({
+      env: c.env,
+      payload,
+      eventType,
+      action,
+      traceId,
+      deliveryId,
+    });
+    if ("error" in result) return c.json({ error: result.error }, 400);
+    return c.json(result);
+  }
 
   if (eventType === "AgentSessionEvent") {
     if (!isAgentSessionWebhookPayload(payload)) {
@@ -149,7 +338,6 @@ app.post("/webhook", async (c) => {
     // each delivery. The `webhookId` field in the body is the registered-webhook
     // configuration ID and is constant across deliveries, so we must not dedup
     // on it. https://linear.app/developers/webhooks#webhook-payload-details
-    const deliveryId = c.req.header("linear-delivery");
     if (!deliveryId) {
       log.warn("webhook.invalid_payload", {
         trace_id: traceId,

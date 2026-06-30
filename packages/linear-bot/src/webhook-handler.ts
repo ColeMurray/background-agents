@@ -11,15 +11,16 @@ import type {
   AgentSessionWebhookIssue,
 } from "./types";
 import {
-  getLinearClientResult,
+  getLinearAuthContext,
   emitAgentActivity,
   fetchIssueDetails,
   fetchUser,
   updateAgentSession,
   getRepoSuggestions,
-  postIssueComment,
+  postAuthFailureCommentFallback,
 } from "./utils/linear-client";
 import type { LinearAuthFailure } from "./utils/linear-client";
+import type { LinearWorkspaceAuthStatus } from "./types";
 import { buildInternalAuthHeaders } from "./utils/internal";
 import { splitRepoFullName } from "./utils/repo";
 import { classifyRepo } from "./classifier";
@@ -176,11 +177,15 @@ async function createSession(
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
 
 type AgentSessionAuthFailureMode = "start" | "follow_up";
+type AgentSessionAuthFailure = LinearAuthFailure & {
+  authStatus: LinearWorkspaceAuthStatus;
+  reconnectUrl: string;
+};
 
 function formatAgentSessionAuthFailureComment(params: {
   env: Env;
   mode: AgentSessionAuthFailureMode;
-  authFailure: LinearAuthFailure;
+  authFailure: AgentSessionAuthFailure;
   traceId: string;
 }): string {
   const action =
@@ -196,7 +201,7 @@ function formatAgentSessionAuthFailureComment(params: {
     `Open-Inspect could not ${action} because ${reason}.`,
     "",
     nextStep,
-    `${params.env.WORKER_URL}/oauth/authorize`,
+    params.authFailure.reconnectUrl,
     "",
     `Trace ID: ${params.traceId}`,
   ].join("\n");
@@ -209,11 +214,22 @@ async function notifyAgentSessionAuthFailure(params: {
   agentSessionId: string;
   issue: AgentSessionWebhookIssue;
   mode: AgentSessionAuthFailureMode;
-  authFailure: LinearAuthFailure;
+  authFailure: AgentSessionAuthFailure;
 }): Promise<void> {
   const { env, traceId, orgId, agentSessionId, issue, mode, authFailure } = params;
 
-  if (!env.LINEAR_API_KEY) {
+  const result = await postAuthFailureCommentFallback(env, {
+    orgId,
+    issueId: issue.id,
+    issueIdentifier: issue.identifier,
+    agentSessionId,
+    traceId,
+    status: authFailure.authStatus,
+    reason: authFailure.reason,
+    body: formatAgentSessionAuthFailureComment({ env, mode, authFailure, traceId }),
+  });
+
+  if (result.outcome === "unavailable") {
     log.warn("agent_session.auth_failure_notification_unavailable", {
       trace_id: traceId,
       org_id: orgId,
@@ -222,16 +238,10 @@ async function notifyAgentSessionAuthFailure(params: {
       issue_identifier: issue.identifier,
       auth_failure_reason: authFailure.reason,
       reauthorization_required: authFailure.reauthorizationRequired,
+      auth_status: authFailure.authStatus,
       message: "LINEAR_API_KEY not configured, cannot post fallback comment",
     });
-    return;
   }
-
-  const result = await postIssueComment(
-    env.LINEAR_API_KEY,
-    issue.id,
-    formatAgentSessionAuthFailureComment({ env, mode, authFailure, traceId })
-  );
 
   log.info("agent_session.auth_failure_notified", {
     trace_id: traceId,
@@ -241,8 +251,9 @@ async function notifyAgentSessionAuthFailure(params: {
     issue_identifier: issue.identifier,
     auth_failure_reason: authFailure.reason,
     reauthorization_required: authFailure.reauthorizationRequired,
+    auth_status: authFailure.authStatus,
     delivery: "comment_fallback",
-    delivery_outcome: result.success ? "success" : "error",
+    delivery_outcome: result.outcome,
   });
 }
 
@@ -298,7 +309,7 @@ async function handleFollowUp(
   const agentActivity = webhook.agentActivity;
   const orgId = webhook.organizationId;
 
-  const clientResult = await getLinearClientResult(env, orgId);
+  const clientResult = await getLinearAuthContext(env, orgId, traceId);
   if (!clientResult.ok) {
     log.error("agent_session.no_oauth_token", {
       trace_id: traceId,
@@ -306,6 +317,7 @@ async function handleFollowUp(
       agent_session_id: agentSessionId,
       auth_failure_reason: clientResult.reason,
       reauthorization_required: clientResult.reauthorizationRequired,
+      auth_status: clientResult.authStatus,
     });
     await notifyAgentSessionAuthFailure({
       env,
@@ -377,6 +389,16 @@ async function handleFollowUp(
         }),
         authorId: `linear:${webhook.appUserId}`,
         source: "linear",
+        callbackContext: {
+          source: "linear",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          issueUrl: issue.url,
+          repoFullName: `${existingSession.repoOwner}/${existingSession.repoName}`,
+          model: existingSession.model,
+          agentSessionId,
+          organizationId: orgId,
+        } satisfies CallbackContext,
       }),
     }
   );
@@ -413,7 +435,7 @@ async function handleNewSession(
   const comment = webhook.agentSession.comment;
   const orgId = webhook.organizationId;
 
-  const clientResult = await getLinearClientResult(env, orgId);
+  const clientResult = await getLinearAuthContext(env, orgId, traceId);
   if (!clientResult.ok) {
     log.error("agent_session.no_oauth_token", {
       trace_id: traceId,
@@ -421,6 +443,7 @@ async function handleNewSession(
       agent_session_id: agentSessionId,
       auth_failure_reason: clientResult.reason,
       reauthorization_required: clientResult.reauthorizationRequired,
+      auth_status: clientResult.authStatus,
     });
     await notifyAgentSessionAuthFailure({
       env,

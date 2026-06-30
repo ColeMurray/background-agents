@@ -6,11 +6,13 @@
 import { Hono } from "hono";
 import type { Env, CompletionCallback, ToolCallCallback } from "./types";
 import {
-  getLinearClient,
+  getLinearAuthContext,
   emitAgentActivity,
+  postAuthFailureCommentFallback,
   postIssueComment,
   updateAgentSession,
 } from "./utils/linear-client";
+import type { LinearAuthContext } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./utils/crypto";
@@ -36,6 +38,34 @@ export function formatCompletionComment(
   return success
     ? `## 🤖 ${appName} completed\n\n${message}`
     : `## ⚠️ ${appName} encountered an issue\n\n${message}`;
+}
+
+type CompletionAuthFailure = Extract<LinearAuthContext, { ok: false }>;
+
+function formatCompletionAuthFailureComment(params: {
+  appName: string;
+  success: boolean;
+  message: string;
+  authFailure: CompletionAuthFailure;
+  traceId?: string;
+}): string {
+  const reason = params.authFailure.reauthorizationRequired
+    ? "the Linear workspace authorization is no longer valid"
+    : "Open-Inspect could not verify the Linear workspace authorization";
+  const nextStep = params.authFailure.reauthorizationRequired
+    ? "Please re-authorize Open-Inspect for this workspace:"
+    : "Please retry if this was a temporary Linear auth failure. If it continues, re-authorize Open-Inspect for this workspace:";
+
+  return [
+    formatCompletionComment(params.appName, params.success, params.message),
+    "",
+    "---",
+    `Open-Inspect could not update the Linear agent session because ${reason}.`,
+    "",
+    nextStep,
+    params.authFailure.reconnectUrl,
+    ...(params.traceId ? ["", `Trace ID: ${params.traceId}`] : []),
+  ].join("\n");
 }
 
 export function isValidPayload(payload: unknown): payload is CompletionCallback {
@@ -226,8 +256,8 @@ callbacksRouter.post("/tool_call", async (c) => {
         return;
       }
 
-      const client = await getLinearClient(c.env, context.organizationId);
-      if (!client) {
+      const clientResult = await getLinearAuthContext(c.env, context.organizationId, traceId);
+      if (!clientResult.ok) {
         log.warn("callback.tool_call", {
           trace_id: traceId,
           session_id: payload.sessionId,
@@ -236,10 +266,14 @@ callbacksRouter.post("/tool_call", async (c) => {
           tool: payload.tool,
           outcome: "skipped",
           skip_reason: "no_oauth_token",
+          auth_failure_reason: clientResult.reason,
+          auth_status: clientResult.authStatus,
+          reauthorization_required: clientResult.reauthorizationRequired,
           duration_ms: Date.now() - processStart,
         });
         return;
       }
+      const client = clientResult.client;
 
       try {
         const { action, parameter } = formatToolAction(payload.tool, payload.args);
@@ -305,15 +339,15 @@ async function handleCompletionCallback(
 
     // Emit via Agent API if we have session context
     if (context.agentSessionId && context.organizationId) {
-      const client = await getLinearClient(env, context.organizationId);
-      if (client) {
-        await emitAgentActivity(client, context.agentSessionId, {
+      const clientResult = await getLinearAuthContext(env, context.organizationId, traceId);
+      if (clientResult.ok) {
+        await emitAgentActivity(clientResult.client, context.agentSessionId, {
           type: activityType,
           body: message,
         });
 
         // Update plan to completed/failed
-        await updateAgentSession(client, context.agentSessionId, {
+        await updateAgentSession(clientResult.client, context.agentSessionId, {
           plan: makePlan(payload.success ? "completed" : "failed"),
         });
 
@@ -324,7 +358,9 @@ async function handleCompletionCallback(
             { label: "View Session", url: `${env.WEB_APP_URL}/session/${sessionId}` },
             { label: "Pull Request", url: prArtifact.url },
           ];
-          await updateAgentSession(client, context.agentSessionId, { externalUrls: urls });
+          await updateAgentSession(clientResult.client, context.agentSessionId, {
+            externalUrls: urls,
+          });
         }
 
         log.info("callback.complete", {
@@ -347,7 +383,46 @@ async function handleCompletionCallback(
       log.warn("callback.no_oauth_token", {
         trace_id: traceId,
         org_id: context.organizationId,
+        session_id: sessionId,
+        issue_id: context.issueId,
+        issue_identifier: context.issueIdentifier,
+        agent_session_id: context.agentSessionId,
+        auth_failure_reason: clientResult.reason,
+        auth_status: clientResult.authStatus,
+        reauthorization_required: clientResult.reauthorizationRequired,
       });
+
+      const commentBody = formatCompletionAuthFailureComment({
+        appName: resolveAppName(env),
+        success: payload.success,
+        message,
+        authFailure: clientResult,
+        traceId,
+      });
+      const fallback = await postAuthFailureCommentFallback(env, {
+        orgId: context.organizationId,
+        issueId: context.issueId,
+        issueIdentifier: context.issueIdentifier,
+        agentSessionId: context.agentSessionId,
+        traceId,
+        status: clientResult.authStatus,
+        reason: clientResult.reason,
+        body: commentBody,
+      });
+
+      log.info("callback.complete", {
+        trace_id: traceId,
+        session_id: sessionId,
+        issue_id: context.issueId,
+        issue_identifier: context.issueIdentifier,
+        agent_session_id: context.agentSessionId,
+        outcome: payload.success ? "success" : "failed",
+        agent_success: payload.success,
+        delivery: "comment_fallback",
+        delivery_outcome: fallback.outcome,
+        duration_ms: Date.now() - startTime,
+      });
+      return;
     }
 
     // Fallback: post a comment (requires LINEAR_API_KEY)
