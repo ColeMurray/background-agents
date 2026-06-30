@@ -46,6 +46,15 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(false);
     });
+
+    it("rejects branch without repository context", () => {
+      const result = createSessionRequestSchema.safeParse({
+        title: "Incident sweep",
+        branch: "main",
+      });
+
+      expect(result.success).toBe(false);
+    });
   });
 
   describe("sandboxEventSchema", () => {

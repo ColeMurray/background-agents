@@ -273,7 +273,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       }
       if (!session.repo_owner || !session.repo_name) {
         return Response.json(
-          { error: "SCM credentials require a repository target" },
+          { error: "SCM credentials require a repository context" },
           { status: 400 }
         );
       }

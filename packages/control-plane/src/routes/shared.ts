@@ -61,16 +61,16 @@ export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
-export type OptionalRepositoryTarget = { repoOwner: string; repoName: string } | null;
+export type OptionalRepositoryContext = { repoOwner: string; repoName: string } | null;
 
-export type OptionalRepositoryTargetResult =
-  | { ok: true; target: OptionalRepositoryTarget }
+export type OptionalRepositoryContextResult =
+  | { ok: true; repository: OptionalRepositoryContext }
   | { ok: false; message: string };
 
-export function normalizeOptionalRepositoryTarget(
+export function normalizeOptionalRepositoryContext(
   input: { repoOwner?: string | null; repoName?: string | null },
   partialMessage = "repoOwner and repoName must be provided together"
-): OptionalRepositoryTargetResult {
+): OptionalRepositoryContextResult {
   const repoOwner = input.repoOwner?.trim().toLowerCase() || null;
   const repoName = input.repoName?.trim().toLowerCase() || null;
 
@@ -80,7 +80,7 @@ export function normalizeOptionalRepositoryTarget(
 
   return {
     ok: true,
-    target: repoOwner && repoName ? { repoOwner, repoName } : null,
+    repository: repoOwner && repoName ? { repoOwner, repoName } : null,
   };
 }
 

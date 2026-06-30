@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AutomationRow } from "../db/automation-store";
 import type { Env } from "../types";
 import type { SourceControlProvider } from "../source-control";
-import { resolveAutomationSessionLaunches } from "./target-resolution";
+import { resolveAutomationRepository } from "./repository";
 
 const automation: AutomationRow = {
   id: "auto-1",
@@ -38,7 +38,7 @@ function createProvider(
   } as unknown as SourceControlProvider;
 }
 
-describe("automation target resolution", () => {
+describe("resolveAutomationRepository", () => {
   it("validates repo access and returns session repo fields", async () => {
     const provider = createProvider({
       repoId: 98765,
@@ -47,16 +47,12 @@ describe("automation target resolution", () => {
       defaultBranch: "main",
     });
 
-    await expect(
-      resolveAutomationSessionLaunches({} as Env, automation, provider)
-    ).resolves.toEqual([
-      {
-        repoOwner: "acme",
-        repoName: "web-app",
-        repoId: 98765,
-        baseBranch: "release",
-      },
-    ]);
+    await expect(resolveAutomationRepository({} as Env, automation, provider)).resolves.toEqual({
+      repoOwner: "acme",
+      repoName: "web-app",
+      repoId: 98765,
+      baseBranch: "release",
+    });
 
     expect(provider.checkRepositoryAccess).toHaveBeenCalledWith({
       owner: "ACME",
@@ -72,16 +68,16 @@ describe("automation target resolution", () => {
       defaultBranch: "develop",
     });
 
-    const result = await resolveAutomationSessionLaunches(
+    const result = await resolveAutomationRepository(
       {} as Env,
       { ...automation, base_branch: "" },
       provider
     );
 
-    expect(result[0]).toMatchObject({ baseBranch: "develop" });
+    expect(result).toMatchObject({ baseBranch: "develop" });
   });
 
-  it("resolves repo-less launches without checking repository access", async () => {
+  it("resolves repo-less automations without checking repository access", async () => {
     const provider = createProvider({
       repoId: 98765,
       repoOwner: "acme",
@@ -90,7 +86,7 @@ describe("automation target resolution", () => {
     });
 
     await expect(
-      resolveAutomationSessionLaunches(
+      resolveAutomationRepository(
         {} as Env,
         {
           ...automation,
@@ -101,7 +97,7 @@ describe("automation target resolution", () => {
         },
         provider
       )
-    ).resolves.toEqual([{ repoOwner: null, repoName: null, repoId: null, baseBranch: null }]);
+    ).resolves.toBeNull();
 
     expect(provider.checkRepositoryAccess).not.toHaveBeenCalled();
   });
@@ -109,20 +105,18 @@ describe("automation target resolution", () => {
   it("fails when the configured repository is not accessible", async () => {
     const provider = createProvider(null);
 
-    await expect(resolveAutomationSessionLaunches({} as Env, automation, provider)).rejects.toThrow(
+    await expect(resolveAutomationRepository({} as Env, automation, provider)).rejects.toThrow(
       "Repository is not accessible for the configured SCM provider"
     );
   });
 
   it("rejects partial repository fields", async () => {
     await expect(
-      resolveAutomationSessionLaunches(
+      resolveAutomationRepository(
         {} as Env,
         { ...automation, repo_name: null },
         createProvider(null)
       )
-    ).rejects.toThrow(
-      "Automation repository target must include repo_owner and repo_name together"
-    );
+    ).rejects.toThrow("Automation repository must include repo_owner and repo_name together");
   });
 });

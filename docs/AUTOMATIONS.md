@@ -65,7 +65,7 @@ Automations can run with or without repository context:
 - **Single repository**: clone one configured repository and branch for each run.
 - **No repository**: no repository is cloned. The agent still starts a normal session and can use
   configured tools such as MCP servers, but repo workspace actions like opening pull requests
-  require a repository target.
+  require repository context.
 
 ---
 

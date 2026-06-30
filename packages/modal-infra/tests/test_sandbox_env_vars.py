@@ -7,7 +7,7 @@ from src.sandbox.manager import (
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     SandboxConfig,
     SandboxManager,
-    _repository_mode,
+    _has_repository,
 )
 
 
@@ -18,8 +18,8 @@ from src.sandbox.manager import (
         (None, None, "none"),
     ],
 )
-def test_repository_mode_accepts_complete_or_absent_metadata(repo_owner, repo_name, expected):
-    assert _repository_mode(repo_owner, repo_name) == expected
+def test_has_repository_accepts_complete_or_absent_metadata(repo_owner, repo_name, expected):
+    assert _has_repository(repo_owner, repo_name) is (expected == "single")
 
 
 @pytest.mark.parametrize(
@@ -29,9 +29,9 @@ def test_repository_mode_accepts_complete_or_absent_metadata(repo_owner, repo_na
         (None, "repo"),
     ],
 )
-def test_repository_mode_rejects_partial_repo_metadata(repo_owner, repo_name):
+def test_has_repository_rejects_partial_repo_metadata(repo_owner, repo_name):
     with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
-        _repository_mode(repo_owner, repo_name)
+        _has_repository(repo_owner, repo_name)
 
 
 @pytest.mark.asyncio

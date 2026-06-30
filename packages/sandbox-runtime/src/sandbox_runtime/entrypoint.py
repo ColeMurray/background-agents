@@ -134,7 +134,6 @@ class SandboxSupervisor:
         session_config_json = os.environ.get("SESSION_CONFIG", "{}")
         self.session_config = json.loads(session_config_json)
         self.has_repository = bool(self.repo_owner) and bool(self.repo_name)
-        self.repository_mode = "single" if self.has_repository else "none"
 
         # Paths
         self.workspace_path = Path("/workspace")
@@ -394,7 +393,7 @@ class SandboxSupervisor:
         repository already exists on disk.
         """
         if not self.has_repository:
-            self.log.info("git.update_skip", reason="no_repository")
+            self.log.info("git.update_skip", reason="no_repo_configured")
             return True
         if not self.repo_path.exists():
             self.log.info("git.update_skip", reason="no_repo_path")
@@ -445,7 +444,7 @@ class SandboxSupervisor:
         )
 
         if not self.has_repository:
-            self.log.info("git.skip_clone", reason="no_repository")
+            self.log.info("git.skip_clone", reason="no_repo_configured")
             return True
 
         if not self.repo_path.exists():
@@ -1478,9 +1477,7 @@ class SandboxSupervisor:
         restored_from_snapshot = os.environ.get("RESTORED_FROM_SNAPSHOT") == "true"
         from_repo_image = os.environ.get("FROM_REPO_IMAGE") == "true"
 
-        if not self.has_repository:
-            self.boot_mode = "no_repository"
-        elif image_build_mode:
+        if image_build_mode:
             self.boot_mode = "build"
         elif restored_from_snapshot:
             self.boot_mode = "snapshot_restore"
@@ -1492,8 +1489,8 @@ class SandboxSupervisor:
         # Expose boot mode to repo hooks and child processes.
         os.environ["OPENINSPECT_BOOT_MODE"] = self.boot_mode
 
-        if self.boot_mode == "no_repository":
-            self.log.info("supervisor.no_repository_mode")
+        if not self.has_repository:
+            self.log.info("supervisor.no_repo_configured")
         elif image_build_mode:
             self.log.info("supervisor.image_build_mode")
         elif restored_from_snapshot:
@@ -1524,7 +1521,7 @@ class SandboxSupervisor:
             # Phase 0: Make sure the git credential helper is configured
             # before any git operation. New images do this in /etc/gitconfig,
             # but snapshots/repo-images built before this migration won't.
-            if self.boot_mode != "no_repository":
+            if self.has_repository:
                 await self._ensure_credential_helper_configured()
 
             # Phase 1: Git sync
@@ -1547,7 +1544,7 @@ class SandboxSupervisor:
 
             # Phase 2: Run setup script only for fresh or build boots.
             setup_success: bool | None = None
-            if self.boot_mode in ("fresh", "build"):
+            if self.has_repository and self.boot_mode in ("fresh", "build"):
                 setup_success = await self.run_setup_script()
                 if image_build_mode and not setup_success:
                     raise RuntimeError("setup hook failed in build mode")
@@ -1555,7 +1552,7 @@ class SandboxSupervisor:
             # Phase 3: Run runtime start hook for all non-build boots. Wait for
             # tunnel URLs first so dev servers booted by start.sh see fresh data.
             start_success: bool | None = None
-            if self.boot_mode not in ("build", "no_repository"):
+            if self.has_repository and self.boot_mode != "build":
                 await self._wait_for_tunnel_env_file(expected_tunnel_ports)
                 start_success = await self.run_start_script()
                 if not start_success:

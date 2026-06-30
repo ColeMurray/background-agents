@@ -68,6 +68,17 @@ describe("parseCreateSessionInput", () => {
     });
   });
 
+  it("rejects branch without repository context", async () => {
+    const result = await parseCreateSessionInput(
+      jsonRequest({
+        title: "Incident sweep",
+        branch: "main",
+      })
+    );
+
+    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
+  });
+
   it("rejects invalid JSON without throwing", async () => {
     const result = await parseCreateSessionInput(rawRequest("{"));
 

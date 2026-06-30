@@ -46,7 +46,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
-import { resolveAutomationSessionLaunches } from "../automation/target-resolution";
+import { resolveAutomationRepository } from "../automation/repository";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -881,15 +881,7 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
-    const [launch, ...additionalLaunches] = await resolveAutomationSessionLaunches(
-      this.env,
-      automation
-    );
-    // automation_runs still stores one session_id, so fail closed until run
-    // materialization is widened for multi-repository automations.
-    if (additionalLaunches.length > 0) {
-      throw new Error("Multiple automation session launches are not supported yet");
-    }
+    const repository = await resolveAutomationRepository(this.env, automation);
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -911,7 +903,10 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    const { repoOwner, repoName, repoId, baseBranch } = launch;
+    const repoOwner = repository?.repoOwner ?? null;
+    const repoName = repository?.repoName ?? null;
+    const repoId = repository?.repoId ?? null;
+    const baseBranch = repository?.baseBranch ?? null;
 
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
       resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),

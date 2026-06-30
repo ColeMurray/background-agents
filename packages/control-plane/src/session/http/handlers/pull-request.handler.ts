@@ -54,7 +54,7 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       }
       if (!session.repo_owner || !session.repo_name) {
         return Response.json(
-          { error: "Pull requests require a repository target" },
+          { error: "Pull requests require a repository context" },
           { status: 400 }
         );
       }

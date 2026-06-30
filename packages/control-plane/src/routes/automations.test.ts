@@ -494,6 +494,77 @@ describe("automation route handlers", () => {
       );
     });
 
+    it("clears repository context when explicit null repo fields are supplied", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.update.mockResolvedValue({
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: null, repoName: null },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.update).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        })
+      );
+    });
+
+    it("replaces repository context when repo fields are supplied", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.update.mockResolvedValue({
+        ...sampleRow,
+        repo_owner: "acme",
+        repo_name: "web-app",
+        repo_id: 12345,
+        base_branch: "main",
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: "Acme", repoName: "Web-App" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.update).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+        })
+      );
+    });
+
+    it("rejects branch updates without repository context", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { baseBranch: "main" },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: "baseBranch requires repoOwner and repoName",
+      });
+    });
+
     it("returns 400 for invalid reasoning effort in update", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 

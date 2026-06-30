@@ -18,7 +18,7 @@ import type { CreateSessionResponse, Env } from "../types";
 import {
   error,
   json,
-  normalizeOptionalRepositoryTarget,
+  normalizeOptionalRepositoryContext,
   parsePattern,
   resolveRepoOrError,
   type RequestContext,
@@ -38,8 +38,11 @@ async function handleCreateSession(
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
 
-  const repoTarget = normalizeOptionalRepositoryTarget(body, INVALID_SESSION_REQUEST_BODY_ERROR);
-  if (!repoTarget.ok) return error(repoTarget.message, 400);
+  const repositoryContext = normalizeOptionalRepositoryContext(
+    body,
+    INVALID_SESSION_REQUEST_BODY_ERROR
+  );
+  if (!repositoryContext.ok) return error(repositoryContext.message, 400);
 
   // Validate branch name if provided (defense in depth)
   if (body.branch && !/^[\w.\-/]+$/.test(body.branch)) {
@@ -50,9 +53,9 @@ async function handleCreateSession(
   let defaultBranch: string | null = null;
   let repoOwner: string | null = null;
   let repoName: string | null = null;
-  if (repoTarget.target) {
-    repoOwner = repoTarget.target.repoOwner;
-    repoName = repoTarget.target.repoName;
+  if (repositoryContext.repository) {
+    repoOwner = repositoryContext.repository.repoOwner;
+    repoName = repositoryContext.repository.repoName;
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
     if (resolved instanceof Response) return resolved;
 

@@ -60,7 +60,7 @@ const DEFAULT_REASONING_VALUE = "__default__";
 const INSTRUCTIONS_MAX_LENGTH = 15000;
 const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
 
-function requiresRepositoryTarget(triggerType: AutomationTriggerType): boolean {
+function requiresRepositoryContext(triggerType: AutomationTriggerType): boolean {
   return triggerType === "github_event" || triggerType === "linear_event";
 }
 
@@ -139,7 +139,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>(
     initialValues?.triggerType ?? "schedule"
   );
-  const repoTargetRequired = requiresRepositoryTarget(triggerType);
+  const repositoryRequired = requiresRepositoryContext(triggerType);
   const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
   const [eventTypeError, setEventTypeError] = useState("");
   const [conditions, setConditions] = useState<TriggerCondition[]>(
@@ -189,10 +189,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   }, [showEventTypeSelector, eventType]);
 
   useEffect(() => {
-    if (repoTargetRequired && !usesRepository) {
+    if (repositoryRequired && !usesRepository) {
       setUsesRepository(true);
     }
-  }, [repoTargetRequired, usesRepository]);
+  }, [repositoryRequired, usesRepository]);
 
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
@@ -205,14 +205,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   const handleRepositorySelectionChange = useCallback(
     (nextUsesRepository: boolean) => {
-      if (repoTargetRequired && !nextUsesRepository) return;
+      if (repositoryRequired && !nextUsesRepository) return;
       setUsesRepository(nextUsesRepository);
       if (!nextUsesRepository) {
         setSelectedRepo("");
         setBaseBranch("");
       }
     },
-    [repoTargetRequired]
+    [repositoryRequired]
   );
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -349,10 +349,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               value="none"
               checked={!usesRepository}
               onChange={() => handleRepositorySelectionChange(false)}
-              disabled={repoTargetRequired}
+              disabled={repositoryRequired}
               label={NO_REPOSITORY_LABEL}
               description={
-                repoTargetRequired
+                repositoryRequired
                   ? "Repository-scoped triggers need a repository."
                   : "Run without cloning a repository."
               }

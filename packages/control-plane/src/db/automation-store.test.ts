@@ -161,7 +161,7 @@ describe("toAutomation", () => {
 
   it("rejects partial repository fields", () => {
     expect(() => toAutomation({ ...sampleRow, repo_name: null })).toThrow(
-      "Automation repository target must include repo_owner and repo_name together"
+      "Automation repository context must include repo_owner and repo_name together"
     );
   });
 });
@@ -197,6 +197,21 @@ describe("AutomationStore", () => {
       expect(statements[0].params[1]).toBe("Daily sync");
       expect(statements[0].params[2]).toBe("acme");
       expect(statements[0].params[3]).toBe("web-app");
+    });
+
+    it("rejects repo-less rows with branch metadata", async () => {
+      const { db } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await expect(
+        store.create({
+          ...sampleRow,
+          repo_owner: null,
+          repo_name: null,
+          base_branch: "main",
+          repo_id: null,
+        })
+      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
     });
   });
 

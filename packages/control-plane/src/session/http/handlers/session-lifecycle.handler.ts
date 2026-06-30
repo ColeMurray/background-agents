@@ -110,7 +110,7 @@ export function createSessionLifecycleHandler(
       const hasRepoId = body.repoId != null;
       if (hasRepoOwner !== hasRepoName || (!hasRepoOwner && hasRepoId)) {
         return Response.json(
-          { error: "Repository target must include repoOwner and repoName together" },
+          { error: "Repository context must include repoOwner and repoName together" },
           { status: 400 }
         );
       }

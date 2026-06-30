@@ -580,7 +580,11 @@ export const createSessionRequestSchema = z
       message: "repoOwner and repoName must be provided together",
       path: ["repoName"],
     }
-  );
+  )
+  .refine((data) => hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim(), {
+    message: "branch requires repoOwner and repoName",
+    path: ["branch"],
+  });
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
@@ -642,8 +646,8 @@ export interface SpawnChildSessionRequest {
 
 /** Returned by parent DO's GET /internal/spawn-context */
 export interface SpawnContext {
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   repoId: number | null;
   model: string;
   reasoningEffort: string | null;
@@ -809,6 +813,8 @@ export type CreateAutomationRequest = CreateAutomationRequestBase;
 export interface UpdateAutomationRequest {
   name?: string;
   instructions?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;

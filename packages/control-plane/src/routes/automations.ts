@@ -38,7 +38,7 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
-  normalizeOptionalRepositoryTarget,
+  normalizeOptionalRepositoryContext,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -156,8 +156,8 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  const repoTarget = normalizeOptionalRepositoryTarget(body);
-  if (!repoTarget.ok) return error(repoTarget.message, 400);
+  const repositoryContext = normalizeOptionalRepositoryContext(body);
+  if (!repositoryContext.ok) return error(repositoryContext.message, 400);
 
   // Validate trigger type
   const triggerType: AutomationTriggerType = body.triggerType || "schedule";
@@ -172,7 +172,10 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
-  if (!repoTarget.target && (triggerType === "github_event" || triggerType === "linear_event")) {
+  if (
+    !repositoryContext.repository &&
+    (triggerType === "github_event" || triggerType === "linear_event")
+  ) {
     return error("repoOwner and repoName are required for repo-scoped triggers", 400);
   }
 
@@ -238,9 +241,9 @@ async function handleCreateAutomation(
   let repoId: number | null = null;
   let baseBranch: string | null = null;
 
-  if (repoTarget.target) {
-    repoOwner = repoTarget.target.repoOwner;
-    repoName = repoTarget.target.repoName;
+  if (repositoryContext.repository) {
+    repoOwner = repositoryContext.repository.repoOwner;
+    repoName = repositoryContext.repository.repoName;
 
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
     if (resolved instanceof Response) return resolved;
@@ -469,7 +472,44 @@ async function handleUpdateAutomation(
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
   }
-  if (body.baseBranch !== undefined) updateFields.base_branch = body.baseBranch;
+
+  const repositoryChanged = "repoOwner" in body || "repoName" in body;
+  if (repositoryChanged) {
+    const repositoryContext = normalizeOptionalRepositoryContext(body);
+    if (!repositoryContext.ok) return error(repositoryContext.message, 400);
+
+    if (!repositoryContext.repository) {
+      if (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event") {
+        return error("repoOwner and repoName are required for repo-scoped triggers", 400);
+      }
+      if (body.baseBranch?.trim()) {
+        return error("baseBranch requires repoOwner and repoName", 400);
+      }
+      updateFields.repo_owner = null;
+      updateFields.repo_name = null;
+      updateFields.repo_id = null;
+      updateFields.base_branch = null;
+    } else {
+      const resolved = await resolveRepoOrError(
+        env,
+        repositoryContext.repository.repoOwner,
+        repositoryContext.repository.repoName,
+        ctx,
+        logger
+      );
+      if (resolved instanceof Response) return resolved;
+
+      updateFields.repo_owner = repositoryContext.repository.repoOwner;
+      updateFields.repo_name = repositoryContext.repository.repoName;
+      updateFields.repo_id = resolved.repoId;
+      updateFields.base_branch = body.baseBranch || resolved.defaultBranch;
+    }
+  } else if (body.baseBranch !== undefined) {
+    if (!existing.repo_owner || !existing.repo_name) {
+      return error("baseBranch requires repoOwner and repoName", 400);
+    }
+    updateFields.base_branch = body.baseBranch;
+  }
 
   // Update event type — only for non-schedule types
   if (body.eventType !== undefined) {

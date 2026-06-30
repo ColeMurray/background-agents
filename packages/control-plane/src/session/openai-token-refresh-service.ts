@@ -139,7 +139,7 @@ export class OpenAITokenRefreshService {
           return {
             ok: false,
             status: 400,
-            error: "Repository-scoped OpenAI tokens require a repository target",
+            error: "Repository-scoped OpenAI tokens require a repository context",
           };
         }
         const repoStore = new RepoSecretsStore(this.db, this.encryptionKey);

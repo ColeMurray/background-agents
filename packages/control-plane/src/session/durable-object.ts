@@ -1732,7 +1732,7 @@ export class SessionDO extends DurableObject<Env> {
       return session.repo_id;
     }
     if (!session.repo_owner || !session.repo_name) {
-      throw new Error("Session has no repository target");
+      throw new Error("Session has no repository context");
     }
 
     const result = await this.sourceControlProvider.checkRepositoryAccess({
