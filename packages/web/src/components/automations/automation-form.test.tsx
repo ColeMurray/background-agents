@@ -178,6 +178,67 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0].baseBranch).toBeUndefined();
   });
 
+  it("omits repository fields when edit mode leaves repository context unchanged", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Daily review",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Review the repo.",
+          triggerType: "schedule",
+        }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].repoName).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].baseBranch).toBe("main");
+  });
+
+  it("submits null repository fields when edit mode clears repository context", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Daily review",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Review the repo.",
+          triggerType: "schedule",
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText("No repository"));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      repoOwner: null,
+      repoName: null,
+      baseBranch: null,
+    });
+  });
+
   it("disables repo-less selection for GitHub event automations", () => {
     const { container } = render(
       <AutomationForm

@@ -274,6 +274,24 @@ describe("automation route handlers", () => {
       });
     });
 
+    it("rejects baseBranch without repository context", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Branch without repo",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run without a repository.",
+          baseBranch: "main",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "baseBranch requires repoOwner and repoName",
+      });
+      expect(mockStore.create).not.toHaveBeenCalled();
+    });
+
     it("resolves user_id when scmUserId is provided", async () => {
       mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
@@ -518,6 +536,20 @@ describe("automation route handlers", () => {
           base_branch: null,
         })
       );
+    });
+
+    it("rejects repository context updates with only one repo field", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: null },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName must be provided together",
+      });
+      expect(mockStore.update).not.toHaveBeenCalled();
     });
 
     it("replaces repository context when repo fields are supplied", async () => {

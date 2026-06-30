@@ -35,7 +35,7 @@ import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import { ConditionBuilder } from "./condition-builder";
 import { cn } from "@/lib/utils";
-import { formatRepoLabel, NO_REPOSITORY_LABEL } from "@/lib/repo-label";
+import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -88,9 +88,9 @@ function FieldDescription({
 
 export interface AutomationFormValues {
   name: string;
-  repoOwner?: string;
-  repoName?: string;
-  baseBranch?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  baseBranch?: string | null;
   model: string;
   reasoningEffort: string | null;
   scheduleCron: string;
@@ -112,10 +112,15 @@ interface AutomationFormProps {
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
+  const initialRepositoryKey =
+    initialValues?.repoOwner && initialValues?.repoName
+      ? `${initialValues.repoOwner}/${initialValues.repoName}`.toLowerCase()
+      : "";
+  const initialUsesRepository = initialRepositoryKey.length > 0;
 
   const [name, setName] = useState(initialValues?.name ?? "");
   const [usesRepository, setUsesRepository] = useState(
-    mode === "create" ? true : Boolean(initialValues?.repoOwner && initialValues?.repoName)
+    mode === "create" ? true : initialUsesRepository
   );
   const [selectedRepo, setSelectedRepo] = useState(
     initialValues?.repoOwner && initialValues?.repoName
@@ -247,10 +252,29 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       instructions: instructions.trim(),
       triggerType,
     };
-    if (usesRepository) {
-      values.repoOwner = repoOwner;
-      values.repoName = repoName;
-      values.baseBranch = baseBranch;
+    if (mode === "create") {
+      if (usesRepository) {
+        values.repoOwner = repoOwner;
+        values.repoName = repoName;
+        values.baseBranch = baseBranch;
+      }
+    } else {
+      const currentRepositoryKey = usesRepository ? selectedRepo.toLowerCase() : "";
+      const repositoryContextChanged = currentRepositoryKey !== initialRepositoryKey;
+
+      if (repositoryContextChanged) {
+        if (usesRepository) {
+          values.repoOwner = repoOwner;
+          values.repoName = repoName;
+          values.baseBranch = baseBranch;
+        } else {
+          values.repoOwner = null;
+          values.repoName = null;
+          values.baseBranch = null;
+        }
+      } else if (usesRepository) {
+        values.baseBranch = baseBranch;
+      }
     }
 
     if (!isSchedule) {
@@ -267,10 +291,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       }
     }
 
-    if (mode === "edit") {
-      delete (values as Partial<AutomationFormValues>).repoOwner;
-      delete (values as Partial<AutomationFormValues>).repoName;
-    }
     onSubmit(values);
   };
 
@@ -280,7 +300,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const displayRepoName = selectedRepoObj
     ? selectedRepoObj.name
     : selectedRepo || "Select repository";
-  const targetLabel = usesRepository ? formatRepoLabel(repoOwner, repoName) : NO_REPOSITORY_LABEL;
   const reasoningConfig = getReasoningConfig(resolvedModel);
 
   return (
@@ -334,36 +353,29 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <label className="block text-sm font-medium text-foreground mb-1.5">
           Repository Configuration
         </label>
-        {mode === "create" ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            <RadioCard
-              name="repositoryContext"
-              value="repository"
-              checked={usesRepository}
-              onChange={() => handleRepositorySelectionChange(true)}
-              label="Single repository"
-              description="Clone one repository and branch for each run."
-            />
-            <RadioCard
-              name="repositoryContext"
-              value="none"
-              checked={!usesRepository}
-              onChange={() => handleRepositorySelectionChange(false)}
-              disabled={repositoryRequired}
-              label={NO_REPOSITORY_LABEL}
-              description={
-                repositoryRequired
-                  ? "Repository-scoped triggers need a repository."
-                  : "Run without cloning a repository."
-              }
-            />
-          </div>
-        ) : (
-          <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
-            {usesRepository ? targetLabel : NO_REPOSITORY_LABEL}
-            <span className="text-xs ml-2">(cannot be changed)</span>
-          </div>
-        )}
+        <div className="grid gap-2 sm:grid-cols-2">
+          <RadioCard
+            name="repositoryContext"
+            value="repository"
+            checked={usesRepository}
+            onChange={() => handleRepositorySelectionChange(true)}
+            label="Single repository"
+            description="Clone one repository and branch for each run."
+          />
+          <RadioCard
+            name="repositoryContext"
+            value="none"
+            checked={!usesRepository}
+            onChange={() => handleRepositorySelectionChange(false)}
+            disabled={repositoryRequired}
+            label={NO_REPOSITORY_LABEL}
+            description={
+              repositoryRequired
+                ? "Repository-scoped triggers need a repository."
+                : "Run without cloning a repository."
+            }
+          />
+        </div>
       </div>
 
       {/* Repository */}
@@ -386,7 +398,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               String(option.value).toLowerCase().includes(query)
             }
             dropdownWidth="w-72"
-            disabled={loadingRepos || mode === "edit"}
+            disabled={loadingRepos}
             triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
           >
             <RepoIcon className="w-4 h-4 text-muted-foreground" />
@@ -395,10 +407,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             </span>
             <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
           </Combobox>
-          <FieldDescription>
-            Runs clone and execute against this repository.
-            {mode === "edit" ? " The repository cannot be changed after creation." : ""}
-          </FieldDescription>
+          <FieldDescription>Runs clone and execute against this repository.</FieldDescription>
         </div>
       )}
 

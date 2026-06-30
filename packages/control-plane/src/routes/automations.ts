@@ -178,6 +178,9 @@ async function handleCreateAutomation(
   ) {
     return error("repoOwner and repoName are required for repo-scoped triggers", 400);
   }
+  if (!repositoryContext.repository && body.baseBranch?.trim()) {
+    return error("baseBranch requires repoOwner and repoName", 400);
+  }
 
   const isSchedule = triggerType === "schedule";
 
@@ -473,8 +476,14 @@ async function handleUpdateAutomation(
     updateFields.reasoning_effort = resolvedReasoningEffort;
   }
 
-  const repositoryChanged = "repoOwner" in body || "repoName" in body;
+  const repoOwnerChanged = "repoOwner" in body;
+  const repoNameChanged = "repoName" in body;
+  const repositoryChanged = repoOwnerChanged || repoNameChanged;
   if (repositoryChanged) {
+    if (repoOwnerChanged !== repoNameChanged) {
+      return error("repoOwner and repoName must be provided together", 400);
+    }
+
     const repositoryContext = normalizeOptionalRepositoryContext(body);
     if (!repositoryContext.ok) return error(repositoryContext.message, 400);
 

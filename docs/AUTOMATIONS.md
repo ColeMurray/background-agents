@@ -32,7 +32,7 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Trigger Type**             | How the automation starts: schedule, inbound webhook, or Sentry alert.                                                                                                                     |
 | **Name**                     | A short label for the automation (max 200 characters). Appears in the automations list and in session titles prefixed with `[Auto]`.                                                       |
-| **Repository Configuration** | Choose **Single repository** to clone one repository and branch, or **No repository** to run without a cloned code workspace. Cannot be changed after creation.                            |
+| **Repository Configuration** | Choose **Single repository** to clone one repository and branch, or **No repository** to run without a cloned code workspace.                                                              |
 | **Repository**               | Required for single-repo automations. Only repositories installed on the GitHub App are available.                                                                                         |
 | **Instructions**             | The prompt sent to the coding agent each time the automation fires (max 15,000 characters). Write this as you would a normal session prompt and reference the trigger context when useful. |
 
@@ -315,9 +315,9 @@ runs: if a run is already active, the trigger is rejected.
 
 ### Edit
 
-You can change an automation's name, branch, model, and instructions at any time. For scheduled
-automations, you can also change the schedule and timezone. The repository cannot be changed after
-creation.
+You can change an automation's name, repository context, branch, model, and instructions at any
+time. For scheduled automations, you can also change the schedule and timezone. Repository-scoped
+triggers require repository context; other trigger types can be changed to **No repository**.
 
 If you update the schedule or timezone, the next run time is recalculated automatically.
 
