@@ -766,7 +766,7 @@ export type AutomationRunStatus = "starting" | "running" | "completed" | "failed
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
 
-export interface AutomationBase {
+export interface Automation {
   id: string;
   name: string;
   instructions: string;
@@ -790,9 +790,7 @@ export interface AutomationBase {
   repoId: number | null;
 }
 
-export type Automation = AutomationBase;
-
-export interface CreateAutomationRequestBase {
+export interface CreateAutomationRequest {
   name: string;
   instructions: string;
   triggerType?: AutomationTriggerType;
@@ -807,8 +805,6 @@ export interface CreateAutomationRequestBase {
   repoName?: string | null;
   baseBranch?: string | null;
 }
-
-export type CreateAutomationRequest = CreateAutomationRequestBase;
 
 export interface UpdateAutomationRequest {
   name?: string;

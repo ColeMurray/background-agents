@@ -538,6 +538,25 @@ describe("automation route handlers", () => {
       );
     });
 
+    it("rejects clearing repository context on repo-scoped automations", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        event_type: "pull_request.opened",
+        schedule_cron: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: null, repoName: null },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName are required for repo-scoped triggers",
+      });
+      expect(mockStore.update).not.toHaveBeenCalled();
+    });
+
     it("rejects repository context updates with only one repo field", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
