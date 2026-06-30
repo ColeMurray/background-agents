@@ -9,6 +9,7 @@ import type {
   ParticipantRole,
   SessionStatus,
 } from "@open-inspect/shared";
+import { z } from "zod";
 
 export type {
   ArtifactType,
@@ -184,10 +185,12 @@ export interface GitHubUser {
   avatar_url: string;
 }
 
-export interface GitHubTokenResponse {
-  access_token: string;
-  token_type: string;
-  scope: string;
-  refresh_token?: string;
-  expires_in?: number;
-}
+export const githubTokenResponseSchema = z.object({
+  access_token: z.string(),
+  token_type: z.string(),
+  scope: z.string(),
+  refresh_token: z.string().optional(),
+  expires_in: z.number().optional(),
+});
+
+export type GitHubTokenResponse = z.infer<typeof githubTokenResponseSchema>;
