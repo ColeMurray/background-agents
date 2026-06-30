@@ -39,6 +39,8 @@ import {
   parseJsonBody,
   resolveRepoOrError,
   normalizeOptionalRepositoryContext,
+  RepositoryContextValidationError,
+  type OptionalRepositoryContext,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -62,6 +64,20 @@ function resolveReasoningEffort(
 ): string | null {
   if (reasoningEffort === undefined || reasoningEffort === null) return null;
   return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
+}
+
+function parseRepositoryContext(
+  input: { repoOwner?: string | null; repoName?: string | null },
+  partialMessage?: string
+): OptionalRepositoryContext | Response {
+  try {
+    return normalizeOptionalRepositoryContext(input, partialMessage);
+  } catch (e) {
+    if (e instanceof RepositoryContextValidationError) {
+      return error(e.message, 400);
+    }
+    throw e;
+  }
 }
 
 /**
@@ -156,8 +172,8 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  const repositoryContext = normalizeOptionalRepositoryContext(body);
-  if (!repositoryContext.ok) return error(repositoryContext.message, 400);
+  const repositoryContext = parseRepositoryContext(body);
+  if (repositoryContext instanceof Response) return repositoryContext;
 
   // Validate trigger type
   const triggerType: AutomationTriggerType = body.triggerType || "schedule";
@@ -172,13 +188,10 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
-  if (
-    !repositoryContext.repository &&
-    (triggerType === "github_event" || triggerType === "linear_event")
-  ) {
+  if (!repositoryContext && (triggerType === "github_event" || triggerType === "linear_event")) {
     return error("repoOwner and repoName are required for repo-scoped triggers", 400);
   }
-  if (!repositoryContext.repository && body.baseBranch?.trim()) {
+  if (!repositoryContext && body.baseBranch?.trim()) {
     return error("baseBranch requires repoOwner and repoName", 400);
   }
 
@@ -244,9 +257,9 @@ async function handleCreateAutomation(
   let repoId: number | null = null;
   let baseBranch: string | null = null;
 
-  if (repositoryContext.repository) {
-    repoOwner = repositoryContext.repository.repoOwner;
-    repoName = repositoryContext.repository.repoName;
+  if (repositoryContext) {
+    repoOwner = repositoryContext.repoOwner;
+    repoName = repositoryContext.repoName;
 
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
     if (resolved instanceof Response) return resolved;
@@ -484,10 +497,10 @@ async function handleUpdateAutomation(
       return error("repoOwner and repoName must be provided together", 400);
     }
 
-    const repositoryContext = normalizeOptionalRepositoryContext(body);
-    if (!repositoryContext.ok) return error(repositoryContext.message, 400);
+    const repositoryContext = parseRepositoryContext(body);
+    if (repositoryContext instanceof Response) return repositoryContext;
 
-    if (!repositoryContext.repository) {
+    if (!repositoryContext) {
       if (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event") {
         return error("repoOwner and repoName are required for repo-scoped triggers", 400);
       }
@@ -501,15 +514,15 @@ async function handleUpdateAutomation(
     } else {
       const resolved = await resolveRepoOrError(
         env,
-        repositoryContext.repository.repoOwner,
-        repositoryContext.repository.repoName,
+        repositoryContext.repoOwner,
+        repositoryContext.repoName,
         ctx,
         logger
       );
       if (resolved instanceof Response) return resolved;
 
-      updateFields.repo_owner = repositoryContext.repository.repoOwner;
-      updateFields.repo_name = repositoryContext.repository.repoName;
+      updateFields.repo_owner = repositoryContext.repoOwner;
+      updateFields.repo_name = repositoryContext.repoName;
       updateFields.repo_id = resolved.repoId;
       updateFields.base_branch = body.baseBranch || resolved.defaultBranch;
     }

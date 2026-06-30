@@ -63,25 +63,25 @@ export function error(message: string, status = 400): Response {
 
 export type OptionalRepositoryContext = { repoOwner: string; repoName: string } | null;
 
-export type OptionalRepositoryContextResult =
-  | { ok: true; repository: OptionalRepositoryContext }
-  | { ok: false; message: string };
+export class RepositoryContextValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepositoryContextValidationError";
+  }
+}
 
 export function normalizeOptionalRepositoryContext(
   input: { repoOwner?: string | null; repoName?: string | null },
   partialMessage = "repoOwner and repoName must be provided together"
-): OptionalRepositoryContextResult {
+): OptionalRepositoryContext {
   const repoOwner = input.repoOwner?.trim().toLowerCase() || null;
   const repoName = input.repoName?.trim().toLowerCase() || null;
 
   if ((repoOwner === null) !== (repoName === null)) {
-    return { ok: false, message: partialMessage };
+    throw new RepositoryContextValidationError(partialMessage);
   }
 
-  return {
-    ok: true,
-    repository: repoOwner && repoName ? { repoOwner, repoName } : null,
-  };
+  return repoOwner && repoName ? { repoOwner, repoName } : null;
 }
 
 /**
