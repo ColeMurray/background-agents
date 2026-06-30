@@ -9,9 +9,10 @@ import {
   getVerifiedGitHubEmails,
 } from "./auth";
 
-vi.mock("@open-inspect/shared", () => ({
-  DEFAULT_APP_NAME: "Open-Inspect",
-}));
+vi.mock("@open-inspect/shared", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, DEFAULT_APP_NAME: "Open-Inspect" };
+});
 
 vi.mock("next-auth/providers/github", () => ({
   default: (config: unknown) => ({
@@ -386,6 +387,20 @@ describe("getVerifiedGitHubEmails", () => {
     );
 
     await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+  });
+
+  it("returns empty array for malformed GitHub email responses", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([{ email: "user@company.com", verified: true }]))
+    );
+
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-email-fetch] invalid response",
+      expect.objectContaining({ elapsedMs: expect.any(Number) })
+    );
   });
 
   it("returns empty array when GitHub email lookup fails", async () => {
