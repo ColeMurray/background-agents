@@ -42,7 +42,6 @@ import {
 
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
-const OPENCOMPUTER_PROVIDER_TIMEOUT_FALLBACK_SECONDS = 10 * 60;
 const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
   "OI_REPO_IMAGE_BUILD_ID",
@@ -108,7 +107,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
             name: config.sandboxId,
             env: envVars,
             labels,
-            timeoutSeconds,
+            ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
           })
         : await this.client.createSandbox({
@@ -116,13 +115,15 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
             template: this.client.config.template,
             env: envVars,
             labels,
-            timeoutSeconds,
+            ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
             projectId: this.client.config.projectId,
             target: this.client.config.target,
           });
       providerObjectId = sandbox.id;
-      await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
+      if (timeoutSeconds !== undefined) {
+        await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
+      }
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -166,19 +167,19 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     try {
       const envVars = await this.buildRuntimeEnvVars(config, { restoredFromSnapshot: true });
       secretStore = await this.createSecretStoreFor(config.sessionId, config.userEnvVars);
+      const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
       const sandbox = await this.client.forkFromCheckpoint({
         checkpointId: config.snapshotImageId,
         name: config.sandboxId,
         env: envVars,
         labels: this.buildLabels(config),
-        timeoutSeconds: resolveOpenComputerTimeoutSeconds(config.timeoutSeconds),
+        ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
-      await this.client.setSandboxTimeout(
-        providerObjectId,
-        resolveOpenComputerTimeoutSeconds(config.timeoutSeconds)
-      );
+      if (timeoutSeconds !== undefined) {
+        await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
+      }
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -268,10 +269,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       }
 
       if (wokeSandbox) {
-        await this.client.setSandboxTimeout(
-          config.providerObjectId,
-          resolveOpenComputerTimeoutSeconds(config.timeoutSeconds)
-        );
+        const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
+        if (timeoutSeconds !== undefined) {
+          await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
+        }
         await this.client.startRuntime(config.providerObjectId);
       }
 
@@ -686,8 +687,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 }
 
-function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number {
-  return timeoutSeconds ?? OPENCOMPUTER_PROVIDER_TIMEOUT_FALLBACK_SECONDS;
+function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number | undefined {
+  return timeoutSeconds;
 }
 
 export function createOpenComputerProvider(
