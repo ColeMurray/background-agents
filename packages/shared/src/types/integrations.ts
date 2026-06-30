@@ -24,6 +24,8 @@ export interface GitHubBotSettings {
   allowedTriggerUsers?: string[];
   codeReviewInstructions?: string;
   commentActionInstructions?: string;
+  /** Label applied to every agent-created PR. The label is created in the target repo if it doesn't exist. */
+  prLabel?: string;
 }
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */

@@ -63,6 +63,8 @@ export interface PullRequestServiceDeps {
   broadcastArtifactCreated: (artifact: SessionArtifact) => void;
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
+  /** Label applied to agent-created PRs. Created in the target repo if absent. */
+  prLabel?: string;
 }
 
 /**
@@ -197,6 +199,7 @@ export class SessionPullRequestService {
         body: fullBody,
         sourceBranch: sanitizedHeadBranch,
         targetBranch: baseBranch,
+        labels: this.deps.prLabel ? [this.deps.prLabel] : undefined,
       });
 
       const artifactId = this.deps.generateId();
