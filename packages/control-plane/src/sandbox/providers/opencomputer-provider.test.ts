@@ -167,6 +167,33 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
+  it("serializes repo-less sandboxes without nullable repo env or labels", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      repoOwner: null,
+      repoName: null,
+      branch: null,
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      REPO_OWNER: "",
+      REPO_NAME: "",
+    });
+    expect(createCall.labels).not.toHaveProperty("openinspect_repo");
+    expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toMatchObject({
+      repo_owner: null,
+      repo_name: null,
+      branch: null,
+    });
+  });
+
   it("adds provider-level LLM credentials to the runtime environment", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
@@ -319,6 +346,34 @@ describe("OpenComputerSandboxProvider", () => {
     );
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 600);
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("serializes repo-less snapshot restores without nullable repo env or labels", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.restoreFromSnapshot({
+      ...baseConfig,
+      snapshotImageId: "checkpoint-session-1",
+      repoOwner: null,
+      repoName: null,
+      branch: null,
+    });
+
+    const forkCall = vi.mocked(client.forkFromCheckpoint).mock.calls[0][0];
+    expect(forkCall.env).toMatchObject({
+      REPO_OWNER: "",
+      REPO_NAME: "",
+    });
+    expect(forkCall.labels).not.toHaveProperty("openinspect_repo");
+    expect(JSON.parse(forkCall.env!.SESSION_CONFIG)).toMatchObject({
+      repo_owner: null,
+      repo_name: null,
+      branch: null,
+    });
   });
 
   it("never marks a runtime session as an image build", async () => {
