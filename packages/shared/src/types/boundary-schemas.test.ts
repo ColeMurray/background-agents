@@ -3,6 +3,7 @@ import {
   clientMessageSchema,
   createSessionRequestSchema,
   sandboxEventSchema,
+  serverMessageSchema,
   userPreferencesRequestSchema,
 } from ".";
 
@@ -135,6 +136,67 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe("serverMessageSchema", () => {
+    it("parses a valid subscribed message with nullable fields", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "subscribed",
+        sessionId: "session-1",
+        state: {
+          id: "session-1",
+          title: null,
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          branchName: null,
+          status: "active",
+          sandboxStatus: "ready",
+          messageCount: 1,
+          createdAt: 123,
+          parentSessionId: null,
+          tunnelUrls: null,
+        },
+        artifacts: [
+          {
+            id: "artifact-1",
+            type: "screenshot",
+            url: null,
+            metadata: null,
+            createdAt: 124,
+          },
+        ],
+        participantId: "participant-1",
+        replay: {
+          events: [],
+          hasMore: false,
+          cursor: null,
+        },
+        spawnError: null,
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed partial sandbox event message", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "sandbox_event",
+        event: {
+          type: "token",
+          content: "hello",
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        },
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects an unknown message type", () => {
+      const result = serverMessageSchema.safeParse({ type: "unexpected" });
+
+      expect(result.success).toBe(false);
     });
   });
 
