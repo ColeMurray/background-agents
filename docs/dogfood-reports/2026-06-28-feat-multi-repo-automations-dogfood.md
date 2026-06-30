@@ -16,8 +16,8 @@
   branch selection for multi-repo targets, show grouped run history, and paginate group rows.
 - Extends session, sandbox, Modal, and sandbox-runtime handling so no-repository automations can
   start without clone metadata while repo-required tools remain gated.
-- Adds migrations `0029` and `0030`, control-plane integration coverage, web component tests, Modal
-  tests, and sandbox-runtime tests for the new target modes.
+- Adds migrations `0029` through `0032`, control-plane integration coverage, web component tests,
+  Modal tests, and sandbox-runtime tests for the new target modes.
 
 ## Personas
 
@@ -185,7 +185,7 @@ flowchart TD
 | 18  | No-repository sandbox  | Modal/sandbox-runtime starts no-repo sandboxes without clone tokens, skips clone/update/start hooks, and omits repo-required tools.                                                    | Pass   | -                                                                                                                                                                                                                        | -                                                                                      | -       |
 | 19  | Child session boundary | No-repo parent child-spawn failure forwards the runtime error/status instead of masking it as a generic 500.                                                                           | Pass   | -                                                                                                                                                                                                                        | -                                                                                      | -       |
 | 20  | Legacy regression      | Existing single-repo automations still create flat runs, display flat history, resolve repo settings, and match repo filters.                                                          | Pass   | -                                                                                                                                                                                                                        | -                                                                                      | -       |
-| 21  | Migrations             | D1 migrations `0029` and `0030` apply cleanly and preserve/backfill existing automation/session/run data.                                                                              | Pass   | -                                                                                                                                                                                                                        | -                                                                                      | -       |
+| 21  | Migrations             | D1 migrations `0029` through `0032` apply cleanly and preserve/backfill existing automation/session/run data.                                                                          | Pass   | -                                                                                                                                                                                                                        | -                                                                                      | -       |
 | 22  | Cross-cutting          | Typecheck, lint, build, unit tests, integration tests, Python tests, and browser console checks are clean.                                                                             | Pass   | Root lint scans generated `.open-next` artifacts; root typecheck also fails in local `opencomputer-infra` because `@opencomputer/sdk/node` is absent. Scoped package checks for changed and dependent workspaces passed. | Used source-scoped lint/typecheck/test/build commands plus full workspace build/tests. | -       |
 
 ## What Was Fixed
