@@ -148,6 +148,60 @@ export class RepoImageStore {
     };
   }
 
+  async markBuildFailedWithCallbackToken(params: {
+    buildId: string;
+    provider: RepoImageProvider;
+    tokenHash: string;
+    providerSessionId: string;
+    error: string;
+    now: number;
+  }): Promise<boolean> {
+    const build = await this.db
+      .prepare(
+        `SELECT id, provider, provider_session_id, status, callback_token_hash, callback_token_expires_at, callback_token_used_at
+         FROM repo_images WHERE id = ? AND provider = ?`
+      )
+      .bind(params.buildId, params.provider)
+      .first<{
+        id: string;
+        provider: RepoImageProvider;
+        provider_session_id: string | null;
+        status: RepoImage["status"];
+        callback_token_hash: string | null;
+        callback_token_expires_at: number | null;
+        callback_token_used_at: number | null;
+      }>();
+
+    if (!build || build.status !== "building") return false;
+    if (!build.callback_token_hash || !build.callback_token_expires_at) return false;
+    if (build.callback_token_used_at !== null) return false;
+    if (build.callback_token_expires_at < params.now) return false;
+    if (!timingSafeEqual(build.callback_token_hash, params.tokenHash)) return false;
+    if (build.provider_session_id !== params.providerSessionId) return false;
+
+    const result = await this.db
+      .prepare(
+        `UPDATE repo_images
+         SET status = 'failed', error_message = ?, callback_token_used_at = ?
+         WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
+           AND callback_token_hash = ?
+           AND callback_token_expires_at >= ?
+           AND callback_token_used_at IS NULL`
+      )
+      .bind(
+        params.error,
+        params.now,
+        params.buildId,
+        params.provider,
+        params.providerSessionId,
+        params.tokenHash,
+        params.now
+      )
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   async getCallbackBuild(buildId: string): Promise<RepoImageCallbackBuild | null> {
     const build = await this.db
       .prepare("SELECT id, provider, provider_session_id, status FROM repo_images WHERE id = ?")
@@ -159,7 +213,7 @@ export class RepoImageStore {
         status: RepoImageBuildStatus;
       }>();
 
-    if (!build) return null;
+    if (!build || build.status !== "building") return null;
     return {
       id: build.id,
       provider: build.provider,

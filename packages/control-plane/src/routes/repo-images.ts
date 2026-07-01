@@ -169,7 +169,11 @@ async function parseRepoImageCallbackBody<T>(request: Request): Promise<T | Resp
   }
 
   try {
-    return JSON.parse(bodyText) as T;
+    const parsed: unknown = JSON.parse(bodyText);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return error("Invalid JSON body", 400);
+    }
+    return parsed as T;
   } catch {
     return error("Invalid JSON body", 400);
   }

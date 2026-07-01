@@ -139,51 +139,54 @@ export class RepoImageBuildPlanner {
     callbackAuth: PlannedCallbackAuth,
     cloneAuth: VercelCloneAuth
   ): PlannedRepoImageBuild {
-    if (this.provider === "modal") {
-      return {
-        plan: {
-          ...basePlan,
-          provider: "modal",
-          callbackMode: "provider_image",
-        },
-        callbackAuth: { type: "none" },
-      };
+    switch (this.provider) {
+      case "modal":
+        return {
+          plan: {
+            ...basePlan,
+            provider: "modal",
+            callbackMode: "provider_image",
+          },
+          callbackAuth: { type: "none" },
+        };
+      case "vercel": {
+        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+        return {
+          plan: {
+            ...basePlan,
+            provider: "vercel",
+            callbackMode: "provider_session",
+            callbackToken: bearerAuth.token,
+            cloneAuth,
+          },
+          callbackAuth: {
+            type: "bearer_token",
+            tokenHash: bearerAuth.tokenHash,
+            expiresAt: bearerAuth.expiresAt,
+          },
+        };
+      }
+      case "opencomputer": {
+        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+        return {
+          plan: {
+            ...basePlan,
+            provider: "opencomputer",
+            callbackMode: "provider_session",
+            callbackToken: bearerAuth.token,
+          },
+          callbackAuth: {
+            type: "bearer_token",
+            tokenHash: bearerAuth.tokenHash,
+            expiresAt: bearerAuth.expiresAt,
+          },
+        };
+      }
+      default: {
+        const exhaustive: never = this.provider;
+        throw new Error(`Unsupported repo image provider: ${String(exhaustive)}`);
+      }
     }
-
-    if (callbackAuth.kind !== "bearer_token") {
-      throw new Error(`${this.provider} repo image builds require callback token auth`);
-    }
-
-    if (this.provider === "vercel") {
-      return {
-        plan: {
-          ...basePlan,
-          provider: "vercel",
-          callbackMode: "provider_session",
-          callbackToken: callbackAuth.token,
-          cloneAuth,
-        },
-        callbackAuth: {
-          type: "bearer_token",
-          tokenHash: callbackAuth.tokenHash,
-          expiresAt: callbackAuth.expiresAt,
-        },
-      };
-    }
-
-    return {
-      plan: {
-        ...basePlan,
-        provider: "opencomputer",
-        callbackMode: "provider_session",
-        callbackToken: callbackAuth.token,
-      },
-      callbackAuth: {
-        type: "bearer_token",
-        tokenHash: callbackAuth.tokenHash,
-        expiresAt: callbackAuth.expiresAt,
-      },
-    };
   }
 
   private async loadUserEnvVars(params: {
@@ -257,4 +260,14 @@ export class RepoImageBuildPlanner {
 
 function errorMessage(errorValue: unknown): string {
   return errorValue instanceof Error ? errorValue.message : String(errorValue);
+}
+
+function requireBearerCallbackAuth(
+  provider: RepoImageProvider,
+  callbackAuth: PlannedCallbackAuth
+): Extract<PlannedCallbackAuth, { kind: "bearer_token" }> {
+  if (callbackAuth.kind !== "bearer_token") {
+    throw new Error(`${provider} repo image builds require callback token auth`);
+  }
+  return callbackAuth;
 }

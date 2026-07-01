@@ -63,6 +63,7 @@ function createStore(overrides: Partial<RepoImageStore> = {}): RepoImageStore {
   return {
     getCallbackBuild: vi.fn(async () => callbackBuild()),
     consumeCallbackToken: vi.fn(async () => callbackBuild()),
+    markBuildFailedWithCallbackToken: vi.fn(async () => true),
     tryMarkRepoImageReady: vi.fn(async () => markedReady()),
     markBuildFailed: vi.fn(async () => true),
     registerBuild: vi.fn(),
@@ -939,7 +940,15 @@ describe("RepoImageBuildWorkflow", () => {
 
     await expectBuildFailed(result);
 
-    expect(store.markBuildFailed).toHaveBeenCalledWith("build-1", "vercel", "setup failed");
+    expect(store.markBuildFailedWithCallbackToken).toHaveBeenCalledWith({
+      buildId: "build-1",
+      provider: "vercel",
+      providerSessionId: "provider-session-1",
+      tokenHash: expect.any(String),
+      error: "setup failed",
+      now: expect.any(Number),
+    });
+    expect(store.markBuildFailed).not.toHaveBeenCalled();
     expect(adapter.cleanupFailedBuild).toHaveBeenCalledWith({
       buildId: "build-1",
       kind: "provider_session",
@@ -967,7 +976,15 @@ describe("RepoImageBuildWorkflow", () => {
     });
 
     expect(result).toEqual({ type: "build_failed" });
-    expect(store.markBuildFailed).toHaveBeenCalledWith("build-1", "vercel", "setup failed");
+    expect(store.markBuildFailedWithCallbackToken).toHaveBeenCalledWith({
+      buildId: "build-1",
+      provider: "vercel",
+      providerSessionId: "provider-session-1",
+      tokenHash: expect.any(String),
+      error: "setup failed",
+      now: expect.any(Number),
+    });
+    expect(store.markBuildFailed).not.toHaveBeenCalled();
     expect(adapterFactory.create).toHaveBeenCalledWith("vercel");
   });
 });
