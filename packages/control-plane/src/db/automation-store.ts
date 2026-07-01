@@ -17,9 +17,9 @@ import type {
 export interface AutomationRow {
   id: string;
   name: string;
-  repo_owner: string;
-  repo_name: string;
-  base_branch: string;
+  repo_owner: string | null;
+  repo_name: string | null;
+  base_branch: string | null;
   repo_id: number | null;
   instructions: string;
   trigger_type: string;
@@ -69,13 +69,16 @@ export function toAutomation(row: AutomationRow): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)
     : null;
+
+  if ((row.repo_owner === null) !== (row.repo_name === null)) {
+    throw new Error("Automation repository context must include repo_owner and repo_name together");
+  }
+
+  const hasRepository = row.repo_owner !== null && row.repo_name !== null;
+
   return {
     id: row.id,
     name: row.name,
-    repoOwner: row.repo_owner,
-    repoName: row.repo_name,
-    baseBranch: row.base_branch,
-    repoId: row.repo_id,
     instructions: row.instructions,
     triggerType: row.trigger_type as Automation["triggerType"],
     scheduleCron: row.schedule_cron,
@@ -91,7 +94,24 @@ export function toAutomation(row: AutomationRow): Automation {
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
     triggerConfig,
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    baseBranch: hasRepository ? row.base_branch : null,
+    repoId: hasRepository ? row.repo_id : null,
   };
+}
+
+function assertAutomationRepositoryFields(row: Partial<AutomationRow>): void {
+  const repoOwner = row.repo_owner ?? null;
+  const repoName = row.repo_name ?? null;
+
+  if ((repoOwner === null) !== (repoName === null)) {
+    throw new Error("Automation repository must include repo_owner and repo_name together");
+  }
+
+  if (repoOwner === null && (row.base_branch != null || row.repo_id != null)) {
+    throw new Error("Automation base_branch and repo_id require repository context");
+  }
 }
 
 export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
@@ -125,6 +145,8 @@ export class AutomationStore {
    * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
   bindAutomationInsert(row: AutomationRow): D1PreparedStatement {
+    assertAutomationRepositoryFields(row);
+
     return this.db
       .prepare(
         `INSERT INTO automations
@@ -214,6 +236,9 @@ export class AutomationStore {
       "schedule_tz",
       "model",
       "reasoning_effort",
+      "repo_owner",
+      "repo_name",
+      "repo_id",
       "base_branch",
       "next_run_at",
       "enabled",
@@ -244,6 +269,17 @@ export class AutomationStore {
   }
 
   async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
+    if (
+      "repo_owner" in fields ||
+      "repo_name" in fields ||
+      "repo_id" in fields ||
+      "base_branch" in fields
+    ) {
+      const current = await this.getById(id);
+      if (!current) return null;
+      assertAutomationRepositoryFields({ ...current, ...fields });
+    }
+
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
     return this.getById(id);

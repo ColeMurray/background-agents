@@ -88,6 +88,63 @@ describe("initializeSession", () => {
     expect(stubFetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 42 }],
+    ["repository context without repoId", { repoOwner: "acme", repoName: "web-app", repoId: null }],
+  ])("rejects invalid repository tuples before writing D1: %s", async (_name, repoFields) => {
+    await expect(
+      initializeSession(createEnv(), { ...baseInput, ...repoFields }, ctx as never)
+    ).rejects.toThrow("Repository context must include repoOwner, repoName, and repoId together");
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(stubFetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["branch", { branch: "feature-1", defaultBranch: null }],
+    ["defaultBranch", { branch: null, defaultBranch: "main" }],
+  ])("rejects %s for no-repository sessions before writing D1", async (_name, branchFields) => {
+    await expect(
+      initializeSession(
+        createEnv(),
+        {
+          ...baseInput,
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          ...branchFields,
+        },
+        ctx as never
+      )
+    ).rejects.toThrow("No-repository sessions must not include branch context");
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(stubFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes branch fields to null for no-repository sessions", async () => {
+    await initializeSession(
+      createEnv(),
+      {
+        ...baseInput,
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        branch: null,
+        defaultBranch: null,
+      },
+      ctx as never
+    );
+
+    const d1Entry = createMock.mock.calls[0][0];
+    expect(d1Entry.baseBranch).toBeNull();
+
+    const request = stubFetchMock.mock.calls[0][0] as Request;
+    const body = (await request.json()) as Record<string, unknown>;
+    expect(body.defaultBranch).toBeNull();
+    expect(body.branch).toBeNull();
+  });
+
   it("throws when DO init returns a non-ok response", async () => {
     stubFetchMock.mockResolvedValue(new Response("Internal error", { status: 500 }));
 

@@ -45,6 +45,7 @@ import { getAvailableModels, getSlackDefaultModel } from "./app-home/models";
 import { slackInteractionPayloadSchema } from "./interaction-payload";
 
 const log = createLogger("handler");
+const THREAD_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
@@ -215,7 +216,7 @@ async function lookupThreadSession(
 
 /**
  * Store a session mapping for a thread.
- * TTL is 24 hours by default.
+ * TTL is THREAD_SESSION_TTL_SECONDS by default.
  */
 async function storeThreadSession(
   env: Env,
@@ -226,7 +227,7 @@ async function storeThreadSession(
   try {
     const key = getThreadSessionKey(channel, threadTs);
     await createKvCacheStore(env.SLACK_KV).put(key, JSON.stringify(session), {
-      expirationTtl: 86400, // 24 hours
+      expirationTtl: THREAD_SESSION_TTL_SECONDS,
     });
   } catch (e) {
     log.error("kv.put", {

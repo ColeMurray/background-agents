@@ -10,10 +10,11 @@ const logger = createLogger("session-integration-settings");
  */
 export async function resolveCodeServerEnabled(
   db: D1Database | undefined,
-  repoOwner: string,
-  repoName: string
+  repoOwner: string | null,
+  repoName: string | null
 ): Promise<boolean> {
   if (!db) return false;
+  if (!repoOwner || !repoName) return false;
   const repo = `${repoOwner}/${repoName}`;
   try {
     const store = new IntegrationSettingsStore(db);
@@ -36,10 +37,22 @@ export async function resolveCodeServerEnabled(
  */
 export async function resolveSandboxSettings(
   db: D1Database | undefined,
-  repoOwner: string,
-  repoName: string
+  repoOwner: string | null,
+  repoName: string | null
 ): Promise<SandboxSettings> {
   if (!db) return {};
+  if (!repoOwner || !repoName) {
+    try {
+      const store = new IntegrationSettingsStore(db);
+      const globalSettings = await store.getGlobal("sandbox");
+      return (globalSettings?.defaults ?? {}) as SandboxSettings;
+    } catch (e) {
+      logger.warn("Failed to resolve global sandbox settings, using defaults", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return {};
+    }
+  }
   const repo = `${repoOwner}/${repoName}`;
   try {
     const store = new IntegrationSettingsStore(db);

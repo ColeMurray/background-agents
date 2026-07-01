@@ -237,11 +237,35 @@ describe("DaytonaSandboxProvider", () => {
 
       await provider.createSandbox(baseCreateConfig);
 
-      const labels = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].labels;
+      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      const labels = createCall.labels;
       expect(labels).toEqual({
         openinspect_framework: "open-inspect",
         openinspect_session_id: "session-123",
         openinspect_repo: "testowner/testrepo",
+        openinspect_expected_sandbox_id: "sandbox-456",
+      });
+    });
+
+    it("omits repo label for no-repository sandboxes", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await provider.createSandbox({
+        ...baseCreateConfig,
+        repoOwner: null,
+        repoName: null,
+      });
+
+      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(createCall.env).toMatchObject({
+        REPO_OWNER: "",
+        REPO_NAME: "",
+      });
+      const labels = createCall.labels;
+      expect(labels).toEqual({
+        openinspect_framework: "open-inspect",
+        openinspect_session_id: "session-123",
         openinspect_expected_sandbox_id: "sandbox-456",
       });
     });
