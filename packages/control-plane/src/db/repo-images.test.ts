@@ -31,6 +31,8 @@ const QUERY_PATTERNS = {
     /^SELECT id, provider, provider_session_id, status FROM repo_images WHERE id = \?$/,
   UPDATE_CALLBACK_USED:
     /^UPDATE repo_images SET callback_token_used_at = \? WHERE id = \? AND provider = \? AND provider_session_id = \? AND status = 'building' AND callback_token_hash = \? AND callback_token_expires_at >= \? AND callback_token_used_at IS NULL$/,
+  UPDATE_FAILED_WITH_CALLBACK_TOKEN:
+    /^UPDATE repo_images SET status = 'failed', error_message = \?, callback_token_used_at = \? WHERE id = \? AND provider = \? AND provider_session_id = \? AND status = 'building' AND callback_token_hash = \? AND callback_token_expires_at >= \? AND callback_token_used_at IS NULL$/,
   SELECT_READY_FOR_REPO:
     /^SELECT id, provider_image_id, provider_session_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready' AND id <> \? AND \( created_at < \? OR \(created_at = \? AND id < \?\) \) ORDER BY created_at DESC, id DESC$/,
   UPDATE_READY:
@@ -285,6 +287,35 @@ class FakeD1Database {
         row.callback_token_expires_at >= now &&
         row.callback_token_used_at === null
       ) {
+        row.callback_token_used_at = usedAt;
+        return { meta: { changes: 1 } };
+      }
+      return { meta: { changes: 0 } };
+    }
+
+    if (QUERY_PATTERNS.UPDATE_FAILED_WITH_CALLBACK_TOKEN.test(normalized)) {
+      const [error, usedAt, id, provider, providerSessionId, tokenHash, now] = args as [
+        string,
+        number,
+        string,
+        string,
+        string,
+        string,
+        number,
+      ];
+      const row = this.rows.get(id);
+      if (
+        row &&
+        row.provider === provider &&
+        row.provider_session_id === providerSessionId &&
+        row.status === "building" &&
+        row.callback_token_hash === tokenHash &&
+        row.callback_token_expires_at !== null &&
+        row.callback_token_expires_at >= now &&
+        row.callback_token_used_at === null
+      ) {
+        row.status = "failed";
+        row.error_message = error;
         row.callback_token_used_at = usedAt;
         return { meta: { changes: 1 } };
       }
@@ -654,6 +685,113 @@ describe("RepoImageStore", () => {
       ).resolves.toBeNull();
 
       const status = await store.getStatus("acme", "repo");
+      expect(status[0].callback_token_used_at).toBeNull();
+    });
+
+    it("returns callback builds only while they are building", async () => {
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+      });
+
+      await expect(store.getCallbackBuild("img-vercel")).resolves.toMatchObject({
+        id: "img-vercel",
+        status: "building",
+      });
+
+      await store.markBuildFailed("img-vercel", "vercel", "setup failed");
+
+      await expect(store.getCallbackBuild("img-vercel")).resolves.toBeNull();
+
+      await store.registerBuild({
+        id: "img-ready",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+      await store.markBuildReady("img-ready", "modal", "modal-img-1", "sha", 1_000);
+      await expect(store.getCallbackBuild("img-ready")).resolves.toBeNull();
+
+      db.seedRow({
+        id: "img-superseded",
+        repo_owner: "acme",
+        repo_name: "repo",
+        provider: "modal",
+        provider_session_id: null,
+        provider_image_id: "modal-img-old",
+        base_sha: "sha",
+        base_branch: "main",
+        status: "superseded",
+        build_duration_seconds: 1,
+        error_message: null,
+        callback_token_hash: null,
+        callback_token_expires_at: null,
+        callback_token_used_at: null,
+        created_at: Date.now(),
+      });
+      await expect(store.getCallbackBuild("img-superseded")).resolves.toBeNull();
+    });
+
+    it("marks provider-session builds failed and consumes callback token together", async () => {
+      const now = Date.now();
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+        callbackTokenHash: "token-hash",
+        callbackTokenExpiresAt: now + 60_000,
+      });
+      await store.bindProviderSession("img-vercel", "vercel", "vercel-session-1");
+
+      await expect(
+        store.markBuildFailedWithCallbackToken({
+          buildId: "img-vercel",
+          provider: "vercel",
+          providerSessionId: "vercel-session-1",
+          tokenHash: "token-hash",
+          error: "setup failed",
+          now,
+        })
+      ).resolves.toBe(true);
+
+      const status = await store.getStatus("acme", "repo");
+      expect(status[0].status).toBe("failed");
+      expect(status[0].error_message).toBe("setup failed");
+      expect(status[0].callback_token_used_at).toBe(now);
+    });
+
+    it("does not consume callback tokens when provider-session failure auth does not match", async () => {
+      const now = Date.now();
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+        callbackTokenHash: "token-hash",
+        callbackTokenExpiresAt: now + 60_000,
+      });
+      await store.bindProviderSession("img-vercel", "vercel", "vercel-session-1");
+
+      await expect(
+        store.markBuildFailedWithCallbackToken({
+          buildId: "img-vercel",
+          provider: "vercel",
+          providerSessionId: "other-session",
+          tokenHash: "token-hash",
+          error: "setup failed",
+          now,
+        })
+      ).resolves.toBe(false);
+
+      const status = await store.getStatus("acme", "repo");
+      expect(status[0].status).toBe("building");
       expect(status[0].callback_token_used_at).toBeNull();
     });
   });

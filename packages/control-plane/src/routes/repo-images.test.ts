@@ -286,6 +286,47 @@ describe("repo image routes", () => {
     expect(row.callback_token_used_at).toBeNull();
   });
 
+  it.each(["null", "[]", "true", '"not-an-object"'])(
+    "rejects non-object build-complete callback bodies: %s",
+    async (body) => {
+      const row: RepoImageRow = {
+        id: "build-1",
+        repo_owner: "acme",
+        repo_name: "repo",
+        provider: "vercel",
+        provider_session_id: "vercel-session-1",
+        base_branch: "main",
+        provider_image_id: "",
+        status: "building",
+        base_sha: "",
+        build_duration_seconds: null,
+        error_message: null,
+        callback_token_hash: null,
+        callback_token_expires_at: null,
+        callback_token_used_at: null,
+        created_at: Date.now(),
+      };
+
+      const response = await buildCompleteRoute().handler(
+        new Request("https://test.local/repo-images/build-complete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body,
+        }),
+        createEnv(createRepoImageDb(row)),
+        [] as unknown as RegExpMatchArray,
+        createContext([])
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+      expect(vercelClient.snapshotSession).not.toHaveBeenCalled();
+      expect(row.status).toBe("building");
+    }
+  );
+
   it("rejects oversized build-complete callback bodies before parsing", async () => {
     const row: RepoImageRow = {
       id: "build-1",

@@ -13,6 +13,12 @@ import type {
 const logger = createLogger("repo-images:vercel-adapter");
 const MS_PER_SECOND = 1000;
 
+/**
+ * Vercel adapter for provider-session repo image builds.
+ *
+ * Builds run in a temporary Vercel sandbox. On success, the adapter turns that
+ * sandbox into the durable repo image artifact; cleanup hooks handle teardown.
+ */
 export class VercelRepoImageBuildAdapter implements RepoImageBuildAdapter<VercelRepoImageBuildPlan> {
   constructor(private readonly provider: VercelSandboxProvider) {}
 

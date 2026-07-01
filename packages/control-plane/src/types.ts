@@ -95,8 +95,6 @@ export interface Env {
   DAYTONA_TARGET?: string; // Optional Daytona target name
   OPENCOMPUTER_API_URL?: string; // OpenComputer REST API base URL
   OPENCOMPUTER_TEMPLATE?: string; // Declarative template containing sandbox runtime
-  OPENCOMPUTER_PROJECT_ID?: string; // Optional OpenComputer project/workspace scope
-  OPENCOMPUTER_TARGET?: string; // Optional OpenComputer target/region/cell
   VERCEL_PROJECT_ID?: string; // Vercel project ID used for Sandbox API scope
   VERCEL_TEAM_ID?: string; // Optional Vercel team ID used for Sandbox API scope
   VERCEL_BASE_SNAPSHOT_ID?: string; // Optional prebuilt base snapshot with sandbox runtime

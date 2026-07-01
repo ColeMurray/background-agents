@@ -3,6 +3,12 @@ import type { Env } from "../types";
 import type { RepoImageProvider } from "./model";
 import type { RepoImageCallbackMode } from "./types";
 
+/**
+ * Central provider policy for repo image support.
+ *
+ * Keep capability and callback-mode decisions here so routes/workflows can work
+ * from provider-neutral lifecycle terms instead of open-coded provider checks.
+ */
 const REPO_IMAGE_CALLBACK_MODES = {
   modal: "provider_image",
   vercel: "provider_session",

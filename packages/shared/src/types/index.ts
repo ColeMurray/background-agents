@@ -564,51 +564,72 @@ function hasRepositoryIdentifier(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+interface CreateSessionRepositoryFields {
+  repoOwner?: string | null;
+  repoName?: string | null;
+  branch?: string;
+}
+
+function hasMatchingRepositoryIdentifiers(data: CreateSessionRepositoryFields): boolean {
+  return hasRepositoryIdentifier(data.repoOwner) === hasRepositoryIdentifier(data.repoName);
+}
+
+function hasRepositoryForBranch(data: CreateSessionRepositoryFields): boolean {
+  return hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim();
+}
+
 // API response types
-export const createSessionRequestSchema = z
-  .object({
-    repoOwner: z.string().trim().min(1).nullish(),
-    repoName: z.string().trim().min(1).nullish(),
-    title: z.string().optional(),
-    model: z.string().optional(),
-    reasoningEffort: z.string().optional(),
-    branch: z.string().optional(),
+const createSessionRequestBaseSchema = z.object({
+  repoOwner: z.string().trim().min(1).nullish(),
+  repoName: z.string().trim().min(1).nullish(),
+  title: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  branch: z.string().optional(),
+});
+
+export const createSessionRequestSchema = createSessionRequestBaseSchema
+  .refine(hasMatchingRepositoryIdentifiers, {
+    message: "repoOwner and repoName must be provided together",
+    path: ["repoName"],
   })
-  .refine(
-    (data) => hasRepositoryIdentifier(data.repoOwner) === hasRepositoryIdentifier(data.repoName),
-    {
-      message: "repoOwner and repoName must be provided together",
-      path: ["repoName"],
-    }
-  )
-  .refine((data) => hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim(), {
+  .refine(hasRepositoryForBranch, {
     message: "branch requires repoOwner and repoName",
     path: ["branch"],
   });
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
-export const createSessionInputSchema = createSessionRequestSchema.extend({
-  userId: z.string().optional(),
-  spawnSource: spawnSourceSchema.optional(),
-  authProvider: z.enum(["github", "google"]).optional(),
-  authUserId: z.string().optional(),
-  authEmail: z.string().optional(),
-  authName: z.string().optional(),
-  authAvatarUrl: z.string().optional(),
-  scmUserId: z.string().optional(),
-  scmLogin: z.string().optional(),
-  scmName: z.string().optional(),
-  scmEmail: z.string().optional(),
-  scmAvatarUrl: z.string().optional(),
-  actorUserId: z.string().optional(),
-  actorDisplayName: z.string().optional(),
-  actorEmail: z.string().optional(),
-  actorAvatarUrl: z.string().optional(),
-  scmToken: z.string().optional(),
-  scmRefreshToken: z.string().optional(),
-  scmTokenExpiresAt: z.number().optional(),
-});
+export const createSessionInputSchema = createSessionRequestBaseSchema
+  .extend({
+    userId: z.string().optional(),
+    spawnSource: spawnSourceSchema.optional(),
+    authProvider: z.enum(["github", "google"]).optional(),
+    authUserId: z.string().optional(),
+    authEmail: z.string().optional(),
+    authName: z.string().optional(),
+    authAvatarUrl: z.string().optional(),
+    scmUserId: z.string().optional(),
+    scmLogin: z.string().optional(),
+    scmName: z.string().optional(),
+    scmEmail: z.string().optional(),
+    scmAvatarUrl: z.string().optional(),
+    actorUserId: z.string().optional(),
+    actorDisplayName: z.string().optional(),
+    actorEmail: z.string().optional(),
+    actorAvatarUrl: z.string().optional(),
+    scmToken: z.string().optional(),
+    scmRefreshToken: z.string().optional(),
+    scmTokenExpiresAt: z.number().optional(),
+  })
+  .refine(hasMatchingRepositoryIdentifiers, {
+    message: "repoOwner and repoName must be provided together",
+    path: ["repoName"],
+  })
+  .refine(hasRepositoryForBranch, {
+    message: "branch requires repoOwner and repoName",
+    path: ["branch"],
+  });
 
 export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 
