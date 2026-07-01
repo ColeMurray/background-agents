@@ -230,7 +230,7 @@ class TestInstallTools:
         assert len(js_files) == 3
 
     def test_repository_tools_skipped_without_repository(self, tmp_path):
-        """Repo-only PR tools are skipped, but child-spawn tools remain available."""
+        """Repo-only PR and spawn tools should not be installed for no-repo sessions."""
         sup = _make_supervisor()
         sup.repo_owner = ""
         sup.repo_name = ""
@@ -256,7 +256,7 @@ class TestInstallTools:
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "_bridge-client.js").exists()
         assert not (tool_dest / "create-pull-request.js").exists()
-        assert (tool_dest / "spawn-task.js").exists()
+        assert not (tool_dest / "spawn-task.js").exists()
         assert (tool_dest / "get-task-status.js").exists()
         assert (tool_dest / "get-task-status-format.js").exists()
         assert (tool_dest / "cancel-task.js").exists()

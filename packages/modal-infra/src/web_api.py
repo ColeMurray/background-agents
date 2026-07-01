@@ -72,19 +72,12 @@ def require_valid_control_plane_url(url: str | None) -> None:
         )
 
 
-def _normalize_optional_repository_context(
-    repo_owner: str | None, repo_name: str | None
-) -> tuple[str | None, str | None]:
-    normalized_owner = repo_owner.strip() if isinstance(repo_owner, str) else None
-    normalized_name = repo_name.strip() if isinstance(repo_name, str) else None
-    normalized_owner = normalized_owner or None
-    normalized_name = normalized_name or None
-    if (normalized_owner is None) != (normalized_name is None):
+def require_complete_repo_pair(repo_owner: str | None, repo_name: str | None) -> None:
+    if bool(repo_owner) != bool(repo_name):
         raise HTTPException(
             status_code=400,
             detail="repo_owner and repo_name must be provided together",
         )
-    return normalized_owner, normalized_name
 
 
 @app.function(
@@ -127,6 +120,10 @@ async def api_create_sandbox(
     control_plane_url = request.get("control_plane_url")
     require_valid_control_plane_url(control_plane_url)
 
+    repo_owner = request.get("repo_owner")
+    repo_name = request.get("repo_name")
+    require_complete_repo_pair(repo_owner, repo_name)
+
     try:
         # Import types and manager directly
         from .sandbox import SessionConfig
@@ -136,10 +133,6 @@ async def api_create_sandbox(
 
         snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
-        repo_owner, repo_name = _normalize_optional_repository_context(
-            request.get("repo_owner"),
-            request.get("repo_name"),
-        )
         fallback_clone_token = (
             resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
@@ -187,10 +180,6 @@ async def api_create_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
     except Exception as e:
         outcome = "error"
         http_status = 500
@@ -447,18 +436,18 @@ async def api_restore_sandbox(
     if not snapshot_image_id:
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
+    session_config = request.get("session_config", {})
+    repo_owner = session_config.get("repo_owner") if isinstance(session_config, dict) else None
+    repo_name = session_config.get("repo_name") if isinstance(session_config, dict) else None
+    require_complete_repo_pair(repo_owner, repo_name)
+
     try:
         from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
 
-        session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
-        repo_owner, repo_name = _normalize_optional_repository_context(
-            session_config.get("repo_owner") if isinstance(session_config, dict) else None,
-            session_config.get("repo_name") if isinstance(session_config, dict) else None,
-        )
 
         manager = SandboxManager()
         clone_token = resolve_clone_token() if repo_owner and repo_name else None

@@ -161,7 +161,7 @@ describe("toAutomation", () => {
 
   it("rejects partial repository fields", () => {
     expect(() => toAutomation({ ...sampleRow, repo_name: null })).toThrow(
-      "Automation repository context must include repo_owner and repo_name together"
+      "Automation repository target must include repo_owner and repo_name together"
     );
   });
 });
@@ -197,53 +197,6 @@ describe("AutomationStore", () => {
       expect(statements[0].params[1]).toBe("Daily sync");
       expect(statements[0].params[2]).toBe("acme");
       expect(statements[0].params[3]).toBe("web-app");
-    });
-
-    it("rejects repo-less rows with branch metadata", async () => {
-      const { db } = createFakeD1();
-      const store = new AutomationStore(db);
-
-      await expect(
-        store.create({
-          ...sampleRow,
-          repo_owner: null,
-          repo_name: null,
-          base_branch: "main",
-          repo_id: null,
-        })
-      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
-    });
-  });
-
-  describe("update", () => {
-    it("rejects branch updates that would leave a repo-less row with branch metadata", async () => {
-      const { db } = createFakeD1({
-        firstResult: {
-          ...sampleRow,
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-          base_branch: null,
-        },
-      });
-      const store = new AutomationStore(db);
-
-      await expect(store.update(sampleRow.id, { base_branch: "main" })).rejects.toThrow(
-        "Automation base_branch and repo_id require repository context"
-      );
-    });
-
-    it("rejects clearing repository fields while leaving the existing branch", async () => {
-      const { db } = createFakeD1({ firstResult: sampleRow });
-      const store = new AutomationStore(db);
-
-      await expect(
-        store.update(sampleRow.id, {
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-        })
-      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
     });
   });
 
@@ -459,11 +412,46 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("started_at = ?");
     });
 
+    it("updates resolved target metadata fields", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+      await store.updateRun("run_test1", {
+        target_repo_owner: "acme",
+        target_repo_name: "api",
+        target_repo_id: 67890,
+        target_base_branch: "develop",
+      });
+
+      expect(statements[0].sql).toContain("target_repo_owner = ?");
+      expect(statements[0].sql).toContain("target_repo_name = ?");
+      expect(statements[0].sql).toContain("target_repo_id = ?");
+      expect(statements[0].sql).toContain("target_base_branch = ?");
+    });
+
     it("skips update when no fields provided", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
       await store.updateRun("run_test1", {});
       expect(statements).toHaveLength(0);
+    });
+  });
+
+  describe("materializeRunGroupChildren", () => {
+    it("updates expected run count and inserts child runs in one batch", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.materializeRunGroupChildren("group_test1", 2, [
+        sampleRunRow,
+        { ...sampleRunRow, id: "run_test2" },
+      ]);
+
+      expect(statements).toHaveLength(3);
+      expect(statements[0].sql).toContain("UPDATE automation_run_groups");
+      expect(statements[0].sql).toContain("expected_runs = ?");
+      expect(statements[0].params).toContain(2);
+      expect(statements[1].sql).toContain("INSERT INTO automation_runs");
+      expect(statements[2].sql).toContain("INSERT INTO automation_runs");
     });
   });
 

@@ -23,9 +23,13 @@ import {
 import {
   AutomationStore,
   toAutomationRun,
+  toAutomationRunGroup,
   isDuplicateKeyError,
   type AutomationRow,
   type AutomationRunRow,
+  type AutomationRunGroupRow,
+  type AutomationTargetRow,
+  type EnrichedRunGroupRow,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import {
@@ -46,7 +50,10 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
-import { resolveAutomationRepository } from "../automation/repository";
+import {
+  resolveAutomationSessionLaunches,
+  resolveAutomationTargetRow,
+} from "../automation/target-resolution";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -69,7 +76,7 @@ const RECOVERY_SWEEP_LIMIT = 50;
  * does not create new runs, so this is measured from the root run's `created_at` and
  * does not slide — a reply after the window forks a fresh run.
  */
-const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function formatAutomationTargetLabel(
   automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
@@ -77,6 +84,73 @@ function formatAutomationTargetLabel(
   return automation?.repo_owner && automation?.repo_name
     ? `${automation.repo_owner}/${automation.repo_name}`
     : "No repository";
+}
+
+function deriveGroupStatus(
+  summary: Pick<
+    EnrichedRunGroupRow,
+    | "expected_runs"
+    | "total_runs"
+    | "starting_runs"
+    | "running_runs"
+    | "completed_runs"
+    | "failed_runs"
+    | "skipped_runs"
+  >
+): AutomationRunGroupRow["status"] {
+  const observedRuns =
+    summary.starting_runs +
+    summary.running_runs +
+    summary.completed_runs +
+    summary.failed_runs +
+    summary.skipped_runs;
+  const materializationIncomplete =
+    summary.expected_runs > 0 && observedRuns < summary.expected_runs;
+
+  if (materializationIncomplete) {
+    if (summary.failed_runs + summary.skipped_runs > 0) return "partial_failed";
+    if (summary.starting_runs > 0 || summary.running_runs > 0) return "running";
+    return "starting";
+  }
+
+  if (summary.total_runs === 0) return "starting";
+  if (summary.completed_runs === summary.total_runs) return "completed";
+  if (summary.failed_runs + summary.skipped_runs === summary.total_runs) {
+    return summary.skipped_runs === summary.total_runs ? "skipped" : "failed";
+  }
+  if (summary.failed_runs + summary.skipped_runs > 0) {
+    return "partial_failed";
+  }
+  if (summary.starting_runs > 0 || summary.running_runs > 0) return "running";
+  return "failed";
+}
+
+function groupStatusIsTerminal(
+  status: AutomationRunGroupRow["status"],
+  summary: Pick<
+    EnrichedRunGroupRow,
+    | "expected_runs"
+    | "starting_runs"
+    | "running_runs"
+    | "completed_runs"
+    | "failed_runs"
+    | "skipped_runs"
+  >
+): boolean {
+  const observedRuns =
+    summary.starting_runs +
+    summary.running_runs +
+    summary.completed_runs +
+    summary.failed_runs +
+    summary.skipped_runs;
+  if (summary.expected_runs > 0 && observedRuns < summary.expected_runs) return false;
+  if (summary.starting_runs > 0 || summary.running_runs > 0) return false;
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "partial_failed" ||
+    status === "skipped"
+  );
 }
 
 export class SchedulerDO extends DurableObject<Env> {
@@ -173,6 +247,20 @@ export class SchedulerDO extends DurableObject<Env> {
 
     for (const automation of overdue) {
       try {
+        const targets = await store.getTargetsForAutomation(automation.id);
+        if (targets.length > 1) {
+          const result = await this.processScheduledMultiRepoAutomation(
+            store,
+            automation,
+            targets,
+            now
+          );
+          processed += result.processed;
+          skipped += result.skipped;
+          failed += result.failed;
+          continue;
+        }
+
         // Concurrency check — advance next_run_at to avoid repeat skip inserts
         const activeRun = await store.getActiveRunForAutomation(automation.id);
         if (activeRun) {
@@ -277,6 +365,237 @@ export class SchedulerDO extends DurableObject<Env> {
     });
   }
 
+  private async processScheduledMultiRepoAutomation(
+    store: AutomationStore,
+    automation: AutomationRow,
+    targets: AutomationTargetRow[],
+    now: number
+  ): Promise<{ processed: number; skipped: number; failed: number }> {
+    const nextRunAt = nextCronOccurrence(
+      automation.schedule_cron!,
+      automation.schedule_tz
+    ).getTime();
+    const scheduledAt = automation.next_run_at!;
+
+    const activeGroup = await store.getActiveRunGroupForAutomation(automation.id);
+    if (activeGroup) {
+      await store.createRunGroupAndAdvanceSchedule(
+        {
+          id: generateId(),
+          automation_id: automation.id,
+          status: "skipped",
+          skip_reason: "concurrent_run_active",
+          failure_reason: null,
+          scheduled_at: scheduledAt,
+          started_at: null,
+          completed_at: now,
+          created_at: now,
+          updated_at: now,
+          failure_counted_at: null,
+          expected_runs: 0,
+        },
+        automation.id,
+        nextRunAt
+      );
+      return { processed: 0, skipped: 1, failed: 0 };
+    }
+
+    const groupId = generateId();
+    const group: AutomationRunGroupRow = {
+      id: groupId,
+      automation_id: automation.id,
+      status: "starting",
+      skip_reason: null,
+      failure_reason: null,
+      scheduled_at: scheduledAt,
+      started_at: now,
+      completed_at: null,
+      created_at: now,
+      updated_at: now,
+      failure_counted_at: null,
+      expected_runs: 0,
+    };
+
+    await store.createRunGroupAndAdvanceSchedule(group, automation.id, nextRunAt);
+
+    try {
+      await this.startMultiRepoRunGroup(store, automation, group, targets);
+      return { processed: 1, skipped: 0, failed: 0 };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await store.updateRunGroup(groupId, {
+        status: "failed",
+        failure_reason: message,
+        completed_at: Date.now(),
+      });
+      await this.trackRunGroupTerminalStatus(store, automation.id, groupId, "failed");
+      this.log.error("Failed to start multi-repo automation group", {
+        event: "scheduler.multi_repo_group_failed",
+        automation_id: automation.id,
+        group_id: groupId,
+        error: message,
+      });
+      return { processed: 0, skipped: 0, failed: 1 };
+    }
+  }
+
+  private async startMultiRepoRunGroup(
+    store: AutomationStore,
+    automation: AutomationRow,
+    group: AutomationRunGroupRow,
+    targets: AutomationTargetRow[]
+  ): Promise<void> {
+    if (targets.length < 2 || targets.length > 10) {
+      throw new Error("Multi-repository automation must have 2-10 targets");
+    }
+
+    const childRuns = targets.map((target) => ({
+      target,
+      run: this.buildMultiRepoChildRunRow(automation.id, group, target),
+    }));
+
+    await store.materializeRunGroupChildren(
+      group.id,
+      targets.length,
+      childRuns.map(({ run }) => run)
+    );
+
+    await Promise.all(
+      childRuns.map(({ target, run }) =>
+        this.startMultiRepoChildRun(store, automation, run.id, target)
+      )
+    );
+    await this.refreshRunGroupStatus(store, automation.id, group.id);
+  }
+
+  private buildMultiRepoChildRunRow(
+    automationId: string,
+    group: AutomationRunGroupRow,
+    targetRow: AutomationTargetRow
+  ): AutomationRunRow {
+    const runId = generateId();
+    const now = Date.now();
+
+    return {
+      id: runId,
+      automation_id: automationId,
+      session_id: null,
+      status: "starting",
+      skip_reason: null,
+      failure_reason: null,
+      scheduled_at: group.scheduled_at,
+      started_at: null,
+      completed_at: null,
+      created_at: now,
+      trigger_key: null,
+      concurrency_key: null,
+      group_id: group.id,
+      target_repo_owner: targetRow.repo_owner,
+      target_repo_name: targetRow.repo_name,
+      target_repo_id: targetRow.repo_id,
+      target_base_branch: targetRow.base_branch,
+    };
+  }
+
+  private async startMultiRepoChildRun(
+    store: AutomationStore,
+    automation: AutomationRow,
+    runId: string,
+    targetRow: AutomationTargetRow
+  ): Promise<void> {
+    try {
+      const target = await resolveAutomationTargetRow(this.env, targetRow);
+      await store.updateRun(runId, {
+        target_repo_owner: target.repoOwner,
+        target_repo_name: target.repoName,
+        target_repo_id: target.repoId,
+        target_base_branch: target.baseBranch,
+      });
+      const { sessionId } = await this.createSessionForAutomation(automation, runId, target);
+      await this.sendPromptToSession(
+        sessionId,
+        automation,
+        runId,
+        this.buildMultiRepoInstructions(automation, target)
+      );
+
+      await store.updateRun(runId, {
+        status: "running",
+        session_id: sessionId,
+        started_at: Date.now(),
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await store.updateRun(runId, {
+        status: "failed",
+        failure_reason: message,
+        completed_at: Date.now(),
+      });
+    }
+  }
+
+  private buildMultiRepoInstructions(
+    automation: AutomationRow,
+    target: { repoOwner: string; repoName: string }
+  ): string {
+    return [
+      `Automation target: ${target.repoOwner}/${target.repoName}`,
+      "This is one repository in a multi-repository scheduled maintenance run.",
+      "---",
+      "",
+      automation.instructions,
+    ].join("\n");
+  }
+
+  private async refreshRunGroupStatus(
+    store: AutomationStore,
+    automationId: string,
+    groupId: string
+  ): Promise<AutomationRunGroupRow["status"] | null> {
+    const summary = await store.getRunGroupSummary(groupId);
+    if (!summary) return null;
+
+    const status = deriveGroupStatus(summary);
+    const terminal = groupStatusIsTerminal(status, summary);
+    const completedAt = terminal ? Date.now() : null;
+    await store.updateRunGroup(groupId, {
+      status,
+      completed_at: completedAt,
+    });
+
+    if (status === "partial_failed" || terminal) {
+      await this.trackRunGroupTerminalStatus(store, automationId, groupId, status);
+    }
+
+    return status;
+  }
+
+  private async trackRunGroupTerminalStatus(
+    store: AutomationStore,
+    automationId: string,
+    groupId: string,
+    status: AutomationRunGroupRow["status"]
+  ): Promise<void> {
+    if (status === "completed") {
+      await store.resetConsecutiveFailures(automationId);
+      return;
+    }
+    if (status === "skipped") return;
+
+    const counted = await store.tryMarkRunGroupFailureCounted(groupId, Date.now());
+    if (!counted) return;
+
+    const count = await store.incrementConsecutiveFailures(automationId);
+    if (count >= AUTO_PAUSE_THRESHOLD) {
+      await store.autoPause(automationId);
+      this.log.warn("Automation auto-paused due to consecutive failed groups", {
+        event: "scheduler.auto_pause",
+        automation_id: automationId,
+        consecutive_failures: count,
+      });
+    }
+  }
+
   // ─── Recovery sweep ──────────────────────────────────────────────────────
 
   private async recoverySweep(store: AutomationStore): Promise<void> {
@@ -285,13 +604,16 @@ export class SchedulerDO extends DurableObject<Env> {
       10
     );
 
-    const [orphanedResult, timedOutResult] = await Promise.allSettled([
+    const [orphanedResult, timedOutResult, orphanedGroupsResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
       store.getTimedOutRunningRuns(executionTimeoutMs, RECOVERY_SWEEP_LIMIT),
+      store.getOrphanedActiveRunGroups(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
     ]);
 
     const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
     const timedOut = timedOutResult.status === "fulfilled" ? timedOutResult.value : [];
+    const orphanedGroups =
+      orphanedGroupsResult.status === "fulfilled" ? orphanedGroupsResult.value : [];
 
     if (orphanedResult.status === "rejected") {
       this.log.error("Recovery sweep failed to query orphaned runs", {
@@ -315,7 +637,18 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
-    if (orphaned.length === 0 && timedOut.length === 0) return;
+    if (orphanedGroupsResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query orphaned run groups", {
+        event: "scheduler.recovery.query_error",
+        category: "orphaned_groups",
+        error:
+          orphanedGroupsResult.reason instanceof Error
+            ? orphanedGroupsResult.reason.message
+            : String(orphanedGroupsResult.reason),
+      });
+    }
+
+    if (orphaned.length === 0 && timedOut.length === 0 && orphanedGroups.length === 0) return;
 
     for (const run of orphaned) {
       this.log.warn("Recovering orphaned starting run", {
@@ -329,6 +662,13 @@ export class SchedulerDO extends DurableObject<Env> {
         event: "scheduler.recovery.timed_out",
         run_id: run.id,
         automation_id: run.automation_id,
+      });
+    }
+    for (const group of orphanedGroups) {
+      this.log.warn("Recovering orphaned active run group", {
+        event: "scheduler.recovery.orphaned_group",
+        automation_id: group.automation_id,
+        group_id: group.id,
       });
     }
 
@@ -371,22 +711,54 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
+    for (const group of orphanedGroups) {
+      try {
+        const activeChildRunIds = (await store.listRunsForGroup(group.id))
+          .filter((run) => run.status === "starting" || run.status === "running")
+          .map((run) => run.id);
+        if (activeChildRunIds.length > 0) {
+          await store.bulkFailRuns(activeChildRunIds, "group_start_timeout", now);
+        }
+        await store.failRunGroup(group.id, "group_start_timeout", now);
+        await this.trackRunGroupTerminalStatus(store, group.automation_id, group.id, "failed");
+      } catch (e) {
+        this.log.error("Recovery sweep failed to mark orphaned run group as failed", {
+          event: "scheduler.recovery.group_fail_error",
+          automation_id: group.automation_id,
+          group_id: group.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
     if (recoveredRuns.length === 0) return;
 
     const automationCounts = new Map<string, number>();
-    for (const run of recoveredRuns) {
+    const groupedRuns = recoveredRuns.filter((run) => run.group_id);
+    for (const run of recoveredRuns.filter((candidate) => !candidate.group_id)) {
       automationCounts.set(run.automation_id, (automationCounts.get(run.automation_id) ?? 0) + 1);
     }
 
-    let newCounts: Map<string, number>;
-    try {
-      newCounts = await store.bulkIncrementFailures(automationCounts);
-    } catch (e) {
-      this.log.error("Recovery sweep failed to track failures", {
-        event: "scheduler.recovery.bulk_track_error",
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return;
+    let newCounts = new Map<string, number>();
+    if (automationCounts.size > 0) {
+      try {
+        newCounts = await store.bulkIncrementFailures(automationCounts);
+      } catch (e) {
+        this.log.error("Recovery sweep failed to track failures", {
+          event: "scheduler.recovery.bulk_track_error",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+    }
+
+    const groupedByGroupId = new Map<string, AutomationRunRow>();
+    for (const run of groupedRuns) {
+      if (run.group_id) groupedByGroupId.set(run.group_id, run);
+    }
+
+    for (const [groupId, run] of groupedByGroupId) {
+      await this.refreshRunGroupStatus(store, run.automation_id, groupId);
     }
 
     for (const [automationId, count] of newCounts) {
@@ -598,6 +970,11 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
+    const targets = await store.getTargetsForAutomation(automationId);
+    if (targets.length > 1) {
+      return this.handleMultiRepoTrigger(store, automation, targets);
+    }
+
     // Concurrency check
     const activeRun = await store.getActiveRunForAutomation(automationId);
     if (activeRun) {
@@ -669,6 +1046,80 @@ export class SchedulerDO extends DurableObject<Env> {
     }
   }
 
+  private async handleMultiRepoTrigger(
+    store: AutomationStore,
+    automation: AutomationRow,
+    targets: AutomationTargetRow[]
+  ): Promise<Response> {
+    const activeGroup = await store.getActiveRunGroupForAutomation(automation.id);
+    if (activeGroup) {
+      return new Response(JSON.stringify({ error: "An active run already exists" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const now = Date.now();
+    const groupId = generateId();
+    const group: AutomationRunGroupRow = {
+      id: groupId,
+      automation_id: automation.id,
+      status: "starting",
+      skip_reason: null,
+      failure_reason: null,
+      scheduled_at: now,
+      started_at: now,
+      completed_at: null,
+      created_at: now,
+      updated_at: now,
+      failure_counted_at: null,
+      expected_runs: 0,
+    };
+
+    await store.insertRunGroup(group);
+
+    try {
+      await this.startMultiRepoRunGroup(store, automation, group, targets);
+      const summary = await store.getRunGroupSummary(groupId);
+      const runs = await store.listRunsForGroup(groupId);
+      if (summary) summary.runs = runs;
+
+      this.log.info("Manual multi-repo trigger succeeded", {
+        event: "scheduler.manual_multi_repo_trigger",
+        automation_id: automation.id,
+        group_id: groupId,
+      });
+
+      return new Response(
+        JSON.stringify({ group: summary ? toAutomationRunGroup(summary) : { id: groupId } }),
+        {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await store.updateRunGroup(groupId, {
+        status: "failed",
+        failure_reason: message,
+        completed_at: Date.now(),
+      });
+      await this.trackRunGroupTerminalStatus(store, automation.id, groupId, "failed");
+
+      this.log.error("Manual multi-repo trigger failed", {
+        event: "scheduler.manual_multi_repo_trigger_failed",
+        automation_id: automation.id,
+        group_id: groupId,
+        error: message,
+      });
+
+      return new Response(JSON.stringify({ error: "Failed to trigger automation" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
   // ─── Run complete callback ───────────────────────────────────────────────
 
   private async handleRunComplete(request: Request): Promise<Response> {
@@ -695,6 +1146,37 @@ export class SchedulerDO extends DurableObject<Env> {
         current_status: run?.status ?? "not_found",
       });
       return new Response(JSON.stringify({ ok: true, ignored: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (run.group_id) {
+      if (body.success) {
+        await store.updateRun(body.runId, {
+          status: "completed",
+          completed_at: Date.now(),
+        });
+      } else {
+        await store.updateRun(body.runId, {
+          status: "failed",
+          failure_reason: body.error || "Unknown error",
+          completed_at: Date.now(),
+        });
+      }
+
+      const groupStatus = await this.refreshRunGroupStatus(store, body.automationId, run.group_id);
+
+      this.log.info("Grouped run child completed", {
+        event: "scheduler.grouped_run_child_complete",
+        automation_id: body.automationId,
+        group_id: run.group_id,
+        run_id: body.runId,
+        session_id: body.sessionId,
+        success: body.success,
+        group_status: groupStatus,
+      });
+
+      return new Response(JSON.stringify({ ok: true }), {
         headers: { "Content-Type": "application/json" },
       });
     }
@@ -878,10 +1360,17 @@ export class SchedulerDO extends DurableObject<Env> {
 
   private async createSessionForAutomation(
     automation: AutomationRow,
-    runId: string
+    runId: string,
+    targetOverride?: {
+      repoOwner: string | null;
+      repoName: string | null;
+      repoId: number | null;
+      baseBranch: string | null;
+    }
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
-    const repository = await resolveAutomationRepository(this.env, automation);
+    const launch =
+      targetOverride ?? (await resolveAutomationSessionLaunches(this.env, automation))[0];
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -903,10 +1392,7 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    const repoOwner = repository?.repoOwner ?? null;
-    const repoName = repository?.repoName ?? null;
-    const repoId = repository?.repoId ?? null;
-    const baseBranch = repository?.baseBranch ?? null;
+    const { repoOwner, repoName, repoId, baseBranch } = launch;
 
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
       resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),

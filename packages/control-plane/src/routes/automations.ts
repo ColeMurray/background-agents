@@ -16,13 +16,16 @@ import {
   type CreateAutomationRequest,
   type UpdateAutomationRequest,
   type AutomationTriggerType,
+  type AutomationTargetInput,
   type TriggerConfig,
 } from "@open-inspect/shared";
 import {
   AutomationStore,
   toAutomation,
   toAutomationRun,
+  toAutomationRunGroup,
   type AutomationRow,
+  type AutomationTargetRow,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
@@ -38,9 +41,7 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
-  normalizeOptionalRepositoryContext,
-  RepositoryContextValidationError,
-  type OptionalRepositoryContext,
+  normalizeOptionalRepositoryTarget,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -58,26 +59,15 @@ const MAX_INSTRUCTIONS_LENGTH = 15_000;
 /** Warn if next run is more than 31 days away. */
 const FAR_FUTURE_THRESHOLD_MS = 31 * 24 * 60 * 60 * 1000;
 
+const MIN_MULTI_REPO_TARGETS = 2;
+const MAX_MULTI_REPO_TARGETS = 10;
+
 function resolveReasoningEffort(
   model: string,
   reasoningEffort: string | null | undefined
 ): string | null {
   if (reasoningEffort === undefined || reasoningEffort === null) return null;
   return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
-}
-
-function parseRepositoryContext(
-  input: { repoOwner?: string | null; repoName?: string | null },
-  partialMessage?: string
-): OptionalRepositoryContext | Response {
-  try {
-    return normalizeOptionalRepositoryContext(input, partialMessage);
-  } catch (e) {
-    if (e instanceof RepositoryContextValidationError) {
-      return error(e.message, 400);
-    }
-    throw e;
-  }
 }
 
 /**
@@ -124,6 +114,89 @@ function validateSlackTriggerConfig(
   return null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeTargetInput(target: {
+  repoOwner: string;
+  repoName: string;
+}): AutomationTargetInput {
+  return {
+    repoOwner: target.repoOwner.trim().toLowerCase(),
+    repoName: target.repoName.trim().toLowerCase(),
+  };
+}
+
+function validateTargetInputs(
+  targets: unknown,
+  options: { min: number; max: number }
+): { targets: AutomationTargetInput[] } | { error: string } {
+  if (!Array.isArray(targets)) {
+    return { error: "targets must be an array" };
+  }
+
+  if (
+    targets.some(
+      (target) =>
+        !isRecord(target) ||
+        typeof target.repoOwner !== "string" ||
+        typeof target.repoName !== "string"
+    )
+  ) {
+    return { error: "targets must include repoOwner and repoName" };
+  }
+
+  const normalized = (targets as Array<{ repoOwner: string; repoName: string }>).map(
+    normalizeTargetInput
+  );
+  if (normalized.some((target) => !target.repoOwner || !target.repoName)) {
+    return { error: "targets must include repoOwner and repoName" };
+  }
+
+  const seen = new Set<string>();
+  for (const target of normalized) {
+    const key = `${target.repoOwner}/${target.repoName}`;
+    if (seen.has(key)) {
+      return { error: "targets must not include duplicate repositories" };
+    }
+    seen.add(key);
+  }
+
+  if (normalized.length < options.min || normalized.length > options.max) {
+    return {
+      error: `multi-repository automations require ${options.min}-${options.max} repository targets`,
+    };
+  }
+
+  return { targets: normalized };
+}
+
+async function resolveAutomationTargets(
+  env: Env,
+  targets: AutomationTargetInput[],
+  ctx: RequestContext
+): Promise<AutomationTargetRow[] | Response> {
+  const now = Date.now();
+  const rows: AutomationTargetRow[] = [];
+
+  for (const target of targets) {
+    const resolved = await resolveRepoOrError(env, target.repoOwner, target.repoName, ctx, logger);
+    if (resolved instanceof Response) return resolved;
+    rows.push({
+      automation_id: "",
+      repo_owner: resolved.repoOwner.toLowerCase(),
+      repo_name: resolved.repoName.toLowerCase(),
+      repo_id: resolved.repoId,
+      base_branch: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  return rows;
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 async function handleListAutomations(
@@ -138,9 +211,14 @@ async function handleListAutomations(
 
   const store = new AutomationStore(env.DB);
   const result = await store.list({ repoOwner, repoName });
+  const targetsByAutomation = await store.getTargetsForAutomationIds(
+    result.automations.map((automation) => automation.id)
+  );
 
   return json({
-    automations: result.automations.map(toAutomation),
+    automations: result.automations.map((automation) =>
+      toAutomation(automation, targetsByAutomation.get(automation.id) ?? [])
+    ),
     total: result.total,
   });
 }
@@ -172,8 +250,15 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  const repositoryContext = parseRepositoryContext(body);
-  if (repositoryContext instanceof Response) return repositoryContext;
+  const repoTarget = normalizeOptionalRepositoryTarget(body);
+  if (!repoTarget.ok) return error(repoTarget.message, 400);
+  const hasMultiRepoTargets = body.targets !== undefined;
+  if (
+    hasMultiRepoTargets &&
+    (body.repoOwner !== undefined || body.repoName !== undefined || body.baseBranch !== undefined)
+  ) {
+    return error("repoOwner, repoName, and baseBranch cannot be provided with targets", 400);
+  }
 
   // Validate trigger type
   const triggerType: AutomationTriggerType = body.triggerType || "schedule";
@@ -188,11 +273,20 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
-  if (!repositoryContext && (triggerType === "github_event" || triggerType === "linear_event")) {
+  if (!repoTarget.target && (triggerType === "github_event" || triggerType === "linear_event")) {
     return error("repoOwner and repoName are required for repo-scoped triggers", 400);
   }
-  if (!repositoryContext && body.baseBranch?.trim()) {
-    return error("baseBranch requires repoOwner and repoName", 400);
+  if (hasMultiRepoTargets && triggerType !== "schedule") {
+    return error("multi-repository automations are only supported for schedule triggers", 400);
+  }
+  const targetInputs = hasMultiRepoTargets
+    ? validateTargetInputs(body.targets, {
+        min: MIN_MULTI_REPO_TARGETS,
+        max: MAX_MULTI_REPO_TARGETS,
+      })
+    : { targets: [] };
+  if ("error" in targetInputs) {
+    return error(targetInputs.error, 400);
   }
 
   const isSchedule = triggerType === "schedule";
@@ -256,16 +350,32 @@ async function handleCreateAutomation(
   let repoName: string | null = null;
   let repoId: number | null = null;
   let baseBranch: string | null = null;
+  let targetRows: AutomationTargetRow[] = [];
 
-  if (repositoryContext) {
-    repoOwner = repositoryContext.repoOwner;
-    repoName = repositoryContext.repoName;
+  if (repoTarget.target) {
+    repoOwner = repoTarget.target.repoOwner;
+    repoName = repoTarget.target.repoName;
 
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
     if (resolved instanceof Response) return resolved;
 
     repoId = resolved.repoId;
     baseBranch = body.baseBranch || resolved.defaultBranch;
+    targetRows = [
+      {
+        automation_id: "",
+        repo_owner: resolved.repoOwner.toLowerCase(),
+        repo_name: resolved.repoName.toLowerCase(),
+        repo_id: resolved.repoId,
+        base_branch: baseBranch,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      },
+    ];
+  } else if (hasMultiRepoTargets) {
+    const resolvedTargets = await resolveAutomationTargets(env, targetInputs.targets, ctx);
+    if (resolvedTargets instanceof Response) return resolvedTargets;
+    targetRows = resolvedTargets;
   }
 
   // Compute next run (only for schedule triggers)
@@ -341,6 +451,7 @@ async function handleCreateAutomation(
     trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
     trigger_auth_data: triggerAuthData,
   };
+  targetRows = targetRows.map((target) => ({ ...target, automation_id: id }));
 
   // Persist the automation and (for slack_event) its watched-channel index in a
   // single atomic write, so the canonical trigger_config and the channel index
@@ -350,13 +461,16 @@ async function handleCreateAutomation(
     const slackStore = new SlackChannelStore(env.DB);
     await env.DB.batch([
       store.bindAutomationInsert(row),
+      ...targetRows.map((target) => store.bindTargetInsert(target)),
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig)),
     ]);
+  } else if (targetRows.length > 0) {
+    await store.createWithTargets(row, targetRows);
   } else {
     await store.create(row);
   }
 
-  const automation = toAutomation((await store.getById(id))!);
+  const automation = toAutomation((await store.getById(id))!, targetRows);
 
   logger.info("automation.created", {
     event: "automation.created",
@@ -404,8 +518,9 @@ async function handleGetAutomation(
   const store = new AutomationStore(env.DB);
   const row = await store.getById(id);
   if (!row) return error("Automation not found", 404);
+  const targets = await store.getTargetsForAutomation(id);
 
-  return json({ automation: toAutomation(row) });
+  return json({ automation: toAutomation(row, targets) });
 }
 
 async function handleUpdateAutomation(
@@ -461,6 +576,124 @@ async function handleUpdateAutomation(
     return error("Invalid model", 400);
   }
 
+  const existingTargets = await store.getTargetsForAutomation(id);
+  const existingTargetCount =
+    existingTargets.length > 0
+      ? existingTargets.length
+      : existing.repo_owner && existing.repo_name
+        ? 1
+        : 0;
+  const targetChangeRequested =
+    body.targets !== undefined ||
+    body.repoOwner !== undefined ||
+    body.repoName !== undefined ||
+    (body.baseBranch !== undefined && existingTargetCount <= 1);
+
+  let targetRowsForUpdate: AutomationTargetRow[] | null = null;
+  let targetFieldUpdates: Partial<AutomationRow> = {};
+
+  if (targetChangeRequested) {
+    const [activeRun, activeGroup] = await Promise.all([
+      store.getActiveRunForAutomation(id),
+      store.getActiveRunGroupForAutomation(id),
+    ]);
+    if (activeRun || activeGroup) {
+      return error("Cannot change automation targets while a run is active", 409);
+    }
+
+    let nextTargetCount: number;
+
+    if (body.targets !== undefined) {
+      if (
+        body.repoOwner !== undefined ||
+        body.repoName !== undefined ||
+        body.baseBranch !== undefined
+      ) {
+        return error("repoOwner, repoName, and baseBranch cannot be provided with targets", 400);
+      }
+      if (existing.trigger_type !== "schedule") {
+        return error("multi-repository automations are only supported for schedule triggers", 400);
+      }
+      const targetInputs = validateTargetInputs(body.targets, {
+        min: MIN_MULTI_REPO_TARGETS,
+        max: MAX_MULTI_REPO_TARGETS,
+      });
+      if ("error" in targetInputs) {
+        return error(targetInputs.error, 400);
+      }
+      const resolvedTargets = await resolveAutomationTargets(env, targetInputs.targets, ctx);
+      if (resolvedTargets instanceof Response) return resolvedTargets;
+      targetRowsForUpdate = resolvedTargets.map((target) => ({ ...target, automation_id: id }));
+      targetFieldUpdates = {
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      nextTargetCount = targetRowsForUpdate.length;
+    } else {
+      const repoTarget = normalizeOptionalRepositoryTarget({
+        repoOwner: body.repoOwner !== undefined ? body.repoOwner : existing.repo_owner,
+        repoName: body.repoName !== undefined ? body.repoName : existing.repo_name,
+      });
+      if (!repoTarget.ok) return error(repoTarget.message, 400);
+
+      if (
+        !repoTarget.target &&
+        (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event")
+      ) {
+        return error("repoOwner and repoName are required for repo-scoped triggers", 400);
+      }
+
+      if (!repoTarget.target) {
+        targetRowsForUpdate = [];
+        targetFieldUpdates = {
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        };
+        nextTargetCount = 0;
+      } else {
+        const resolved = await resolveRepoOrError(
+          env,
+          repoTarget.target.repoOwner,
+          repoTarget.target.repoName,
+          ctx,
+          logger
+        );
+        if (resolved instanceof Response) return resolved;
+        const baseBranch = body.baseBranch ?? existing.base_branch ?? resolved.defaultBranch;
+        const now = Date.now();
+        targetRowsForUpdate = [
+          {
+            automation_id: id,
+            repo_owner: resolved.repoOwner.toLowerCase(),
+            repo_name: resolved.repoName.toLowerCase(),
+            repo_id: resolved.repoId,
+            base_branch: baseBranch,
+            created_at: now,
+            updated_at: now,
+          },
+        ];
+        targetFieldUpdates = {
+          repo_owner: resolved.repoOwner.toLowerCase(),
+          repo_name: resolved.repoName.toLowerCase(),
+          repo_id: resolved.repoId,
+          base_branch: baseBranch,
+        };
+        nextTargetCount = 1;
+      }
+    }
+
+    if (nextTargetCount !== existingTargetCount && (await store.hasRunHistory(id))) {
+      return error(
+        "Cannot change automation repository cardinality after runs have been created",
+        409
+      );
+    }
+  }
+
   const nextModel = body.model !== undefined ? getValidModelOrDefault(body.model) : existing.model;
   const requestedReasoningEffort = body.reasoningEffort;
   const resolvedReasoningEffort =
@@ -481,56 +714,13 @@ async function handleUpdateAutomation(
   // Build update fields
   const updateFields: Record<string, unknown> = {};
   if (body.name !== undefined) updateFields.name = body.name.trim();
+  Object.assign(updateFields, targetFieldUpdates);
   if (body.instructions !== undefined) updateFields.instructions = body.instructions;
   if (body.scheduleCron !== undefined) updateFields.schedule_cron = body.scheduleCron;
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
   if (body.model !== undefined) updateFields.model = nextModel;
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
-  }
-
-  const repoOwnerChanged = "repoOwner" in body;
-  const repoNameChanged = "repoName" in body;
-  const repositoryChanged = repoOwnerChanged || repoNameChanged;
-  if (repositoryChanged) {
-    if (repoOwnerChanged !== repoNameChanged) {
-      return error("repoOwner and repoName must be provided together", 400);
-    }
-
-    const repositoryContext = parseRepositoryContext(body);
-    if (repositoryContext instanceof Response) return repositoryContext;
-
-    if (!repositoryContext) {
-      if (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event") {
-        return error("repoOwner and repoName are required for repo-scoped triggers", 400);
-      }
-      if (body.baseBranch?.trim()) {
-        return error("baseBranch requires repoOwner and repoName", 400);
-      }
-      updateFields.repo_owner = null;
-      updateFields.repo_name = null;
-      updateFields.repo_id = null;
-      updateFields.base_branch = null;
-    } else {
-      const resolved = await resolveRepoOrError(
-        env,
-        repositoryContext.repoOwner,
-        repositoryContext.repoName,
-        ctx,
-        logger
-      );
-      if (resolved instanceof Response) return resolved;
-
-      updateFields.repo_owner = repositoryContext.repoOwner;
-      updateFields.repo_name = repositoryContext.repoName;
-      updateFields.repo_id = resolved.repoId;
-      updateFields.base_branch = body.baseBranch || resolved.defaultBranch;
-    }
-  } else if (body.baseBranch !== undefined) {
-    if (!existing.repo_owner || !existing.repo_name) {
-      return error("baseBranch requires repoOwner and repoName", 400);
-    }
-    updateFields.base_branch = body.baseBranch;
   }
 
   // Update event type — only for non-schedule types
@@ -619,14 +809,26 @@ async function handleUpdateAutomation(
       id,
       extractSlackChannels(body.triggerConfig)
     );
+    const targetStatements =
+      targetRowsForUpdate === null
+        ? []
+        : [
+            store.bindTargetDelete(id),
+            ...targetRowsForUpdate.map((target) => store.bindTargetInsert(target)),
+          ];
     await env.DB.batch(
-      updateStatement ? [updateStatement, ...channelStatements] : channelStatements
+      updateStatement
+        ? [updateStatement, ...targetStatements, ...channelStatements]
+        : [...targetStatements, ...channelStatements]
     );
     updated = await store.getById(id);
+  } else if (targetRowsForUpdate !== null) {
+    updated = await store.updateWithTargets(id, updateFields, targetRowsForUpdate);
   } else {
     updated = await store.update(id, updateFields);
   }
   if (!updated) return error("Automation not found", 404);
+  const targets = await store.getTargetsForAutomation(id);
 
   logger.info("automation.updated", {
     event: "automation.updated",
@@ -635,7 +837,7 @@ async function handleUpdateAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json({ automation: toAutomation(updated) });
+  return json({ automation: toAutomation(updated, targets) });
 }
 
 async function handleDeleteAutomation(
@@ -682,7 +884,8 @@ async function handlePauseAutomation(
   });
 
   const row = await store.getById(id);
-  return json({ automation: row ? toAutomation(row) : null });
+  const targets = row ? await store.getTargetsForAutomation(id) : [];
+  return json({ automation: row ? toAutomation(row, targets) : null });
 }
 
 async function handleResumeAutomation(
@@ -722,7 +925,8 @@ async function handleResumeAutomation(
   });
 
   const row = await store.getById(id);
-  return json({ automation: row ? toAutomation(row) : null });
+  const targets = row ? await store.getTargetsForAutomation(id) : [];
+  return json({ automation: row ? toAutomation(row, targets) : null });
 }
 
 async function handleTriggerAutomation(
@@ -799,6 +1003,17 @@ async function handleListRuns(
   const url = new URL(request.url);
   const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "20") || 20, 100));
   const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0") || 0);
+
+  const targets = await store.getTargetsForAutomation(automationId);
+  if (targets.length > 1) {
+    const result = await store.listRunGroupsForAutomation(automationId, { limit, offset });
+    const groups = result.groups.map(toAutomationRunGroup);
+    return json({
+      runs: groups.flatMap((group) => group.runs),
+      groups,
+      total: result.total,
+    });
+  }
 
   const result = await store.listRunsForAutomation(automationId, { limit, offset });
 

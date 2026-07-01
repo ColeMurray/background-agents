@@ -54,6 +54,14 @@ function describeTrigger(automation: Automation): string {
   return label;
 }
 
+function describeTarget(automation: Automation): string {
+  if (automation.targets.length > 1) {
+    const count = automation.targets.length;
+    return `${count} ${count === 1 ? "repository" : "repositories"}`;
+  }
+  return formatRepoLabel(automation.repoOwner, automation.repoName);
+}
+
 export function AutomationsList({
   automations,
   onPause,
@@ -145,7 +153,7 @@ export function AutomationsList({
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1">
               <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-              {formatRepoLabel(automation.repoOwner, automation.repoName)}
+              {describeTarget(automation)}
             </span>
             <span className="inline-flex items-center gap-1">
               <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />

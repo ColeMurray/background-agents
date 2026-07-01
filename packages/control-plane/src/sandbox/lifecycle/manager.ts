@@ -532,6 +532,7 @@ export class SandboxLifecycleManager {
 
   private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
     if (!this.config.slackAgentNotifyLookup) return false;
+    if (!sessionHasRepository(session)) return false;
     try {
       return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
         sessionHasRepository(session) ? session.repo_owner : null,

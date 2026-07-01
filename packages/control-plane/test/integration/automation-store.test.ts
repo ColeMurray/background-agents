@@ -5,6 +5,7 @@ import {
   toAutomation,
   toAutomationRun,
   type AutomationRow,
+  type AutomationRunGroupRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -59,8 +60,91 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
   };
 }
 
+function makeRunGroup(
+  automationId: string,
+  overrides?: Partial<AutomationRunGroupRow>
+): AutomationRunGroupRow {
+  const now = Date.now();
+  return {
+    id: `group-${Math.random().toString(36).slice(2, 8)}`,
+    automation_id: automationId,
+    status: "starting",
+    skip_reason: null,
+    failure_reason: null,
+    scheduled_at: now,
+    started_at: now,
+    completed_at: null,
+    created_at: now,
+    updated_at: now,
+    failure_counted_at: null,
+    expected_runs: 0,
+    ...overrides,
+  };
+}
+
 describe("AutomationStore (D1 integration)", () => {
   beforeEach(cleanD1Tables);
+
+  it("enforces automation repository target invariants in D1", async () => {
+    const schema = await env.DB.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'automations'"
+    ).first<{ sql: string }>();
+
+    expect(schema?.sql).toContain("CHECK ((repo_owner IS NULL) = (repo_name IS NULL))");
+    expect(schema?.sql).toContain("CHECK (repo_owner IS NOT NULL OR base_branch IS NULL)");
+    expect(schema?.sql).toContain("CHECK (repo_owner IS NOT NULL OR repo_id IS NULL)");
+
+    const now = Date.now();
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO automations (
+          id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+          trigger_type, schedule_tz, model, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          "auto-invalid-no-repo-branch",
+          "Invalid no-repo branch",
+          null,
+          null,
+          "main",
+          null,
+          "Run tests",
+          "schedule",
+          "UTC",
+          "anthropic/claude-sonnet-4-6",
+          "user-1",
+          now,
+          now
+        )
+        .run()
+    ).rejects.toThrow();
+
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO automations (
+          id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+          trigger_type, schedule_tz, model, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          "auto-invalid-partial-repo",
+          "Invalid partial repo",
+          "acme",
+          null,
+          "main",
+          12345,
+          "Run tests",
+          "schedule",
+          "UTC",
+          "anthropic/claude-sonnet-4-6",
+          "user-1",
+          now,
+          now
+        )
+        .run()
+    ).rejects.toThrow();
+  });
 
   // ─── CRUD ─────────────────────────────────────────────────────────────────
 
@@ -367,6 +451,113 @@ describe("AutomationStore (D1 integration)", () => {
       expect(run!.started_at).toBe(now + 1000);
     });
 
+    it("updates resolved target metadata on a run", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-r3-target" }));
+
+      await store.insertRun(
+        makeRun("auto-r3-target", {
+          id: "run-u-target",
+          target_repo_owner: "acme",
+          target_repo_name: "api",
+          target_repo_id: null,
+          target_base_branch: null,
+        })
+      );
+
+      await store.updateRun("run-u-target", {
+        target_repo_owner: "acme",
+        target_repo_name: "api",
+        target_repo_id: 67890,
+        target_base_branch: "develop",
+      });
+
+      const run = await store.getRunById("auto-r3-target", "run-u-target");
+      expect(run).toMatchObject({
+        target_repo_owner: "acme",
+        target_repo_name: "api",
+        target_repo_id: 67890,
+        target_base_branch: "develop",
+      });
+    });
+
+    it("materializes grouped child runs with an expected run count", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-r3-group" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-r3-group", {
+          id: "group-r3-materialize",
+          expected_runs: 0,
+          created_at: now,
+        })
+      );
+
+      await store.materializeRunGroupChildren("group-r3-materialize", 2, [
+        makeRun("auto-r3-group", {
+          id: "run-r3-web",
+          group_id: "group-r3-materialize",
+          target_repo_owner: "acme",
+          target_repo_name: "web-app",
+          scheduled_at: now,
+        }),
+        makeRun("auto-r3-group", {
+          id: "run-r3-api",
+          group_id: "group-r3-materialize",
+          target_repo_owner: "acme",
+          target_repo_name: "api",
+          scheduled_at: now + 1,
+        }),
+      ]);
+
+      const group = await store.getRunGroupSummary("group-r3-materialize");
+      expect(group).toMatchObject({
+        expected_runs: 2,
+        total_runs: 2,
+        starting_runs: 2,
+      });
+      await expect(store.listRunsForGroup("group-r3-materialize")).resolves.toHaveLength(2);
+    });
+
+    it("uses expected child count for group totals while preserving observed status counts", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-r3-incomplete" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-r3-incomplete", {
+          id: "group-r3-incomplete",
+          expected_runs: 3,
+          created_at: now,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-r3-incomplete", {
+          id: "run-r3-done-1",
+          group_id: "group-r3-incomplete",
+          status: "completed",
+          completed_at: now,
+          scheduled_at: now,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-r3-incomplete", {
+          id: "run-r3-done-2",
+          group_id: "group-r3-incomplete",
+          status: "completed",
+          completed_at: now,
+          scheduled_at: now + 1,
+        })
+      );
+
+      const group = await store.getRunGroupSummary("group-r3-incomplete");
+      expect(group).toMatchObject({
+        expected_runs: 3,
+        materialized_runs: 2,
+        total_runs: 3,
+        completed_runs: 2,
+      });
+    });
+
     it("detects active runs (starting or running)", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -402,6 +593,36 @@ describe("AutomationStore (D1 integration)", () => {
 
       const active = await store.getActiveRunForAutomation("auto-r5");
       expect(active).toBeNull();
+    });
+
+    it("treats partial_failed groups without completed_at as active", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-active-partial" }));
+      await store.create(makeAutomation({ id: "auto-terminal-partial" }));
+
+      await store.insertRunGroup(
+        makeRunGroup("auto-active-partial", {
+          id: "group-active-partial",
+          status: "partial_failed",
+          completed_at: null,
+          created_at: now,
+        })
+      );
+      await store.insertRunGroup(
+        makeRunGroup("auto-terminal-partial", {
+          id: "group-terminal-partial",
+          status: "partial_failed",
+          completed_at: now,
+          created_at: now,
+        })
+      );
+
+      const active = await store.getActiveRunGroupForAutomation("auto-active-partial");
+      expect(active?.id).toBe("group-active-partial");
+
+      const terminal = await store.getActiveRunGroupForAutomation("auto-terminal-partial");
+      expect(terminal).toBeNull();
     });
 
     it("lists runs with pagination", async () => {
@@ -445,7 +666,7 @@ describe("AutomationStore (D1 integration)", () => {
         repoName: "web-app",
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: null,
-        baseBranch: null,
+        baseBranch: "main",
         status: "completed",
         createdAt: now,
         updatedAt: now,
@@ -468,6 +689,21 @@ describe("AutomationStore (D1 integration)", () => {
       const mapped = toAutomationRun(run!);
       expect(mapped.sessionTitle).toBe("Auto Session Title");
       expect(mapped.sessionId).toBe("sess-enriched");
+    });
+
+    it("detects history from ungrouped runs and grouped runs", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-history-run" }));
+      await store.create(makeAutomation({ id: "auto-history-group" }));
+      await store.create(makeAutomation({ id: "auto-history-empty" }));
+
+      expect(await store.hasRunHistory("auto-history-empty")).toBe(false);
+
+      await store.insertRun(makeRun("auto-history-run", { id: "run-history-1" }));
+      expect(await store.hasRunHistory("auto-history-run")).toBe(true);
+
+      await store.insertRunGroup(makeRunGroup("auto-history-group", { id: "group-history-1" }));
+      expect(await store.hasRunHistory("auto-history-group")).toBe(true);
     });
   });
 
@@ -545,6 +781,44 @@ describe("AutomationStore (D1 integration)", () => {
 
       const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
       expect(timedOut).toHaveLength(0);
+    });
+
+    it("finds old active groups with fewer child runs than expected", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      const tenMinutesAgo = now - 10 * 60 * 1000;
+      await store.create(makeAutomation({ id: "auto-rec-incomplete-group" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-rec-incomplete-group", {
+          id: "group-rec-incomplete",
+          status: "starting",
+          expected_runs: 3,
+          created_at: tenMinutesAgo,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-rec-incomplete-group", {
+          id: "run-rec-child-1",
+          group_id: "group-rec-incomplete",
+          status: "completed",
+          completed_at: now,
+          scheduled_at: tenMinutesAgo,
+          created_at: tenMinutesAgo,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-rec-incomplete-group", {
+          id: "run-rec-child-2",
+          group_id: "group-rec-incomplete",
+          status: "completed",
+          completed_at: now,
+          created_at: tenMinutesAgo + 1,
+          scheduled_at: tenMinutesAgo + 1,
+        })
+      );
+
+      const orphaned = await store.getOrphanedActiveRunGroups(5 * 60 * 1000, 50);
+      expect(orphaned.map((group) => group.id)).toContain("group-rec-incomplete");
     });
 
     it("drains oldest orphaned runs first when LIMIT is hit", async () => {
@@ -636,12 +910,21 @@ describe("AutomationStore (D1 integration)", () => {
 
     it("resets consecutive failures to zero", async () => {
       const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-f2", consecutive_failures: 5 }));
+      await store.create(
+        makeAutomation({
+          id: "auto-f2",
+          enabled: 0,
+          next_run_at: null,
+          consecutive_failures: 5,
+        })
+      );
 
       await store.resetConsecutiveFailures("auto-f2");
 
       const row = await store.getById("auto-f2");
       expect(row!.consecutive_failures).toBe(0);
+      expect(row!.enabled).toBe(0);
+      expect(row!.next_run_at).toBeNull();
     });
 
     it("auto-pauses automation (disables + clears next_run_at)", async () => {
@@ -655,6 +938,60 @@ describe("AutomationStore (D1 integration)", () => {
       const row = await store.getById("auto-f3");
       expect(row!.enabled).toBe(0);
       expect(row!.next_run_at).toBeNull();
+    });
+
+    it("fails active partial_failed run groups during recovery", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      const completedAt = now + 1000;
+      await store.create(makeAutomation({ id: "auto-f4" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-f4", {
+          id: "group-f4",
+          status: "partial_failed",
+          completed_at: null,
+          created_at: now,
+        })
+      );
+
+      await store.failRunGroup("group-f4", "group_start_timeout", completedAt);
+
+      const group = await store.getRunGroupSummary("group-f4");
+      expect(group).toMatchObject({
+        status: "failed",
+        failure_reason: "group_start_timeout",
+        completed_at: completedAt,
+      });
+      await expect(store.getActiveRunGroupForAutomation("auto-f4")).resolves.toBeNull();
+    });
+
+    it("summarizes run groups using expected child count when rows are missing", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-f5" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-f5", {
+          id: "group-f5",
+          expected_runs: 3,
+        })
+      );
+      await store.insertRun(
+        makeRun("auto-f5", {
+          id: "run-f5-one",
+          status: "completed",
+          completed_at: Date.now(),
+          group_id: "group-f5",
+          target_repo_owner: "acme",
+          target_repo_name: "web-app",
+        })
+      );
+
+      const group = await store.getRunGroupSummary("group-f5");
+      expect(group).toMatchObject({
+        materialized_runs: 1,
+        total_runs: 3,
+        completed_runs: 1,
+        expected_runs: 3,
+      });
     });
   });
 

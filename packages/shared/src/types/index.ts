@@ -567,36 +567,48 @@ function hasRepositoryIdentifier(value: string | null | undefined): boolean {
 interface CreateSessionRepositoryFields {
   repoOwner?: string | null;
   repoName?: string | null;
-  branch?: string;
+  branch?: string | null;
 }
 
-function hasMatchingRepositoryIdentifiers(data: CreateSessionRepositoryFields): boolean {
-  return hasRepositoryIdentifier(data.repoOwner) === hasRepositoryIdentifier(data.repoName);
+function validateSessionRepoPair(value: CreateSessionRepositoryFields, ctx: z.RefinementCtx): void {
+  const repoOwnerMissing = !hasRepositoryIdentifier(value.repoOwner);
+  const repoNameMissing = !hasRepositoryIdentifier(value.repoName);
+  if (repoOwnerMissing !== repoNameMissing) {
+    ctx.addIssue({
+      code: "custom",
+      message: "repoOwner and repoName must be provided together",
+      path: repoOwnerMissing ? ["repoOwner"] : ["repoName"],
+    });
+  }
 }
 
-function hasRepositoryForBranch(data: CreateSessionRepositoryFields): boolean {
-  return hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim();
+function validateSessionRepositoryContext(
+  value: CreateSessionRepositoryFields,
+  ctx: z.RefinementCtx
+): void {
+  validateSessionRepoPair(value, ctx);
+
+  if (!hasRepositoryIdentifier(value.repoOwner) && value.branch?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      message: "branch requires repoOwner and repoName",
+      path: ["branch"],
+    });
+  }
 }
 
-// API response types
 const createSessionRequestBaseSchema = z.object({
-  repoOwner: z.string().trim().min(1).nullish(),
-  repoName: z.string().trim().min(1).nullish(),
+  repoOwner: z.string().nullish(),
+  repoName: z.string().nullish(),
   title: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   branch: z.string().optional(),
 });
 
-export const createSessionRequestSchema = createSessionRequestBaseSchema
-  .refine(hasMatchingRepositoryIdentifiers, {
-    message: "repoOwner and repoName must be provided together",
-    path: ["repoName"],
-  })
-  .refine(hasRepositoryForBranch, {
-    message: "branch requires repoOwner and repoName",
-    path: ["branch"],
-  });
+export const createSessionRequestSchema = createSessionRequestBaseSchema.superRefine(
+  validateSessionRepositoryContext
+);
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
@@ -622,14 +634,7 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     scmRefreshToken: z.string().optional(),
     scmTokenExpiresAt: z.number().optional(),
   })
-  .refine(hasMatchingRepositoryIdentifiers, {
-    message: "repoOwner and repoName must be provided together",
-    path: ["repoName"],
-  })
-  .refine(hasRepositoryForBranch, {
-    message: "branch requires repoOwner and repoName",
-    path: ["branch"],
-  });
+  .superRefine(validateSessionRepositoryContext);
 
 export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 
@@ -783,13 +788,33 @@ export type AutomationTriggerType =
   | "slack_event";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
+export type AutomationRunGroupStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "partial_failed"
+  | "skipped";
+
+export interface AutomationTarget {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string | null;
+}
+
+export interface AutomationTargetInput {
+  repoOwner: string;
+  repoName: string;
+}
 
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
 
-export interface Automation {
+export interface AutomationBase {
   id: string;
   name: string;
+  targets: AutomationTarget[];
   instructions: string;
   triggerType: AutomationTriggerType;
   scheduleCron: string | null;
@@ -811,7 +836,9 @@ export interface Automation {
   repoId: number | null;
 }
 
-export interface CreateAutomationRequest {
+export type Automation = AutomationBase;
+
+export interface CreateAutomationRequestBase {
   name: string;
   instructions: string;
   triggerType?: AutomationTriggerType;
@@ -825,18 +852,22 @@ export interface CreateAutomationRequest {
   repoOwner?: string | null;
   repoName?: string | null;
   baseBranch?: string | null;
+  targets?: AutomationTargetInput[];
 }
+
+export type CreateAutomationRequest = CreateAutomationRequestBase;
 
 export interface UpdateAutomationRequest {
   name?: string;
-  instructions?: string;
   repoOwner?: string | null;
   repoName?: string | null;
+  instructions?: string;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
   baseBranch?: string | null;
+  targets?: AutomationTargetInput[];
   eventType?: string;
   triggerConfig?: TriggerConfig;
 }
@@ -856,6 +887,32 @@ export interface AutomationRun {
   artifactSummary: string | null;
   triggerKey: string | null;
   concurrencyKey: string | null;
+  groupId: string | null;
+  targetRepoOwner: string | null;
+  targetRepoName: string | null;
+  targetRepoId: number | null;
+  targetBaseBranch: string | null;
+}
+
+export interface AutomationRunGroup {
+  id: string;
+  automationId: string;
+  status: AutomationRunGroupStatus;
+  skipReason: string | null;
+  failureReason: string | null;
+  scheduledAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  failureCountedAt: number | null;
+  totalRuns: number;
+  startingRuns: number;
+  runningRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  skippedRuns: number;
+  runs: AutomationRun[];
 }
 
 export interface ListAutomationsResponse {
@@ -865,6 +922,7 @@ export interface ListAutomationsResponse {
 
 export interface ListAutomationRunsResponse {
   runs: AutomationRun[];
+  groups?: AutomationRunGroup[];
   total: number;
 }
 

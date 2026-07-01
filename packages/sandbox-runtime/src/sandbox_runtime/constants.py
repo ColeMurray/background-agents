@@ -20,3 +20,15 @@ TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env"
 # Comma-separated tunnel ports the manager will resolve. Read by the entrypoint
 # to gate stale-file cleanup and the wait-for-fresh-URLs before start.sh.
 EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"
+
+# Boot mode values exposed to repo hooks through OPENINSPECT_BOOT_MODE.
+BOOT_MODE_UNKNOWN = "unknown"
+BOOT_MODE_NO_REPOSITORY = "no_repository"
+BOOT_MODE_BUILD = "build"
+BOOT_MODE_SNAPSHOT_RESTORE = "snapshot_restore"
+BOOT_MODE_REPO_IMAGE = "repo_image"
+BOOT_MODE_FRESH = "fresh"
+
+# Shared reason value for paths intentionally skipped because no repository is
+# available in the sandbox.
+NO_REPOSITORY_REASON = BOOT_MODE_NO_REPOSITORY

@@ -119,6 +119,22 @@ export class OpenAITokenRefreshService {
     tokenState: Extract<OpenAITokenState, { type: "refresh" }>,
     session: SessionRow
   ): Promise<OpenAITokenRefreshResult> {
+    let repoRefreshTarget: { repoId: number; repoOwner: string; repoName: string } | null = null;
+    if (tokenState.source === "repo") {
+      if (tokenState.repoId === null || !session.repo_owner || !session.repo_name) {
+        return {
+          ok: false,
+          status: 400,
+          error: "Repository-scoped OpenAI tokens require a repository target",
+        };
+      }
+      repoRefreshTarget = {
+        repoId: tokenState.repoId,
+        repoOwner: session.repo_owner,
+        repoName: session.repo_name,
+      };
+    }
+
     const tokens = await refreshOpenAIToken(tokenState.refreshToken);
     const accountId = extractOpenAIAccountId(tokens);
     const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
@@ -134,19 +150,12 @@ export class OpenAITokenRefreshService {
         secretsToWrite.OPENAI_OAUTH_ACCOUNT_ID = accountId;
       }
 
-      if (tokenState.source === "repo") {
-        if (tokenState.repoId === null || !session.repo_owner || !session.repo_name) {
-          return {
-            ok: false,
-            status: 400,
-            error: "Repository-scoped OpenAI tokens require a repository context",
-          };
-        }
+      if (repoRefreshTarget) {
         const repoStore = new RepoSecretsStore(this.db, this.encryptionKey);
         await repoStore.setSecrets(
-          tokenState.repoId,
-          session.repo_owner,
-          session.repo_name,
+          repoRefreshTarget.repoId,
+          repoRefreshTarget.repoOwner,
+          repoRefreshTarget.repoName,
           secretsToWrite
         );
       } else {

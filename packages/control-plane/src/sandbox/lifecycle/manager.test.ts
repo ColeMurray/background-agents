@@ -506,13 +506,13 @@ describe("SandboxLifecycleManager", () => {
           repoName: null,
           branch: null,
           codeServerEnabled: true,
-          agentSlackNotifyEnabled: true,
+          agentSlackNotifyEnabled: false,
           repoImageId: null,
           repoImageSha: null,
         })
       );
       expect(mcpServerLookup.getDecryptedForSession).toHaveBeenCalledWith(null, null);
-      expect(slackAgentNotifyLookup.isEnabledForRepo).toHaveBeenCalledWith(null, null);
+      expect(slackAgentNotifyLookup.isEnabledForRepo).not.toHaveBeenCalled();
       expect(repoImageLookup.getLatestReady).not.toHaveBeenCalled();
     });
 
@@ -2123,11 +2123,10 @@ describe("SandboxLifecycleManager", () => {
       lookup?: SlackAgentNotifyLookup;
       provider?: ReturnType<typeof createMockProvider>;
       sandbox?: ReturnType<typeof createMockSandbox>;
-      session?: ReturnType<typeof createMockSession>;
     }) {
       const sandbox =
         opts.sandbox ?? createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(opts.session ?? createMockSession(), sandbox);
+      const storage = createMockStorage(createMockSession(), sandbox);
       const provider = opts.provider ?? createMockProvider();
       const config = { ...createTestConfig(), slackAgentNotifyLookup: opts.lookup };
       const manager = new SandboxLifecycleManager(
@@ -2183,26 +2182,6 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("uses the global slack-notify lookup for no-repository sessions", async () => {
-      const lookup: SlackAgentNotifyLookup = {
-        isEnabledForRepo: vi.fn(async () => true),
-      };
-      const session = createMockSession({
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-      const { manager, provider } = buildManagerWith({ lookup, session });
-
-      await manager.spawnSandbox();
-
-      expect(lookup.isEnabledForRepo).toHaveBeenCalledWith(null, null);
-      expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ agentSlackNotifyEnabled: true })
-      );
-    });
-
     it("treats lookup failure as disabled and continues spawning", async () => {
       const lookup: SlackAgentNotifyLookup = {
         isEnabledForRepo: vi.fn(async () => {
@@ -2251,30 +2230,6 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ agentSlackNotifyEnabled: false })
-      );
-    });
-
-    it("uses the global slack-notify lookup for no-repository snapshot restores", async () => {
-      const lookup: SlackAgentNotifyLookup = {
-        isEnabledForRepo: vi.fn(async () => true),
-      };
-      const session = createMockSession({
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-      const { manager, provider } = buildManagerWith({
-        lookup,
-        session,
-        sandbox: snapshotSandbox(),
-      });
-
-      await manager.spawnSandbox();
-
-      expect(lookup.isEnabledForRepo).toHaveBeenCalledWith(null, null);
-      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ agentSlackNotifyEnabled: true })
       );
     });
 

@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
 import type { SessionRow } from "./types";
-import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
+import {
+  OpenAITokenRefreshService,
+  type OpenAITokenRefreshResult,
+} from "./openai-token-refresh-service";
 import { OpenAITokenRefreshError } from "../auth/openai";
 
 const mockState = vi.hoisted(() => ({
@@ -161,6 +164,84 @@ describe("OpenAITokenRefreshService", () => {
       status: 404,
       error: "OPENAI_OAUTH_REFRESH_TOKEN not configured",
     });
+  });
+
+  it("rejects invalid repo-scoped refresh state before rotating tokens", async () => {
+    type RefreshAttemptCapable = {
+      attemptRefresh(
+        tokenState: {
+          type: "refresh";
+          refreshToken: string;
+          source: "repo";
+          repoId: number | null;
+        },
+        session: SessionRow
+      ): Promise<OpenAITokenRefreshResult>;
+    };
+
+    const service = new OpenAITokenRefreshService(
+      {} as Env["DB"],
+      "enc-key",
+      async () => 123,
+      createLogger()
+    );
+
+    const result = await (service as unknown as RefreshAttemptCapable).attemptRefresh(
+      {
+        type: "refresh",
+        refreshToken: "refresh-old",
+        source: "repo",
+        repoId: 123,
+      },
+      createSession({ repo_owner: null, repo_name: null, repo_id: null, base_branch: null })
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: "Repository-scoped OpenAI tokens require a repository target",
+    });
+    expect(mockState.refreshImpl).not.toHaveBeenCalled();
+    expect(mockState.repoWrites).toEqual([]);
+  });
+
+  it("rejects repo-scoped refresh state with a null repoId before rotating tokens", async () => {
+    type RefreshAttemptCapable = {
+      attemptRefresh(
+        tokenState: {
+          type: "refresh";
+          refreshToken: string;
+          source: "repo";
+          repoId: number | null;
+        },
+        session: SessionRow
+      ): Promise<OpenAITokenRefreshResult>;
+    };
+
+    const service = new OpenAITokenRefreshService(
+      {} as Env["DB"],
+      "enc-key",
+      async () => 123,
+      createLogger()
+    );
+
+    const result = await (service as unknown as RefreshAttemptCapable).attemptRefresh(
+      {
+        type: "refresh",
+        refreshToken: "refresh-old",
+        source: "repo",
+        repoId: null,
+      },
+      createSession()
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: "Repository-scoped OpenAI tokens require a repository target",
+    });
+    expect(mockState.refreshImpl).not.toHaveBeenCalled();
+    expect(mockState.repoWrites).toEqual([]);
   });
 
   it("refreshes token and persists rotated credentials to repo secrets", async () => {

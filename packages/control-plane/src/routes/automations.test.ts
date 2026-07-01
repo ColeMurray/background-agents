@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { automationRoutes } from "./automations";
-import type { RequestContext } from "./shared";
+import { resolveRepoOrError, type RequestContext } from "./shared";
 import type { Env } from "../types";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -16,13 +16,22 @@ import type { Env } from "../types";
 const mockStore = {
   list: vi.fn(),
   create: vi.fn(),
+  createWithTargets: vi.fn(),
+  bindTargetInsert: vi.fn((row: unknown) => row),
+  bindTargetDelete: vi.fn((id: string) => ({ id })),
+  updateWithTargets: vi.fn(),
   getById: vi.fn(),
+  getTargetsForAutomation: vi.fn(),
+  getTargetsForAutomationIds: vi.fn(),
   update: vi.fn(),
   softDelete: vi.fn(),
   pause: vi.fn(),
   resume: vi.fn(),
   getActiveRunForAutomation: vi.fn(),
+  getActiveRunGroupForAutomation: vi.fn(),
+  hasRunHistory: vi.fn(),
   listRunsForAutomation: vi.fn(),
+  listRunGroupsForAutomation: vi.fn(),
   getRunById: vi.fn(),
 };
 
@@ -32,6 +41,7 @@ vi.mock("../db/automation-store", () => ({
   }),
   toAutomation: vi.fn((row: unknown) => row),
   toAutomationRun: vi.fn((row: unknown) => row),
+  toAutomationRunGroup: vi.fn((row: unknown) => row),
 }));
 
 const mockUserStore = {
@@ -147,11 +157,37 @@ const sampleRow = {
   deleted_at: null,
 };
 
+const sampleTargets = [
+  {
+    automation_id: "auto-1",
+    repo_owner: "acme",
+    repo_name: "web-app",
+    repo_id: 12345,
+    base_branch: "main",
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    automation_id: "auto-1",
+    repo_owner: "acme",
+    repo_name: "api",
+    repo_id: 67890,
+    base_branch: null,
+    created_at: now,
+    updated_at: now,
+  },
+];
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe("automation route handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockStore.getTargetsForAutomation.mockResolvedValue([]);
+    mockStore.getTargetsForAutomationIds.mockResolvedValue(new Map());
+    mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+    mockStore.getActiveRunGroupForAutomation.mockResolvedValue(null);
+    mockStore.hasRunHistory.mockResolvedValue(false);
   });
 
   describe("GET /automations (list)", () => {
@@ -194,19 +230,44 @@ describe("automation route handlers", () => {
     };
 
     it("creates automation with valid input", async () => {
-      mockStore.create.mockResolvedValue(undefined);
+      mockStore.createWithTargets.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", { body: validBody });
       expect(res.status).toBe(201);
-      expect(mockStore.create).toHaveBeenCalledTimes(1);
-      expect(mockStore.create).toHaveBeenCalledWith(
+      expect(mockStore.createWithTargets).toHaveBeenCalledTimes(1);
+      expect(mockStore.createWithTargets).toHaveBeenCalledWith(
         expect.objectContaining({
           repo_owner: "acme",
           repo_name: "web-app",
           repo_id: 12345,
           base_branch: "main",
-        })
+        }),
+        expect.arrayContaining([
+          expect.objectContaining({
+            automation_id: "generated-id",
+            repo_owner: "acme",
+            repo_name: "web-app",
+          }),
+        ])
+      );
+    });
+
+    it("trims single-repo identifiers before resolving on create", async () => {
+      mockStore.createWithTargets.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, repoOwner: " ACME ", repoName: " web-app " },
+      });
+
+      expect(res.status).toBe(201);
+      expect(vi.mocked(resolveRepoOrError)).toHaveBeenCalledWith(
+        expect.anything(),
+        "acme",
+        "web-app",
+        expect.anything(),
+        expect.anything()
       );
     });
 
@@ -239,6 +300,104 @@ describe("automation route handlers", () => {
           base_branch: null,
         })
       );
+    });
+
+    it("creates multi-repository automation with target rows", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.createWithTargets.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Weekly AGENTS.md sweep",
+          targets: [
+            { repoOwner: "acme", repoName: "web-app" },
+            { repoOwner: "acme", repoName: "api" },
+          ],
+          scheduleCron: "0 9 * * 1",
+          scheduleTz: "UTC",
+          instructions: "Update AGENTS.md if needed.",
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.createWithTargets).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        }),
+        expect.arrayContaining([
+          expect.objectContaining({
+            automation_id: "generated-id",
+            repo_owner: "acme",
+            repo_name: "web-app",
+          }),
+        ])
+      );
+    });
+
+    it("rejects multi-repository automations with fewer than two targets", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Weekly AGENTS.md sweep",
+          targets: [{ repoOwner: "acme", repoName: "web-app" }],
+          scheduleCron: "0 9 * * 1",
+          scheduleTz: "UTC",
+          instructions: "Update AGENTS.md if needed.",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "multi-repository automations require 2-10 repository targets",
+      });
+    });
+
+    it("rejects malformed multi-repository targets", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Weekly AGENTS.md sweep",
+          targets: [{ repoOwner: "acme" }, null],
+          scheduleCron: "0 9 * * 1",
+          scheduleTz: "UTC",
+          instructions: "Update AGENTS.md if needed.",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "targets must include repoOwner and repoName",
+      });
+      expect(mockStore.createWithTargets).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate multi-repository targets", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Weekly AGENTS.md sweep",
+          targets: [
+            { repoOwner: "ACME", repoName: "web-app" },
+            { repoOwner: "acme", repoName: "web-app " },
+          ],
+          scheduleCron: "0 9 * * 1",
+          scheduleTz: "UTC",
+          instructions: "Update AGENTS.md if needed.",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "targets must not include duplicate repositories",
+      });
+      expect(mockStore.createWithTargets).not.toHaveBeenCalled();
     });
 
     it("rejects repo-less repo-scoped triggers", async () => {
@@ -274,26 +433,8 @@ describe("automation route handlers", () => {
       });
     });
 
-    it("rejects baseBranch without repository context", async () => {
-      const res = await callRoute("POST", "/automations", {
-        body: {
-          name: "Branch without repo",
-          scheduleCron: "0 9 * * *",
-          scheduleTz: "UTC",
-          instructions: "Run without a repository.",
-          baseBranch: "main",
-        },
-      });
-
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({
-        error: "baseBranch requires repoOwner and repoName",
-      });
-      expect(mockStore.create).not.toHaveBeenCalled();
-    });
-
     it("resolves user_id when scmUserId is provided", async () => {
-      mockStore.create.mockResolvedValue(undefined);
+      mockStore.createWithTargets.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", {
@@ -308,24 +449,28 @@ describe("automation route handlers", () => {
           providerLogin: "alice",
         })
       );
-      expect(mockStore.create).toHaveBeenCalledWith(
-        expect.objectContaining({ user_id: "resolved-user-1" })
+      expect(mockStore.createWithTargets).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: "resolved-user-1" }),
+        expect.any(Array)
       );
     });
 
     it("creates automation with null user_id when scmUserId is missing", async () => {
-      mockStore.create.mockResolvedValue(undefined);
+      mockStore.createWithTargets.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", { body: validBody });
 
       expect(res.status).toBe(201);
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-      expect(mockStore.create).toHaveBeenCalledWith(expect.objectContaining({ user_id: null }));
+      expect(mockStore.createWithTargets).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: null }),
+        expect.any(Array)
+      );
     });
 
     it("resolves user_id for a Google automation (auth* fields, no scmUserId)", async () => {
-      mockStore.create.mockResolvedValue(undefined);
+      mockStore.createWithTargets.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", {
@@ -346,13 +491,14 @@ describe("automation route handlers", () => {
           providerEmail: "pm@corp.com",
         })
       );
-      expect(mockStore.create).toHaveBeenCalledWith(
-        expect.objectContaining({ user_id: "resolved-user-1" })
+      expect(mockStore.createWithTargets).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: "resolved-user-1" }),
+        expect.any(Array)
       );
     });
 
     it("stores reasoning effort when valid for the selected model", async () => {
-      mockStore.create.mockResolvedValue(undefined);
+      mockStore.createWithTargets.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
 
       const res = await callRoute("POST", "/automations", {
@@ -360,8 +506,12 @@ describe("automation route handlers", () => {
       });
 
       expect(res.status).toBe(201);
-      expect(mockStore.create).toHaveBeenCalledWith(
-        expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoning_effort: "high" })
+      expect(mockStore.createWithTargets).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "anthropic/claude-sonnet-4-6",
+          reasoning_effort: "high",
+        }),
+        expect.any(Array)
       );
     });
 
@@ -478,6 +628,24 @@ describe("automation route handlers", () => {
       );
     });
 
+    it("trims single-repo identifiers before resolving on update", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.updateWithTargets.mockResolvedValue({ ...sampleRow, name: "Daily sync" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: " ACME ", repoName: " web-app " },
+      });
+
+      expect(res.status).toBe(200);
+      expect(vi.mocked(resolveRepoOrError)).toHaveBeenCalledWith(
+        expect.anything(),
+        "acme",
+        "web-app",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
     it("updates reasoning effort when valid for the selected model", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       mockStore.update.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
@@ -512,110 +680,6 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("clears repository context when explicit null repo fields are supplied", async () => {
-      mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.update.mockResolvedValue({
-        ...sampleRow,
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { repoOwner: null, repoName: null },
-      });
-
-      expect(res.status).toBe(200);
-      expect(mockStore.update).toHaveBeenCalledWith(
-        "auto-1",
-        expect.objectContaining({
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-          base_branch: null,
-        })
-      );
-    });
-
-    it("rejects clearing repository context on repo-scoped automations", async () => {
-      mockStore.getById.mockResolvedValue({
-        ...sampleRow,
-        trigger_type: "github_event",
-        event_type: "pull_request.opened",
-        schedule_cron: null,
-      });
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { repoOwner: null, repoName: null },
-      });
-
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({
-        error: "repoOwner and repoName are required for repo-scoped triggers",
-      });
-      expect(mockStore.update).not.toHaveBeenCalled();
-    });
-
-    it("rejects repository context updates with only one repo field", async () => {
-      mockStore.getById.mockResolvedValue(sampleRow);
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { repoOwner: null },
-      });
-
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({
-        error: "repoOwner and repoName must be provided together",
-      });
-      expect(mockStore.update).not.toHaveBeenCalled();
-    });
-
-    it("replaces repository context when repo fields are supplied", async () => {
-      mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.update.mockResolvedValue({
-        ...sampleRow,
-        repo_owner: "acme",
-        repo_name: "web-app",
-        repo_id: 12345,
-        base_branch: "main",
-      });
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { repoOwner: "Acme", repoName: "Web-App" },
-      });
-
-      expect(res.status).toBe(200);
-      expect(mockStore.update).toHaveBeenCalledWith(
-        "auto-1",
-        expect.objectContaining({
-          repo_owner: "acme",
-          repo_name: "web-app",
-          repo_id: 12345,
-          base_branch: "main",
-        })
-      );
-    });
-
-    it("rejects branch updates without repository context", async () => {
-      mockStore.getById.mockResolvedValue({
-        ...sampleRow,
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { baseBranch: "main" },
-      });
-
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({
-        error: "baseBranch requires repoOwner and repoName",
-      });
-    });
-
     it("returns 400 for invalid reasoning effort in update", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
@@ -626,6 +690,152 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(400);
       const body = await res.json<{ error: string }>();
       expect(body.error).toContain("reasoning");
+    });
+
+    it("rejects malformed multi-repository targets in update", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          targets: [{ repoOwner: "acme", repoName: 123 }],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "targets must include repoOwner and repoName",
+      });
+      expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
+      expect(mockStore.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate multi-repository targets in update", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          targets: [
+            { repoOwner: "ACME", repoName: "web-app" },
+            { repoOwner: "acme", repoName: "web-app " },
+          ],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "targets must not include duplicate repositories",
+      });
+      expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
+      expect(mockStore.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects repository cardinality changes after run history exists", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.hasRunHistory.mockResolvedValue(true);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          repoOwner: null,
+          repoName: null,
+        },
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "Cannot change automation repository cardinality after runs have been created",
+      });
+      expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
+      expect(mockStore.update).not.toHaveBeenCalled();
+    });
+
+    it("allows same-cardinality multi-repo target edits after run history exists", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
+      mockStore.hasRunHistory.mockResolvedValue(true);
+      mockStore.updateWithTargets.mockResolvedValue(multiRepoRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          targets: [
+            { repoOwner: "acme", repoName: "web-app" },
+            { repoOwner: "acme", repoName: "api" },
+          ],
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.updateWithTargets).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        }),
+        expect.arrayContaining([
+          expect.objectContaining({
+            automation_id: "auto-1",
+            repo_owner: "acme",
+            repo_name: "web-app",
+          }),
+        ])
+      );
+    });
+
+    it("ignores baseBranch-only updates for existing multi-repo automations", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
+      mockStore.update.mockResolvedValue(multiRepoRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { baseBranch: "main" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.getActiveRunGroupForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
+      expect(mockStore.update).toHaveBeenCalledWith("auto-1", {});
+    });
+
+    it("updates non-target fields on multi-repo automations without requiring targets", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
+      mockStore.update.mockResolvedValue({ ...multiRepoRow, name: "Updated" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          name: "Updated",
+          baseBranch: "main",
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.getActiveRunGroupForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
+      expect(mockStore.update).toHaveBeenCalledWith("auto-1", { name: "Updated" });
     });
 
     it("returns 404 when automation not found", async () => {
@@ -825,6 +1035,47 @@ describe("automation route handlers", () => {
         limit: 100,
         offset: 0,
       });
+    });
+
+    it("returns grouped runs with flattened child runs for multi-repo automations", async () => {
+      const multiRepoRow = {
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      const childRuns = [
+        { id: "run-1", status: "completed", target_repo_name: "web-app" },
+        { id: "run-2", status: "failed", target_repo_name: "api" },
+      ];
+      const group = {
+        id: "group-1",
+        status: "partial_failed",
+        runs: childRuns,
+        total_runs: 2,
+      };
+      mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
+      mockStore.listRunGroupsForAutomation.mockResolvedValue({
+        groups: [group],
+        total: 1,
+      });
+
+      const res = await callRoute("GET", "/automations/auto-1/runs", {
+        query: { limit: "5", offset: "10" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.listRunGroupsForAutomation).toHaveBeenCalledWith("auto-1", {
+        limit: 5,
+        offset: 10,
+      });
+      expect(mockStore.listRunsForAutomation).not.toHaveBeenCalled();
+      const body = await res.json<{ runs: unknown[]; groups: unknown[]; total: number }>();
+      expect(body.groups).toEqual([group]);
+      expect(body.runs).toEqual(childRuns);
+      expect(body.total).toBe(1);
     });
   });
 

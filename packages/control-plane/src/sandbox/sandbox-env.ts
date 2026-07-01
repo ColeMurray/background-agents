@@ -45,8 +45,8 @@ export interface SessionConfigInput {
  *
  * `mcp_servers` is always set (left undefined when absent) so `JSON.stringify`
  * omits it — matching how the runtime treats an absent key and an empty list
- * identically. `branch` is only omitted when undefined; null is serialized to
- * explicitly represent a no-repository session.
+ * identically. `branch` is only omitted when undefined; explicit null is
+ * preserved for repository-less sessions.
  */
 export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayload {
   const payload: SessionConfigPayload = {

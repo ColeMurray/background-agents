@@ -7,7 +7,7 @@ from src.sandbox.manager import (
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     SandboxConfig,
     SandboxManager,
-    _has_repository,
+    _repository_mode,
 )
 
 
@@ -18,8 +18,8 @@ from src.sandbox.manager import (
         (None, None, "none"),
     ],
 )
-def test_has_repository_accepts_complete_or_absent_metadata(repo_owner, repo_name, expected):
-    assert _has_repository(repo_owner, repo_name) is (expected == "single")
+def test_repository_mode_accepts_complete_or_absent_metadata(repo_owner, repo_name, expected):
+    assert _repository_mode(repo_owner, repo_name) == expected
 
 
 @pytest.mark.parametrize(
@@ -29,9 +29,9 @@ def test_has_repository_accepts_complete_or_absent_metadata(repo_owner, repo_nam
         (None, "repo"),
     ],
 )
-def test_has_repository_rejects_partial_repo_metadata(repo_owner, repo_name):
+def test_repository_mode_rejects_partial_repo_metadata(repo_owner, repo_name):
     with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
-        _has_repository(repo_owner, repo_name)
+        _repository_mode(repo_owner, repo_name)
 
 
 @pytest.mark.asyncio
@@ -560,8 +560,6 @@ async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
-    assert "VCS_HOST" not in env
-    assert "VCS_CLONE_USERNAME" not in env
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env
@@ -675,8 +673,6 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
-    assert "VCS_HOST" not in env
-    assert "VCS_CLONE_USERNAME" not in env
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env

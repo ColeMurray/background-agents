@@ -502,7 +502,7 @@ class TestSnapshotRestoreMode:
         supervisor.start_opencode.assert_called_once()
 
 
-class TestNoRepository:
+class TestNoRepositoryMode:
     """Missing repo fields: no clone or repo hooks, but OpenCode still starts."""
 
     @pytest.mark.asyncio
@@ -515,12 +515,11 @@ class TestNoRepository:
 
         assert result is True
         mock_exec.assert_not_called()
-        supervisor.log.info.assert_any_call("git.skip_clone", reason="no_repo_configured")
+        supervisor.log.info.assert_any_call("git.skip_clone", reason="no_repository")
 
     @pytest.mark.asyncio
     async def test_skips_repo_hooks_but_starts_agent(self, no_repo_env):
         supervisor = _make_supervisor(no_repo_env)
-        supervisor.log = MagicMock()
 
         supervisor._ensure_credential_helper_configured = AsyncMock()
         supervisor.perform_git_sync = AsyncMock(return_value=True)
@@ -539,8 +538,7 @@ class TestNoRepository:
             await supervisor.run()
 
         assert supervisor.has_repository is False
-        assert supervisor.boot_mode == "fresh"
-        supervisor.log.info.assert_any_call("supervisor.no_repo_configured")
+        assert supervisor.boot_mode == "no_repository"
         supervisor._ensure_credential_helper_configured.assert_not_called()
         supervisor.perform_git_sync.assert_called_once()
         supervisor._update_existing_repo.assert_not_called()

@@ -396,19 +396,12 @@ describe("SessionIndexStore", () => {
     });
 
     it("stores blank repoOwner and repoName as null", async () => {
-      const session = makeSession({ repoOwner: "   ", repoName: "", baseBranch: "main" });
+      const session = makeSession({ repoOwner: "   ", repoName: "" });
       await store.create(session);
 
       const result = await store.get("test-id");
       expect(result?.repoOwner).toBeNull();
       expect(result?.repoName).toBeNull();
-      expect(result?.baseBranch).toBeNull();
-    });
-
-    it("rejects partial repository fields", async () => {
-      await expect(store.create(makeSession({ repoName: null }))).rejects.toThrow(
-        "Session repository must include repoOwner and repoName together"
-      );
     });
 
     it("ignores duplicate inserts (INSERT OR IGNORE)", async () => {

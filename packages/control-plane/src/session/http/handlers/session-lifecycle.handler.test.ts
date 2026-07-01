@@ -153,9 +153,10 @@ function createHandler() {
 describe("createSessionLifecycleHandler", () => {
   it.each([
     ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
-    ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
-    ["repository context without repoId", { repoOwner: "acme", repoName: "repo", repoId: null }],
-  ])("rejects partial repository contexts during init: %s", async (_name, repoFields) => {
+    ["repoName without repoOwner", { repoOwner: null, repoName: "repo" }],
+    ["repo target without repoId", { repoOwner: "acme", repoName: "repo" }],
+    ["repoId without repo target", { repoOwner: null, repoName: null, repoId: 123 }],
+  ])("rejects partial repository targets during init: %s", async (_name, repoFields) => {
     const { handler, repository, scheduleWarmSandbox } = createHandler();
 
     const response = await handler.init(
@@ -172,7 +173,7 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "Repository context must include repoOwner, repoName, and repoId together",
+      error: "Repository target must include repoOwner, repoName, and repoId together",
     });
     expect(repository.upsertSession).not.toHaveBeenCalled();
     expect(repository.createSandbox).not.toHaveBeenCalled();

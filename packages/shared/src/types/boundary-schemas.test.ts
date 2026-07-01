@@ -21,7 +21,7 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("parses a valid repo-less session creation request", () => {
+    it("parses a repo-less session creation request for route-level validation", () => {
       const result = createSessionRequestSchema.safeParse({
         title: "Incident sweep",
         model: "anthropic/claude-sonnet-4-6",
@@ -30,9 +30,21 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("rejects a partial repository session creation request", () => {
-      const result = createSessionRequestSchema.safeParse({
+    it("rejects partial repository metadata", () => {
+      const ownerOnly = createSessionRequestSchema.safeParse({
         repoOwner: "open-inspect",
+      });
+      const nameOnly = createSessionRequestSchema.safeParse({
+        repoName: "background-agents",
+      });
+
+      expect(ownerOnly.success).toBe(false);
+      expect(nameOnly.success).toBe(false);
+    });
+
+    it("rejects malformed session creation field types", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: 123,
       });
 
       expect(result.success).toBe(false);
@@ -42,24 +54,6 @@ describe("boundary schemas", () => {
       const result = createSessionRequestSchema.safeParse({
         repoOwner: "   ",
         repoName: "background-agents",
-      });
-
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects whitespace-only repository identifiers", () => {
-      const result = createSessionRequestSchema.safeParse({
-        repoOwner: "   ",
-        repoName: "\t",
-      });
-
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects branch without repository context", () => {
-      const result = createSessionRequestSchema.safeParse({
-        title: "Incident sweep",
-        branch: "main",
       });
 
       expect(result.success).toBe(false);

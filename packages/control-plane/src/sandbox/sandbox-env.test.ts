@@ -28,10 +28,10 @@ describe("buildSessionConfig", () => {
     expect(buildSessionConfig(baseInput)).not.toHaveProperty("branch");
   });
 
-  it("preserves null branch values", () => {
-    expect(buildSessionConfig({ ...baseInput, branch: null })).toEqual(
-      expect.objectContaining({ branch: null })
-    );
+  it("preserves explicit null branch values", () => {
+    expect(buildSessionConfig({ ...baseInput, branch: null })).toMatchObject({
+      branch: null,
+    });
   });
 
   it("serializes to a SESSION_CONFIG that omits undefined mcp_servers", () => {

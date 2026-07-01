@@ -493,7 +493,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "SCM credentials require a repository context",
+      error: "SCM credentials require a repository target",
     });
     expect(getScmCredentials).not.toHaveBeenCalled();
   });

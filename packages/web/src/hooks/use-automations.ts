@@ -2,9 +2,14 @@ import useSWR from "swr";
 import { useSession } from "next-auth/react";
 import type {
   Automation,
+  AutomationRun,
+  AutomationRunGroup,
   ListAutomationsResponse,
   ListAutomationRunsResponse,
 } from "@open-inspect/shared";
+
+const EMPTY_RUNS: AutomationRun[] = [];
+const EMPTY_GROUPS: AutomationRunGroup[] = [];
 
 export function useAutomations() {
   const { data: session } = useSession();
@@ -43,7 +48,8 @@ export function useAutomationRuns(id: string | undefined, limit = 20, offset = 0
   );
 
   return {
-    runs: data?.runs ?? [],
+    runs: data?.runs ?? EMPTY_RUNS,
+    groups: data?.groups ?? EMPTY_GROUPS,
     total: data?.total ?? 0,
     loading: isLoading,
     mutate,

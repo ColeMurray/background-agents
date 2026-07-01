@@ -45,51 +45,25 @@ describe("parseCreateSessionInput", () => {
     });
   });
 
-  it("rejects a malformed partial session input", async () => {
+  it("rejects partial repository metadata", async () => {
     const result = await parseCreateSessionInput(jsonRequest({ repoOwner: "open-inspect" }));
 
     expect(result).toEqual({ ok: false, message: "Invalid session request body" });
   });
 
-  it("parses a repo-less session input", async () => {
+  it("keeps no-repository requests available for route-level validation", async () => {
     const result = await parseCreateSessionInput(
       jsonRequest({
-        title: "Incident sweep",
-        model: "anthropic/claude-haiku-4-5",
+        title: "No repository automation run",
       })
     );
 
     expect(result).toEqual({
       ok: true,
       input: {
-        title: "Incident sweep",
-        model: "anthropic/claude-haiku-4-5",
+        title: "No repository automation run",
       },
     });
-  });
-
-  it("rejects branch without repository context", async () => {
-    const result = await parseCreateSessionInput(
-      jsonRequest({
-        title: "Incident sweep",
-        branch: "main",
-      })
-    );
-
-    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
-  });
-
-  it("rejects whitespace-only repository identifiers", async () => {
-    const result = await parseCreateSessionInput(
-      jsonRequest({
-        title: "Incident sweep",
-        model: "anthropic/claude-haiku-4-5",
-        repoOwner: "   ",
-        repoName: "\t",
-      })
-    );
-
-    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
   });
 
   it("rejects invalid JSON without throwing", async () => {

@@ -95,31 +95,10 @@ function normalizeRepoIdentifier(value: string | null | undefined): string | nul
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
-function normalizeSessionRepository(session: SessionEntry): {
-  repoOwner: string | null;
-  repoName: string | null;
-  baseBranch: string | null;
-} {
-  const repoOwner = normalizeRepoIdentifier(session.repoOwner);
-  const repoName = normalizeRepoIdentifier(session.repoName);
-
-  if ((repoOwner === null) !== (repoName === null)) {
-    throw new Error("Session repository must include repoOwner and repoName together");
-  }
-
-  return {
-    repoOwner,
-    repoName,
-    baseBranch: repoOwner && repoName ? session.baseBranch : null,
-  };
-}
-
 export class SessionIndexStore {
   constructor(private readonly db: D1Database) {}
 
   async create(session: SessionEntry): Promise<void> {
-    const repository = normalizeSessionRepository(session);
-
     await this.db
       .prepare(
         `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, created_at, updated_at)
@@ -128,11 +107,11 @@ export class SessionIndexStore {
       .bind(
         session.id,
         session.title,
-        repository.repoOwner,
-        repository.repoName,
+        normalizeRepoIdentifier(session.repoOwner),
+        normalizeRepoIdentifier(session.repoName),
         session.model,
         session.reasoningEffort,
-        repository.baseBranch,
+        session.baseBranch,
         session.status,
         session.parentSessionId ?? null,
         session.spawnSource ?? "user",

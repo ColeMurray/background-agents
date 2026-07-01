@@ -60,12 +60,12 @@ def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
     )
 
 
-def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
+def _repository_mode(repo_owner: str | None, repo_name: str | None) -> str:
     has_owner = bool(repo_owner)
     has_name = bool(repo_name)
     if has_owner != has_name:
         raise ValueError("repo_owner and repo_name must be provided together")
-    return has_owner
+    return "single" if has_owner else "none"
 
 
 def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
@@ -392,12 +392,14 @@ class SandboxManager:
         start_time = time.time()
 
         # Use provided sandbox_id from control plane, or generate one
-        has_repository = _has_repository(config.repo_owner, config.repo_name)
+        repository_mode = _repository_mode(config.repo_owner, config.repo_name)
         if config.sandbox_id:
             sandbox_id = config.sandbox_id
         else:
             sandbox_name = (
-                f"{config.repo_owner}-{config.repo_name}" if has_repository else "no-repository"
+                f"{config.repo_owner}-{config.repo_name}"
+                if repository_mode == "single"
+                else "no-repository"
             )
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
@@ -418,13 +420,12 @@ class SandboxManager:
             }
         )
 
-        if has_repository:
-            fallback_clone_token = config.fallback_clone_token
-            self._inject_vcs_env_vars(
-                env_vars,
-                clone_token=fallback_clone_token,
-                include_github_cli_aliases=bool(fallback_clone_token),
-            )
+        fallback_clone_token = config.fallback_clone_token if repository_mode == "single" else None
+        self._inject_vcs_env_vars(
+            env_vars,
+            clone_token=fallback_clone_token,
+            include_github_cli_aliases=bool(fallback_clone_token),
+        )
 
         code_server_password: str | None = None
         if config.code_server_enabled:
@@ -747,11 +748,13 @@ class SandboxManager:
             repo_owner = session_config.repo_owner
             repo_name = session_config.repo_name
             session_config_json = session_config.model_dump_json()
-        has_repository = _has_repository(repo_owner, repo_name)
+        repository_mode = _repository_mode(repo_owner, repo_name)
 
         # Use provided sandbox_id or generate one
         if not sandbox_id:
-            sandbox_name = f"{repo_owner}-{repo_name}" if has_repository else "no-repository"
+            sandbox_name = (
+                f"{repo_owner}-{repo_name}" if repository_mode == "single" else "no-repository"
+            )
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
         # Lookup the image by ID
@@ -776,7 +779,7 @@ class SandboxManager:
             }
         )
 
-        if has_repository:
+        if repository_mode == "single":
             # Snapshot restore still passes the clone token through for
             # repo-backed sandboxes. Snapshots taken before the credential-helper
             # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env

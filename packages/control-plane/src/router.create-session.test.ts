@@ -150,19 +150,29 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).toHaveBeenCalledOnce();
   });
 
-  it("rejects whitespace-only repository fields as invalid before resolving the repo", async () => {
-    const response = await invalidCreateSessionRequest(
-      JSON.stringify({
-        repoOwner: "   ",
-        repoName: "\t",
-        title: "No repo",
-        model: "anthropic/claude-haiku-4-5",
+  it("treats whitespace-only repository fields as absent", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      repoOwner: "   ",
+      repoName: "\t",
+      title: "No repo",
+      model: "anthropic/claude-haiku-4-5",
+    });
+
+    expect(response.status).toBe(201);
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: null,
+        repoName: null,
+        baseBranch: null,
       })
     );
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid session request body" });
-    expect(resolveRepoOrError).not.toHaveBeenCalled();
   });
 
   it("rejects partial repository payloads as invalid before resolving the repo", async () => {

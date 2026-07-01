@@ -187,6 +187,32 @@ async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "repo_fields",
+    [
+        {"repo_owner": "acme"},
+        {"repo_name": "repo"},
+    ],
+)
+async def test_create_sandbox_rejects_partial_repo_metadata(monkeypatch, repo_fields):
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, {})
+
+    with pytest.raises(HTTPException) as exc:
+        await _call_create_sandbox(
+            {
+                "session_id": "sess-1",
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+                **repo_fields,
+            }
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "repo_owner and repo_name must be provided together"
+
+
+@pytest.mark.asyncio
 async def test_create_sandbox_snapshot_without_repo_does_not_resolve_clone_token(monkeypatch):
     """No-repository snapshot boots must not mint a repository clone token."""
     captured = {}
@@ -208,32 +234,6 @@ async def test_create_sandbox_snapshot_without_repo_does_not_resolve_clone_token
     assert result["success"] is True
     assert calls == []
     assert captured["config"].fallback_clone_token is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "request_patch",
-    [
-        {"repo_owner": "acme"},
-        {"repo_name": "repo"},
-        {"repo_owner": "   ", "repo_name": "repo"},
-    ],
-)
-async def test_create_sandbox_rejects_partial_repo_context(monkeypatch, request_patch):
-    _patch_auth(monkeypatch)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await _call_create_sandbox(
-            {
-                "session_id": "sess-1",
-                "control_plane_url": "https://control-plane.example",
-                "sandbox_auth_token": "sandbox-token",
-                **request_patch,
-            }
-        )
-
-    assert getattr(exc_info.value, "status_code", None) == 400
-    assert "repo_owner and repo_name must be provided together" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -270,25 +270,21 @@ async def test_restore_sandbox_without_repo_does_not_resolve_clone_token(monkeyp
     [
         {"session_id": "sess-1", "repo_owner": "acme"},
         {"session_id": "sess-1", "repo_name": "repo"},
-        {"session_id": "sess-1", "repo_owner": "", "repo_name": "repo"},
     ],
 )
-async def test_restore_sandbox_rejects_partial_repo_context(monkeypatch, session_config):
+async def test_restore_sandbox_rejects_partial_repo_metadata(monkeypatch, session_config):
     _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, {})
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(HTTPException) as exc:
         await _call_restore_sandbox(
             {
                 "snapshot_image_id": "img-abc",
-                "session_config": {
-                    "provider": "anthropic",
-                    "model": "claude-sonnet-4-6",
-                    **session_config,
-                },
+                "session_config": session_config,
                 "control_plane_url": "https://control-plane.example",
                 "sandbox_auth_token": "sandbox-token",
             }
         )
 
-    assert getattr(exc_info.value, "status_code", None) == 400
-    assert "repo_owner and repo_name must be provided together" in str(exc_info.value.detail)
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "repo_owner and repo_name must be provided together"

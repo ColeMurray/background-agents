@@ -18,6 +18,7 @@
       "binding": "DB",
       "database_id": "00000000-0000-0000-0000-000000000000",
       "database_name": "open-inspect-test",
+      "migrations_dir": "../../terraform/d1/migrations",
     },
   ],
   "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "00000000000000000000000000000000" }],

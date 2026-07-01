@@ -114,7 +114,7 @@ export function createSessionLifecycleHandler(
         (hasRepoOwner && !hasRepoId)
       ) {
         return Response.json(
-          { error: "Repository context must include repoOwner, repoName, and repoId together" },
+          { error: "Repository target must include repoOwner, repoName, and repoId together" },
           { status: 400 }
         );
       }
@@ -148,7 +148,7 @@ export function createSessionLifecycleHandler(
         title: body.title ?? null,
         repoOwner,
         repoName,
-        repoId: hasRepoOwner ? body.repoId : null,
+        repoId: hasRepoOwner ? (body.repoId ?? null) : null,
         baseBranch,
         model,
         reasoningEffort,

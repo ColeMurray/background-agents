@@ -122,6 +122,39 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Grandchild session")).toBeInTheDocument();
   });
 
+  it("does not match repo-less sessions through the no-repository display label", async () => {
+    render(
+      <SWRConfig
+        value={{
+          fallback: {
+            [SIDEBAR_SESSIONS_KEY]: {
+              sessions: [
+                createSession(1, {
+                  title: "Repo-less task",
+                  repoOwner: null,
+                  repoName: null,
+                }),
+              ],
+              hasMore: false,
+            },
+          },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Repo-less task")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search sessions..."), {
+      target: { value: "no repository" },
+    });
+
+    expect(screen.queryByText("Repo-less task")).not.toBeInTheDocument();
+  });
+
   it("loads the next page when scrolled near the bottom", async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
     const secondPage = Array.from({ length: 5 }, (_, index) => createSession(index + 51));

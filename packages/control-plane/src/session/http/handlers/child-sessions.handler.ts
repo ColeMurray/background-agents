@@ -53,6 +53,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       if (!owner) {
         return Response.json({ error: "No owner participant found" }, { status: 404 });
       }
+
       const context: SpawnContext = {
         repoOwner: session.repo_owner,
         repoName: session.repo_name,

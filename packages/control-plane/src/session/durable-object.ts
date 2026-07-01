@@ -674,11 +674,10 @@ export class SessionDO extends DurableObject<Env> {
       slackAgentNotifyLookup = {
         isEnabledForRepo: async (repoOwner, repoName) => {
           if (!tokenPresent) return false;
-          const settings =
-            repoOwner && repoName
-              ? (await settingsStore.getResolvedConfig("slack", `${repoOwner}/${repoName}`))
-                  .settings
-              : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
+          const { settings } = await settingsStore.getResolvedConfig(
+            "slack",
+            `${repoOwner}/${repoName}`
+          );
           return resolveSlackSettings(settings).agentNotificationsEnabled;
         },
       };
@@ -1733,7 +1732,7 @@ export class SessionDO extends DurableObject<Env> {
       return session.repo_id;
     }
     if (!session.repo_owner || !session.repo_name) {
-      throw new Error("Session has no repository context");
+      throw new Error("Session has no repository target");
     }
 
     const result = await this.sourceControlProvider.checkRepositoryAccess({

@@ -111,7 +111,7 @@ describe("createPullRequestHandler", () => {
     expect(await response.json()).toEqual({ error: "No active prompt found" });
   });
 
-  it("returns repository context error before participant lookup for no-repo sessions", async () => {
+  it("returns repository target error before participant lookup for no-repo sessions", async () => {
     const {
       handler,
       getSession,
@@ -132,7 +132,7 @@ describe("createPullRequestHandler", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Pull requests require a repository context" });
+    expect(await response.json()).toEqual({ error: "Pull requests require a repository target" });
     expect(getPromptingParticipantForPR).not.toHaveBeenCalled();
     expect(resolveAuthForPR).not.toHaveBeenCalled();
     expect(createPullRequest).not.toHaveBeenCalled();

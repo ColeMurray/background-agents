@@ -219,7 +219,10 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         if (!searchQuery) return true;
         const query = searchQuery.toLowerCase();
         const title = session.title?.toLowerCase() || "";
-        const repo = formatRepoLabel(session.repoOwner, session.repoName).toLowerCase();
+        const repo =
+          session.repoOwner && session.repoName
+            ? formatRepoLabel(session.repoOwner, session.repoName).toLowerCase()
+            : "";
         return title.includes(query) || repo.includes(query);
       });
 

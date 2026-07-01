@@ -45,8 +45,7 @@ async function seedSession(
     repoName: input.repoName,
     model: "anthropic/claude-haiku-4-5",
     reasoningEffort: null,
-    baseBranch:
-      input.repoOwner !== null && input.repoName !== null ? (input.baseBranch ?? "main") : null,
+    baseBranch: "baseBranch" in input ? (input.baseBranch ?? null) : "main",
     status: input.status,
     spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,
@@ -478,6 +477,7 @@ describe("Analytics API", () => {
       id: "no-repo-completed",
       repoOwner: null,
       repoName: null,
+      baseBranch: null,
       scmLogin: "dana",
       status: "completed",
       createdAt: noRepoCompletedAt,

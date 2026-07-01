@@ -30,13 +30,8 @@ CREATE TABLE IF NOT EXISTS session (
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  CHECK (
-    (repo_owner IS NULL) = (repo_name IS NULL)
-    AND (
-      repo_owner IS NOT NULL
-      OR (repo_id IS NULL AND base_branch IS NULL)
-    )
-  )
+  CHECK ((repo_owner IS NULL) = (repo_name IS NULL)),
+  CHECK (repo_owner IS NOT NULL OR (repo_id IS NULL AND base_branch IS NULL))
 );
 
 -- Participants in the session
@@ -389,6 +384,98 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 30,
     description: "Add total_cost to session",
     run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 31,
+    description: "Enforce session repository target invariant",
+    run: (sql) => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS session_0031_new (
+          id TEXT PRIMARY KEY,
+          session_name TEXT,
+          title TEXT,
+          repo_owner TEXT,
+          repo_name TEXT,
+          repo_id INTEGER,
+          base_branch TEXT,
+          branch_name TEXT,
+          base_sha TEXT,
+          current_sha TEXT,
+          opencode_session_id TEXT,
+          model TEXT DEFAULT 'anthropic/claude-haiku-4-5',
+          reasoning_effort TEXT,
+          status TEXT DEFAULT 'created',
+          parent_session_id TEXT,
+          spawn_source TEXT NOT NULL DEFAULT 'user',
+          spawn_depth INTEGER NOT NULL DEFAULT 0,
+          code_server_enabled INTEGER NOT NULL DEFAULT 0,
+          total_cost REAL NOT NULL DEFAULT 0,
+          sandbox_settings TEXT DEFAULT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          CHECK ((repo_owner IS NULL) = (repo_name IS NULL)),
+          CHECK (repo_owner IS NOT NULL OR (repo_id IS NULL AND base_branch IS NULL))
+        );
+
+        INSERT OR REPLACE INTO session_0031_new (
+          id, session_name, title, repo_owner, repo_name, repo_id, base_branch,
+          branch_name, base_sha, current_sha, opencode_session_id, model,
+          reasoning_effort, status, parent_session_id, spawn_source, spawn_depth,
+          code_server_enabled, total_cost, sandbox_settings, created_at, updated_at
+        )
+        SELECT
+          id,
+          session_name,
+          title,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE normalized_repo_owner
+          END,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE normalized_repo_name
+          END,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE repo_id
+          END,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE base_branch
+          END,
+          branch_name,
+          base_sha,
+          current_sha,
+          opencode_session_id,
+          model,
+          reasoning_effort,
+          status,
+          parent_session_id,
+          spawn_source,
+          spawn_depth,
+          code_server_enabled,
+          total_cost,
+          sandbox_settings,
+          created_at,
+          updated_at
+        FROM (
+          SELECT
+            *,
+            NULLIF(
+              TRIM(repo_owner, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+              ''
+            ) AS normalized_repo_owner,
+            NULLIF(
+              TRIM(repo_name, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+              ''
+            ) AS normalized_repo_name
+          FROM session
+        );
+
+        DROP TABLE IF EXISTS session;
+        ALTER TABLE session_0031_new RENAME TO session;
+      `);
+    },
   },
 ];
 

@@ -237,8 +237,7 @@ describe("DaytonaSandboxProvider", () => {
 
       await provider.createSandbox(baseCreateConfig);
 
-      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const labels = createCall.labels;
+      const labels = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].labels;
       expect(labels).toEqual({
         openinspect_framework: "open-inspect",
         openinspect_session_id: "session-123",
@@ -257,12 +256,7 @@ describe("DaytonaSandboxProvider", () => {
         repoName: null,
       });
 
-      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(createCall.env).toMatchObject({
-        REPO_OWNER: "",
-        REPO_NAME: "",
-      });
-      const labels = createCall.labels;
+      const labels = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].labels;
       expect(labels).toEqual({
         openinspect_framework: "open-inspect",
         openinspect_session_id: "session-123",

@@ -109,13 +109,21 @@ export function assertConditionMatch(
  * Build a minimal trigger automation for testing.
  */
 export function makeTriggerAutomation(overrides?: Partial<Automation>): Automation {
-  return {
+  const automation: Automation = {
     id: "auto-test",
     name: "Test Automation",
     repoOwner: "test-owner",
     repoName: "test-repo",
     baseBranch: "main",
     repoId: 1,
+    targets: [
+      {
+        repoOwner: "test-owner",
+        repoName: "test-repo",
+        repoId: 1,
+        baseBranch: "main",
+      },
+    ],
     instructions: "Test instructions",
     triggerType: "sentry",
     scheduleCron: null,
@@ -133,4 +141,6 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
     triggerConfig: { conditions: [] },
     ...overrides,
   };
+
+  return automation;
 }

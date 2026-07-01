@@ -81,9 +81,9 @@ export async function initializeSession(
   if (!hasRepoOwner && (hasBranchContext(input.branch) || hasBranchContext(input.defaultBranch))) {
     throw new Error("No-repository sessions must not include branch context");
   }
+
   const branch = hasRepoOwner ? input.branch : null;
   const defaultBranch = hasRepoOwner ? input.defaultBranch : null;
-
   const now = Date.now();
   const baseBranch = hasRepoOwner ? branch || defaultBranch || "main" : null;
 

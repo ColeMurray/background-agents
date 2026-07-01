@@ -173,6 +173,7 @@ function NewAutomationContent() {
           <AutomationForm
             mode="create"
             initialValues={initialValues}
+            repositorySelectionRequired={Boolean(template)}
             onSubmit={handleSubmit}
             submitting={submitting}
           />

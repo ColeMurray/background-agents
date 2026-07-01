@@ -28,6 +28,7 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
+from .constants import NO_REPOSITORY_REASON
 from .log_config import configure_logging, get_logger
 from .types import GitUser
 
@@ -1490,7 +1491,7 @@ class AgentBridge:
 
         repo_dirs = list(self.repo_path.glob("*/.git"))
         if not repo_dirs:
-            self.log.warn("git.push_error", reason="no_repo_configured")
+            self.log.warn("git.push_error", reason=NO_REPOSITORY_REASON)
             await self._send_event(
                 {
                     "type": "push_error",
@@ -1655,7 +1656,7 @@ class AgentBridge:
 
         repo_dirs = list(self.repo_path.glob("*/.git"))
         if not repo_dirs:
-            self.log.debug("git.identity_skip", reason="no_repo_configured")
+            self.log.debug("git.identity_skip", reason=NO_REPOSITORY_REASON)
             return
 
         repo_dir = repo_dirs[0].parent
