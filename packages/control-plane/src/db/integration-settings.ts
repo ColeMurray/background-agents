@@ -280,6 +280,14 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
     }
 
+    if (settings.prLabel !== undefined && typeof settings.prLabel !== "string") {
+      throw new IntegrationSettingsValidationError("prLabel must be a string");
+    }
+
+    if (settings.prLabel !== undefined) {
+      settings = { ...settings, prLabel: settings.prLabel.trim() || undefined };
+    }
+
     if (settings.allowedTriggerUsers !== undefined) {
       if (
         !Array.isArray(settings.allowedTriggerUsers) ||
