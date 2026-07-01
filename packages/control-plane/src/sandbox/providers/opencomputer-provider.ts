@@ -81,6 +81,11 @@ export interface OpenComputerProviderConfig {
   llmEnvVars?: Record<string, string | undefined>;
 }
 
+interface PreparedOpenComputerEnvironment {
+  envVars: Record<string, string>;
+  secretEnvVars?: Record<string, string>;
+}
+
 export class OpenComputerSandboxProvider implements SandboxProvider {
   readonly name = "opencomputer";
 
@@ -101,18 +106,18 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
-      const envVars = await this.buildRuntimeEnvVars(config, {
+      const environment = await this.buildRuntimeEnvironment(config, {
         fromRepoImage: !!config.repoImageId,
         repoImageSha: config.repoImageSha ?? undefined,
       });
-      secretStore = await this.createSecretStoreFor(config.sessionId, config.userEnvVars);
+      secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
       const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
       const sandbox = config.repoImageId
         ? await this.client.forkFromCheckpoint({
             checkpointId: config.repoImageId,
             name: config.sandboxId,
-            env: envVars,
+            env: environment.envVars,
             labels,
             ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
@@ -120,7 +125,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         : await this.client.createSandbox({
             name: config.sandboxId,
             template: this.client.config.template,
-            env: envVars,
+            env: environment.envVars,
             labels,
             ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
@@ -170,13 +175,15 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
-      const envVars = await this.buildRuntimeEnvVars(config, { restoredFromSnapshot: true });
-      secretStore = await this.createSecretStoreFor(config.sessionId, config.userEnvVars);
+      const environment = await this.buildRuntimeEnvironment(config, {
+        restoredFromSnapshot: true,
+      });
+      secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
       const sandbox = await this.client.forkFromCheckpoint({
         checkpointId: config.snapshotImageId,
         name: config.sandboxId,
-        env: envVars,
+        env: environment.envVars,
         labels: this.buildLabels(config),
         ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
         secretStore: secretStore?.name,
@@ -344,13 +351,12 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let providerObjectId: string | undefined;
     try {
       const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
-      const userEnvVars = withoutReservedRepoImageEnvVars(config.userEnvVars);
-      const envVars = await this.buildBuildEnvVars({ ...config, userEnvVars });
-      secretStore = await this.createSecretStoreFor(config.buildId, userEnvVars);
+      const environment = await this.buildBuildEnvironment(config);
+      secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
       const sandbox = await this.client.createSandbox({
         name: sandboxName,
         template: this.client.config.template,
-        env: envVars,
+        env: environment.envVars,
         labels: {
           openinspect_framework: "open-inspect",
           openinspect_provider: "opencomputer",
@@ -411,23 +417,17 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
   }
 
-  private async buildRuntimeEnvVars(
+  private async buildRuntimeEnvironment(
     config: CreateSandboxConfig | RestoreConfig,
     mode: {
       restoredFromSnapshot?: boolean;
       fromRepoImage?: boolean;
       repoImageSha?: string;
     } = {}
-  ): Promise<Record<string, string>> {
-    const envVars: Record<string, string> = {};
+  ): Promise<PreparedOpenComputerEnvironment> {
+    const environment = this.prepareEnvironment(config.userEnvVars);
+    const { envVars } = environment;
     const sessionConfig = buildSessionConfig(config);
-
-    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
-    for (const [name, value] of Object.entries(config.userEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
 
     Object.assign(envVars, {
       PYTHONUNBUFFERED: "1",
@@ -473,23 +473,16 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       envVars.VCS_CLONE_USERNAME = "x-access-token";
     }
 
-    return envVars;
+    return environment;
   }
 
-  private async buildBuildEnvVars(
+  private async buildBuildEnvironment(
     config: TriggerOpenComputerRepoImageBuildConfig
-  ): Promise<Record<string, string>> {
-    const envVars: Record<string, string> = {};
-
-    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
-    for (const [name, value] of Object.entries(config.userEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
-    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
-      delete envVars[key];
-    }
+  ): Promise<PreparedOpenComputerEnvironment> {
+    const environment = this.prepareEnvironment(config.userEnvVars, {
+      scrubReservedRepoImageEnv: true,
+    });
+    const { envVars } = environment;
 
     Object.assign(envVars, {
       PYTHONUNBUFFERED: "1",
@@ -514,7 +507,26 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       envVars.VCS_CLONE_TOKEN = config.cloneToken;
     }
 
-    return envVars;
+    return environment;
+  }
+
+  private prepareEnvironment(
+    userEnvVars: Record<string, string> | undefined,
+    options: { scrubReservedRepoImageEnv?: boolean } = {}
+  ): PreparedOpenComputerEnvironment {
+    const envVars: Record<string, string> = {};
+    copyDefinedEnvVars(envVars, this.providerConfig.llmEnvVars);
+    copyDefinedEnvVars(envVars, userEnvVars);
+
+    const secretEnvVars = copyDefinedEnvVars({}, userEnvVars);
+    if (options.scrubReservedRepoImageEnv) {
+      for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+        delete envVars[key];
+        delete secretEnvVars[key];
+      }
+    }
+
+    return { envVars, secretEnvVars };
   }
 
   private async createSecretStoreFor(
@@ -728,15 +740,14 @@ function sleepMs(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
-function withoutReservedRepoImageEnvVars(
-  envVars: Record<string, string> | undefined
-): Record<string, string> | undefined {
-  if (!envVars) return undefined;
-  const filtered = { ...envVars };
-  for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
-    delete filtered[key];
+function copyDefinedEnvVars(
+  target: Record<string, string>,
+  source: Record<string, string | undefined> | undefined
+): Record<string, string> {
+  for (const [name, value] of Object.entries(source ?? {})) {
+    if (value) target[name] = value;
   }
-  return filtered;
+  return target;
 }
 
 export function createOpenComputerProvider(
