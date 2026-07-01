@@ -17,8 +17,8 @@ import {
 } from "./auth";
 import { RepoImagePlanningError, RepoImageRepositoryNotInstalledError } from "./errors";
 import type { RepoImageProvider } from "./model";
-import { getRepoImageCallbackMode } from "./provider-policy";
-import type { PlannedRepoImageBuild, VercelCloneAuth } from "./types";
+import { getRepoImageCallbackMode, getRepoImageCloneAuthMode } from "./provider-policy";
+import type { PlannedRepoImageBuild, RepoImageCloneAuth } from "./types";
 
 const logger = createLogger("repo-images:planner");
 const MS_PER_SECOND = 1000;
@@ -74,7 +74,7 @@ export class RepoImageBuildPlanner {
         repoName: params.repoName,
         repoId: resolved.repoId,
       }),
-      this.resolveVercelCloneAuth({
+      this.resolveCloneAuth({
         repoOwner: params.repoOwner,
         repoName: params.repoName,
       }),
@@ -144,7 +144,7 @@ export class RepoImageBuildPlanner {
   private createPlannedBuildForProvider(
     basePlan: BaseRepoImageBuildPlanInput,
     callbackAuth: PlannedCallbackAuth,
-    cloneAuth: VercelCloneAuth
+    cloneAuth: RepoImageCloneAuth
   ): PlannedRepoImageBuild {
     switch (this.provider) {
       case "modal":
@@ -181,6 +181,7 @@ export class RepoImageBuildPlanner {
             provider: "opencomputer",
             callbackMode: "provider_session",
             callbackToken: bearerAuth.token,
+            cloneAuth,
           },
           callbackAuth: {
             type: "bearer_token",
@@ -244,11 +245,13 @@ export class RepoImageBuildPlanner {
     return merged;
   }
 
-  private async resolveVercelCloneAuth(params: {
+  private async resolveCloneAuth(params: {
     repoOwner: string;
     repoName: string;
-  }): Promise<VercelCloneAuth> {
-    if (this.provider !== "vercel") return { type: "unavailable" };
+  }): Promise<RepoImageCloneAuth> {
+    if (getRepoImageCloneAuthMode(this.provider) !== "credential_helper") {
+      return { type: "unavailable" };
+    }
 
     try {
       const provider = createSourceControlProviderFromEnv(this.env);

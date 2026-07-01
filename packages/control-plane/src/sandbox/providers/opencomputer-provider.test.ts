@@ -226,6 +226,23 @@ describe("OpenComputerSandboxProvider", () => {
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-provider");
   });
 
+  it("keeps repo LLM credentials ahead of provider defaults", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+      llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      userEnvVars: { ANTHROPIC_API_KEY: "sk-repo" },
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-repo");
+  });
+
   it("scopes clone secrets to GitLab hosts for GitLab sessions", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
@@ -333,6 +350,7 @@ describe("OpenComputerSandboxProvider", () => {
           OI_REPO_IMAGE_BUILD_ID: "",
           OI_REPO_IMAGE_CALLBACK_URL: "",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "",
+          VCS_CLONE_TOKEN: "",
         }),
       })
     );
@@ -340,6 +358,29 @@ describe("OpenComputerSandboxProvider", () => {
     expect(forkCall).not.toHaveProperty("timeoutSeconds");
     expect(client.setSandboxTimeout).not.toHaveBeenCalled();
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("keeps explicit session clone tokens when forking from a repo image", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      repoImageId: "checkpoint-repo-1",
+      userEnvVars: { VCS_CLONE_TOKEN: "session-token" },
+    });
+
+    expect(client.forkFromCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkpointId: "checkpoint-repo-1",
+        env: expect.objectContaining({
+          VCS_CLONE_TOKEN: "session-token",
+        }),
+      })
+    );
   });
 
   it("restores session snapshots by forking from the checkpoint", async () => {
@@ -368,6 +409,28 @@ describe("OpenComputerSandboxProvider", () => {
     expect(forkCall).not.toHaveProperty("timeoutSeconds");
     expect(client.setSandboxTimeout).not.toHaveBeenCalled();
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("cleans up a restored sandbox when runtime startup fails", async () => {
+    const client = createMockClient({
+      startRuntime: vi.fn(async () => {
+        throw new Error("runtime failed");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.restoreFromSnapshot({
+        ...baseConfig,
+        snapshotImageId: "checkpoint-session-1",
+      })
+    ).rejects.toThrow("Failed to restore OpenComputer sandbox from checkpoint");
+
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-fork-1");
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
   });
 
   it("applies an explicit timeout when restoring from a snapshot", async () => {
@@ -501,6 +564,13 @@ describe("OpenComputerSandboxProvider", () => {
       defaultBranch: "main",
       callbackUrl: "https://control.example/repo-images/build-complete",
       callbackToken: "callback-token",
+      cloneToken: "clone-token",
+      userEnvVars: {
+        ANTHROPIC_API_KEY: "sk-repo",
+        OI_REPO_IMAGE_PROVIDER_SESSION_ID: "user-controlled",
+        OI_REPO_IMAGE_CALLBACK_TOKEN: "user-controlled",
+        OI_REPO_IMAGE_CALLBACK_SECRET: "legacy-user-controlled",
+      },
       onProviderSessionCreated,
     });
 
@@ -511,7 +581,8 @@ describe("OpenComputerSandboxProvider", () => {
           OI_REPO_IMAGE_BUILD_ID: "build-1",
           OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/repo-images/build-complete",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
-          ANTHROPIC_API_KEY: "sk-provider",
+          VCS_CLONE_TOKEN: "clone-token",
+          ANTHROPIC_API_KEY: "sk-repo",
         }),
         labels: expect.objectContaining({
           openinspect_kind: "repo-image-build",
@@ -519,10 +590,51 @@ describe("OpenComputerSandboxProvider", () => {
         }),
       })
     );
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).not.toHaveProperty("OI_REPO_IMAGE_PROVIDER_SESSION_ID");
+    expect(createCall.env).not.toHaveProperty("OI_REPO_IMAGE_CALLBACK_SECRET");
+    expect(client.setSecret).toHaveBeenCalledWith({
+      storeId: "secret-store-1",
+      name: "ANTHROPIC_API_KEY",
+      value: "sk-repo",
+      allowedHosts: ["api.anthropic.com"],
+    });
+    expect(client.setSecret).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "OI_REPO_IMAGE_CALLBACK_TOKEN" })
+    );
+    expect(client.setSecret).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "OI_REPO_IMAGE_CALLBACK_SECRET" })
+    );
     expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1");
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1", {
       OI_REPO_IMAGE_PROVIDER_SESSION_ID: "oc-sandbox-1",
     });
+  });
+
+  it("cleans up a repo image build sandbox when runtime startup fails", async () => {
+    const client = createMockClient({
+      startRuntime: vi.fn(async () => {
+        throw new Error("runtime failed");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.triggerRepoImageBuild({
+        buildId: "build-1",
+        repoOwner: "acme",
+        repoName: "repo",
+        defaultBranch: "main",
+        callbackUrl: "https://control.example/repo-images/build-complete",
+        callbackToken: "callback-token",
+      })
+    ).rejects.toThrow("Failed to trigger OpenComputer repo image build");
+
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
   });
 
   it("wakes hibernated sandboxes on resume", async () => {

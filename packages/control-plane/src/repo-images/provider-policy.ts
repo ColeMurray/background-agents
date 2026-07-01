@@ -1,7 +1,7 @@
 import { resolveSandboxBackendName, type SandboxBackendName } from "../sandbox/provider-name";
 import type { Env } from "../types";
 import type { RepoImageProvider } from "./model";
-import type { RepoImageCallbackMode } from "./types";
+import type { RepoImageCallbackMode, RepoImageCloneAuthMode } from "./types";
 
 /**
  * Central provider policy for repo image support.
@@ -14,6 +14,12 @@ const REPO_IMAGE_CALLBACK_MODES = {
   vercel: "provider_session",
   opencomputer: "provider_session",
 } satisfies Record<RepoImageProvider, RepoImageCallbackMode>;
+
+const REPO_IMAGE_CLONE_AUTH_MODES = {
+  modal: "none",
+  vercel: "credential_helper",
+  opencomputer: "credential_helper",
+} satisfies Record<RepoImageProvider, RepoImageCloneAuthMode>;
 
 export function getRepoImagesUnsupportedMessage(env: Env): string | null {
   if (resolveRepoImageProvider(env.SANDBOX_PROVIDER)) {
@@ -38,6 +44,10 @@ export function getRepoImageProvider(env: Env): RepoImageProvider {
 
 export function getRepoImageCallbackMode(provider: RepoImageProvider): RepoImageCallbackMode {
   return REPO_IMAGE_CALLBACK_MODES[provider];
+}
+
+export function getRepoImageCloneAuthMode(provider: RepoImageProvider): RepoImageCloneAuthMode {
+  return REPO_IMAGE_CLONE_AUTH_MODES[provider];
 }
 
 function isRepoImageProvider(provider: SandboxBackendName): provider is RepoImageProvider {

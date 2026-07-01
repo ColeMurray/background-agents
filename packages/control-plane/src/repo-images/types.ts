@@ -41,16 +41,20 @@ export interface ModalRepoImageBuildPlan extends BaseRepoImageBuildPlan {
   callbackMode: "provider_image";
 }
 
-export type VercelCloneAuth =
+export type RepoImageCloneAuth =
   | { type: "credential_helper"; token: string }
   | { type: "unavailable" };
+
+export type RepoImageCloneAuthMode = "credential_helper" | "none";
+
+export type VercelCloneAuth = RepoImageCloneAuth;
 
 /** Vercel builds inside a sandbox; the control plane snapshots it after callback success. */
 export interface VercelRepoImageBuildPlan extends BaseRepoImageBuildPlan {
   provider: "vercel";
   callbackMode: "provider_session";
   callbackToken: string;
-  cloneAuth: VercelCloneAuth;
+  cloneAuth: RepoImageCloneAuth;
 }
 
 /** OpenComputer builds inside a sandbox; the control plane checkpoints it after callback success. */
@@ -58,6 +62,7 @@ export interface OpenComputerRepoImageBuildPlan extends BaseRepoImageBuildPlan {
   provider: "opencomputer";
   callbackMode: "provider_session";
   callbackToken: string;
+  cloneAuth: RepoImageCloneAuth;
 }
 
 export type ProviderSessionRepoImageBuildPlan =

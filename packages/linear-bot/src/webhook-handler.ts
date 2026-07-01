@@ -181,6 +181,8 @@ type AgentSessionAuthFailureMode = "start" | "follow_up";
 type AgentSessionAuthFailure = LinearAuthFailure & {
   authStatus: LinearWorkspaceAuthStatus;
   reconnectUrl: string;
+  reauthorizationRequired: boolean;
+  retryable: boolean;
 };
 
 function formatAgentSessionAuthFailureComment(params: {
@@ -238,6 +240,7 @@ async function notifyAgentSessionAuthFailure(params: {
       agent_session_id: agentSessionId,
       issue_id: issue.id,
       issue_identifier: issue.identifier,
+      mode,
       auth_failure_reason: authFailure.reason,
       reauthorization_required: authFailure.reauthorizationRequired,
       auth_status: authFailure.authStatus,
@@ -251,6 +254,7 @@ async function notifyAgentSessionAuthFailure(params: {
     agent_session_id: agentSessionId,
     issue_id: issue.id,
     issue_identifier: issue.identifier,
+    mode,
     auth_failure_reason: authFailure.reason,
     reauthorization_required: authFailure.reauthorizationRequired,
     auth_status: authFailure.authStatus,
@@ -317,6 +321,9 @@ async function handleFollowUp(
       trace_id: traceId,
       org_id: orgId,
       agent_session_id: agentSessionId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      mode: "follow_up",
       auth_failure_reason: clientResult.reason,
       reauthorization_required: clientResult.reauthorizationRequired,
       auth_status: clientResult.authStatus,
@@ -443,6 +450,9 @@ async function handleNewSession(
       trace_id: traceId,
       org_id: orgId,
       agent_session_id: agentSessionId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      mode: "start",
       auth_failure_reason: clientResult.reason,
       reauthorization_required: clientResult.reauthorizationRequired,
       auth_status: clientResult.authStatus,

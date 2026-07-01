@@ -3,6 +3,7 @@ import {
   exchangeCodeForToken,
   fetchUser,
   getLinearAuthContext,
+  getOAuthTokenOrThrow,
   getOAuthTokenResult,
   postAuthFailureCommentFallback,
 } from "./linear-client";
@@ -11,6 +12,9 @@ import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
 import { getLinearAuthState } from "../kv-store";
 
 const client: LinearApiClient = { accessToken: "test-token" };
+const FRESH_TOKEN_EXPIRES_IN_MS = 10 * 60 * 1000;
+const NEAR_EXPIRY_TOKEN_EXPIRES_IN_MS = 4 * 60 * 1000;
+const EXPIRED_TOKEN_AGE_MS = 60 * 1000;
 
 function mockFetchResponse(data: unknown): void {
   vi.stubGlobal(
@@ -92,7 +96,7 @@ describe("fetchUser", () => {
   });
 });
 
-describe("getOAuthTokenResult", () => {
+describe("getOAuthTokenOrThrow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -106,25 +110,49 @@ describe("getOAuthTokenResult", () => {
     return { env: makeLinearBotEnv(kv), store };
   }
 
-  it("requires reauthorization when the workspace token is missing", async () => {
+  function expectAuthFailure(promise: Promise<unknown>, failure: Record<string, unknown>) {
+    return expect(promise).rejects.toMatchObject({
+      name: "LinearAuthError",
+      ...failure,
+    });
+  }
+
+  it("throws an auth error when the workspace token is missing", async () => {
     const { env } = envWithToken();
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
-      ok: false,
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "missing_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   });
 
-  it("requires reauthorization when the workspace token is malformed", async () => {
+  it("throws an auth error when the workspace token is malformed", async () => {
     const { env } = envWithToken("{not-json");
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
-      ok: false,
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "malformed_token",
-      reauthorizationRequired: true,
-      retryable: false,
+    });
+  });
+
+  it("throws an auth error when the workspace token shape is invalid", async () => {
+    const { env } = envWithToken(
+      JSON.stringify({
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
+      })
+    );
+
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
+      reason: "malformed_token",
+    });
+  });
+
+  it("throws an auth error when the token read fails", async () => {
+    const { env } = envWithToken();
+    const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
+    kvGet.mockRejectedValueOnce(new Error("kv down"));
+
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
+      reason: "token_read_error",
     });
   });
 
@@ -137,7 +165,7 @@ describe("getOAuthTokenResult", () => {
       name: "missing access token",
       raw: JSON.stringify({
         refresh_token: "refresh-token",
-        expires_at: Date.now() + 10 * 60 * 1000,
+        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       }),
     },
     {
@@ -145,7 +173,7 @@ describe("getOAuthTokenResult", () => {
       raw: JSON.stringify({
         access_token: 123,
         refresh_token: "refresh-token",
-        expires_at: Date.now() + 10 * 60 * 1000,
+        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       }),
     },
     {
@@ -153,7 +181,7 @@ describe("getOAuthTokenResult", () => {
       raw: JSON.stringify({
         access_token: "fresh-token",
         refresh_token: "refresh-token",
-        expires_at: String(Date.now() + 10 * 60 * 1000),
+        expires_at: String(Date.now() + FRESH_TOKEN_EXPIRES_IN_MS),
       }),
     },
     {
@@ -161,7 +189,7 @@ describe("getOAuthTokenResult", () => {
       raw: JSON.stringify({
         access_token: "fresh-token",
         refresh_token: 123,
-        expires_at: Date.now() + 10 * 60 * 1000,
+        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       }),
     },
   ])("requires reauthorization when the stored token has $name", async ({ raw }) => {
@@ -180,16 +208,13 @@ describe("getOAuthTokenResult", () => {
       JSON.stringify({
         access_token: "fresh-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() + 10 * 60 * 1000,
+        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       })
     );
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toEqual({
-      ok: true,
-      token: "fresh-token",
-    });
+    await expect(getOAuthTokenOrThrow(env, "org-1")).resolves.toBe("fresh-token");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -198,7 +223,7 @@ describe("getOAuthTokenResult", () => {
       JSON.stringify({
         access_token: "nearly-expired-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() + 4 * 60 * 1000,
+        expires_at: Date.now() + NEAR_EXPIRY_TOKEN_EXPIRES_IN_MS,
       })
     );
     const fetchMock = vi.fn().mockResolvedValue({
@@ -223,7 +248,7 @@ describe("getOAuthTokenResult", () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "fresh-token",
-        expires_at: Date.now() + 10 * 60 * 1000,
+        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       })
     );
     const fetchMock = vi.fn();
@@ -236,28 +261,25 @@ describe("getOAuthTokenResult", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("requires reauthorization when an expired token has no refresh token", async () => {
+  it("throws an auth error when an expired token has no refresh token", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       })
     );
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
-      ok: false,
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "missing_refresh_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   });
 
-  it("marks invalid_grant refresh failures as reauthorization-required", async () => {
+  it("classifies invalid_grant refresh failures", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       })
     );
     vi.stubGlobal(
@@ -275,23 +297,20 @@ describe("getOAuthTokenResult", () => {
       })
     );
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
-      ok: false,
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "refresh_invalid_grant",
-      reauthorizationRequired: true,
-      retryable: false,
       status: 400,
       oauthError: "invalid_grant",
       oauthErrorDescription: "Refresh token has expired.",
     });
   });
 
-  it("marks other refresh HTTP failures as retryable", async () => {
+  it("classifies other refresh HTTP failures", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       })
     );
     vi.stubGlobal(
@@ -303,30 +322,24 @@ describe("getOAuthTokenResult", () => {
       })
     );
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
-      ok: false,
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "refresh_failed",
-      reauthorizationRequired: false,
-      retryable: true,
       status: 503,
     });
   });
 
-  it("marks refresh exceptions as retryable errors", async () => {
+  it("classifies refresh exceptions", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       })
     );
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
-      ok: false,
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "refresh_error",
-      reauthorizationRequired: false,
-      retryable: true,
     });
   });
 
@@ -335,7 +348,7 @@ describe("getOAuthTokenResult", () => {
       JSON.stringify({
         access_token: "expired-token",
         refresh_token: "old-refresh-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       })
     );
     vi.stubGlobal(
@@ -351,10 +364,7 @@ describe("getOAuthTokenResult", () => {
       })
     );
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toEqual({
-      ok: true,
-      token: "new-access-token",
-    });
+    await expect(getOAuthTokenOrThrow(env, "org-1")).resolves.toBe("new-access-token");
     expect(JSON.parse(store.get("oauth:token:org-1") ?? "{}")).toMatchObject({
       access_token: "new-access-token",
       refresh_token: "new-refresh-token",
@@ -376,7 +386,7 @@ describe("getLinearAuthContext", () => {
       "oauth:token:org-1": JSON.stringify({
         access_token: "expired-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       }),
     });
     const env = makeLinearBotEnv(kv);
@@ -418,7 +428,7 @@ describe("getLinearAuthContext", () => {
       "oauth:token:org-1": JSON.stringify({
         access_token: "expired-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       }),
     });
     const env = makeLinearBotEnv(kv);
@@ -444,6 +454,25 @@ describe("getLinearAuthContext", () => {
     });
   });
 
+  it("records transient auth health when the token read fails", async () => {
+    const { kv, store } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
+    kvGet.mockImplementationOnce(async () => null);
+    kvGet.mockRejectedValueOnce(new Error("kv down"));
+
+    await expect(getLinearAuthContext(env, "org-1", "trace-kv")).resolves.toMatchObject({
+      ok: false,
+      reason: "token_read_error",
+      authStatus: "transient_failure",
+    });
+    expect(JSON.parse(store.get("linear_auth:org-1") ?? "{}")).toMatchObject({
+      status: "transient_failure",
+      reason: "token_read_error",
+      lastTraceId: "trace-kv",
+    });
+  });
+
   it.each([
     {
       name: "missing token",
@@ -459,7 +488,7 @@ describe("getLinearAuthContext", () => {
       name: "missing refresh token",
       initial: JSON.stringify({
         access_token: "expired-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       }),
       expectedReason: "missing_refresh_token",
     },
@@ -487,7 +516,7 @@ describe("getLinearAuthContext", () => {
       "oauth:token:org-1": JSON.stringify({
         access_token: "expired-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() - 60 * 1000,
+        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
       }),
     });
     const env = makeLinearBotEnv(kv);
@@ -512,7 +541,7 @@ describe("getLinearAuthContext", () => {
         "oauth:token:org-1": JSON.stringify({
           access_token: "fresh-token",
           refresh_token: "refresh-token",
-          expires_at: Date.now() + 10 * 60 * 1000,
+          expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
         }),
         "linear_auth:org-1": JSON.stringify({
           schemaVersion: 1,
@@ -544,7 +573,7 @@ describe("getLinearAuthContext", () => {
       "oauth:token:org-1": JSON.stringify({
         access_token: "fresh-token",
         refresh_token: "refresh-token",
-        expires_at: Date.now() + 10 * 60 * 1000,
+        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       }),
       "linear_auth:org-1": JSON.stringify({
         schemaVersion: 1,

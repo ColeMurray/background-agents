@@ -35,6 +35,10 @@ export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter<
       callbackUrl: openComputerPlan.callbackUrl,
       callbackToken: openComputerPlan.callbackToken,
       userEnvVars: openComputerPlan.userEnvVars,
+      cloneToken:
+        openComputerPlan.cloneAuth.type === "credential_helper"
+          ? openComputerPlan.cloneAuth.token
+          : undefined,
       buildTimeoutSeconds: Math.ceil(openComputerPlan.buildTimeoutMs / MS_PER_SECOND),
       onProviderSessionCreated: callbacks.bindProviderSession,
     });
