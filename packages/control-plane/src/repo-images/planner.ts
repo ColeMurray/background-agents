@@ -43,6 +43,13 @@ interface ResolvedRepoImageRepository {
   defaultBranch: string;
 }
 
+/**
+ * Resolves a trigger request into a concrete provider build plan.
+ *
+ * The planner is the only repo-image layer that talks to source-control and
+ * settings/secrets stores. It produces a typed plan that the workflow can run
+ * without passing request objects or environment lookup concerns into adapters.
+ */
 export class RepoImageBuildPlanner {
   constructor(
     private readonly env: Env,

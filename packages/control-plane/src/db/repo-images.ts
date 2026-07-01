@@ -38,6 +38,14 @@ export interface RepoImage {
   created_at: number;
 }
 
+/**
+ * D1-backed repo image registry and state machine.
+ *
+ * The store is the concurrency boundary for build acceptance. Methods only move
+ * rows from building to terminal states when predicates still hold, which lets
+ * the workflow handle duplicate callbacks, provider-session token replay, and
+ * newer builds racing older builds without provider-specific branching.
+ */
 export class RepoImageStore {
   constructor(private readonly db: D1Database) {}
 

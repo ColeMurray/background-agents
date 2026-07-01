@@ -92,8 +92,17 @@ export interface AcceptBuildFailedCommand {
   context: RepoImageWorkflowContext;
 }
 
-// Workflow methods return successful domain outcomes and throw RepoImageError subclasses for
-// route-level error mapping.
+/**
+ * Application service for the repo image build lifecycle.
+ *
+ * The workflow sequences planning, provider adapter calls, callback authorization,
+ * store state transitions, and best-effort cleanup. It deliberately keeps HTTP
+ * parsing in routes, environment/repository resolution in the planner, and
+ * provider API details in adapters.
+ *
+ * Public methods return successful domain outcomes and throw RepoImageError
+ * subclasses for route-level error mapping.
+ */
 export class RepoImageBuildWorkflow {
   private readonly planner: RepoImageBuildPlannerLike | null;
 

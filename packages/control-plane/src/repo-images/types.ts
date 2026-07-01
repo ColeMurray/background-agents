@@ -1,6 +1,13 @@
 import type { CorrelationContext } from "../logger";
 import type { RepoImageProviderImageRef, SupersededRepoImage } from "./model";
 
+/**
+ * Callback mode captures the lifecycle shape, not the vendor.
+ *
+ * provider_image: the builder callback includes the ready artifact id.
+ * provider_session: the callback identifies a build sandbox; the control plane
+ * then snapshots/checkpoints that sandbox into the repo image artifact.
+ */
 export type RepoImageCallbackMode = "provider_image" | "provider_session";
 export type RepoImageWorkflowContext = CorrelationContext;
 
@@ -16,6 +23,7 @@ export type RepoImageWorkflowResult =
   | { type: "build_superseded"; cleanup?: Promise<void> }
   | { type: "build_failed"; cleanup?: Promise<void> };
 
+/** Provider-neutral build request fields resolved before adapter-specific execution. */
 interface BaseRepoImageBuildPlan {
   buildId: string;
   repoOwner: string;
@@ -27,6 +35,7 @@ interface BaseRepoImageBuildPlan {
   correlation: CorrelationContext;
 }
 
+/** Modal's data-plane builder returns the provider image id directly in its callback. */
 export interface ModalRepoImageBuildPlan extends BaseRepoImageBuildPlan {
   provider: "modal";
   callbackMode: "provider_image";
@@ -36,6 +45,7 @@ export type VercelCloneAuth =
   | { type: "credential_helper"; token: string }
   | { type: "unavailable" };
 
+/** Vercel builds inside a sandbox; the control plane snapshots it after callback success. */
 export interface VercelRepoImageBuildPlan extends BaseRepoImageBuildPlan {
   provider: "vercel";
   callbackMode: "provider_session";
@@ -43,6 +53,7 @@ export interface VercelRepoImageBuildPlan extends BaseRepoImageBuildPlan {
   cloneAuth: VercelCloneAuth;
 }
 
+/** OpenComputer builds inside a sandbox; the control plane checkpoints it after callback success. */
 export interface OpenComputerRepoImageBuildPlan extends BaseRepoImageBuildPlan {
   provider: "opencomputer";
   callbackMode: "provider_session";
@@ -62,6 +73,10 @@ export type RepoImageCallbackAuth =
   | { type: "none" }
   | { type: "bearer_token"; tokenHash: string; expiresAt: number };
 
+/**
+ * Planner output keeps the provider-specific plan and its persisted callback auth together.
+ * This is the handoff from environment/repository resolution to workflow execution.
+ */
 export type PlannedRepoImageBuild =
   | { plan: ModalRepoImageBuildPlan; callbackAuth: { type: "none" } }
   | {
@@ -73,6 +88,7 @@ export type PlannedRepoImageBuild =
       callbackAuth: Extract<RepoImageCallbackAuth, { type: "bearer_token" }>;
     };
 
+/** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */
 export interface RepoImageBuildStartCallbacks {
   bindProviderSession(providerSessionId: string): Promise<void>;
 }
@@ -134,6 +150,7 @@ export type FailedRepoImageBuildInput = FailRepoImageBuild & {
   correlation: CorrelationContext;
 };
 
+/** Cleanup hook for providers whose completed build sandbox outlives finalization. */
 export interface CleanupCompletedProviderSessionBuildInput {
   kind: "provider_session";
   buildId: string;
@@ -146,6 +163,12 @@ export interface DeleteRepoImageInput {
   correlation?: CorrelationContext;
 }
 
+/**
+ * Provider-facing operations needed after a build has started.
+ *
+ * The workflow owns state transitions; adapters own translating lifecycle steps
+ * into provider API calls such as snapshot/checkpoint, stop/delete, and artifact deletion.
+ */
 export interface RepoImageBuildFinalizer {
   finalizeSuccessfulBuild(
     input: FinalizeRepoImageBuildInput
@@ -158,6 +181,7 @@ export interface RepoImageBuildFinalizer {
   deleteImage(input: DeleteRepoImageInput): Promise<void>;
 }
 
+/** Full provider adapter contract for starting and finalizing one typed repo image plan. */
 export type RepoImageBuildAdapter<Plan extends RepoImageBuildPlan> = RepoImageBuildFinalizer & {
   startBuild(plan: Plan, callbacks: RepoImageBuildStartCallbacks): Promise<void>;
 };
