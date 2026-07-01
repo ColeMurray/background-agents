@@ -95,7 +95,7 @@ function createInput(overrides: Partial<CreatePullRequestInput> = {}): CreatePul
   };
 }
 
-function createTestHarness() {
+function createTestHarness(options: { alwaysDraftDefault?: boolean } = {}) {
   const log = createMockLogger();
   const provider = createMockProvider();
   const artifacts: ArtifactRow[] = [];
@@ -130,6 +130,7 @@ function createTestHarness() {
     broadcastSessionBranch: vi.fn(),
     broadcastArtifactCreated: vi.fn(),
     appName: "Open-Inspect",
+    resolveAlwaysDraftDefault: vi.fn(async () => options.alwaysDraftDefault ?? false),
   };
 
   const service = new SessionPullRequestService(deps);
@@ -256,6 +257,46 @@ describe("SessionPullRequestService", () => {
       "feature/test"
     );
     expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("feature/test");
+  });
+
+  it("passes draft=false to the provider by default", async () => {
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: false })
+    );
+  });
+
+  it("forwards an explicit draft flag from the request", async () => {
+    await harness.service.createPullRequest(createInput({ draft: true }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("falls back to the always-draft default when draft is unspecified", async () => {
+    harness = createTestHarness({ alwaysDraftDefault: true });
+
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("forces draft when always-draft is enabled, even if the request sets draft=false", async () => {
+    harness = createTestHarness({ alwaysDraftDefault: true });
+
+    await harness.service.createPullRequest(createInput({ draft: false }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {

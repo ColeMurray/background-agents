@@ -10,6 +10,7 @@ import { DataControlsSettings } from "@/components/settings/data-controls-settin
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
 import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
+import { ScmSettingsPage } from "@/components/settings/scm-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
 import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
@@ -26,6 +27,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   "keyboard-shortcuts": "Keyboard",
   "data-controls": "Data Controls",
   sandbox: "Sandbox",
+  scm: "SCM Settings",
   integrations: "Integrations",
   "mcp-servers": "MCP Servers",
 };
@@ -38,6 +40,7 @@ const VALID_CATEGORIES = new Set<string>([
   "keyboard-shortcuts",
   "data-controls",
   "sandbox",
+  "scm",
   "integrations",
   "mcp-servers",
 ]);
@@ -87,6 +90,7 @@ export default function SettingsPage() {
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
       {activeCategory === "data-controls" && <DataControlsSettings />}
       {activeCategory === "sandbox" && <SandboxSettingsPage />}
+      {activeCategory === "scm" && <ScmSettingsPage />}
       {activeCategory === "integrations" && <IntegrationsSettings />}
       {activeCategory === "mcp-servers" && <McpServersSettings />}
     </>
