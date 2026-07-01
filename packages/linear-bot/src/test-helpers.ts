@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { Env } from "./types";
+import { computeHmacHex } from "./utils/crypto";
 
 export const LINEAR_WEBHOOK_TEST_SECRET = "test-linear-webhook-secret";
 
@@ -70,4 +71,14 @@ export async function signLinearWebhookRequest(body: string): Promise<string> {
   return Array.from(new Uint8Array(signature))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+export async function signCallbackPayload<T extends Record<string, unknown>>(
+  payload: T,
+  secret: string
+): Promise<T & { signature: string }> {
+  return {
+    ...payload,
+    signature: await computeHmacHex(JSON.stringify(payload), secret),
+  };
 }
