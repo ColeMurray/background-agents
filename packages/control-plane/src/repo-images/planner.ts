@@ -4,13 +4,18 @@ import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { createLogger, type CorrelationContext } from "../logger";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
-import { createSourceControlProviderFromEnv, SourceControlProviderError } from "../source-control";
+import {
+  createSourceControlProviderFromEnv,
+  type RepositoryAccessResult,
+  SourceControlProviderError,
+} from "../source-control";
 import type { Env } from "../types";
 import {
   generateRepoImageCallbackToken,
   hashRepoImageCallbackToken,
   REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
 } from "./auth";
+import { RepoImagePlanningError, RepoImageRepositoryNotInstalledError } from "./errors";
 import type { RepoImageProvider } from "./model";
 import { getRepoImageCallbackMode } from "./provider-policy";
 import type { PlannedRepoImageBuild, VercelCloneAuth } from "./types";
@@ -33,13 +38,10 @@ interface BaseRepoImageBuildPlanInput {
   correlation: CorrelationContext;
 }
 
-export type RepoImageBuildPlanningResult =
-  | {
-      type: "ok";
-      build: PlannedRepoImageBuild;
-    }
-  | { type: "repo_not_installed"; message: string }
-  | { type: "failed"; message: string };
+interface ResolvedRepoImageRepository {
+  repoId: number;
+  defaultBranch: string;
+}
 
 export class RepoImageBuildPlanner {
   constructor(
@@ -54,9 +56,8 @@ export class RepoImageBuildPlanner {
     now: number;
     callbackUrl: string;
     correlation: CorrelationContext;
-  }): Promise<RepoImageBuildPlanningResult> {
+  }): Promise<PlannedRepoImageBuild> {
     const resolved = await this.resolveRepo(params.repoOwner, params.repoName, params.correlation);
-    if (resolved.type !== "ok") return resolved;
 
     const [callbackAuth, sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
       this.createCallbackAuth(params.now),
@@ -86,31 +87,18 @@ export class RepoImageBuildPlanner {
       },
     };
 
-    return {
-      type: "ok",
-      build: this.createPlannedBuildForProvider(basePlan, callbackAuth, cloneAuth),
-    };
+    return this.createPlannedBuildForProvider(basePlan, callbackAuth, cloneAuth);
   }
 
   private async resolveRepo(
     owner: string,
     name: string,
     correlation: CorrelationContext
-  ): Promise<
-    | { type: "ok"; repoId: number; defaultBranch: string }
-    | { type: "repo_not_installed"; message: string }
-    | { type: "failed"; message: string }
-  > {
+  ): Promise<ResolvedRepoImageRepository> {
+    let resolved: RepositoryAccessResult | null;
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
-      const resolved = await provider.checkRepositoryAccess({ owner, name });
-      if (!resolved) {
-        return {
-          type: "repo_not_installed",
-          message: "Repository is not installed for the GitHub App",
-        };
-      }
-      return { type: "ok", repoId: resolved.repoId, defaultBranch: resolved.defaultBranch };
+      resolved = await provider.checkRepositoryAccess({ owner, name });
     } catch (e) {
       const message = errorMessage(e);
       logger.error("Failed to resolve repository", {
@@ -122,11 +110,14 @@ export class RepoImageBuildPlanner {
       });
       const isConfigError =
         e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-      return {
-        type: "failed",
-        message: isConfigError ? message : "Failed to resolve repository",
-      };
+      throw new RepoImagePlanningError(isConfigError ? message : "Failed to resolve repository", e);
     }
+
+    if (!resolved) {
+      throw new RepoImageRepositoryNotInstalledError();
+    }
+
+    return { repoId: resolved.repoId, defaultBranch: resolved.defaultBranch };
   }
 
   private async createCallbackAuth(now: number): Promise<PlannedCallbackAuth> {

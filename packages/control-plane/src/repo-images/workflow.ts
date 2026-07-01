@@ -5,6 +5,20 @@ import type { RepoImageBuild } from "../db/repo-images";
 import { createLogger, type CorrelationContext } from "../logger";
 import type { Env } from "../types";
 import { hashRepoImageCallbackToken } from "./auth";
+import {
+  RepoImageBuildCompleteFailedError,
+  RepoImageBuildFailedUpdateError,
+  RepoImageCallbackAuthRejectedError,
+  RepoImageCallbackAuthUnavailableError,
+  RepoImageCompletionNotAcceptedError,
+  RepoImageFailureNotAcceptedError,
+  RepoImageInvalidCallbackError,
+  RepoImagePlanningError,
+  RepoImageProviderUnconfiguredError,
+  RepoImageRepositoryNotInstalledError,
+  RepoImageTriggerFailedError,
+  RepoImageWorkflowUnavailableError,
+} from "./errors";
 import type { RepoImageCallbackBuild, RepoImageProvider } from "./model";
 import { getRepoImageCallbackMode, resolveRepoImageProvider } from "./provider-policy";
 import { RepoImageBuildPlanner } from "./planner";
@@ -14,7 +28,6 @@ import {
 } from "./provider-factory";
 import type {
   AnyRepoImageBuildAdapter,
-  CompleteProviderImageBuild,
   CompleteProviderSessionBuild,
   CompleteRepoImageBuild,
   CompleteRepoImageBuildCallback,
@@ -25,6 +38,7 @@ import type {
   RepoImageBuildPlan,
   RepoImageBuildFinalizer,
   RepoImageBuildStartCallbacks,
+  TriggerRepoImageBuildResult,
   RepoImageWorkflowContext,
   RepoImageWorkflowResult,
   ReplacedRepoImage,
@@ -33,38 +47,16 @@ import type {
 const logger = createLogger("repo-images:workflow");
 
 type PlanBuildInput = Parameters<RepoImageBuildPlanner["planBuild"]>[0];
-type AdapterResolution<TAdapter extends RepoImageBuildFinalizer> =
-  | { type: "ok"; adapter: TAdapter }
-  | {
-      type: "unconfigured";
-      result: Extract<RepoImageWorkflowResult, { type: "repo_image_provider_unconfigured" }>;
-    };
-type PlannedBuildStart =
-  | {
-      type: "ok";
-      adapter: AnyRepoImageBuildAdapter;
-      start(callbacks: {
-        bindProviderSession(providerSessionId: string): Promise<void>;
-      }): Promise<void>;
-    }
-  | Extract<AdapterResolution<AnyRepoImageBuildAdapter>, { type: "unconfigured" }>;
-type CallbackAuthorization =
-  | { type: "authorized"; provider: RepoImageProvider }
-  | { type: "invalid"; message: string }
-  | {
-      type: "failed";
-      result: Extract<
-        RepoImageWorkflowResult,
-        { type: "callback_auth_rejected" | "callback_auth_unavailable" }
-      >;
-    };
+type PlannedBuildStart = {
+  adapter: AnyRepoImageBuildAdapter;
+  start(callbacks: {
+    bindProviderSession(providerSessionId: string): Promise<void>;
+  }): Promise<void>;
+};
 type FinalizedReadyResult =
   | { type: "ready"; replacedImages: ReplacedRepoImage[]; cleanup?: Promise<void> }
   | { type: "superseded"; cleanup?: Promise<void> }
   | { type: "not_accepting" };
-type ReadyCompletionResult =
-  | { type: "ok"; completion: CompleteRepoImageBuild }
-  | { type: "invalid"; message: string };
 type BoundRepoImageBuildAdapter = RepoImageBuildFinalizer & {
   startBuild(plan: RepoImageBuildPlan, callbacks: RepoImageBuildStartCallbacks): Promise<void>;
 };
@@ -95,6 +87,8 @@ export interface AcceptBuildFailedCommand {
   context: RepoImageWorkflowContext;
 }
 
+// Workflow methods return successful domain outcomes and throw RepoImageError subclasses for
+// route-level error mapping.
 export class RepoImageBuildWorkflow {
   private readonly planner: RepoImageBuildPlannerLike | null;
 
@@ -112,48 +106,52 @@ export class RepoImageBuildWorkflow {
     owner: string,
     name: string,
     ctx: RepoImageWorkflowContext
-  ): Promise<RepoImageWorkflowResult> {
+  ): Promise<TriggerRepoImageBuildResult> {
     if (!this.provider || !this.planner) {
-      return {
-        type: "repo_image_workflow_unavailable",
-        message: "Repo image provider is not configured",
-      };
+      throw new RepoImageWorkflowUnavailableError("Repo image provider is not configured");
     }
     if (!this.env.WORKER_URL) {
-      return { type: "repo_image_workflow_unavailable", message: "WORKER_URL not configured" };
+      throw new RepoImageWorkflowUnavailableError("WORKER_URL not configured");
     }
 
     const provider = this.provider;
     const now = Date.now();
     const buildId = createBuildId(owner, name, now);
-    let providerSessionIdForCleanup: string | null = null;
-    let adapterForCleanup: AnyRepoImageBuildAdapter | null = null;
+    const callbackUrl = `${this.env.WORKER_URL}/repo-images/build-complete`;
+    let build: PlannedRepoImageBuild;
+    let start: PlannedBuildStart;
 
     try {
-      const planned = await this.planner.planBuild({
+      build = await this.planner.planBuild({
         buildId,
         repoOwner: owner,
         repoName: name,
         now,
-        callbackUrl: `${this.env.WORKER_URL}/repo-images/build-complete`,
+        callbackUrl,
         correlation: ctx,
       });
-      if (planned.type === "repo_not_installed") {
-        return { type: "repository_not_installed", message: planned.message };
-      }
-      if (planned.type === "failed") {
-        return {
-          type: "workflow_failed",
-          operation: "trigger_build",
-          message: planned.message,
-        };
+      start = this.preparePlannedBuildStart(build, ctx);
+    } catch (e) {
+      if (
+        e instanceof RepoImageRepositoryNotInstalledError ||
+        e instanceof RepoImagePlanningError ||
+        e instanceof RepoImageProviderUnconfiguredError
+      ) {
+        throw e;
       }
 
-      const build = planned.build;
-      const start = this.preparePlannedBuildStart(build, ctx);
-      if (start.type === "unconfigured") return start.result;
-      adapterForCleanup = start.adapter;
+      logger.error("repo_image.trigger_error", {
+        error: errorMessage(e),
+        repo_owner: owner,
+        repo_name: name,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      throw new RepoImageTriggerFailedError("Failed to trigger build", e);
+    }
 
+    let providerSessionIdForCleanup: string | null = null;
+    try {
       await this.store.registerBuild({
         id: buildId,
         repoOwner: owner,
@@ -181,10 +179,10 @@ export class RepoImageBuildWorkflow {
         trace_id: ctx.trace_id,
       });
 
-      return { type: "build_triggered", buildId };
+      return { buildId };
     } catch (e) {
-      if (providerSessionIdForCleanup && adapterForCleanup?.cleanupFailedBuild) {
-        await adapterForCleanup
+      if (providerSessionIdForCleanup && start.adapter.cleanupFailedBuild) {
+        await start.adapter
           .cleanupFailedBuild({
             kind: "provider_session",
             buildId,
@@ -221,11 +219,7 @@ export class RepoImageBuildWorkflow {
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      return {
-        type: "workflow_failed",
-        operation: "trigger_build",
-        message: "Failed to trigger build",
-      };
+      throw new RepoImageTriggerFailedError("Failed to trigger build", e);
     }
   }
 
@@ -233,35 +227,23 @@ export class RepoImageBuildWorkflow {
     const { completion, context: ctx } = command;
     const build = await this.store.getCallbackBuild(completion.buildId);
     if (!build) {
-      return { type: "completion_not_accepted", message: "Build is not accepting completion" };
+      throw new RepoImageCompletionNotAcceptedError("Build is not accepting completion");
     }
 
     const provider = build.provider;
     let readyCompletion: CompleteRepoImageBuild;
 
     if (getRepoImageCallbackMode(provider) === "provider_session") {
-      const completionResult = this.buildReadyCompletion(provider, completion);
-      if (completionResult.type === "invalid") {
-        return { type: "invalid_callback", message: completionResult.message };
+      readyCompletion = this.buildReadyCompletion(provider, completion);
+      if (readyCompletion.kind !== "provider_session") {
+        throw new RepoImageBuildCompleteFailedError("Invalid provider-session completion");
       }
-      if (completionResult.completion.kind !== "provider_session") {
-        return {
-          type: "workflow_failed",
-          operation: "build_complete",
-          message: "Invalid provider-session completion",
-        };
-      }
-      readyCompletion = completionResult.completion;
 
-      const authorization = await this.authorizeRepoImageCallback(build, {
+      await this.authorizeRepoImageCallback(build, {
         providerSessionId: readyCompletion.providerSessionId,
         callbackToken: command.callbackToken,
         ctx,
       });
-      if (authorization.type === "failed") return authorization.result;
-      if (authorization.type === "invalid") {
-        return { type: "invalid_callback", message: authorization.message };
-      }
 
       logger.info("repo_image.build_complete_received", {
         build_id: readyCompletion.buildId,
@@ -284,40 +266,26 @@ export class RepoImageBuildWorkflow {
       return { type: "completion_accepted", finalization };
     }
 
-    const authorization = await this.authorizeRepoImageCallback(build, {
+    await this.authorizeRepoImageCallback(build, {
       authorizationHeader: command.authorizationHeader,
       ctx,
     });
-    if (authorization.type === "failed") return authorization.result;
-    if (authorization.type === "invalid") {
-      return { type: "invalid_callback", message: authorization.message };
-    }
 
-    const completionResult = this.buildReadyCompletion(provider, completion);
-    if (completionResult.type === "invalid") {
-      return { type: "invalid_callback", message: completionResult.message };
+    readyCompletion = this.buildReadyCompletion(provider, completion);
+    if (readyCompletion.kind !== "provider_image") {
+      throw new RepoImageBuildCompleteFailedError("Invalid provider-image completion");
     }
-    if (completionResult.completion.kind !== "provider_image") {
-      return {
-        type: "workflow_failed",
-        operation: "build_complete",
-        message: "Invalid provider-image completion",
-      };
-    }
-    readyCompletion = completionResult.completion;
 
     if (build.status !== "building") {
-      return { type: "completion_not_accepted", message: "Build is not accepting completion" };
+      throw new RepoImageCompletionNotAcceptedError("Build is not accepting completion");
     }
 
-    const adapterResolution = this.createAdapterForOperation(
+    const adapter = this.createAdapterForOperation(
       provider,
       "build_complete",
       ctx,
       readyCompletion.buildId
     );
-    if (adapterResolution.type === "unconfigured") return adapterResolution.result;
-    const { adapter } = adapterResolution;
 
     let finalized: FinalizeRepoImageBuildResult | null = null;
     try {
@@ -348,9 +316,11 @@ export class RepoImageBuildWorkflow {
             ? { type: "build_superseded", cleanup: result.cleanup }
             : { type: "build_superseded" };
         case "not_accepting":
-          return { type: "completion_not_accepted", message: "Build is not accepting completion" };
+          throw new RepoImageCompletionNotAcceptedError("Build is not accepting completion");
       }
     } catch (e) {
+      if (e instanceof RepoImageCompletionNotAcceptedError) throw e;
+
       logger.error("repo_image.build_complete_error", {
         error: errorMessage(e),
         build_id: readyCompletion.buildId,
@@ -358,11 +328,7 @@ export class RepoImageBuildWorkflow {
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      return {
-        type: "workflow_failed",
-        operation: "build_complete",
-        message: "Failed to mark build as ready",
-      };
+      throw new RepoImageBuildCompleteFailedError("Failed to mark build as ready", e);
     }
   }
 
@@ -370,49 +336,24 @@ export class RepoImageBuildWorkflow {
     const { failure, context: ctx } = command;
     const build = await this.store.getCallbackBuild(failure.buildId);
     if (!build) {
-      return { type: "failure_not_accepted", message: "Build is not accepting failure" };
+      throw new RepoImageFailureNotAcceptedError("Build is not accepting failure");
     }
 
-    const authorization = await this.authorizeRepoImageCallback(build, {
+    const provider = await this.authorizeRepoImageCallback(build, {
       providerSessionId: failure.providerSessionId,
       authorizationHeader: command.authorizationHeader,
       callbackToken: command.callbackToken,
       ctx,
     });
-    if (authorization.type === "failed") return authorization.result;
-    if (authorization.type === "invalid") {
-      return { type: "invalid_callback", message: authorization.message };
-    }
-    const provider = authorization.provider;
     const failureInput = this.buildFailureInput(provider, failure);
-    if (failureInput.type === "invalid") {
-      return { type: "invalid_callback", message: failureInput.message };
-    }
 
+    let updated: boolean;
     try {
-      const updated = await this.store.markBuildFailed(
-        failureInput.failure.buildId,
+      updated = await this.store.markBuildFailed(
+        failureInput.buildId,
         provider,
-        failureInput.failure.errorMessage
+        failureInput.errorMessage
       );
-      if (!updated) {
-        return { type: "failure_not_accepted", message: "Build is not accepting failure" };
-      }
-
-      logger.info("repo_image.build_failed", {
-        build_id: failureInput.failure.buildId,
-        provider,
-        error_message: failureInput.failure.errorMessage,
-        provider_session_id:
-          failureInput.failure.kind === "provider_session"
-            ? failureInput.failure.providerSessionId
-            : null,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-
-      const cleanup = this.cleanupFailedBuild(provider, failureInput.failure, ctx);
-      return cleanup ? { type: "build_failed", cleanup } : { type: "build_failed" };
     } catch (e) {
       logger.error("repo_image.build_failed_error", {
         error: errorMessage(e),
@@ -420,87 +361,91 @@ export class RepoImageBuildWorkflow {
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      return {
-        type: "workflow_failed",
-        operation: "build_failed",
-        message: "Failed to mark build as failed",
-      };
+      throw new RepoImageBuildFailedUpdateError("Failed to mark build as failed", e);
     }
+
+    if (!updated) {
+      throw new RepoImageFailureNotAcceptedError("Build is not accepting failure");
+    }
+
+    logger.info("repo_image.build_failed", {
+      build_id: failureInput.buildId,
+      provider,
+      error_message: failureInput.errorMessage,
+      provider_session_id:
+        failureInput.kind === "provider_session" ? failureInput.providerSessionId : null,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    const cleanup = this.cleanupFailedBuild(provider, failureInput, ctx);
+    return cleanup ? { type: "build_failed", cleanup } : { type: "build_failed" };
   }
 
   private buildFailureInput(
     provider: RepoImageProvider,
     failure: FailRepoImageBuildCallback
-  ): { type: "ok"; failure: FailRepoImageBuild } | { type: "invalid"; message: string } {
+  ): FailRepoImageBuild {
     if (getRepoImageCallbackMode(provider) === "provider_session") {
       if (!failure.providerSessionId) {
-        return { type: "invalid", message: "provider_session_id is required" };
+        throw new RepoImageInvalidCallbackError("provider_session_id is required");
       }
       return {
-        type: "ok",
-        failure: {
-          kind: "provider_session",
-          buildId: failure.buildId,
-          providerSessionId: failure.providerSessionId,
-          errorMessage: failure.errorMessage,
-        },
+        kind: "provider_session",
+        buildId: failure.buildId,
+        providerSessionId: failure.providerSessionId,
+        errorMessage: failure.errorMessage,
       };
     }
 
     return {
-      type: "ok",
-      failure: {
-        kind: "provider_image",
-        buildId: failure.buildId,
-        errorMessage: failure.errorMessage,
-      },
+      kind: "provider_image",
+      buildId: failure.buildId,
+      errorMessage: failure.errorMessage,
     };
   }
 
   private buildReadyCompletion(
     provider: RepoImageProvider,
     completion: CompleteRepoImageBuildCallback
-  ): ReadyCompletionResult {
+  ): CompleteRepoImageBuild {
     if (!completion.baseSha) {
-      return { type: "invalid", message: "base_sha is required" };
+      throw new RepoImageInvalidCallbackError("base_sha is required");
     }
     if (typeof completion.buildDurationMs !== "number") {
-      return { type: "invalid", message: "build_duration_seconds is required" };
+      throw new RepoImageInvalidCallbackError("build_duration_seconds is required");
     }
     if (!Number.isFinite(completion.buildDurationMs) || completion.buildDurationMs < 0) {
-      return {
-        type: "invalid",
-        message: "build_duration_seconds must be a non-negative finite number",
-      };
+      throw new RepoImageInvalidCallbackError(
+        "build_duration_seconds must be a non-negative finite number"
+      );
     }
 
     if (getRepoImageCallbackMode(provider) === "provider_session") {
       if (!completion.providerSessionId) {
-        return { type: "invalid", message: "provider_session_id is required" };
+        throw new RepoImageInvalidCallbackError("provider_session_id is required");
       }
 
-      const providerSessionCompletion: CompleteProviderSessionBuild = {
+      return {
         kind: "provider_session",
         buildId: completion.buildId,
         providerSessionId: completion.providerSessionId,
         baseSha: completion.baseSha,
         buildDurationMs: completion.buildDurationMs,
       };
-      return { type: "ok", completion: providerSessionCompletion };
     }
 
     if (!completion.providerImageId) {
-      return { type: "invalid", message: "provider_image_id is required" };
+      throw new RepoImageInvalidCallbackError("provider_image_id is required");
     }
 
-    const providerImageCompletion: CompleteProviderImageBuild = {
+    return {
       kind: "provider_image",
       buildId: completion.buildId,
       providerImageId: completion.providerImageId,
       baseSha: completion.baseSha,
       buildDurationMs: completion.buildDurationMs,
     };
-    return { type: "ok", completion: providerImageCompletion };
   }
 
   private createAdapterForOperation(
@@ -508,7 +453,7 @@ export class RepoImageBuildWorkflow {
     operation: string,
     ctx: RepoImageWorkflowContext,
     buildId?: string
-  ): AdapterResolution<AnyRepoImageBuildAdapter> {
+  ): AnyRepoImageBuildAdapter {
     return this.createAdapter(
       provider,
       operation,
@@ -524,9 +469,9 @@ export class RepoImageBuildWorkflow {
     ctx: RepoImageWorkflowContext,
     create: () => TAdapter,
     buildId?: string
-  ): AdapterResolution<TAdapter> {
+  ): TAdapter {
     try {
-      return { type: "ok", adapter: create() };
+      return create();
     } catch (e) {
       logger.error("repo_image.adapter_config_error", {
         operation,
@@ -536,13 +481,7 @@ export class RepoImageBuildWorkflow {
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      return {
-        type: "unconfigured",
-        result: {
-          type: "repo_image_provider_unconfigured",
-          message: "Repo image provider is not configured",
-        },
-      };
+      throw new RepoImageProviderUnconfiguredError("Repo image provider is not configured", e);
     }
   }
 
@@ -551,14 +490,13 @@ export class RepoImageBuildWorkflow {
     ctx: RepoImageWorkflowContext
   ): PlannedBuildStart {
     const plan = build.plan;
-    const adapterResolution = this.createAdapterForOperation(
+    const adapter = this.createAdapterForOperation(
       plan.provider,
       "trigger_build",
       ctx,
       plan.buildId
     );
-    if (adapterResolution.type === "unconfigured") return adapterResolution;
-    return this.bindPlannedBuildStart(plan, adapterResolution.adapter);
+    return this.bindPlannedBuildStart(plan, adapter);
   }
 
   private bindPlannedBuildStart(
@@ -567,7 +505,6 @@ export class RepoImageBuildWorkflow {
   ): PlannedBuildStart {
     const boundAdapter = adapter as BoundRepoImageBuildAdapter;
     return {
-      type: "ok",
       adapter,
       start: (callbacks) => boundAdapter.startBuild(plan, callbacks),
     };
@@ -578,8 +515,12 @@ export class RepoImageBuildWorkflow {
     buildId: string,
     ctx: RepoImageWorkflowContext
   ): AnyRepoImageBuildAdapter | null {
-    const adapterResolution = this.createAdapterForOperation(provider, "cleanup", ctx, buildId);
-    return adapterResolution.type === "ok" ? adapterResolution.adapter : null;
+    try {
+      return this.createAdapterForOperation(provider, "cleanup", ctx, buildId);
+    } catch (e) {
+      if (e instanceof RepoImageProviderUnconfiguredError) return null;
+      throw e;
+    }
   }
 
   private async authorizeRepoImageCallback(
@@ -590,61 +531,51 @@ export class RepoImageBuildWorkflow {
       callbackToken?: string | null;
       ctx: RepoImageWorkflowContext;
     }
-  ): Promise<CallbackAuthorization> {
+  ): Promise<RepoImageProvider> {
     if (getRepoImageCallbackMode(build.provider) === "provider_image") {
-      const result = await this.requireInternalBuildCallbackAuth(
-        params.authorizationHeader,
-        build.id,
-        params.ctx
-      );
-      return result ? { type: "failed", result } : { type: "authorized", provider: build.provider };
+      await this.requireInternalBuildCallbackAuth(params.authorizationHeader, build.id, params.ctx);
+      return build.provider;
     }
 
     if (!params.providerSessionId) {
-      return { type: "invalid", message: "provider_session_id is required" };
+      throw new RepoImageInvalidCallbackError("provider_session_id is required");
     }
 
-    const result = await this.requireTokenBuildCallbackAuth(params.callbackToken, {
+    await this.requireTokenBuildCallbackAuth(params.callbackToken, {
       buildId: build.id,
       provider: build.provider,
       providerSessionId: params.providerSessionId,
       ctx: params.ctx,
     });
-    return result ? { type: "failed", result } : { type: "authorized", provider: build.provider };
+    return build.provider;
   }
 
   private async requireInternalBuildCallbackAuth(
     authorizationHeader: string | null | undefined,
     buildId: string,
     ctx: RepoImageWorkflowContext
-  ): Promise<Extract<
-    RepoImageWorkflowResult,
-    { type: "callback_auth_rejected" | "callback_auth_unavailable" }
-  > | null> {
+  ): Promise<void> {
     if (!this.env.INTERNAL_CALLBACK_SECRET) {
       logger.error("repo_image.callback_auth_misconfigured", {
         build_id: buildId,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      return {
-        type: "callback_auth_unavailable",
-        message: "Internal authentication not configured",
-      };
+      throw new RepoImageCallbackAuthUnavailableError("Internal authentication not configured");
     }
 
     const authorized = await verifyInternalToken(
       authorizationHeader ?? null,
       this.env.INTERNAL_CALLBACK_SECRET
     );
-    if (authorized) return null;
+    if (authorized) return;
 
     logger.warn("repo_image.callback_auth_failed", {
       build_id: buildId,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return { type: "callback_auth_rejected", message: "Unauthorized" };
+    throw new RepoImageCallbackAuthRejectedError("Unauthorized");
   }
 
   private async requireTokenBuildCallbackAuth(
@@ -655,10 +586,7 @@ export class RepoImageBuildWorkflow {
       providerSessionId: string;
       ctx: RepoImageWorkflowContext;
     }
-  ): Promise<Extract<
-    RepoImageWorkflowResult,
-    { type: "callback_auth_rejected" | "callback_auth_unavailable" }
-  > | null> {
+  ): Promise<void> {
     if (!token) {
       logger.warn("repo_image.callback_auth_failed", {
         build_id: params.buildId,
@@ -667,7 +595,7 @@ export class RepoImageBuildWorkflow {
         request_id: params.ctx.request_id,
         trace_id: params.ctx.trace_id,
       });
-      return { type: "callback_auth_rejected", message: "Unauthorized" };
+      throw new RepoImageCallbackAuthRejectedError("Unauthorized");
     }
 
     let tokenHash: string;
@@ -680,10 +608,7 @@ export class RepoImageBuildWorkflow {
         request_id: params.ctx.request_id,
         trace_id: params.ctx.trace_id,
       });
-      return {
-        type: "callback_auth_unavailable",
-        message: "Internal authentication not configured",
-      };
+      throw new RepoImageCallbackAuthUnavailableError("Internal authentication not configured");
     }
 
     const build = await this.store.consumeCallbackToken({
@@ -702,10 +627,8 @@ export class RepoImageBuildWorkflow {
         request_id: params.ctx.request_id,
         trace_id: params.ctx.trace_id,
       });
-      return { type: "callback_auth_rejected", message: "Unauthorized" };
+      throw new RepoImageCallbackAuthRejectedError("Unauthorized");
     }
-
-    return null;
   }
 
   private async finalizeAndCommit(
@@ -720,16 +643,7 @@ export class RepoImageBuildWorkflow {
     let adapter: AnyRepoImageBuildAdapter | null = null;
 
     try {
-      const adapterResolution = this.createAdapterForOperation(
-        provider,
-        "build_complete",
-        ctx,
-        input.buildId
-      );
-      if (adapterResolution.type === "unconfigured") {
-        throw new Error(adapterResolution.result.message);
-      }
-      adapter = adapterResolution.adapter;
+      adapter = this.createAdapterForOperation(provider, "build_complete", ctx, input.buildId);
       logger.info(`repo_image.${provider}_finalize_start`, {
         build_id: input.buildId,
         provider_session_id: input.providerSessionId,

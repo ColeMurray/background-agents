@@ -8,6 +8,14 @@ import type {
   RepoImageCallbackBuild,
   SupersededRepoImage,
 } from "./model";
+import {
+  RepoImageBuildCompleteFailedError,
+  RepoImageCallbackAuthRejectedError,
+  RepoImageCompletionNotAcceptedError,
+  RepoImageInvalidCallbackError,
+  RepoImageRepositoryNotInstalledError,
+  RepoImageTriggerFailedError,
+} from "./errors";
 import type { RepoImageBuildAdapterFactory } from "./provider-factory";
 import type {
   AnyRepoImageBuildAdapter,
@@ -160,26 +168,23 @@ describe("RepoImageBuildWorkflow", () => {
           callbackUrl: string;
           correlation: { request_id: string; trace_id: string };
         }) => ({
-          type: "ok" as const,
-          build: {
-            plan: {
-              provider: "vercel" as const,
-              callbackMode: "provider_session" as const,
-              buildId: params.buildId,
-              repoOwner: "acme",
-              repoName: "repo",
-              baseBranch: "develop",
-              callbackUrl: "https://worker.test/repo-images/build-complete",
-              callbackToken: CALLBACK_TOKEN,
-              cloneAuth: { type: "unavailable" as const },
-              buildTimeoutMs: 1_800_000,
-              correlation: { request_id: "request-1", trace_id: "trace-1" },
-            },
-            callbackAuth: {
-              type: "bearer_token" as const,
-              tokenHash: "token-hash",
-              expiresAt: 456,
-            },
+          plan: {
+            provider: "vercel" as const,
+            callbackMode: "provider_session" as const,
+            buildId: params.buildId,
+            repoOwner: "acme",
+            repoName: "repo",
+            baseBranch: "develop",
+            callbackUrl: "https://worker.test/repo-images/build-complete",
+            callbackToken: CALLBACK_TOKEN,
+            cloneAuth: { type: "unavailable" as const },
+            buildTimeoutMs: 1_800_000,
+            correlation: { request_id: "request-1", trace_id: "trace-1" },
+          },
+          callbackAuth: {
+            type: "bearer_token" as const,
+            tokenHash: "token-hash",
+            expiresAt: 456,
           },
         })
       ),
@@ -194,7 +199,7 @@ describe("RepoImageBuildWorkflow", () => {
 
     const result = await workflow.triggerBuild("acme", "repo", createContext());
 
-    expect(result).toEqual({ type: "build_triggered", buildId: expect.stringContaining("img-") });
+    expect(result).toEqual({ buildId: expect.stringContaining("img-") });
     expect(planner.planBuild).toHaveBeenCalledWith({
       buildId: expect.stringContaining("img-acme-repo-"),
       repoOwner: "acme",
@@ -235,26 +240,23 @@ describe("RepoImageBuildWorkflow", () => {
     });
     const planner = {
       planBuild: vi.fn(async (params: { buildId: string }) => ({
-        type: "ok" as const,
-        build: {
-          plan: {
-            provider: "vercel" as const,
-            callbackMode: "provider_session" as const,
-            buildId: params.buildId,
-            repoOwner: "acme",
-            repoName: "repo",
-            baseBranch: "develop",
-            callbackUrl: "https://worker.test/repo-images/build-complete",
-            callbackToken: CALLBACK_TOKEN,
-            cloneAuth: { type: "unavailable" as const },
-            buildTimeoutMs: 1_800_000,
-            correlation: { request_id: "request-1", trace_id: "trace-1" },
-          },
-          callbackAuth: {
-            type: "bearer_token" as const,
-            tokenHash: "token-hash",
-            expiresAt: 456,
-          },
+        plan: {
+          provider: "vercel" as const,
+          callbackMode: "provider_session" as const,
+          buildId: params.buildId,
+          repoOwner: "acme",
+          repoName: "repo",
+          baseBranch: "develop",
+          callbackUrl: "https://worker.test/repo-images/build-complete",
+          callbackToken: CALLBACK_TOKEN,
+          cloneAuth: { type: "unavailable" as const },
+          buildTimeoutMs: 1_800_000,
+          correlation: { request_id: "request-1", trace_id: "trace-1" },
+        },
+        callbackAuth: {
+          type: "bearer_token" as const,
+          tokenHash: "token-hash",
+          expiresAt: 456,
         },
       })),
     };
@@ -266,13 +268,9 @@ describe("RepoImageBuildWorkflow", () => {
       planner
     );
 
-    const result = await workflow.triggerBuild("acme", "repo", createContext());
-
-    expect(result).toEqual({
-      type: "workflow_failed",
-      operation: "trigger_build",
-      message: "Failed to trigger build",
-    });
+    await expect(workflow.triggerBuild("acme", "repo", createContext())).rejects.toBeInstanceOf(
+      RepoImageTriggerFailedError
+    );
     expect(adapter.cleanupFailedBuild).toHaveBeenCalledWith({
       kind: "provider_session",
       buildId: expect.stringContaining("img-acme-repo-"),
@@ -286,10 +284,9 @@ describe("RepoImageBuildWorkflow", () => {
     const store = createStore();
     const adapter = createAdapter();
     const planner = {
-      planBuild: vi.fn(async () => ({
-        type: "repo_not_installed" as const,
-        message: "Repository is not installed for the GitHub App",
-      })),
+      planBuild: vi.fn(async () => {
+        throw new RepoImageRepositoryNotInstalledError();
+      }),
     };
     const workflow = new RepoImageBuildWorkflow(
       { ...env, WORKER_URL: "https://worker.test" } as Env,
@@ -299,12 +296,9 @@ describe("RepoImageBuildWorkflow", () => {
       planner
     );
 
-    const result = await workflow.triggerBuild("acme", "repo", createContext());
-
-    expect(result).toEqual({
-      type: "repository_not_installed",
-      message: "Repository is not installed for the GitHub App",
-    });
+    await expect(workflow.triggerBuild("acme", "repo", createContext())).rejects.toBeInstanceOf(
+      RepoImageRepositoryNotInstalledError
+    );
     expect(store.registerBuild).not.toHaveBeenCalled();
     expect(adapter.startBuild).not.toHaveBeenCalled();
   });
@@ -440,21 +434,18 @@ describe("RepoImageBuildWorkflow", () => {
     });
     const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
 
-    const result = await workflow.acceptBuildComplete({
-      authorizationHeader: await internalAuthHeader(),
-      completion: {
-        buildId: "build-1",
-        providerImageId: "modal-image-1",
-        baseSha: "abc123",
-        buildDurationMs: 4_500,
-      },
-      context: createContext(),
-    });
-
-    expect(result).toEqual({
-      type: "completion_not_accepted",
-      message: "Build is not accepting completion",
-    });
+    await expect(
+      workflow.acceptBuildComplete({
+        authorizationHeader: await internalAuthHeader(),
+        completion: {
+          buildId: "build-1",
+          providerImageId: "modal-image-1",
+          baseSha: "abc123",
+          buildDurationMs: 4_500,
+        },
+        context: createContext(),
+      })
+    ).rejects.toBeInstanceOf(RepoImageCompletionNotAcceptedError);
     expect(adapter.deleteImage).not.toHaveBeenCalled();
   });
 
@@ -471,21 +462,18 @@ describe("RepoImageBuildWorkflow", () => {
     const adapter = createAdapter();
     const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
 
-    const result = await workflow.acceptBuildComplete({
-      authorizationHeader: await internalAuthHeader(),
-      completion: {
-        buildId: "build-1",
-        providerImageId: "modal-image-1",
-        baseSha: "abc123",
-        buildDurationMs: 4_500,
-      },
-      context: createContext(),
-    });
-
-    expect(result).toEqual({
-      type: "completion_not_accepted",
-      message: "Build is not accepting completion",
-    });
+    await expect(
+      workflow.acceptBuildComplete({
+        authorizationHeader: await internalAuthHeader(),
+        completion: {
+          buildId: "build-1",
+          providerImageId: "modal-image-1",
+          baseSha: "abc123",
+          buildDurationMs: 4_500,
+        },
+        context: createContext(),
+      })
+    ).rejects.toBeInstanceOf(RepoImageCompletionNotAcceptedError);
     expect(adapter.finalizeSuccessfulBuild).not.toHaveBeenCalled();
     expect(store.tryMarkRepoImageReady).not.toHaveBeenCalled();
     expect(adapter.deleteImage).not.toHaveBeenCalled();
@@ -514,22 +502,18 @@ describe("RepoImageBuildWorkflow", () => {
     });
     const workflow = new RepoImageBuildWorkflow(env, store, createAdapterFactory(adapter), "modal");
 
-    const result = await workflow.acceptBuildComplete({
-      authorizationHeader: await internalAuthHeader(),
-      completion: {
-        buildId: "build-1",
-        providerImageId: "modal-image-1",
-        baseSha: "abc123",
-        buildDurationMs: 4_500,
-      },
-      context: createContext(),
-    });
-
-    expect(result).toEqual({
-      type: "workflow_failed",
-      operation: "build_complete",
-      message: "Failed to mark build as ready",
-    });
+    await expect(
+      workflow.acceptBuildComplete({
+        authorizationHeader: await internalAuthHeader(),
+        completion: {
+          buildId: "build-1",
+          providerImageId: "modal-image-1",
+          baseSha: "abc123",
+          buildDurationMs: 4_500,
+        },
+        context: createContext(),
+      })
+    ).rejects.toBeInstanceOf(RepoImageBuildCompleteFailedError);
     expect(adapter.deleteImage).not.toHaveBeenCalled();
   });
 
@@ -640,17 +624,20 @@ describe("RepoImageBuildWorkflow", () => {
       "vercel"
     );
 
-    const result = await workflow.acceptBuildComplete({
-      callbackToken: CALLBACK_TOKEN,
-      completion: {
-        buildId: "build-1",
-        providerSessionId: "provider-session-1",
-        buildDurationMs: 12_500,
-      },
-      context: createContext(),
+    await expect(
+      workflow.acceptBuildComplete({
+        callbackToken: CALLBACK_TOKEN,
+        completion: {
+          buildId: "build-1",
+          providerSessionId: "provider-session-1",
+          buildDurationMs: 12_500,
+        },
+        context: createContext(),
+      })
+    ).rejects.toMatchObject({
+      name: RepoImageInvalidCallbackError.name,
+      message: "base_sha is required",
     });
-
-    expect(result).toEqual({ type: "invalid_callback", message: "base_sha is required" });
     expect(store.consumeCallbackToken).not.toHaveBeenCalled();
     expect(adapter.finalizeSuccessfulBuild).not.toHaveBeenCalled();
   });
@@ -670,19 +657,19 @@ describe("RepoImageBuildWorkflow", () => {
         "vercel"
       );
 
-      const result = await workflow.acceptBuildComplete({
-        callbackToken: CALLBACK_TOKEN,
-        completion: {
-          buildId: "build-1",
-          providerSessionId: "provider-session-1",
-          baseSha: "abc123",
-          buildDurationMs,
-        },
-        context: createContext(),
-      });
-
-      expect(result).toEqual({
-        type: "invalid_callback",
+      await expect(
+        workflow.acceptBuildComplete({
+          callbackToken: CALLBACK_TOKEN,
+          completion: {
+            buildId: "build-1",
+            providerSessionId: "provider-session-1",
+            baseSha: "abc123",
+            buildDurationMs,
+          },
+          context: createContext(),
+        })
+      ).rejects.toMatchObject({
+        name: RepoImageInvalidCallbackError.name,
         message: "build_duration_seconds must be a non-negative finite number",
       });
       expect(store.consumeCallbackToken).not.toHaveBeenCalled();
@@ -863,18 +850,18 @@ describe("RepoImageBuildWorkflow", () => {
       "vercel"
     );
 
-    const result = await workflow.acceptBuildComplete({
-      callbackToken: CALLBACK_TOKEN,
-      completion: {
-        buildId: "build-1",
-        providerSessionId: "provider-session-1",
-        baseSha: "abc123",
-        buildDurationMs: 1,
-      },
-      context: createContext(),
-    });
-
-    expect(result).toEqual({ type: "callback_auth_rejected", message: "Unauthorized" });
+    await expect(
+      workflow.acceptBuildComplete({
+        callbackToken: CALLBACK_TOKEN,
+        completion: {
+          buildId: "build-1",
+          providerSessionId: "provider-session-1",
+          baseSha: "abc123",
+          buildDurationMs: 1,
+        },
+        context: createContext(),
+      })
+    ).rejects.toBeInstanceOf(RepoImageCallbackAuthRejectedError);
     expect(adapter.finalizeSuccessfulBuild).not.toHaveBeenCalled();
   });
 
@@ -887,18 +874,18 @@ describe("RepoImageBuildWorkflow", () => {
     );
     const workflow = new RepoImageBuildWorkflow(env, store, adapterFactory, "vercel");
 
-    const result = await workflow.acceptBuildComplete({
-      callbackToken: CALLBACK_TOKEN,
-      completion: {
-        buildId: "build-1",
-        providerSessionId: "provider-session-1",
-        baseSha: "abc123",
-        buildDurationMs: 1,
-      },
-      context: createContext(),
-    });
-
-    expect(result).toEqual({ type: "callback_auth_rejected", message: "Unauthorized" });
+    await expect(
+      workflow.acceptBuildComplete({
+        callbackToken: CALLBACK_TOKEN,
+        completion: {
+          buildId: "build-1",
+          providerSessionId: "provider-session-1",
+          baseSha: "abc123",
+          buildDurationMs: 1,
+        },
+        context: createContext(),
+      })
+    ).rejects.toBeInstanceOf(RepoImageCallbackAuthRejectedError);
     expect(adapterFactory.create).not.toHaveBeenCalled();
   });
 

@@ -6,25 +6,15 @@ export type RepoImageWorkflowContext = CorrelationContext;
 
 export type ReplacedRepoImage = SupersededRepoImage;
 
+export interface TriggerRepoImageBuildResult {
+  buildId: string;
+}
+
 export type RepoImageWorkflowResult =
-  | { type: "build_triggered"; buildId: string }
   | { type: "completion_accepted"; finalization: Promise<void> }
   | { type: "build_ready"; replacedImages: ReplacedRepoImage[]; cleanup?: Promise<void> }
   | { type: "build_superseded"; cleanup?: Promise<void> }
-  | { type: "build_failed"; cleanup?: Promise<void> }
-  | { type: "invalid_callback"; message: string }
-  | { type: "callback_auth_rejected"; message: string }
-  | { type: "callback_auth_unavailable"; message: string }
-  | { type: "repository_not_installed"; message: string }
-  | { type: "repo_image_workflow_unavailable"; message: string }
-  | { type: "repo_image_provider_unconfigured"; message: string }
-  | { type: "completion_not_accepted"; message: string }
-  | { type: "failure_not_accepted"; message: string }
-  | {
-      type: "workflow_failed";
-      operation: "trigger_build" | "build_complete" | "build_failed";
-      message: string;
-    };
+  | { type: "build_failed"; cleanup?: Promise<void> };
 
 interface BaseRepoImageBuildPlan {
   buildId: string;
