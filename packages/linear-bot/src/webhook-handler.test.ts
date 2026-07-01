@@ -237,7 +237,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
-    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
+    const env = makeLinearBotEnv(kv);
     const fetchMock = stubInvalidGrant();
 
     await handleAgentSessionEvent(makeWebhook("created"), env, "trace-123");
@@ -278,7 +278,7 @@ describe("handleAgentSessionEvent auth failures", () => {
         createdAt: Date.now(),
       }),
     });
-    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
+    const env = makeLinearBotEnv(kv);
     const fetchMock = stubInvalidGrant();
 
     await handleAgentSessionEvent(makeWebhook("prompted"), env, "trace-456");
