@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { APP_NAME } from "@/lib/site-config";
 import {
@@ -35,12 +36,31 @@ import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+const NO_REPOSITORY_OPTION_VALUE = "__no_repository__";
+
+type SessionTarget = { kind: "none" } | { kind: "repo"; repoFullName: string };
+
+function parseRepoFullName(repoFullName: string): { owner: string; name: string } | null {
+  const [owner, name] = repoFullName.split("/");
+  return owner && name ? { owner, name } : null;
+}
+
+function getTargetSelectValue(target: SessionTarget | null): string {
+  if (!target) return "";
+  return target.kind === "none" ? NO_REPOSITORY_OPTION_VALUE : target.repoFullName;
+}
+
+function parseTargetSelectValue(value: string): SessionTarget {
+  return value === NO_REPOSITORY_OPTION_VALUE
+    ? { kind: "none" }
+    : { kind: "repo", repoFullName: value };
+}
 
 export default function Home() {
   const { data: session } = useSession();
   const router = useRouter();
   const { repos, loading: loadingRepos } = useRepos();
-  const [selectedRepo, setSelectedRepo] = useState<string>("");
+  const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
@@ -53,30 +73,40 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
+  const pendingConfigRef = useRef<{ target: string; model: string; branch: string } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
   const { enabledModels, enabledModelOptions } = useEnabledModels();
-  const selectedRepoOwner = selectedRepo.split("/")[0] ?? "";
-  const selectedRepoName = selectedRepo.split("/")[1] ?? "";
+  const targetSelectValue = getTargetSelectValue(sessionTarget);
+  const selectedRepository =
+    sessionTarget?.kind === "repo" ? parseRepoFullName(sessionTarget.repoFullName) : null;
+  const selectedRepoOwner = selectedRepository?.owner ?? "";
+  const selectedRepoName = selectedRepository?.name ?? "";
   const { branches, loading: loadingBranches } = useBranches(selectedRepoOwner, selectedRepoName);
 
   // Auto-select repo when repos load
   useEffect(() => {
-    if (repos.length > 0 && !selectedRepo) {
+    if (sessionTarget) return;
+
+    if (repos.length > 0) {
       const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
       const hasLastSelectedRepo = repos.some((repo) => repo.fullName === lastSelectedRepo);
       const defaultRepo =
         (hasLastSelectedRepo ? lastSelectedRepo : repos[0].fullName) ?? repos[0].fullName;
-      setSelectedRepo(defaultRepo);
+      setSessionTarget({ kind: "repo", repoFullName: defaultRepo });
       const repo = repos.find((r) => r.fullName === defaultRepo);
       if (repo) setSelectedBranch(repo.defaultBranch);
+      return;
     }
-  }, [repos, selectedRepo]);
+
+    if (!loadingRepos) {
+      setSessionTarget({ kind: "none" });
+    }
+  }, [loadingRepos, repos, sessionTarget]);
 
   useEffect(() => {
-    if (!selectedRepo) return;
-    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, selectedRepo);
-  }, [selectedRepo]);
+    if (sessionTarget?.kind !== "repo") return;
+    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, sessionTarget.repoFullName);
+  }, [sessionTarget]);
 
   useEffect(() => {
     if (enabledModels.length === 0 || hasHydratedModelPreferences) return;
@@ -120,16 +150,21 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [selectedRepo, selectedModel, selectedBranch]);
+  }, [sessionTarget, selectedModel, selectedBranch]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
     if (sessionCreationPromise.current) return sessionCreationPromise.current;
-    if (!selectedRepo) return null;
+    if (!sessionTarget) return null;
 
     setIsCreatingSession(true);
-    const [owner, name] = selectedRepo.split("/");
-    const currentConfig = { repo: selectedRepo, model: selectedModel, branch: selectedBranch };
+    const repository =
+      sessionTarget.kind === "repo" ? parseRepoFullName(sessionTarget.repoFullName) : null;
+    const currentConfig = {
+      target: getTargetSelectValue(sessionTarget),
+      model: selectedModel,
+      branch: sessionTarget.kind === "repo" ? selectedBranch : "",
+    };
     pendingConfigRef.current = currentConfig;
 
     const abortController = new AbortController();
@@ -141,11 +176,11 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            repoOwner: owner,
-            repoName: name,
+            repoOwner: repository?.owner ?? null,
+            repoName: repository?.name ?? null,
             model: selectedModel,
             reasoningEffort,
-            branch: selectedBranch || undefined,
+            ...(repository ? { branch: selectedBranch || undefined } : {}),
           }),
           signal: abortController.signal,
         });
@@ -153,7 +188,7 @@ export default function Home() {
         if (res.ok) {
           const data = await res.json();
           if (
-            pendingConfigRef.current?.repo === currentConfig.repo &&
+            pendingConfigRef.current?.target === currentConfig.target &&
             pendingConfigRef.current?.model === currentConfig.model &&
             pendingConfigRef.current?.branch === currentConfig.branch
           ) {
@@ -180,7 +215,7 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
+  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
 
   // Reset selections when model preferences change (only after hydration)
   useEffect(() => {
@@ -198,10 +233,15 @@ export default function Home() {
     }
   }, [hasHydratedModelPreferences, enabledModels, selectedModel, reasoningEffort]);
 
-  const handleRepoChange = useCallback(
-    (repoFullName: string) => {
-      setSelectedRepo(repoFullName);
-      const repo = repos.find((r) => r.fullName === repoFullName);
+  const handleSessionTargetChange = useCallback(
+    (value: string) => {
+      const nextTarget = parseTargetSelectValue(value);
+      setSessionTarget(nextTarget);
+      if (nextTarget.kind === "none") {
+        setSelectedBranch("");
+        return;
+      }
+      const repo = repos.find((r) => r.fullName === nextTarget.repoFullName);
       if (repo) setSelectedBranch(repo.defaultBranch);
     },
     [repos]
@@ -215,7 +255,7 @@ export default function Home() {
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
-    if (wasEmpty && value.length > 0 && !pendingSessionId && !isCreatingSession && selectedRepo) {
+    if (wasEmpty && value.length > 0 && !pendingSessionId && !isCreatingSession && sessionTarget) {
       createSessionForWarming();
     }
   };
@@ -223,7 +263,7 @@ export default function Home() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) return;
-    if (!selectedRepo) {
+    if (!sessionTarget) {
       setError("Please select a repository");
       return;
     }
@@ -272,8 +312,9 @@ export default function Home() {
       isAuthenticated={!!session}
       repos={repos}
       loadingRepos={loadingRepos}
-      selectedRepo={selectedRepo}
-      setSelectedRepo={handleRepoChange}
+      sessionTarget={sessionTarget}
+      targetSelectValue={targetSelectValue}
+      setSessionTargetSelectValue={handleSessionTargetChange}
       selectedBranch={selectedBranch}
       setSelectedBranch={setSelectedBranch}
       branches={branches}
@@ -297,8 +338,9 @@ function HomeContent({
   isAuthenticated,
   repos,
   loadingRepos,
-  selectedRepo,
-  setSelectedRepo,
+  sessionTarget,
+  targetSelectValue,
+  setSessionTargetSelectValue,
   selectedBranch,
   setSelectedBranch,
   branches,
@@ -318,8 +360,9 @@ function HomeContent({
   isAuthenticated: boolean;
   repos: Repo[];
   loadingRepos: boolean;
-  selectedRepo: string;
-  setSelectedRepo: (value: string) => void;
+  sessionTarget: SessionTarget | null;
+  targetSelectValue: string;
+  setSessionTargetSelectValue: (value: string) => void;
   selectedBranch: string;
   setSelectedBranch: (value: string) => void;
   branches: { name: string }[];
@@ -348,8 +391,28 @@ function HomeContent({
     }
   };
 
-  const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
-  const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
+  const selectedRepoObj =
+    sessionTarget?.kind === "repo"
+      ? repos.find((r) => r.fullName === sessionTarget.repoFullName)
+      : undefined;
+  const displayRepoName =
+    sessionTarget?.kind === "none"
+      ? NO_REPOSITORY_LABEL
+      : sessionTarget?.kind === "repo"
+        ? (selectedRepoObj?.name ?? sessionTarget.repoFullName)
+        : "Select repo";
+  const repositoryOptions = [
+    {
+      value: NO_REPOSITORY_OPTION_VALUE,
+      label: NO_REPOSITORY_LABEL,
+      description: "Start without cloning a repository",
+    },
+    ...repos.map((repo) => ({
+      value: repo.fullName,
+      label: repo.name,
+      description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
+    })),
+  ];
 
   return (
     <div className="h-full flex flex-col">
@@ -409,7 +472,7 @@ function HomeContent({
                     )}
                     <button
                       type="submit"
-                      disabled={!prompt.trim() || creating || !selectedRepo}
+                      disabled={!prompt.trim() || creating || !sessionTarget}
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
                       aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
@@ -429,13 +492,9 @@ function HomeContent({
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     {/* Repo selector */}
                     <Combobox
-                      value={selectedRepo}
-                      onChange={(value) => setSelectedRepo(value)}
-                      items={repos.map((repo) => ({
-                        value: repo.fullName,
-                        label: repo.name,
-                        description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
-                      }))}
+                      value={targetSelectValue}
+                      onChange={(value) => setSessionTargetSelectValue(value)}
+                      items={repositoryOptions}
                       searchable
                       searchPlaceholder="Search repositories..."
                       filterFn={(option, query) =>
@@ -456,27 +515,29 @@ function HomeContent({
                     </Combobox>
 
                     {/* Branch selector */}
-                    <Combobox
-                      value={selectedBranch}
-                      onChange={(value) => setSelectedBranch(value)}
-                      items={branches.map((b) => ({
-                        value: b.name,
-                        label: b.name,
-                      }))}
-                      searchable
-                      searchPlaceholder="Search branches..."
-                      filterFn={(option, query) => option.label.toLowerCase().includes(query)}
-                      direction="up"
-                      dropdownWidth="w-56"
-                      disabled={creating || !selectedRepo || loadingBranches}
-                      triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                      <BranchIcon className="w-3.5 h-3.5" />
-                      <span className="truncate max-w-[9rem] sm:max-w-none">
-                        {loadingBranches ? "Loading..." : selectedBranch || "branch"}
-                      </span>
-                      <ChevronDownIcon className="w-3 h-3" />
-                    </Combobox>
+                    {sessionTarget?.kind === "repo" && (
+                      <Combobox
+                        value={selectedBranch}
+                        onChange={(value) => setSelectedBranch(value)}
+                        items={branches.map((b) => ({
+                          value: b.name,
+                          label: b.name,
+                        }))}
+                        searchable
+                        searchPlaceholder="Search branches..."
+                        filterFn={(option, query) => option.label.toLowerCase().includes(query)}
+                        direction="up"
+                        dropdownWidth="w-56"
+                        disabled={creating || loadingBranches}
+                        triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                      >
+                        <BranchIcon className="w-3.5 h-3.5" />
+                        <span className="truncate max-w-[9rem] sm:max-w-none">
+                          {loadingBranches ? "Loading..." : selectedBranch || "branch"}
+                        </span>
+                        <ChevronDownIcon className="w-3 h-3" />
+                      </Combobox>
+                    )}
 
                     {/* Model selector */}
                     <Combobox
@@ -532,7 +593,8 @@ function HomeContent({
 
               {repos.length === 0 && !loadingRepos && (
                 <p className="mt-3 text-sm text-muted-foreground text-center">
-                  No repositories found. Make sure you have granted access to your repositories.
+                  No repositories found. You can start without a repository or grant repository
+                  access in settings.
                 </p>
               )}
             </form>
