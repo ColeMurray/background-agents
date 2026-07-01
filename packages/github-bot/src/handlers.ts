@@ -15,6 +15,17 @@ export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
   | { outcome: "skipped"; skip_reason: string };
 
+function readRequiredStringField(value: unknown, field: string, context: string): string {
+  if (!value || typeof value !== "object") {
+    throw new Error(`${context} returned invalid response`);
+  }
+  const fieldValue = (value as Record<string, unknown>)[field];
+  if (typeof fieldValue !== "string" || fieldValue.length === 0) {
+    throw new Error(`${context} returned invalid response`);
+  }
+  return fieldValue;
+}
+
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   if (!payload || typeof payload !== "object") return false;
   const reviewer = (payload as Record<string, unknown>).requested_reviewer;
@@ -65,8 +76,8 @@ async function createSession(
     const body = await response.text();
     throw new Error(`Session creation failed: ${response.status} ${body}`);
   }
-  const result = (await response.json()) as { sessionId: string };
-  return result.sessionId;
+  const result = await response.json();
+  return readRequiredStringField(result, "sessionId", "Session creation");
 }
 
 async function sendPrompt(
