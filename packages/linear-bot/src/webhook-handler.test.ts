@@ -211,7 +211,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     return (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
   }
 
-  function stubInvalidGrantThenCommentSuccess() {
+  function stubInvalidGrant() {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "https://api.linear.app/oauth/token") {
@@ -227,97 +227,43 @@ describe("handleAgentSessionEvent auth failures", () => {
             ),
         };
       }
-      if (url === "https://api.linear.app/graphql") {
-        return {
-          ok: true,
-          json: () => Promise.resolve({ data: { commentCreate: { success: true } } }),
-        };
-      }
       throw new Error(`Unexpected fetch to ${url} with ${String(init?.method)}`);
     });
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
   }
 
-  function stubInvalidGrantThenCommentFailure() {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "https://api.linear.app/oauth/token") {
-        return {
-          ok: false,
-          status: 400,
-          text: () =>
-            Promise.resolve(
-              JSON.stringify({
-                error: "invalid_grant",
-                error_description: "Refresh token has expired.",
-              })
-            ),
-        };
-      }
-      if (url === "https://api.linear.app/graphql") {
-        return {
-          ok: true,
-          json: () => Promise.resolve({ data: { commentCreate: { success: false } } }),
-        };
-      }
-      throw new Error(`Unexpected fetch to ${url} with ${String(init?.method)}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
-  }
-
-  function stubInvalidGrantThenCommentThrows() {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "https://api.linear.app/oauth/token") {
-        return {
-          ok: false,
-          status: 400,
-          text: () =>
-            Promise.resolve(
-              JSON.stringify({
-                error: "invalid_grant",
-                error_description: "Refresh token has expired.",
-              })
-            ),
-        };
-      }
-      if (url === "https://api.linear.app/graphql") {
-        throw new Error("Linear comment failed");
-      }
-      throw new Error(`Unexpected fetch to ${url} with ${String(init?.method)}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
-  }
-
-  it("posts a reauthorization comment and does not create a session on new-session invalid_grant", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  it("logs auth failure and does not create a session on new-session invalid_grant", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
     const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
-    const fetchMock = stubInvalidGrantThenCommentSuccess();
+    const fetchMock = stubInvalidGrant();
 
     await handleAgentSessionEvent(makeWebhook("created"), env, "trace-123");
 
-    const commentCall = fetchMock.mock.calls.find(
-      ([input]) => String(input) === "https://api.linear.app/graphql"
-    );
-    expect(commentCall).toBeDefined();
-    const body = JSON.parse(String((commentCall?.[1] as RequestInit).body)) as {
-      variables: { input: { issueId: string; body: string } };
-    };
-    expect(body.variables.input.issueId).toBe("issue-1");
-    expect(body.variables.input.body).toContain("could not start this Linear agent session");
-    expect(body.variables.input.body).toContain("workspace authorization");
-    expect(body.variables.input.body).toContain("https://linear-bot.example.test/oauth/authorize");
-    expect(body.variables.input.body).toContain("Trace ID: trace-123");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.linear.app/oauth/token");
     expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
+    const errorEvents = errorSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(errorEvents).toContainEqual(
+      expect.objectContaining({
+        msg: "agent_session.no_oauth_token",
+        trace_id: "trace-123",
+        org_id: "org-1",
+        agent_session_id: "agent-session-1",
+        issue_id: "issue-1",
+        issue_identifier: "ORI-229",
+        mode: "start",
+        auth_failure_reason: "refresh_invalid_grant",
+        reauthorization_required: true,
+        retryable: false,
+      })
+    );
   });
 
-  it("posts follow-up-specific reauthorization copy on prompted invalid_grant", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  it("logs follow-up auth failure and does not prompt the existing session", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const { kv } = createFakeKV({
       "oauth:token:org-1": expiredToken(),
@@ -333,98 +279,27 @@ describe("handleAgentSessionEvent auth failures", () => {
       }),
     });
     const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
-    const fetchMock = stubInvalidGrantThenCommentSuccess();
+    const fetchMock = stubInvalidGrant();
 
     await handleAgentSessionEvent(makeWebhook("prompted"), env, "trace-456");
 
-    const commentCall = fetchMock.mock.calls.find(
-      ([input]) => String(input) === "https://api.linear.app/graphql"
-    );
-    expect(commentCall).toBeDefined();
-    const body = JSON.parse(String((commentCall?.[1] as RequestInit).body)) as {
-      variables: { input: { body: string } };
-    };
-    expect(body.variables.input.body).toContain("could not process this follow-up");
-    expect(body.variables.input.body).toContain("https://linear-bot.example.test/oauth/authorize");
-    expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
-  });
-
-  it("logs a distinct unavailable-notification event when no fallback credential exists", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
-    const env = makeLinearBotEnv(kv);
-    const fetchMock = stubInvalidGrantThenCommentSuccess();
-
-    await handleAgentSessionEvent(makeWebhook("created"), env, "trace-789");
-
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.linear.app/oauth/token");
     expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
-    const warningEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
-    expect(warningEvents).toContainEqual(
+    const errorEvents = errorSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(errorEvents).toContainEqual(
       expect.objectContaining({
-        msg: "agent_session.auth_failure_notification_unavailable",
-        trace_id: "trace-789",
+        msg: "agent_session.no_oauth_token",
+        trace_id: "trace-456",
         org_id: "org-1",
         agent_session_id: "agent-session-1",
         issue_id: "issue-1",
         issue_identifier: "ORI-229",
+        mode: "follow_up",
         auth_failure_reason: "refresh_invalid_grant",
+        reauthorization_required: true,
+        retryable: false,
       })
     );
-  });
-
-  it("logs a distinct notification failure when fallback comment creation is unsuccessful", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
-    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
-    stubInvalidGrantThenCommentFailure();
-
-    await handleAgentSessionEvent(makeWebhook("created"), env, "trace-321");
-
-    const warningEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
-    expect(warningEvents).toContainEqual(
-      expect.objectContaining({
-        msg: "agent_session.auth_failure_notification_failed",
-        trace_id: "trace-321",
-        org_id: "org-1",
-        agent_session_id: "agent-session-1",
-        issue_id: "issue-1",
-        issue_identifier: "ORI-229",
-        auth_failure_reason: "refresh_invalid_grant",
-        delivery: "comment_fallback",
-        delivery_outcome: "error",
-      })
-    );
-    expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
-  });
-
-  it("logs a distinct notification failure when fallback comment delivery throws", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
-    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
-    stubInvalidGrantThenCommentThrows();
-
-    await handleAgentSessionEvent(makeWebhook("created"), env, "trace-654");
-
-    const warningEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
-    expect(warningEvents).toContainEqual(
-      expect.objectContaining({
-        msg: "agent_session.auth_failure_notification_failed",
-        trace_id: "trace-654",
-        org_id: "org-1",
-        agent_session_id: "agent-session-1",
-        issue_id: "issue-1",
-        issue_identifier: "ORI-229",
-        auth_failure_reason: "refresh_invalid_grant",
-        delivery: "comment_fallback",
-        error: "Linear comment failed",
-      })
-    );
-    expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
   });
 });
