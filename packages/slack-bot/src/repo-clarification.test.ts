@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RepoConfig } from "./types";
+import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { filterReposByQuery } from "./classifier/repos";
 import {
   MAX_REPO_QUICK_PICKS,
@@ -113,8 +114,9 @@ describe("baseActionId", () => {
 });
 
 describe("buildRepoClarificationBlocks", () => {
-  it("renders only the searchable picker when there are no alternatives", () => {
-    const blocks = buildRepoClarificationBlocks("could not tell which repo", undefined);
+  it("renders an inline picker when the repo list fits in Slack's static option limit", () => {
+    const repos = [repo("acme/web"), repo("acme/api")];
+    const blocks = buildRepoClarificationBlocks("could not tell which repo", undefined, repos);
 
     expect(blocks).toHaveLength(2);
     expect(blocks.some((block) => block.type === "actions")).toBe(false);
@@ -124,19 +126,20 @@ describe("buildRepoClarificationBlocks", () => {
         type: "section",
         text: { text: "Which repository should I work with?" },
         accessory: {
-          type: "external_select",
+          type: "static_select",
           action_id: SELECT_REPO_ACTION_ID,
-          min_query_length: 0,
+          options: [
+            { text: { type: "plain_text", text: "web" }, value: "acme/web" },
+            { text: { type: "plain_text", text: "api" }, value: "acme/api" },
+          ],
         },
       },
     ]);
   });
 
   it("renders ranked quick-pick buttons above the picker when alternatives exist", () => {
-    const blocks = buildRepoClarificationBlocks("maybe one of these", [
-      repo("acme/web"),
-      repo("acme/api"),
-    ]);
+    const repos = [repo("acme/web"), repo("acme/api"), repo("acme/docs")];
+    const blocks = buildRepoClarificationBlocks("maybe one of these", repos.slice(0, 2), repos);
 
     expect(blocks).toHaveLength(3);
     expect(blocks).toMatchObject([
@@ -151,8 +154,28 @@ describe("buildRepoClarificationBlocks", () => {
       },
       {
         type: "section",
-        text: { text: "Or search for another repository:" },
-        accessory: { type: "external_select", action_id: SELECT_REPO_ACTION_ID },
+        text: { text: "Or choose another repository:" },
+        accessory: { type: "static_select", action_id: SELECT_REPO_ACTION_ID },
+      },
+    ]);
+  });
+
+  it("uses the searchable external picker when the repo list exceeds Slack's static option limit", () => {
+    const repos = Array.from({ length: MAX_REPO_SUGGESTION_OPTIONS + 1 }, (_, idx) =>
+      repo(`acme/repo-${idx}`)
+    );
+    const blocks = buildRepoClarificationBlocks("too many to inline", undefined, repos);
+
+    expect(blocks).toMatchObject([
+      { type: "section" },
+      {
+        type: "section",
+        text: { text: "Which repository should I work with?" },
+        accessory: {
+          type: "external_select",
+          action_id: SELECT_REPO_ACTION_ID,
+          min_query_length: 0,
+        },
       },
     ]);
   });

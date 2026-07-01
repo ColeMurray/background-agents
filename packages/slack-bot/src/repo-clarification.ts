@@ -3,9 +3,9 @@
  *
  * When the classifier can't decide which repository a Slack message refers to,
  * the bot posts a clarification message: the classifier's ranked guesses as
- * one-click quick-pick buttons, plus a searchable external_select over every
- * repo. This module owns that UI — the options Slack queries as the user types,
- * the quick-pick buttons, and the message blocks themselves.
+ * one-click quick-pick buttons, plus a repository picker. This module owns that
+ * UI — the options Slack queries as the user types, the quick-pick buttons, and
+ * the message blocks themselves.
  */
 
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
@@ -14,8 +14,10 @@ import { plainTextOption } from "./slack-options";
 import type {
   SlackActionsBlock,
   SlackButtonElement,
+  SlackExternalSelectElement,
   SlackSectionBlock,
   SlackSelectOption,
+  SlackStaticSelectElement,
 } from "./slack-blocks";
 import type { Env, RepoConfig } from "./types";
 
@@ -79,6 +81,27 @@ export async function getRepoClarificationOptions(
   return repos.slice(0, MAX_REPO_SUGGESTION_OPTIONS).map(toRepoSelectOption);
 }
 
+function buildRepoPickerAccessory(
+  repos: RepoConfig[]
+): SlackStaticSelectElement | SlackExternalSelectElement {
+  if (repos.length > 0 && repos.length <= MAX_REPO_SUGGESTION_OPTIONS) {
+    return {
+      type: "static_select",
+      placeholder: { type: "plain_text", text: "Select a repository" },
+      options: repos.map(toRepoSelectOption),
+      action_id: SELECT_REPO_ACTION_ID,
+    };
+  }
+
+  return {
+    type: "external_select",
+    placeholder: { type: "plain_text", text: "Select a repository" },
+    // 0 so the list appears on open; typing filters across all repos.
+    min_query_length: 0,
+    action_id: SELECT_REPO_ACTION_ID,
+  };
+}
+
 /**
  * One-click buttons for the classifier's ranked alternatives, capped at
  * MAX_REPO_QUICK_PICKS. Each carries the repo id and routes through the same
@@ -118,9 +141,11 @@ function duplicateDisplayNames(repos: RepoConfig[]): Set<string> {
  */
 export function buildRepoClarificationBlocks(
   reasoning: string,
-  alternatives: RepoConfig[] | undefined
+  alternatives: RepoConfig[] | undefined,
+  repos: RepoConfig[]
 ): Array<SlackSectionBlock | SlackActionsBlock> {
   const quickPicks = alternatives?.length ? buildRepoQuickPickButtons(alternatives) : [];
+  const usesInlinePicker = repos.length > 0 && repos.length <= MAX_REPO_SUGGESTION_OPTIONS;
 
   const blocks: Array<SlackSectionBlock | SlackActionsBlock> = [
     {
@@ -142,16 +167,12 @@ export function buildRepoClarificationBlocks(
       type: "mrkdwn",
       text:
         quickPicks.length > 0
-          ? "Or search for another repository:"
+          ? usesInlinePicker
+            ? "Or choose another repository:"
+            : "Or search for another repository:"
           : "Which repository should I work with?",
     },
-    accessory: {
-      type: "external_select",
-      placeholder: { type: "plain_text", text: "Select a repository" },
-      // 0 so the list appears on open; typing filters across all repos.
-      min_query_length: 0,
-      action_id: SELECT_REPO_ACTION_ID,
-    },
+    accessory: buildRepoPickerAccessory(repos),
   });
 
   return blocks;

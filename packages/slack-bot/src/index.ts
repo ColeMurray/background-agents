@@ -932,7 +932,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       `I couldn't determine which repository you're referring to. ${result.reasoning}`,
       {
         thread_ts: threadTs || ts,
-        blocks: buildRepoClarificationBlocks(result.reasoning, result.alternatives),
+        blocks: buildRepoClarificationBlocks(result.reasoning, result.alternatives, repos),
       }
     );
     return;
