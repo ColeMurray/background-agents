@@ -22,6 +22,7 @@ function createPlan(): OpenComputerRepoImageBuildPlan {
     baseBranch: "develop",
     callbackUrl: "https://worker.test/repo-images/build-complete",
     callbackToken: "callback-token",
+    cloneAuth: { type: "credential_helper", token: "clone-token" },
     buildTimeoutMs: 1_800_001,
     userEnvVars: { FOO: "bar" },
     correlation: {
@@ -46,6 +47,7 @@ describe("OpenComputerRepoImageBuildAdapter", () => {
       defaultBranch: "develop",
       callbackUrl: "https://worker.test/repo-images/build-complete",
       callbackToken: "callback-token",
+      cloneToken: "clone-token",
       buildTimeoutSeconds: 1801,
       userEnvVars: { FOO: "bar" },
       onProviderSessionCreated: bindProviderSession,

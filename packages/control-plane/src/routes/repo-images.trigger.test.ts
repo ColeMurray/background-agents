@@ -9,6 +9,8 @@ import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
 import type * as VercelProviderModule from "../sandbox/providers/vercel/provider";
 import type * as VercelClientModule from "../sandbox/providers/vercel/client";
+import type * as OpenComputerProviderModule from "../sandbox/providers/opencomputer-provider";
+import type * as OpenComputerClientModule from "../sandbox/opencomputer-rest-client";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 
 // handleTriggerBuild resolves the repo's actual default branch (never assumes
@@ -27,6 +29,10 @@ const modalClient = vi.hoisted(() => ({
 }));
 
 const vercelProvider = vi.hoisted(() => ({
+  triggerRepoImageBuild: vi.fn(),
+}));
+
+const openComputerProvider = vi.hoisted(() => ({
   triggerRepoImageBuild: vi.fn(),
 }));
 
@@ -63,6 +69,22 @@ vi.mock("../sandbox/providers/vercel/client", async (importOriginal) => {
   return {
     ...actual,
     createVercelSandboxClient: vi.fn(() => ({})),
+  };
+});
+
+vi.mock("../sandbox/providers/opencomputer-provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof OpenComputerProviderModule>();
+  return {
+    ...actual,
+    createOpenComputerProvider: vi.fn(() => openComputerProvider),
+  };
+});
+
+vi.mock("../sandbox/opencomputer-rest-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof OpenComputerClientModule>();
+  return {
+    ...actual,
+    createOpenComputerRestClient: vi.fn(() => ({})),
   };
 });
 
@@ -125,6 +147,19 @@ function createVercelEnv(): Env {
   } as Env;
 }
 
+function createOpenComputerEnv(): Env {
+  return {
+    DB: {} as unknown as D1Database,
+    SANDBOX_PROVIDER: "opencomputer",
+    SCM_PROVIDER: "github",
+    WORKER_URL: "https://cp.test",
+    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    OPENCOMPUTER_API_URL: "https://opencomputer.test",
+    OPENCOMPUTER_API_KEY: "oc-token",
+    OPENCOMPUTER_TEMPLATE: "openinspect-runtime",
+  } as Env;
+}
+
 async function callTrigger(env: Env): Promise<Response> {
   return triggerRoute().handler(
     new Request(`https://test.local${TRIGGER_PATH}`, { method: "POST" }),
@@ -151,6 +186,7 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
     registerBuildSpy.mockResolvedValue(undefined);
     modalClient.buildRepoImage.mockResolvedValue({ buildId: "build-1", status: "building" });
     vercelProvider.triggerRepoImageBuild.mockResolvedValue(undefined);
+    openComputerProvider.triggerRepoImageBuild.mockResolvedValue(undefined);
     integrationSettings.resolveSandboxSettings.mockResolvedValue({});
     scmProvider.generateCredentialHelperAuth.mockResolvedValue({
       username: "x-access-token",
@@ -216,6 +252,7 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
         repoOwner: "acme",
         repoName: "repo",
         defaultBranch: "develop",
+        cloneToken: "clone-token",
       })
     );
 
@@ -225,6 +262,34 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
         repoOwner: "acme",
         repoName: "repo",
         provider: "vercel",
+        baseBranch: "develop",
+      })
+    );
+  });
+
+  it("threads the clone token into the OpenComputer build backend", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
+
+    const response = await callTrigger(createOpenComputerEnv());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      buildId: expect.stringContaining("img-acme-repo-"),
+      status: "building",
+    });
+    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
+    expect(openComputerProvider.triggerRepoImageBuild).toHaveBeenCalledTimes(1);
+    expect(openComputerProvider.triggerRepoImageBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: "acme",
+        repoName: "repo",
+        defaultBranch: "develop",
+        cloneToken: "clone-token",
+      })
+    );
+    expect(registerBuildSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "opencomputer",
         baseBranch: "develop",
       })
     );

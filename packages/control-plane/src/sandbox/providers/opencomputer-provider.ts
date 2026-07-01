@@ -42,11 +42,17 @@ import {
 
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
+const CHECKPOINT_READY_TIMEOUT_MS = 5 * 60_000;
+const CHECKPOINT_READY_POLL_INTERVAL_MS = 2_000;
 const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
   "OI_REPO_IMAGE_BUILD_ID",
   "OI_REPO_IMAGE_CALLBACK_URL",
   "OI_REPO_IMAGE_CALLBACK_TOKEN",
+] as const;
+const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
+  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
+  "OI_REPO_IMAGE_CALLBACK_SECRET",
 ] as const;
 
 export interface TriggerOpenComputerRepoImageBuildConfig {
@@ -57,6 +63,7 @@ export interface TriggerOpenComputerRepoImageBuildConfig {
   callbackUrl: string;
   callbackToken: string;
   userEnvVars?: Record<string, string>;
+  cloneToken?: string;
   buildTimeoutSeconds?: number;
   onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
 }
@@ -226,16 +233,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         }
       );
 
-      if (
-        checkpoint.status &&
-        checkpoint.status !== "ready" &&
-        checkpoint.status !== "created" &&
-        checkpoint.status !== "processing"
-      ) {
-        return { success: false, error: `Checkpoint status was ${checkpoint.status}` };
-      }
-
-      return { success: true, imageId: checkpoint.id };
+      return await this.waitForCheckpointReady(config.providerObjectId, checkpoint);
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to checkpoint OpenComputer sandbox", error);
@@ -343,10 +341,12 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     config: TriggerOpenComputerRepoImageBuildConfig
   ): Promise<TriggerOpenComputerRepoImageBuildResult> {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
+    let providerObjectId: string | undefined;
     try {
       const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
-      const envVars = await this.buildBuildEnvVars(config);
-      secretStore = await this.createSecretStoreFor(config.buildId, config.userEnvVars);
+      const userEnvVars = withoutReservedRepoImageEnvVars(config.userEnvVars);
+      const envVars = await this.buildBuildEnvVars({ ...config, userEnvVars });
+      secretStore = await this.createSecretStoreFor(config.buildId, userEnvVars);
       const sandbox = await this.client.createSandbox({
         name: sandboxName,
         template: this.client.config.template,
@@ -361,6 +361,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         timeoutSeconds: config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
         secretStore: secretStore?.name,
       });
+      providerObjectId = sandbox.id;
 
       if (config.onProviderSessionCreated) {
         await config.onProviderSessionCreated(sandbox.id);
@@ -378,6 +379,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
       return { buildId: config.buildId, status: "building" };
     } catch (error) {
+      if (providerObjectId) {
+        await this.cleanupSandboxAfterFailedCreate(providerObjectId, config.buildId);
+      }
       if (secretStore) {
         try {
           await this.client.deleteSecretStore(secretStore.id);
@@ -418,10 +422,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     const envVars: Record<string, string> = {};
     const sessionConfig = buildSessionConfig(config);
 
-    for (const [name, value] of Object.entries(config.userEnvVars ?? {})) {
+    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
       if (value) envVars[name] = value;
     }
-    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
+    for (const [name, value] of Object.entries(config.userEnvVars ?? {})) {
       if (value) envVars[name] = value;
     }
 
@@ -459,7 +463,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     // build, so force the markers off. IMAGE_BUILD_MODE is checked as
     // === "true" in entrypoint.py, so "false" disables it.
     envVars.IMAGE_BUILD_MODE = "false";
-    for (const key of REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
 
     if (this.providerConfig.scmProvider === "gitlab") {
       envVars.VCS_HOST = "gitlab.com";
@@ -477,11 +481,14 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   ): Promise<Record<string, string>> {
     const envVars: Record<string, string> = {};
 
+    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
+      if (value) envVars[name] = value;
+    }
     for (const [name, value] of Object.entries(config.userEnvVars ?? {})) {
       if (value) envVars[name] = value;
     }
-    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
-      if (value) envVars[name] = value;
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      delete envVars[key];
     }
 
     Object.assign(envVars, {
@@ -502,6 +509,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     } else {
       envVars.VCS_HOST = "github.com";
       envVars.VCS_CLONE_USERNAME = "x-access-token";
+    }
+    if (config.cloneToken) {
+      envVars.VCS_CLONE_TOKEN = config.cloneToken;
     }
 
     return envVars;
@@ -671,6 +681,33 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     return digest.slice(0, 32);
   }
 
+  private async waitForCheckpointReady(
+    providerObjectId: string,
+    initialCheckpoint: { id: string; status?: string }
+  ): Promise<SnapshotResult> {
+    let checkpoint = initialCheckpoint;
+    const deadlineMs = Date.now() + CHECKPOINT_READY_TIMEOUT_MS;
+
+    while (true) {
+      const status = checkpoint.status?.toLowerCase();
+      if (!status || status === "ready") {
+        return { success: true, imageId: checkpoint.id };
+      }
+      if (status !== "created" && status !== "processing") {
+        return { success: false, error: `Checkpoint status was ${checkpoint.status}` };
+      }
+      if (Date.now() >= deadlineMs) {
+        return {
+          success: false,
+          error: `Checkpoint ${checkpoint.id} was not ready before timeout`,
+        };
+      }
+
+      await sleepMs(CHECKPOINT_READY_POLL_INTERVAL_MS);
+      checkpoint = await this.client.getCheckpoint(providerObjectId, checkpoint.id);
+    }
+  }
+
   private classifyError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof OpenComputerApiError) {
       return SandboxProviderError.fromFetchError(
@@ -685,6 +722,21 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
 function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number | undefined {
   return timeoutSeconds;
+}
+
+function sleepMs(durationMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function withoutReservedRepoImageEnvVars(
+  envVars: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (!envVars) return undefined;
+  const filtered = { ...envVars };
+  for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+    delete filtered[key];
+  }
+  return filtered;
 }
 
 export function createOpenComputerProvider(
