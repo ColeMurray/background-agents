@@ -159,6 +159,8 @@ describe("buildFollowUpPrompt", () => {
 });
 
 describe("handleAgentSessionEvent auth failures", () => {
+  const EXPIRED_TOKEN_AGE_MS = 60 * 1000;
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -172,7 +174,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     return JSON.stringify({
       access_token: "expired-token",
       refresh_token: "refresh-token",
-      expires_at: Date.now() - 60 * 1000,
+      expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
     });
   }
 
@@ -230,6 +232,59 @@ describe("handleAgentSessionEvent auth failures", () => {
           ok: true,
           json: () => Promise.resolve({ data: { commentCreate: { success: true } } }),
         };
+      }
+      throw new Error(`Unexpected fetch to ${url} with ${String(init?.method)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function stubInvalidGrantThenCommentFailure() {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://api.linear.app/oauth/token") {
+        return {
+          ok: false,
+          status: 400,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                error: "invalid_grant",
+                error_description: "Refresh token has expired.",
+              })
+            ),
+        };
+      }
+      if (url === "https://api.linear.app/graphql") {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ data: { commentCreate: { success: false } } }),
+        };
+      }
+      throw new Error(`Unexpected fetch to ${url} with ${String(init?.method)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function stubInvalidGrantThenCommentThrows() {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://api.linear.app/oauth/token") {
+        return {
+          ok: false,
+          status: 400,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                error: "invalid_grant",
+                error_description: "Refresh token has expired.",
+              })
+            ),
+        };
+      }
+      if (url === "https://api.linear.app/graphql") {
+        throw new Error("Linear comment failed");
       }
       throw new Error(`Unexpected fetch to ${url} with ${String(init?.method)}`);
     });
@@ -317,5 +372,59 @@ describe("handleAgentSessionEvent auth failures", () => {
         auth_failure_reason: "refresh_invalid_grant",
       })
     );
+  });
+
+  it("logs a distinct notification failure when fallback comment creation is unsuccessful", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
+    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
+    stubInvalidGrantThenCommentFailure();
+
+    await handleAgentSessionEvent(makeWebhook("created"), env, "trace-321");
+
+    const warningEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(warningEvents).toContainEqual(
+      expect.objectContaining({
+        msg: "agent_session.auth_failure_notification_failed",
+        trace_id: "trace-321",
+        org_id: "org-1",
+        agent_session_id: "agent-session-1",
+        issue_id: "issue-1",
+        issue_identifier: "ORI-229",
+        auth_failure_reason: "refresh_invalid_grant",
+        delivery: "comment_fallback",
+        delivery_outcome: "error",
+      })
+    );
+    expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
+  });
+
+  it("logs a distinct notification failure when fallback comment delivery throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
+    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
+    stubInvalidGrantThenCommentThrows();
+
+    await handleAgentSessionEvent(makeWebhook("created"), env, "trace-654");
+
+    const warningEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(warningEvents).toContainEqual(
+      expect.objectContaining({
+        msg: "agent_session.auth_failure_notification_failed",
+        trace_id: "trace-654",
+        org_id: "org-1",
+        agent_session_id: "agent-session-1",
+        issue_id: "issue-1",
+        issue_identifier: "ORI-229",
+        auth_failure_reason: "refresh_invalid_grant",
+        delivery: "comment_fallback",
+        error: "Linear comment failed",
+      })
+    );
+    expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
   });
 });
