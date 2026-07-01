@@ -1,9 +1,9 @@
 # Pre-Built Images
 
 Pre-built images make your sessions start faster. Instead of cloning your repository and installing
-dependencies every time you create a session, Open-Inspect keeps a ready-to-go snapshot of your repo
-that's refreshed automatically. New sessions start from this snapshot and only need to pull the
-latest commits — typically cutting startup from minutes to seconds.
+dependencies every time you create a session, Open-Inspect keeps a ready-to-go repo image artifact
+for your repo that's refreshed automatically. New sessions start from that artifact and only need to
+pull the latest commits — typically cutting startup from minutes to seconds.
 
 ---
 
@@ -17,8 +17,8 @@ Every time you start a new session without pre-built images, the sandbox has to:
 
 For large repositories with many dependencies, this can take anywhere from 30 seconds to several
 minutes. With pre-built images, all of that work is done ahead of time. Your session starts from a
-snapshot that already has the code and dependencies in place, and only needs to pull the last few
-minutes of changes.
+repo image artifact that already has the code and dependencies in place, and only needs to pull the
+last few minutes of changes.
 
 ---
 

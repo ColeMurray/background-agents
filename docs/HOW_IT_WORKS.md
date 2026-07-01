@@ -152,8 +152,8 @@ Open-Inspect supports these sandbox backends:
 - **OpenComputer**: template-based sandboxes with checkpoint-backed repo-image builds via the
   OpenComputer REST API
 
-Modal, Vercel, and OpenComputer support repo-image builds. Modal, Vercel, and OpenComputer can also
-restore saved filesystem state for session resumes; Daytona uses persistent sandboxes instead. For
+Repo-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can be
+restored on those same providers for session resumes; Daytona uses persistent sandboxes instead. For
 Daytona, the control plane stops the sandbox on inactivity or stale heartbeat, then resumes that
 same sandbox later with the same logical sandbox ID and auth token.
 
