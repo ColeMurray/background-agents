@@ -17,8 +17,8 @@ const MS_PER_SECOND = 1000;
 /**
  * OpenComputer adapter for provider-session repo image builds.
  *
- * Builds run in a temporary OpenComputer sandbox. On success, the adapter
- * checkpoints that sandbox into the repo image artifact and deletes the build sandbox.
+ * Builds run in a temporary OpenComputer sandbox. On success, the adapter turns
+ * that sandbox into the repo image artifact; cleanup hooks handle teardown.
  */
 export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter<OpenComputerRepoImageBuildPlan> {
   constructor(private readonly provider: OpenComputerSandboxProvider) {}

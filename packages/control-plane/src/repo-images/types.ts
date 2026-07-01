@@ -181,7 +181,6 @@ export interface RepoImageBuildFinalizer {
   deleteImage(input: DeleteRepoImageInput): Promise<void>;
 }
 
-/** Full provider adapter contract for starting and finalizing one typed repo image plan. */
 export type RepoImageBuildAdapter<Plan extends RepoImageBuildPlan> = RepoImageBuildFinalizer & {
   startBuild(plan: Plan, callbacks: RepoImageBuildStartCallbacks): Promise<void>;
 };

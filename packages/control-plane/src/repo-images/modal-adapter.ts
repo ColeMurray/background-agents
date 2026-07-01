@@ -12,7 +12,7 @@ import type {
  * Modal adapter for direct provider-image callbacks.
  *
  * Modal's repo image builder returns the final provider image id in the callback,
- * so finalization only validates and normalizes that artifact reference.
+ * so finalization passes that artifact id through after kind validation.
  */
 export class ModalRepoImageBuildAdapter implements RepoImageBuildAdapter<ModalRepoImageBuildPlan> {
   constructor(private readonly provider: ModalRepoImageBuildProvider) {}
