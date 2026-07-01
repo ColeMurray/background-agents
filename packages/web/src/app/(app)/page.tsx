@@ -36,23 +36,31 @@ import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
-const NO_REPOSITORY_VALUE = "__no_repository__";
+const NO_REPOSITORY_OPTION_VALUE = "__no_repository__";
 
-function isNoRepositoryTarget(value: string): boolean {
-  return value === NO_REPOSITORY_VALUE;
+type SessionTarget = { kind: "none" } | { kind: "repo"; repoFullName: string };
+
+function parseRepoFullName(repoFullName: string): { owner: string; name: string } | null {
+  const [owner, name] = repoFullName.split("/");
+  return owner && name ? { owner, name } : null;
 }
 
-function parseSelectedRepository(value: string): { owner: string; name: string } | null {
-  if (!value || isNoRepositoryTarget(value)) return null;
-  const [owner, name] = value.split("/");
-  return owner && name ? { owner, name } : null;
+function getTargetSelectValue(target: SessionTarget | null): string {
+  if (!target) return "";
+  return target.kind === "none" ? NO_REPOSITORY_OPTION_VALUE : target.repoFullName;
+}
+
+function parseTargetSelectValue(value: string): SessionTarget {
+  return value === NO_REPOSITORY_OPTION_VALUE
+    ? { kind: "none" }
+    : { kind: "repo", repoFullName: value };
 }
 
 export default function Home() {
   const { data: session } = useSession();
   const router = useRouter();
   const { repos, loading: loadingRepos } = useRepos();
-  const [selectedRepo, setSelectedRepo] = useState<string>("");
+  const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
@@ -65,38 +73,40 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
+  const pendingConfigRef = useRef<{ target: string; model: string; branch: string } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
   const { enabledModels, enabledModelOptions } = useEnabledModels();
-  const selectedRepository = parseSelectedRepository(selectedRepo);
+  const targetSelectValue = getTargetSelectValue(sessionTarget);
+  const selectedRepository =
+    sessionTarget?.kind === "repo" ? parseRepoFullName(sessionTarget.repoFullName) : null;
   const selectedRepoOwner = selectedRepository?.owner ?? "";
   const selectedRepoName = selectedRepository?.name ?? "";
   const { branches, loading: loadingBranches } = useBranches(selectedRepoOwner, selectedRepoName);
 
   // Auto-select repo when repos load
   useEffect(() => {
-    if (selectedRepo) return;
+    if (sessionTarget) return;
 
     if (repos.length > 0) {
       const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
       const hasLastSelectedRepo = repos.some((repo) => repo.fullName === lastSelectedRepo);
       const defaultRepo =
         (hasLastSelectedRepo ? lastSelectedRepo : repos[0].fullName) ?? repos[0].fullName;
-      setSelectedRepo(defaultRepo);
+      setSessionTarget({ kind: "repo", repoFullName: defaultRepo });
       const repo = repos.find((r) => r.fullName === defaultRepo);
       if (repo) setSelectedBranch(repo.defaultBranch);
       return;
     }
 
     if (!loadingRepos) {
-      setSelectedRepo(NO_REPOSITORY_VALUE);
+      setSessionTarget({ kind: "none" });
     }
-  }, [loadingRepos, repos, selectedRepo]);
+  }, [loadingRepos, repos, sessionTarget]);
 
   useEffect(() => {
-    if (!selectedRepo || isNoRepositoryTarget(selectedRepo)) return;
-    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, selectedRepo);
-  }, [selectedRepo]);
+    if (sessionTarget?.kind !== "repo") return;
+    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, sessionTarget.repoFullName);
+  }, [sessionTarget]);
 
   useEffect(() => {
     if (enabledModels.length === 0 || hasHydratedModelPreferences) return;
@@ -140,19 +150,20 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [selectedRepo, selectedModel, selectedBranch]);
+  }, [sessionTarget, selectedModel, selectedBranch]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
     if (sessionCreationPromise.current) return sessionCreationPromise.current;
-    if (!selectedRepo) return null;
+    if (!sessionTarget) return null;
 
     setIsCreatingSession(true);
-    const repository = parseSelectedRepository(selectedRepo);
+    const repository =
+      sessionTarget.kind === "repo" ? parseRepoFullName(sessionTarget.repoFullName) : null;
     const currentConfig = {
-      repo: selectedRepo,
+      target: getTargetSelectValue(sessionTarget),
       model: selectedModel,
-      branch: repository ? selectedBranch : "",
+      branch: sessionTarget.kind === "repo" ? selectedBranch : "",
     };
     pendingConfigRef.current = currentConfig;
 
@@ -177,7 +188,7 @@ export default function Home() {
         if (res.ok) {
           const data = await res.json();
           if (
-            pendingConfigRef.current?.repo === currentConfig.repo &&
+            pendingConfigRef.current?.target === currentConfig.target &&
             pendingConfigRef.current?.model === currentConfig.model &&
             pendingConfigRef.current?.branch === currentConfig.branch
           ) {
@@ -204,7 +215,7 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
+  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
 
   // Reset selections when model preferences change (only after hydration)
   useEffect(() => {
@@ -222,14 +233,15 @@ export default function Home() {
     }
   }, [hasHydratedModelPreferences, enabledModels, selectedModel, reasoningEffort]);
 
-  const handleRepoChange = useCallback(
-    (repoFullName: string) => {
-      setSelectedRepo(repoFullName);
-      if (isNoRepositoryTarget(repoFullName)) {
+  const handleSessionTargetChange = useCallback(
+    (value: string) => {
+      const nextTarget = parseTargetSelectValue(value);
+      setSessionTarget(nextTarget);
+      if (nextTarget.kind === "none") {
         setSelectedBranch("");
         return;
       }
-      const repo = repos.find((r) => r.fullName === repoFullName);
+      const repo = repos.find((r) => r.fullName === nextTarget.repoFullName);
       if (repo) setSelectedBranch(repo.defaultBranch);
     },
     [repos]
@@ -243,7 +255,7 @@ export default function Home() {
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
-    if (wasEmpty && value.length > 0 && !pendingSessionId && !isCreatingSession && selectedRepo) {
+    if (wasEmpty && value.length > 0 && !pendingSessionId && !isCreatingSession && sessionTarget) {
       createSessionForWarming();
     }
   };
@@ -251,7 +263,7 @@ export default function Home() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) return;
-    if (!selectedRepo) {
+    if (!sessionTarget) {
       setError("Please select a repository");
       return;
     }
@@ -300,8 +312,9 @@ export default function Home() {
       isAuthenticated={!!session}
       repos={repos}
       loadingRepos={loadingRepos}
-      selectedRepo={selectedRepo}
-      setSelectedRepo={handleRepoChange}
+      sessionTarget={sessionTarget}
+      targetSelectValue={targetSelectValue}
+      setSessionTargetSelectValue={handleSessionTargetChange}
       selectedBranch={selectedBranch}
       setSelectedBranch={setSelectedBranch}
       branches={branches}
@@ -325,8 +338,9 @@ function HomeContent({
   isAuthenticated,
   repos,
   loadingRepos,
-  selectedRepo,
-  setSelectedRepo,
+  sessionTarget,
+  targetSelectValue,
+  setSessionTargetSelectValue,
   selectedBranch,
   setSelectedBranch,
   branches,
@@ -346,8 +360,9 @@ function HomeContent({
   isAuthenticated: boolean;
   repos: Repo[];
   loadingRepos: boolean;
-  selectedRepo: string;
-  setSelectedRepo: (value: string) => void;
+  sessionTarget: SessionTarget | null;
+  targetSelectValue: string;
+  setSessionTargetSelectValue: (value: string) => void;
   selectedBranch: string;
   setSelectedBranch: (value: string) => void;
   branches: { name: string }[];
@@ -376,15 +391,19 @@ function HomeContent({
     }
   };
 
-  const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
-  const displayRepoName = isNoRepositoryTarget(selectedRepo)
-    ? NO_REPOSITORY_LABEL
-    : selectedRepoObj
-      ? selectedRepoObj.name
-      : "Select repo";
+  const selectedRepoObj =
+    sessionTarget?.kind === "repo"
+      ? repos.find((r) => r.fullName === sessionTarget.repoFullName)
+      : undefined;
+  const displayRepoName =
+    sessionTarget?.kind === "none"
+      ? NO_REPOSITORY_LABEL
+      : sessionTarget?.kind === "repo"
+        ? (selectedRepoObj?.name ?? sessionTarget.repoFullName)
+        : "Select repo";
   const repositoryOptions = [
     {
-      value: NO_REPOSITORY_VALUE,
+      value: NO_REPOSITORY_OPTION_VALUE,
       label: NO_REPOSITORY_LABEL,
       description: "Start without cloning a repository",
     },
@@ -453,7 +472,7 @@ function HomeContent({
                     )}
                     <button
                       type="submit"
-                      disabled={!prompt.trim() || creating || !selectedRepo}
+                      disabled={!prompt.trim() || creating || !sessionTarget}
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
                       aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
@@ -473,8 +492,8 @@ function HomeContent({
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     {/* Repo selector */}
                     <Combobox
-                      value={selectedRepo}
-                      onChange={(value) => setSelectedRepo(value)}
+                      value={targetSelectValue}
+                      onChange={(value) => setSessionTargetSelectValue(value)}
                       items={repositoryOptions}
                       searchable
                       searchPlaceholder="Search repositories..."
@@ -496,7 +515,7 @@ function HomeContent({
                     </Combobox>
 
                     {/* Branch selector */}
-                    {selectedRepoObj && (
+                    {sessionTarget?.kind === "repo" && (
                       <Combobox
                         value={selectedBranch}
                         onChange={(value) => setSelectedBranch(value)}
