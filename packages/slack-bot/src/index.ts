@@ -49,6 +49,12 @@ const THREAD_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
+function readStringField(value: unknown, field: string): string | null {
+  if (!value || typeof value !== "object") return null;
+  const fieldValue = (value as Record<string, unknown>)[field];
+  return typeof fieldValue === "string" && fieldValue.length > 0 ? fieldValue : null;
+}
+
 /**
  * Create a session via the control plane.
  */
@@ -101,7 +107,19 @@ async function createSession(
       return null;
     }
 
-    const result = (await response.json()) as { sessionId: string; status: string };
+    const body = await response.json();
+    const sessionId = readStringField(body, "sessionId");
+    const status = readStringField(body, "status");
+    if (!sessionId || !status) {
+      log.error("control_plane.create_session", {
+        ...base,
+        outcome: "error",
+        error: new Error("Invalid control plane create session response"),
+        duration_ms: Date.now() - startTime,
+      });
+      return null;
+    }
+    const result = { sessionId, status };
     log.info("control_plane.create_session", {
       ...base,
       outcome: "success",
@@ -160,7 +178,18 @@ async function sendPrompt(
       return null;
     }
 
-    const result = (await response.json()) as { messageId: string };
+    const body = await response.json();
+    const messageId = readStringField(body, "messageId");
+    if (!messageId) {
+      log.error("control_plane.send_prompt", {
+        ...base,
+        outcome: "error",
+        error: new Error("Invalid control plane send prompt response"),
+        duration_ms: Date.now() - startTime,
+      });
+      return null;
+    }
+    const result = { messageId };
     log.info("control_plane.send_prompt", {
       ...base,
       outcome: "success",

@@ -468,6 +468,154 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("treats a malformed session creation response as a creation failure", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          order.push("repos");
+          return new Response(
+            JSON.stringify({
+              repos: [
+                {
+                  id: "acme/app",
+                  owner: "acme",
+                  name: "app",
+                  fullName: "acme/app",
+                  defaultBranch: "main",
+                  private: true,
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (url.endsWith("/sessions")) {
+          order.push("session");
+          return new Response(JSON.stringify({ status: "running" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/prompt")) {
+          order.push("prompt");
+          return new Response(JSON.stringify({ messageId: "msg-1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(order).toContain("session");
+    expect(order).not.toContain("prompt");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "Sorry, I couldn't create a session. Please try again." }),
+      ])
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("treats a malformed prompt response as a prompt delivery failure", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          order.push("repos");
+          return new Response(
+            JSON.stringify({
+              repos: [
+                {
+                  id: "acme/app",
+                  owner: "acme",
+                  name: "app",
+                  fullName: "acme/app",
+                  defaultBranch: "main",
+                  private: true,
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (url.endsWith("/sessions")) {
+          order.push("session");
+          return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/prompt")) {
+          order.push("prompt");
+          return new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(order).toContain("session");
+    expect(order).toContain("prompt");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: "Session created but failed to send prompt. Please try again.",
+        }),
+      ])
+    );
+
+    slackFetch.mockRestore();
+  });
+
   it("sets Starting status for a direct message", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
