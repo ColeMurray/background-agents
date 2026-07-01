@@ -19,6 +19,12 @@ variable "cloudflare_zone_id" {
   default     = null
 }
 
+variable "cloudflare_custom_domain" {
+  description = "Custom domain (hostname) to attach to the Cloudflare web Worker (optional). Requires web_platform = 'cloudflare' and cloudflare_zone_id. e.g. 'app.example.com'"
+  type        = string
+  default     = null
+}
+
 variable "cloudflare_worker_subdomain" {
   description = "Cloudflare Workers account subdomain (e.g. 'myaccount' — .workers.dev is appended automatically)"
   type        = string
