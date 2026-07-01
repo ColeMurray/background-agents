@@ -378,18 +378,6 @@ variable "opencomputer_template" {
   default     = ""
 }
 
-variable "opencomputer_project_id" {
-  description = "Optional OpenComputer project/workspace scope"
-  type        = string
-  default     = ""
-}
-
-variable "opencomputer_target" {
-  description = "Optional OpenComputer target, region, or cell"
-  type        = string
-  default     = ""
-}
-
 variable "vercel_sandbox_token" {
   description = "Vercel API token for the Vercel Sandbox API"
   type        = string

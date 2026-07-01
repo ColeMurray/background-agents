@@ -117,8 +117,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
             labels,
             ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
-            projectId: this.client.config.projectId,
-            target: this.client.config.target,
           });
       providerObjectId = sandbox.id;
       if (timeoutSeconds !== undefined) {
@@ -362,8 +360,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         },
         timeoutSeconds: config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
         secretStore: secretStore?.name,
-        projectId: this.client.config.projectId,
-        target: this.client.config.target,
       });
 
       if (config.onProviderSessionCreated) {
