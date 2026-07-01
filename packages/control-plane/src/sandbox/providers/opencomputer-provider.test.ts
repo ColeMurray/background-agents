@@ -350,6 +350,7 @@ describe("OpenComputerSandboxProvider", () => {
           OI_REPO_IMAGE_BUILD_ID: "",
           OI_REPO_IMAGE_CALLBACK_URL: "",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "",
+          VCS_CLONE_TOKEN: "",
         }),
       })
     );
@@ -357,6 +358,29 @@ describe("OpenComputerSandboxProvider", () => {
     expect(forkCall).not.toHaveProperty("timeoutSeconds");
     expect(client.setSandboxTimeout).not.toHaveBeenCalled();
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("keeps explicit session clone tokens when forking from a repo image", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      repoImageId: "checkpoint-repo-1",
+      userEnvVars: { VCS_CLONE_TOKEN: "session-token" },
+    });
+
+    expect(client.forkFromCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkpointId: "checkpoint-repo-1",
+        env: expect.objectContaining({
+          VCS_CLONE_TOKEN: "session-token",
+        }),
+      })
+    );
   });
 
   it("restores session snapshots by forking from the checkpoint", async () => {

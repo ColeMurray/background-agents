@@ -458,17 +458,20 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     if (mode.fromRepoImage) {
       envVars.FROM_REPO_IMAGE = "true";
       envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
+      if (!envVars.VCS_CLONE_TOKEN) {
+        envVars.VCS_CLONE_TOKEN = "";
+      }
     }
 
     // OpenComputer forks (repo-image create + snapshot restore) inherit the
     // source sandbox's persisted env. Repo-image checkpoints are taken from a
     // build sandbox, so its build-mode markers — IMAGE_BUILD_MODE plus the
-    // repo-image build-callback vars — leak into the forked session unless we
-    // override them here, making the supervisor re-enter image-build mode
-    // (booting "build" instead of "repo_image", then failing the already-
-    // completed build-complete callback). A runtime session is never an image
-    // build, so force the markers off. IMAGE_BUILD_MODE is checked as
-    // === "true" in entrypoint.py, so "false" disables it.
+    // repo-image build-callback vars — and one-shot clone token leak into the
+    // forked session unless we override them here, making the supervisor
+    // re-enter image-build mode (booting "build" instead of "repo_image", then
+    // failing the already-completed build-complete callback). A runtime session
+    // is never an image build, so force the markers off. IMAGE_BUILD_MODE is
+    // checked as === "true" in entrypoint.py, so "false" disables it.
     envVars.IMAGE_BUILD_MODE = "false";
     for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
 
