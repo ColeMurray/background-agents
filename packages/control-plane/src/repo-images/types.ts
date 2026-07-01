@@ -45,6 +45,8 @@ export type RepoImageCloneAuth =
   | { type: "credential_helper"; token: string }
   | { type: "unavailable" };
 
+export type RepoImageCloneAuthMode = "credential_helper" | "none";
+
 export type VercelCloneAuth = RepoImageCloneAuth;
 
 /** Vercel builds inside a sandbox; the control plane snapshots it after callback success. */

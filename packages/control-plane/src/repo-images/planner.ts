@@ -17,7 +17,7 @@ import {
 } from "./auth";
 import { RepoImagePlanningError, RepoImageRepositoryNotInstalledError } from "./errors";
 import type { RepoImageProvider } from "./model";
-import { getRepoImageCallbackMode } from "./provider-policy";
+import { getRepoImageCallbackMode, getRepoImageCloneAuthMode } from "./provider-policy";
 import type { PlannedRepoImageBuild, RepoImageCloneAuth } from "./types";
 
 const logger = createLogger("repo-images:planner");
@@ -74,7 +74,7 @@ export class RepoImageBuildPlanner {
         repoName: params.repoName,
         repoId: resolved.repoId,
       }),
-      this.resolveProviderSessionCloneAuth({
+      this.resolveCloneAuth({
         repoOwner: params.repoOwner,
         repoName: params.repoName,
       }),
@@ -245,11 +245,11 @@ export class RepoImageBuildPlanner {
     return merged;
   }
 
-  private async resolveProviderSessionCloneAuth(params: {
+  private async resolveCloneAuth(params: {
     repoOwner: string;
     repoName: string;
   }): Promise<RepoImageCloneAuth> {
-    if (getRepoImageCallbackMode(this.provider) !== "provider_session") {
+    if (getRepoImageCloneAuthMode(this.provider) !== "credential_helper") {
       return { type: "unavailable" };
     }
 

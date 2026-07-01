@@ -222,6 +222,7 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
       }),
       expect.any(Object)
     );
+    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
 
     // ...and is persisted as the build's base branch.
     expect(registerBuildSpy).toHaveBeenCalledWith(
