@@ -395,14 +395,6 @@ export class OpenComputerRestClient {
     );
   }
 
-  async getCheckpoint(id: string, checkpointId: string): Promise<OpenComputerCheckpointResponse> {
-    return await this.request<OpenComputerCheckpointResponse>(
-      "GET",
-      this.expandPath(this.paths.checkpoint, { id, checkpointId }),
-      TIMEOUT_GET_MS
-    );
-  }
-
   async deleteCheckpoint(id: string, checkpointId: string): Promise<void> {
     await this.request<void>(
       "DELETE",

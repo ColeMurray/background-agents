@@ -42,8 +42,6 @@ import {
 
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
-const CHECKPOINT_READY_TIMEOUT_MS = 5 * 60_000;
-const CHECKPOINT_READY_POLL_INTERVAL_MS = 2_000;
 const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
   "OI_REPO_IMAGE_BUILD_ID",
@@ -240,7 +238,16 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         }
       );
 
-      return await this.waitForCheckpointReady(config.providerObjectId, checkpoint);
+      if (
+        checkpoint.status &&
+        checkpoint.status !== "ready" &&
+        checkpoint.status !== "created" &&
+        checkpoint.status !== "processing"
+      ) {
+        return { success: false, error: `Checkpoint status was ${checkpoint.status}` };
+      }
+
+      return { success: true, imageId: checkpoint.id };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to checkpoint OpenComputer sandbox", error);
@@ -693,33 +700,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     return digest.slice(0, 32);
   }
 
-  private async waitForCheckpointReady(
-    providerObjectId: string,
-    initialCheckpoint: { id: string; status?: string }
-  ): Promise<SnapshotResult> {
-    let checkpoint = initialCheckpoint;
-    const deadlineMs = Date.now() + CHECKPOINT_READY_TIMEOUT_MS;
-
-    while (true) {
-      const status = checkpoint.status?.toLowerCase();
-      if (!status || status === "ready") {
-        return { success: true, imageId: checkpoint.id };
-      }
-      if (status !== "created" && status !== "processing") {
-        return { success: false, error: `Checkpoint status was ${checkpoint.status}` };
-      }
-      if (Date.now() >= deadlineMs) {
-        return {
-          success: false,
-          error: `Checkpoint ${checkpoint.id} was not ready before timeout`,
-        };
-      }
-
-      await sleepMs(CHECKPOINT_READY_POLL_INTERVAL_MS);
-      checkpoint = await this.client.getCheckpoint(providerObjectId, checkpoint.id);
-    }
-  }
-
   private classifyError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof OpenComputerApiError) {
       return SandboxProviderError.fromFetchError(
@@ -734,10 +714,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
 function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number | undefined {
   return timeoutSeconds;
-}
-
-function sleepMs(durationMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
 function copyDefinedEnvVars(

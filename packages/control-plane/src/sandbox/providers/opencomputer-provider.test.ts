@@ -37,12 +37,7 @@ function createMockClient(overrides: Partial<OpenComputerRestClient> = {}): Open
     createCheckpoint: vi.fn(async () => ({
       id: "checkpoint-1",
       sandboxId: "oc-sandbox-1",
-      status: "ready",
-    })),
-    getCheckpoint: vi.fn(async () => ({
-      id: "checkpoint-1",
-      sandboxId: "oc-sandbox-1",
-      status: "ready",
+      status: "processing",
     })),
     deleteSandbox: vi.fn(async (): Promise<void> => undefined),
     deleteCheckpoint: vi.fn(async (): Promise<void> => undefined),
@@ -502,40 +497,6 @@ describe("OpenComputerSandboxProvider", () => {
         retentionPolicy: OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
       }
     );
-  });
-
-  it("waits for processing checkpoints before returning a snapshot image", async () => {
-    vi.useFakeTimers();
-    try {
-      const client = createMockClient({
-        createCheckpoint: vi.fn(async () => ({
-          id: "checkpoint-1",
-          sandboxId: "oc-sandbox-1",
-          status: "processing",
-        })),
-        getCheckpoint: vi.fn(async () => ({
-          id: "checkpoint-1",
-          sandboxId: "oc-sandbox-1",
-          status: "ready",
-        })),
-      });
-      const provider = new OpenComputerSandboxProvider(client, {
-        scmProvider: "github",
-        codeServerPasswordSecret: "secret",
-      });
-
-      const snapshot = provider.takeSnapshot({
-        providerObjectId: "oc-sandbox-1",
-        sessionId: "session-1",
-        reason: "user_stop",
-      });
-      await vi.advanceTimersByTimeAsync(2_000);
-
-      await expect(snapshot).resolves.toEqual({ success: true, imageId: "checkpoint-1" });
-      expect(client.getCheckpoint).toHaveBeenCalledWith("oc-sandbox-1", "checkpoint-1");
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("creates checkpoints for execution-complete snapshots", async () => {
