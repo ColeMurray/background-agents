@@ -18,17 +18,23 @@ locals {
   # Must match the deployed Worker's `name` and the custom-domain `service` binding.
   web_worker_name = "open-inspect-web-${local.name_suffix}"
 
+  # Custom-domain inputs normalized to "" when unset. coalesce() must not be
+  # used here: it errors when all arguments are null or empty strings, which is
+  # the default for both variables.
+  web_custom_domain         = var.cloudflare_custom_domain == null ? "" : trimspace(var.cloudflare_custom_domain)
+  web_custom_domain_zone_id = var.cloudflare_zone_id == null ? "" : trimspace(var.cloudflare_zone_id)
+
   # Whether a custom domain is configured for the Cloudflare web Worker
   web_custom_domain_enabled = (
     var.web_platform == "cloudflare" &&
-    trimspace(coalesce(var.cloudflare_custom_domain, "")) != "" &&
-    trimspace(coalesce(var.cloudflare_zone_id, "")) != ""
+    local.web_custom_domain != "" &&
+    local.web_custom_domain_zone_id != ""
   )
 
   # Host the Cloudflare web Worker is served from: custom domain when configured,
   # otherwise its default workers.dev hostname.
   web_cloudflare_host = (local.web_custom_domain_enabled
-    ? var.cloudflare_custom_domain
+    ? local.web_custom_domain
     : "${local.web_worker_name}.${var.cloudflare_worker_subdomain}.workers.dev"
   )
 

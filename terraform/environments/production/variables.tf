@@ -23,6 +23,24 @@ variable "cloudflare_custom_domain" {
   description = "Custom domain (hostname) to attach to the Cloudflare web Worker (optional). Requires web_platform = 'cloudflare' and cloudflare_zone_id. e.g. 'app.example.com'"
   type        = string
   default     = null
+
+  validation {
+    condition = (
+      var.cloudflare_custom_domain == null ||
+      trimspace(var.cloudflare_custom_domain) == "" ||
+      can(regex("(?i)^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.cloudflare_custom_domain))
+    )
+    error_message = "cloudflare_custom_domain must be a bare hostname such as 'app.example.com' — no scheme, port, path, trailing dot, or whitespace."
+  }
+
+  validation {
+    condition = (
+      var.cloudflare_custom_domain == null ||
+      trimspace(var.cloudflare_custom_domain) == "" ||
+      (var.web_platform == "cloudflare" && (var.cloudflare_zone_id == null ? "" : trimspace(var.cloudflare_zone_id)) != "")
+    )
+    error_message = "cloudflare_custom_domain is set but would be silently ignored: it requires web_platform = \"cloudflare\" and a non-empty cloudflare_zone_id."
+  }
 }
 
 variable "cloudflare_worker_subdomain" {

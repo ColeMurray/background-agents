@@ -69,6 +69,10 @@ resource "local_file" "web_app_wrangler_production" {
     compatibility_date = "2025-08-15"
     compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
+    # The workers.dev route is disabled when a custom domain is attached, so the
+    # app is only reachable on the origin NEXTAUTH_URL points at.
+    workers_dev = ${local.web_custom_domain_enabled ? "false" : "true"}
+
     [vars]
     GITHUB_CLIENT_ID = "${var.github_client_id}"
     GOOGLE_CLIENT_ID = "${var.google_client_id}"
@@ -127,8 +131,8 @@ resource "cloudflare_workers_custom_domain" "web_app" {
   count = local.web_custom_domain_enabled ? 1 : 0
 
   account_id = var.cloudflare_account_id
-  zone_id    = var.cloudflare_zone_id
-  hostname   = var.cloudflare_custom_domain
+  zone_id    = local.web_custom_domain_zone_id
+  hostname   = local.web_custom_domain
   service    = local.web_worker_name
 
   depends_on = [null_resource.web_app_cloudflare_deploy]
