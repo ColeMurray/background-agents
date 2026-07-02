@@ -80,7 +80,6 @@ async function handleListSessions(
 
   return json({
     sessions: result.sessions,
-    total: result.total,
     hasMore: result.hasMore,
   });
 }
