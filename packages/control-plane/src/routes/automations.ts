@@ -38,6 +38,9 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
+  normalizeOptionalRepositoryContext,
+  RepositoryContextValidationError,
+  type OptionalRepositoryContext,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -61,6 +64,20 @@ function resolveReasoningEffort(
 ): string | null {
   if (reasoningEffort === undefined || reasoningEffort === null) return null;
   return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
+}
+
+function parseRepositoryContext(
+  input: { repoOwner?: string | null; repoName?: string | null },
+  partialMessage?: string
+): OptionalRepositoryContext | Response {
+  try {
+    return normalizeOptionalRepositoryContext(input, partialMessage);
+  } catch (e) {
+    if (e instanceof RepositoryContextValidationError) {
+      return error(e.message, 400);
+    }
+    throw e;
+  }
 }
 
 /**
@@ -154,9 +171,9 @@ async function handleCreateAutomation(
   if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
-  if (!body.repoOwner || !body.repoName) {
-    return error("repoOwner and repoName are required", 400);
-  }
+
+  const repositoryContext = parseRepositoryContext(body);
+  if (repositoryContext instanceof Response) return repositoryContext;
 
   // Validate trigger type
   const triggerType: AutomationTriggerType = body.triggerType || "schedule";
@@ -170,6 +187,12 @@ async function handleCreateAutomation(
   ];
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
+  }
+  if (!repositoryContext && (triggerType === "github_event" || triggerType === "linear_event")) {
+    return error("repoOwner and repoName are required for repo-scoped triggers", 400);
+  }
+  if (!repositoryContext && body.baseBranch?.trim()) {
+    return error("baseBranch requires repoOwner and repoName", 400);
   }
 
   const isSchedule = triggerType === "schedule";
@@ -229,15 +252,21 @@ async function handleCreateAutomation(
     return error("Invalid reasoning effort for selected model", 400);
   }
 
-  // Resolve repository
-  const repoOwner = body.repoOwner.toLowerCase();
-  const repoName = body.repoName.toLowerCase();
+  let repoOwner: string | null = null;
+  let repoName: string | null = null;
+  let repoId: number | null = null;
+  let baseBranch: string | null = null;
 
-  const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-  if (resolved instanceof Response) return resolved;
+  if (repositoryContext) {
+    repoOwner = repositoryContext.repoOwner;
+    repoName = repositoryContext.repoName;
 
-  const { repoId, defaultBranch } = resolved;
-  const baseBranch = body.baseBranch || defaultBranch;
+    const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
+    if (resolved instanceof Response) return resolved;
+
+    repoId = resolved.repoId;
+    baseBranch = body.baseBranch || resolved.defaultBranch;
+  }
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -332,7 +361,7 @@ async function handleCreateAutomation(
   logger.info("automation.created", {
     event: "automation.created",
     automation_id: id,
-    repo: `${repoOwner}/${repoName}`,
+    repo: repoOwner && repoName ? `${repoOwner}/${repoName}` : null,
     trigger_type: triggerType,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
@@ -459,7 +488,50 @@ async function handleUpdateAutomation(
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
   }
-  if (body.baseBranch !== undefined) updateFields.base_branch = body.baseBranch;
+
+  const repoOwnerChanged = "repoOwner" in body;
+  const repoNameChanged = "repoName" in body;
+  const repositoryChanged = repoOwnerChanged || repoNameChanged;
+  if (repositoryChanged) {
+    if (repoOwnerChanged !== repoNameChanged) {
+      return error("repoOwner and repoName must be provided together", 400);
+    }
+
+    const repositoryContext = parseRepositoryContext(body);
+    if (repositoryContext instanceof Response) return repositoryContext;
+
+    if (!repositoryContext) {
+      if (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event") {
+        return error("repoOwner and repoName are required for repo-scoped triggers", 400);
+      }
+      if (body.baseBranch?.trim()) {
+        return error("baseBranch requires repoOwner and repoName", 400);
+      }
+      updateFields.repo_owner = null;
+      updateFields.repo_name = null;
+      updateFields.repo_id = null;
+      updateFields.base_branch = null;
+    } else {
+      const resolved = await resolveRepoOrError(
+        env,
+        repositoryContext.repoOwner,
+        repositoryContext.repoName,
+        ctx,
+        logger
+      );
+      if (resolved instanceof Response) return resolved;
+
+      updateFields.repo_owner = repositoryContext.repoOwner;
+      updateFields.repo_name = repositoryContext.repoName;
+      updateFields.repo_id = resolved.repoId;
+      updateFields.base_branch = body.baseBranch || resolved.defaultBranch;
+    }
+  } else if (body.baseBranch !== undefined) {
+    if (!existing.repo_owner || !existing.repo_name) {
+      return error("baseBranch requires repoOwner and repoName", 400);
+    }
+    updateFields.base_branch = body.baseBranch;
+  }
 
   // Update event type — only for non-schedule types
   if (body.eventType !== undefined) {

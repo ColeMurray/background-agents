@@ -11,10 +11,10 @@ CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
   session_name TEXT,                                -- External session name for WebSocket routing
   title TEXT,                                       -- Session/PR title
-  repo_owner TEXT NOT NULL,                         -- e.g., "acme-corp"
-  repo_name TEXT NOT NULL,                          -- e.g., "web-app"
+  repo_owner TEXT,                                  -- e.g., "acme-corp"; NULL for no-repo sessions
+  repo_name TEXT,                                   -- e.g., "web-app"; NULL for no-repo sessions
   repo_id INTEGER,                                  -- GitHub repository ID (stable)
-  base_branch TEXT NOT NULL DEFAULT 'main',          -- Base branch for PRs
+  base_branch TEXT,                                 -- Base branch for PRs; NULL for no-repo sessions
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
@@ -29,7 +29,14 @@ CREATE TABLE IF NOT EXISTS session (
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  CHECK (
+    (repo_owner IS NULL) = (repo_name IS NULL)
+    AND (
+      repo_owner IS NOT NULL
+      OR (repo_id IS NULL AND base_branch IS NULL)
+    )
+  )
 );
 
 -- Participants in the session

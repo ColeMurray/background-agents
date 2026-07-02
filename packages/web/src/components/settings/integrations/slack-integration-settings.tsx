@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_MENTIONS_POLICY,
   MAX_SLACK_ROUTING_RULES,
+  MODEL_OPTIONS,
   type EnrichedRepository,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
@@ -13,6 +14,7 @@ import {
   type SlackRepoSettings,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
+import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
@@ -145,9 +147,11 @@ export function SlackIntegrationSettings() {
 }
 
 function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | null | undefined }) {
+  const { enabledModels, enabledModelOptions, loading: modelsLoading } = useEnabledModels();
   const [agentNotificationsEnabled, setAgentNotificationsEnabled] = useState(
     settings?.defaults?.agentNotificationsEnabled ?? false
   );
+  const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [mentionsPolicy, setMentionsPolicy] = useState<SlackMentionsPolicy>(
     settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY
   );
@@ -158,8 +162,14 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   useEffect(() => {
     if (settings === undefined || dirty || saving) return;
     setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
+    setModel(settings?.defaults?.model ?? "");
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
   }, [settings, dirty, saving]);
+
+  const selectedModelEnabled = model ? enabledModels.includes(model) : true;
+  const selectedModelLabel = model
+    ? MODEL_OPTIONS.flatMap((group) => group.models).find((option) => option.id === model)?.name
+    : undefined;
 
   const isConfigured = settings !== null && settings !== undefined;
 
@@ -180,6 +190,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
         setAgentNotificationsEnabled(false);
+        setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
         setDirty(false);
         toast.success("Settings reset to defaults.");
@@ -197,7 +208,11 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const handleSave = async () => {
     setSaving(true);
     const body: SlackGlobalConfig = {
-      defaults: mergedGlobalDefaults(settings, { agentNotificationsEnabled, mentionsPolicy }),
+      defaults: mergedGlobalDefaults(settings, {
+        agentNotificationsEnabled,
+        model: model || undefined,
+        mentionsPolicy,
+      }),
     };
 
     try {
@@ -247,6 +262,53 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
       </label>
 
       <div className="mb-4">
+        <p className="text-sm font-medium text-foreground mb-2">Default model</p>
+        <p className="text-xs text-muted-foreground mb-2">
+          Used for Slack-created sessions until a user chooses their own model in Slack App Home.
+        </p>
+        <Select
+          value={model}
+          onValueChange={(value) => {
+            setModel(value);
+            setDirty(true);
+          }}
+          disabled={modelsLoading}
+        >
+          <SelectTrigger className="w-full sm:w-96">
+            <SelectValue placeholder="Use system default" />
+          </SelectTrigger>
+          <SelectContent>
+            {enabledModelOptions.map((group) =>
+              group.models.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.name}
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
+        {model && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="mt-2 h-auto px-0 text-xs"
+            onClick={() => {
+              setModel("");
+              setDirty(true);
+            }}
+          >
+            Use system default
+          </Button>
+        )}
+        {!selectedModelEnabled && selectedModelLabel && (
+          <p className="text-xs text-destructive mt-2">
+            {selectedModelLabel} is disabled in model settings. Slack will use the first enabled
+            model until you save a different default.
+          </p>
+        )}
+      </div>
+
+      <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Mentions policy</p>
         <p className="text-xs text-muted-foreground mb-2">
           How direct user mentions (<code>{"<@U…>"}</code>) are handled in agent messages. Broadcast
@@ -287,9 +349,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
           <AlertDialogHeader>
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
-              Reset Slack defaults? The master switch will turn off and mentions policy will return
-              to <strong>allow</strong>. Per-repository overrides and routing rules are not
-              affected.
+              Reset Slack defaults? The master switch will turn off, the default model will use the
+              system default, and mentions policy will return to <strong>allow</strong>.
+              Per-repository overrides and routing rules are not affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

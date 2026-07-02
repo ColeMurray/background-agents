@@ -7,6 +7,7 @@
 
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
+import type { CorrelationContext } from "../../logger";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -19,6 +20,35 @@ import {
   type SnapshotConfig,
   type SnapshotResult,
 } from "../provider";
+
+const MS_PER_SECOND = 1000;
+
+export interface TriggerModalRepoImageBuildConfig {
+  buildId: string;
+  repoOwner: string;
+  repoName: string;
+  defaultBranch: string;
+  callbackUrl: string;
+  userEnvVars?: Record<string, string>;
+  /**
+   * Build sandbox lifetime, in milliseconds. Already capped by the trigger.
+   * Omitted -> Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
+   */
+  buildTimeoutMs?: number;
+  correlation?: CorrelationContext;
+}
+
+export interface TriggerModalRepoImageBuildResult {
+  buildId: string;
+  status: string;
+}
+
+export interface ModalRepoImageBuildProvider {
+  triggerRepoImageBuild(
+    config: TriggerModalRepoImageBuildConfig
+  ): Promise<TriggerModalRepoImageBuildResult>;
+  deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
+}
 
 /**
  * Modal sandbox provider.
@@ -40,7 +70,7 @@ import {
  * }
  * ```
  */
-export class ModalSandboxProvider implements SandboxProvider {
+export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuildProvider {
   readonly name = "modal";
 
   readonly capabilities: SandboxProviderCapabilities = {
@@ -194,17 +224,87 @@ export class ModalSandboxProvider implements SandboxProvider {
   }
 
   /**
+   * Trigger a Modal repo-image build.
+   */
+  async triggerRepoImageBuild(
+    config: TriggerModalRepoImageBuildConfig
+  ): Promise<TriggerModalRepoImageBuildResult> {
+    try {
+      const result = await this.client.buildRepoImage(
+        {
+          repoOwner: config.repoOwner,
+          repoName: config.repoName,
+          defaultBranch: config.defaultBranch,
+          buildId: config.buildId,
+          callbackUrl: config.callbackUrl,
+          userEnvVars: config.userEnvVars,
+          buildTimeoutSeconds:
+            config.buildTimeoutMs === undefined
+              ? undefined
+              : Math.ceil(config.buildTimeoutMs / MS_PER_SECOND),
+        },
+        config.correlation
+      );
+
+      return {
+        buildId: result.buildId,
+        status: result.status,
+      };
+    } catch (error) {
+      if (error instanceof ModalApiError) {
+        throw this.classifyErrorWithStatus(
+          `Repo image build failed with HTTP ${error.status}: ${error.message}`,
+          error.status,
+          error
+        );
+      }
+      if (error instanceof SandboxProviderError) {
+        throw error;
+      }
+      throw this.classifyError("Failed to trigger Modal repo image build", error);
+    }
+  }
+
+  /**
+   * Delete a Modal provider image.
+   */
+  async deleteProviderImage(
+    providerImageId: string,
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    try {
+      await this.client.deleteProviderImage({ providerImageId }, correlation);
+    } catch (error) {
+      if (error instanceof ModalApiError) {
+        throw this.classifyErrorWithStatus(
+          `Provider image deletion failed with HTTP ${error.status}: ${error.message}`,
+          error.status,
+          error
+        );
+      }
+      if (error instanceof SandboxProviderError) {
+        throw error;
+      }
+      throw this.classifyError("Failed to delete Modal provider image", error);
+    }
+  }
+
+  /**
    * Classify an error based on HTTP status code.
    * Uses status code directly for accurate transient/permanent classification.
    */
-  private classifyErrorWithStatus(message: string, status: number): SandboxProviderError {
+  private classifyErrorWithStatus(
+    message: string,
+    status: number,
+    cause?: Error
+  ): SandboxProviderError {
     // Transient: 502, 503, 504 (gateway/availability issues)
     if (status === 502 || status === 503 || status === 504) {
-      return new SandboxProviderError(message, "transient");
+      return new SandboxProviderError(message, "transient", cause);
     }
 
     // Permanent: 4xx (client errors) and other 5xx (server errors)
-    return new SandboxProviderError(message, "permanent");
+    return new SandboxProviderError(message, "permanent", cause);
   }
 
   /**

@@ -435,6 +435,11 @@ describe("POST /events", () => {
       env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
     );
     expect(sessionBodies[0]).not.toHaveProperty("title");
+    expect((env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put).toHaveBeenCalledWith(
+      "thread:C123:111.222",
+      expect.any(String),
+      { expirationTtl: 7 * 24 * 60 * 60 }
+    );
 
     const updateBodies = slackApiBodies(slackFetch, "chat.update");
     expect(updateBodies).toEqual(
@@ -458,6 +463,91 @@ describe("POST /events", () => {
           ]),
         }),
       ])
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("embeds repo options in clarification messages when the repo list fits inline", async () => {
+    const slackFetch = mockSlackFetch([]);
+    const env = makeEnv();
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          return new Response(
+            JSON.stringify({
+              repos: [
+                { owner: "acme", name: "web", defaultBranch: "main", private: true },
+                { owner: "acme", name: "api", defaultBranch: "main", private: true },
+                { owner: "acme", name: "docs", defaultBranch: "main", private: true },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+
+        if (url.includes("/integration-settings/slack")) {
+          return new Response(
+            JSON.stringify({
+              settings: {
+                defaults: {
+                  routingRules: [
+                    { keyword: "frontend", target: "acme/web" },
+                    { keyword: "backend", target: "acme/api" },
+                  ],
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+
+        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+
+    const ctx = makeCtx();
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> frontend backend help",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    const clarification = postBodies.find((body) =>
+      String(body.text).includes("I couldn't determine which repository")
+    );
+
+    expect(clarification).toEqual(
+      expect.objectContaining({
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "section",
+            accessory: expect.objectContaining({
+              type: "static_select",
+              action_id: "select_repo",
+              options: expect.arrayContaining([
+                expect.objectContaining({ value: "acme/web" }),
+                expect.objectContaining({ value: "acme/api" }),
+                expect.objectContaining({ value: "acme/docs" }),
+              ]),
+            }),
+          }),
+        ]),
+      })
     );
 
     slackFetch.mockRestore();

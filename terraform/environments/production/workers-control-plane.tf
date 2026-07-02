@@ -86,13 +86,11 @@ module "control_plane_worker" {
     ] : [],
     local.use_opencomputer_backend ? [
       { name = "OPENCOMPUTER_API_URL", value = var.opencomputer_api_url },
-      { name = "OPENCOMPUTER_TEMPLATE", value = var.opencomputer_template },
-    ] : [],
-    local.use_opencomputer_backend && var.opencomputer_project_id != "" ? [
-      { name = "OPENCOMPUTER_PROJECT_ID", value = var.opencomputer_project_id },
-    ] : [],
-    local.use_opencomputer_backend && var.opencomputer_target != "" ? [
-      { name = "OPENCOMPUTER_TARGET", value = var.opencomputer_target },
+      # Pinned template when provided, otherwise the Terraform-managed base snapshot.
+      {
+        name  = "OPENCOMPUTER_TEMPLATE",
+        value = var.opencomputer_template != "" ? var.opencomputer_template : module.opencomputer_infra[0].snapshot_name,
+      },
     ] : [],
     local.use_vercel_backend ? [
       { name = "VERCEL_PROJECT_ID", value = var.vercel_sandbox_project_id },
@@ -169,5 +167,6 @@ module "control_plane_worker" {
     module.linear_bot_worker,
     module.daytona_infra,
     module.vercel_sandbox_infra,
+    module.opencomputer_infra,
   ]
 }

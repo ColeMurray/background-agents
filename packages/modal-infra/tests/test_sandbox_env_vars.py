@@ -3,7 +3,68 @@ import json
 import pytest
 
 from sandbox_runtime.types import SessionConfig
-from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
+from src.sandbox.manager import (
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    SandboxConfig,
+    SandboxManager,
+    _has_repository,
+)
+
+
+@pytest.mark.parametrize(
+    ("repo_owner", "repo_name", "expected"),
+    [
+        ("acme", "repo", "single"),
+        (None, None, "none"),
+    ],
+)
+def test_has_repository_accepts_complete_or_absent_metadata(repo_owner, repo_name, expected):
+    assert _has_repository(repo_owner, repo_name) is (expected == "single")
+
+
+@pytest.mark.parametrize(
+    ("repo_owner", "repo_name"),
+    [
+        ("acme", None),
+        (None, "repo"),
+    ],
+)
+def test_has_repository_rejects_partial_repo_metadata(repo_owner, repo_name):
+    with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
+        _has_repository(repo_owner, repo_name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("repo_owner", "repo_name"),
+    [
+        ("acme", None),
+        (None, "repo"),
+    ],
+)
+async def test_create_sandbox_rejects_partial_repo_metadata(repo_owner, repo_name):
+    manager = SandboxManager()
+
+    with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
+        await manager.create_sandbox(SandboxConfig(repo_owner=repo_owner, repo_name=repo_name))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_config",
+    [
+        {"repo_owner": "acme", "repo_name": None, "session_id": "sess-1"},
+        {"repo_owner": None, "repo_name": "repo", "session_id": "sess-1"},
+    ],
+)
+async def test_restore_rejects_partial_repo_metadata(session_config):
+    manager = SandboxManager()
+
+    with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
+        await manager.restore_from_snapshot(
+            snapshot_image_id="img-abc",
+            session_config=session_config,
+        )
 
 
 @pytest.mark.asyncio
@@ -478,6 +539,36 @@ async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
+    """A no-repository snapshot boot does not expose fallback VCS credentials."""
+    captured = {}
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner=None,
+        repo_name=None,
+        fallback_clone_token="ghs_snapshot_token",
+        snapshot_id="snap-1",
+    )
+    await manager.create_sandbox(config)
+
+    env = captured["env"]
+    assert "REPOSITORY_MODE" not in env
+    assert env["REPO_OWNER"] == ""
+    assert env["REPO_NAME"] == ""
+    assert "VCS_HOST" not in env
+    assert "VCS_CLONE_USERNAME" not in env
+    assert "VCS_CLONE_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
+
+
+@pytest.mark.asyncio
 async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatch):
     """Snapshot restore still injects VCS_CLONE_TOKEN.
 
@@ -553,3 +644,40 @@ async def test_restore_github_includes_gh_cli_aliases(monkeypatch):
     # Marked so the gh wrapper on helper-capable snapshots refreshes past it
     # instead of reusing the soon-expired restore token.
     assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_no_repo_restore_omits_clone_token(monkeypatch):
+    """No-repository snapshot restores must not expose VCS credentials."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": None,
+            "repo_name": None,
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-1",
+        },
+        clone_token="ghs_restore_token",
+    )
+
+    env = captured["env"]
+    assert "REPOSITORY_MODE" not in env
+    assert env["REPO_OWNER"] == ""
+    assert env["REPO_NAME"] == ""
+    assert "VCS_HOST" not in env
+    assert "VCS_CLONE_USERNAME" not in env
+    assert "VCS_CLONE_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env

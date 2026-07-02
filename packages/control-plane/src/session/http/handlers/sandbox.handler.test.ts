@@ -464,7 +464,11 @@ describe("createSandboxHandler", () => {
 
   it("returns mapped service error from scm credentials", async () => {
     const { handler, getSession, getScmCredentials } = createHandler();
-    getSession.mockReturnValue({ id: "session-1" } as SessionRow);
+    getSession.mockReturnValue({
+      id: "session-1",
+      repo_owner: "acme",
+      repo_name: "web-app",
+    } as SessionRow);
     getScmCredentials.mockResolvedValue({
       ok: false,
       status: 503,
@@ -477,9 +481,30 @@ describe("createSandboxHandler", () => {
     expect(await response.json()).toEqual({ error: "GitHub App not configured" });
   });
 
+  it("rejects scm credentials for no-repository sessions", async () => {
+    const { handler, getSession, getScmCredentials } = createHandler();
+    getSession.mockReturnValue({
+      id: "session-1",
+      repo_owner: null,
+      repo_name: null,
+    } as SessionRow);
+
+    const response = await handler.scmCredentials();
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "SCM credentials require a repository context",
+    });
+    expect(getScmCredentials).not.toHaveBeenCalled();
+  });
+
   it("returns scm credentials payload on success", async () => {
     const { handler, getSession, getScmCredentials } = createHandler();
-    getSession.mockReturnValue({ id: "session-1" } as SessionRow);
+    getSession.mockReturnValue({
+      id: "session-1",
+      repo_owner: "acme",
+      repo_name: "web-app",
+    } as SessionRow);
     const expiresAt = Date.now() + 60 * 60 * 1000;
     getScmCredentials.mockResolvedValue({
       ok: true,

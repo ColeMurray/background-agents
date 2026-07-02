@@ -1,8 +1,8 @@
 # Automations
 
 Automations let you run coding agents either on a recurring schedule or when an external event
-arrives. Define the repository, branch, model, and instructions once, then Open-Inspect starts a new
-session whenever the trigger fires.
+arrives. Define the repository configuration, model, and instructions once, then Open-Inspect starts
+a new session whenever the trigger fires.
 
 Trigger types:
 
@@ -28,12 +28,13 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 
 ### Required Fields
 
-| Field            | Description                                                                                                                                                                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Trigger Type** | How the automation starts: schedule, inbound webhook, or Sentry alert.                                                                                                                     |
-| **Name**         | A short label for the automation (max 200 characters). Appears in the automations list and in session titles prefixed with `[Auto]`.                                                       |
-| **Repository**   | The GitHub repository to run against. Only repositories installed on the GitHub App are available. Cannot be changed after creation.                                                       |
-| **Instructions** | The prompt sent to the coding agent each time the automation fires (max 10,000 characters). Write this as you would a normal session prompt and reference the trigger context when useful. |
+| Field                        | Description                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Trigger Type**             | How the automation starts: schedule, inbound webhook, Sentry alert, or Slack message.                                                                                                      |
+| **Name**                     | A short label for the automation (max 200 characters). Appears in the automations list and in session titles prefixed with `[Auto]`.                                                       |
+| **Repository Configuration** | Choose **Single repository** to clone one repository and branch, or **No repository** to run without a cloned code workspace.                                                              |
+| **Repository**               | Required for single-repo automations. Only repositories installed on the GitHub App are available.                                                                                         |
+| **Instructions**             | The prompt sent to the coding agent each time the automation fires (max 15,000 characters). Write this as you would a normal session prompt and reference the trigger context when useful. |
 
 ### Optional Fields
 
@@ -54,6 +55,17 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 | **Slack Message**   | **Conditions** (a Slack Channel condition is required; a Message Text condition is optional) |
 
 For non-schedule automations, schedule fields are not used.
+
+---
+
+## Repository Context
+
+Automations can run with or without repository context:
+
+- **Single repository**: clone one configured repository and branch for each run.
+- **No repository**: no repository is cloned. The agent still starts a normal session and can use
+  configured tools such as MCP servers, but repo workspace actions like opening pull requests
+  require repository context.
 
 ---
 
@@ -235,13 +247,13 @@ any pull requests it opened and to the full web session — and the reaction is 
 posts a short failure notice in the thread instead.
 
 Every reply in a thread **continues the same session** — during the run and after it finishes — for
-up to 24 hours after the thread's first trigger, exactly like replying in an `@mention` thread. The
+up to 7 days after the thread's first trigger, exactly like replying in an `@mention` thread. The
 reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if it had gone
 idle), and the agent posts its response in-thread when the turn finishes. A follow-up does not need
 to match the trigger condition — conditions gate new runs, not replies that continue an existing
 thread. If a reply races the very first trigger before its session exists, it falls back to an
-ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply more than 24
-hours after the first trigger starts a fresh run.
+ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply more than 7
+days after the first trigger starts a fresh run.
 
 ---
 
@@ -303,9 +315,9 @@ runs: if a run is already active, the trigger is rejected.
 
 ### Edit
 
-You can change an automation's name, branch, model, and instructions at any time. For scheduled
-automations, you can also change the schedule and timezone. The repository cannot be changed after
-creation.
+You can change an automation's name, repository context, branch, model, and instructions at any
+time. For scheduled automations, you can also change the schedule and timezone. Repository-scoped
+triggers require repository context; other trigger types can be changed to **No repository**.
 
 If you update the schedule or timezone, the next run time is recalculated automatically.
 
@@ -357,7 +369,7 @@ Event-driven automations use concurrency keys instead. For inbound webhooks, ret
 `idempotencyKey` are treated as the same event, but separate deliveries without a shared
 `idempotencyKey` can overlap.
 
-Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — for 24 hours
+Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — for 7 days
 after the thread's first trigger they continue the same session (during the run and after it
 finishes), routed to that session as follow-up prompts (see the **Run feedback** note under
 [Slack Message Triggers](#slack-message-triggers)).

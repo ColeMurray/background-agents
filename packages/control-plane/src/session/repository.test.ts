@@ -125,6 +125,40 @@ describe("SessionRepository", () => {
         2000,
       ]);
     });
+
+    it("rejects partial repository context", () => {
+      expect(() =>
+        repo.upsertSession({
+          id: "sess-1",
+          sessionName: "test-session",
+          title: "Test Title",
+          repoOwner: "owner",
+          repoName: null,
+          model: "claude-sonnet-4",
+          status: "created",
+          createdAt: 1000,
+          updatedAt: 2000,
+        })
+      ).toThrow("Session repository context must include repoOwner and repoName together");
+    });
+
+    it("rejects repo metadata for no-repository sessions", () => {
+      expect(() =>
+        repo.upsertSession({
+          id: "sess-1",
+          sessionName: "test-session",
+          title: "Test Title",
+          repoOwner: null,
+          repoName: null,
+          repoId: 123,
+          baseBranch: "main",
+          model: "claude-sonnet-4",
+          status: "created",
+          createdAt: 1000,
+          updatedAt: 2000,
+        })
+      ).toThrow("No-repository sessions must not persist repoId or baseBranch");
+    });
   });
 
   describe("updateSessionRepoId", () => {

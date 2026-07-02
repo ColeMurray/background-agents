@@ -18,13 +18,17 @@ import type { CreateSessionResponse, Env } from "../types";
 import {
   error,
   json,
+  normalizeOptionalRepositoryContext,
   parsePattern,
+  RepositoryContextValidationError,
   resolveRepoOrError,
+  type OptionalRepositoryContext,
   type RequestContext,
   type Route,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
+const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 
 async function handleCreateSession(
   request: Request,
@@ -36,8 +40,17 @@ async function handleCreateSession(
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
 
-  if (!body.repoOwner || !body.repoName) {
-    return error("repoOwner and repoName are required");
+  let repositoryContext: OptionalRepositoryContext;
+  try {
+    repositoryContext = normalizeOptionalRepositoryContext(
+      body,
+      INVALID_SESSION_REQUEST_BODY_ERROR
+    );
+  } catch (e) {
+    if (e instanceof RepositoryContextValidationError) {
+      return error(e.message, 400);
+    }
+    throw e;
   }
 
   // Validate branch name if provided (defense in depth)
@@ -45,14 +58,19 @@ async function handleCreateSession(
     return error("Invalid branch name");
   }
 
-  // Normalize repo identifiers to lowercase for consistent storage
-  const repoOwner = body.repoOwner.toLowerCase();
-  const repoName = body.repoName.toLowerCase();
+  let repoId: number | null = null;
+  let defaultBranch: string | null = null;
+  let repoOwner: string | null = null;
+  let repoName: string | null = null;
+  if (repositoryContext) {
+    repoOwner = repositoryContext.repoOwner;
+    repoName = repositoryContext.repoName;
+    const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
+    if (resolved instanceof Response) return resolved;
 
-  const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-  if (resolved instanceof Response) return resolved;
-
-  const { repoId, defaultBranch } = resolved;
+    repoId = resolved.repoId;
+    defaultBranch = resolved.defaultBranch;
+  }
 
   const participantUserId = deriveParticipantUserId(body);
 

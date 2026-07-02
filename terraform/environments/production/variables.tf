@@ -373,24 +373,7 @@ variable "opencomputer_api_key" {
 }
 
 variable "opencomputer_template" {
-  description = "OpenComputer declarative template containing the OpenInspect sandbox runtime"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_template)) > 0
-    error_message = "opencomputer_template must be set when sandbox_provider = 'opencomputer'."
-  }
-}
-
-variable "opencomputer_project_id" {
-  description = "Optional OpenComputer project/workspace scope"
-  type        = string
-  default     = ""
-}
-
-variable "opencomputer_target" {
-  description = "Optional OpenComputer target, region, or cell"
+  description = "Optional manual OpenComputer template/snapshot name to pin. When empty, Terraform builds and manages the base snapshot from the runtime source (like the Vercel and Modal base images)."
   type        = string
   default     = ""
 }

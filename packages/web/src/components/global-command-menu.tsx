@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import type { Session } from "@open-inspect/shared";
 import { formatRelativeTime } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { formatRepoLabel } from "@/lib/repo-label";
 import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
 import {
@@ -28,16 +29,18 @@ interface GlobalCommandMenuProps {
 }
 
 function buildSessionUrl(session: Session): string {
-  const searchParams = new URLSearchParams({
-    repoOwner: session.repoOwner,
-    repoName: session.repoName,
-  });
+  const searchParams = new URLSearchParams();
+  if (session.repoOwner && session.repoName) {
+    searchParams.set("repoOwner", session.repoOwner);
+    searchParams.set("repoName", session.repoName);
+  }
 
   if (session.title) {
     searchParams.set("title", session.title);
   }
 
-  return `/session/${session.id}?${searchParams.toString()}`;
+  const query = searchParams.toString();
+  return query ? `/session/${session.id}?${query}` : `/session/${session.id}`;
 }
 
 export function GlobalCommandMenu({
@@ -93,8 +96,8 @@ export function GlobalCommandMenu({
               <CommandSeparator />
               <CommandGroup heading="Sessions">
                 {recentSessions.map((session) => {
-                  const sessionTitle = session.title || `${session.repoOwner}/${session.repoName}`;
-                  const repoLabel = `${session.repoOwner}/${session.repoName}`;
+                  const repoLabel = formatRepoLabel(session.repoOwner, session.repoName);
+                  const sessionTitle = session.title || repoLabel;
                   const timestamp = session.updatedAt || session.createdAt;
 
                   return (
