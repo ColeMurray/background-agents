@@ -4,9 +4,9 @@ import {
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
+  spawnChildSessionRequestSchema,
+  spawnContextSchema,
   VALID_MODELS,
-  type SpawnChildSessionRequest,
-  type SpawnContext,
 } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
 import { SessionIndexStore } from "../db/session-index";
@@ -33,7 +33,11 @@ async function handleSpawnChild(
   const parentId = match.groups?.id;
   if (!parentId) return error("Parent session ID required");
 
-  const body = (await request.json()) as SpawnChildSessionRequest;
+  const parsedBody = spawnChildSessionRequestSchema.safeParse(await request.json());
+  if (!parsedBody.success) {
+    return error("title and prompt are required");
+  }
+  const body = parsedBody.data;
 
   if (!body.title || !body.prompt) {
     return error("title and prompt are required");
@@ -84,7 +88,11 @@ async function handleSpawnChild(
     return error(message, spawnContextRes.status);
   }
 
-  const spawnContext = (await spawnContextRes.json()) as SpawnContext;
+  const parsedSpawnContext = spawnContextSchema.safeParse(await spawnContextRes.json());
+  if (!parsedSpawnContext.success) {
+    return error("Failed to get parent session context", 500);
+  }
+  const spawnContext = parsedSpawnContext.data;
 
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
   const requestedRepoName = body.repoName?.trim().toLowerCase() || null;

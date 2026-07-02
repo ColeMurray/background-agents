@@ -60,7 +60,6 @@ export interface ListSessionsOptions {
 
 export interface ListSessionsResult {
   sessions: SessionEntry[];
-  total: number;
   hasMore: boolean;
 }
 
@@ -199,26 +198,18 @@ export class SessionIndexStore {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    // Get total count
-    const countResult = await this.db
-      .prepare(`SELECT COUNT(*) as count FROM sessions ${where}`)
-      .bind(...params)
-      .first<{ count: number }>();
-
-    const total = countResult?.count ?? 0;
-
     // Get paginated results
     const result = await this.db
       .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
-      .bind(...params, limit, offset)
+      .bind(...params, limit + 1, offset)
       .all<SessionRow>();
 
-    const sessions = (result.results || []).map(toEntry);
+    const rows = result.results || [];
+    const sessions = rows.slice(0, limit).map(toEntry);
 
     return {
       sessions,
-      total,
-      hasMore: offset + sessions.length < total,
+      hasMore: rows.length > limit,
     };
   }
 

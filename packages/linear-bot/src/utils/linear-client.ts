@@ -264,6 +264,15 @@ export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<str
   }
 }
 
+export async function getOAuthToken(env: Env, orgId: string): Promise<string | null> {
+  try {
+    return await getOAuthTokenOrThrow(env, orgId);
+  } catch (err) {
+    if (err instanceof LinearAuthError) return null;
+    throw err;
+  }
+}
+
 function reauthorizationRequiredForReason(reason: LinearAuthFailureReason): boolean {
   return (
     reason === "missing_token" ||
@@ -305,6 +314,15 @@ export interface LinearApiClient {
 
 export async function getLinearClientOrThrow(env: Env, orgId: string): Promise<LinearApiClient> {
   return { accessToken: await getOAuthTokenOrThrow(env, orgId) };
+}
+
+export async function getLinearClient(env: Env, orgId: string): Promise<LinearApiClient | null> {
+  try {
+    return await getLinearClientOrThrow(env, orgId);
+  } catch (err) {
+    if (err instanceof LinearAuthError) return null;
+    throw err;
+  }
 }
 
 export type LinearClientResult =

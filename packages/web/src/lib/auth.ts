@@ -1,7 +1,7 @@
 import type { Account, NextAuthOptions, Profile, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import GitHubProvider from "next-auth/providers/github";
-import type { GithubEmail, GithubProfile } from "next-auth/providers/github";
+import type { GithubProfile } from "next-auth/providers/github";
 import GoogleProvider from "next-auth/providers/google";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared";
 import {
@@ -16,6 +16,7 @@ import {
   type GitHubOrganizationAccessResult,
 } from "./github-org-membership";
 import { type AuthProvider, isAuthProvider } from "./build-auth-identity";
+import { githubEmailListSchema, type GitHubEmail } from "./github-email-schema";
 
 const GITHUB_EMAIL_FETCH_TIMEOUT_MS = 5_000;
 
@@ -26,7 +27,7 @@ interface GitHubEmailFetchParams {
   timeoutMs?: number;
 }
 
-type GitHubProfileWithEmails = GithubProfile & { verifiedEmails?: GithubEmail[] };
+type GitHubProfileWithEmails = GithubProfile & { verifiedEmails?: GitHubEmail[] };
 
 /**
  * Fetch verified email addresses from GitHub's API.
@@ -40,7 +41,7 @@ export async function getVerifiedGitHubEmails({
   fetchImpl = fetch,
   userAgent = "Open-Inspect",
   timeoutMs = GITHUB_EMAIL_FETCH_TIMEOUT_MS,
-}: GitHubEmailFetchParams): Promise<GithubEmail[]> {
+}: GitHubEmailFetchParams): Promise<GitHubEmail[]> {
   if (!accessToken) return [];
 
   const controller = new AbortController();
@@ -73,8 +74,14 @@ export async function getVerifiedGitHubEmails({
       });
       return [];
     }
-    const emails = (await response.json()) as GithubEmail[];
-    return emails.filter((e) => e.verified);
+    const result = githubEmailListSchema.safeParse(await response.json());
+    if (!result.success) {
+      console.warn("[github-email-fetch] invalid response", {
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+      return [];
+    }
+    return result.data.filter((e) => e.verified);
   } catch (error) {
     console.warn("[github-email-fetch] request error", {
       error: error instanceof Error ? error.name : "unknown",

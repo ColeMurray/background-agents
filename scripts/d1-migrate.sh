@@ -7,6 +7,41 @@ MIGRATIONS_DIR="${2:-$SCRIPT_DIR/../terraform/d1/migrations}"
 
 WRANGLER="npx wrangler"
 
+# 0. Validate filenames and guard against duplicate version numbers. Migrations
+# are deduped by their numeric prefix (the _schema_migrations version), so two
+# files sharing a prefix mean one is silently skipped forever — e.g. two PRs
+# that each grab the next number and then both merge. A file with no numeric
+# prefix can't be tracked at all. Fail fast on either, with a clear message.
+INVALID_FILES=""
+PREFIXES=""
+for file in "$MIGRATIONS_DIR"/*.sql; do
+  [ -f "$file" ] || continue
+  BASE=$(basename "$file")
+  # `|| true` so a prefix-less filename doesn't trip the grep's non-zero exit
+  # under `set -o pipefail` and abort before we can report it below.
+  PREFIX=$(printf '%s' "$BASE" | grep -oE '^[0-9]+' || true)
+  if [ -z "$PREFIX" ]; then
+    INVALID_FILES+="  $BASE"$'\n'
+  else
+    PREFIXES+="$PREFIX"$'\n'
+  fi
+done
+
+if [ -n "$INVALID_FILES" ]; then
+  echo "ERROR: migration files without a leading numeric prefix:" >&2
+  printf '%s' "$INVALID_FILES" >&2
+  echo "Rename them as NNNN_description.sql so they can be tracked." >&2
+  exit 1
+fi
+
+DUPES=$(printf '%s' "$PREFIXES" | sort | uniq -d)
+if [ -n "$DUPES" ]; then
+  echo "ERROR: duplicate migration version prefixes detected:" >&2
+  echo "$DUPES" | sed 's/^/  /' >&2
+  echo "Renumber the colliding files so each prefix is unique before deploying." >&2
+  exit 1
+fi
+
 # 1. Ensure tracking table exists
 $WRANGLER d1 execute "$DATABASE_NAME" --remote \
   --command "CREATE TABLE IF NOT EXISTS _schema_migrations (
