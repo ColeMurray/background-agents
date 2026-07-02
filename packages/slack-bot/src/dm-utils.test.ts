@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripMentions, isDmDispatchable } from "./dm-utils";
+import { stripMentions, isDmDispatchable, isChannelTriggerCandidate } from "./dm-utils";
 
 describe("stripMentions", () => {
   it("removes a single mention", () => {
@@ -65,5 +65,72 @@ describe("isDmDispatchable", () => {
 
   it("returns false for non-message event type", () => {
     expect(isDmDispatchable({ ...baseEvent, type: "app_mention" })).toBe(false);
+  });
+});
+
+describe("isChannelTriggerCandidate", () => {
+  const BOT = "UBOT123";
+  const baseEvent = {
+    type: "message",
+    channel_type: "channel",
+    text: "the deploy job is failing again",
+    channel: "C12345",
+    ts: "1234567890.123456",
+    user: "U99999",
+  };
+
+  it("returns true for a plain public-channel message", () => {
+    expect(isChannelTriggerCandidate(baseEvent, BOT)).toBe(true);
+  });
+
+  it("returns true for a private-channel (group) message", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, channel_type: "group" }, BOT)).toBe(true);
+  });
+
+  it("returns false for DM and group-DM channel types", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, channel_type: "im" }, BOT)).toBe(false);
+    expect(isChannelTriggerCandidate({ ...baseEvent, channel_type: "mpim" }, BOT)).toBe(false);
+  });
+
+  it("returns false when a subtype is present (edits, joins, bot posts)", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, subtype: "message_changed" }, BOT)).toBe(
+      false
+    );
+    expect(isChannelTriggerCandidate({ ...baseEvent, subtype: "channel_join" }, BOT)).toBe(false);
+  });
+
+  it("returns false when bot_id is set", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, bot_id: "B1" }, BOT)).toBe(false);
+  });
+
+  it("returns false when required fields are missing", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, text: undefined }, BOT)).toBe(false);
+    expect(isChannelTriggerCandidate({ ...baseEvent, channel: undefined }, BOT)).toBe(false);
+    expect(isChannelTriggerCandidate({ ...baseEvent, ts: undefined }, BOT)).toBe(false);
+    expect(isChannelTriggerCandidate({ ...baseEvent, user: undefined }, BOT)).toBe(false);
+  });
+
+  it("returns false for the bot's own messages", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, user: BOT }, BOT)).toBe(false);
+  });
+
+  it("suppresses messages that mention the bot (handled by app_mention)", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, text: `<@${BOT}> please deploy` }, BOT)).toBe(
+      false
+    );
+    // piped rendering <@UBOT123|assistant>
+    expect(
+      isChannelTriggerCandidate({ ...baseEvent, text: `<@${BOT}|assistant> deploy` }, BOT)
+    ).toBe(false);
+  });
+
+  it("still triggers when a different user is mentioned", () => {
+    expect(
+      isChannelTriggerCandidate({ ...baseEvent, text: "<@U55555> can you deploy?" }, BOT)
+    ).toBe(true);
+  });
+
+  it("returns false for app_mention event type", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, type: "app_mention" }, BOT)).toBe(false);
   });
 });

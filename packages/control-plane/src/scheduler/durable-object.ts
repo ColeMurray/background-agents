@@ -13,16 +13,28 @@ import {
   nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
+  computeHmacHex,
   type AutomationCallbackContext,
   type AutomationEvent,
+  type SlackAutomationEvent,
+  type SlackCallbackContext,
   type TriggerConfig,
 } from "@open-inspect/shared";
 import {
   AutomationStore,
   toAutomationRun,
+  isDuplicateKeyError,
   type AutomationRow,
   type AutomationRunRow,
 } from "../db/automation-store";
+import { SlackChannelStore } from "../db/slack-channel-store";
+import {
+  buildSlackCompletionNotification,
+  buildSlackSkipNotification,
+  getSlackRunMetadata,
+  type SlackRunMetadata,
+  type SlackCompletionContext,
+} from "./slack-completion";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
@@ -34,6 +46,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
+import { resolveAutomationRepository } from "../automation/repository";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -49,6 +62,22 @@ const AUTO_PAUSE_THRESHOLD = 3;
 
 /** Max runs to recover per sweep type per tick (backpressure). */
 const RECOVERY_SWEEP_LIMIT = 50;
+
+/**
+ * How long after a slack run's first trigger that thread replies keep continuing
+ * the same session (matches the interactive thread→session KV TTL of 7 days). Steering
+ * does not create new runs, so this is measured from the root run's `created_at` and
+ * does not slide — a reply after the window forks a fresh run.
+ */
+const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function formatAutomationTargetLabel(
+  automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
+): string {
+  return automation?.repo_owner && automation?.repo_name
+    ? `${automation.repo_owner}/${automation.repo_name}`
+    : "No repository";
+}
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -416,13 +445,51 @@ export class SchedulerDO extends DurableObject<Env> {
           event.eventType
         );
         break;
+      case "slack":
+        candidates = await new SlackChannelStore(this.env.DB).getSlackAutomationsForChannel(
+          event.channelId
+        );
+        break;
     }
 
     let triggered = 0;
     let skipped = 0;
+    // Follow-ups routed into an already-active thread's session (slack steering).
+    let steered = 0;
+    // Surface at most one concurrency-skip ephemeral per event, even when
+    // several automations watch the same thread and all skip.
+    let concurrencySkipped = false;
 
     for (const automation of candidates) {
-      // 2. Evaluate conditions
+      const now = Date.now();
+
+      // Slack thread continuity — mirrors the interactive @mention path: any reply
+      // in a thread that already has a session (any run status, within the
+      // continuity window) continues that session, regardless of trigger
+      // conditions. A reply is a steer, not a new trigger: a natural reply ("also
+      // do X") won't contain the keyword that started the run, and a reply after
+      // the run finished should still land in the same session. Its reply posts
+      // back in-thread via the slack completion callback, exactly like an
+      // interactive follow-up.
+      if (event.source === "slack") {
+        const steerable = await store.getLatestSteerableRunForThread(
+          automation.id,
+          event.concurrencyKey,
+          now - SLACK_THREAD_CONTINUITY_WINDOW_MS
+        );
+        if (
+          steerable?.session_id &&
+          (await this.steerSession(steerable.session_id, automation, event))
+        ) {
+          steered++;
+          continue;
+        }
+        // No steerable session (outside the window, no session yet, or a rare
+        // enqueue error) → fall through. Like the @mention path's stale-session
+        // recovery, the reply is re-evaluated as a potential new trigger below.
+      }
+
+      // Trigger conditions gate starting a NEW run.
       const config: TriggerConfig = automation.trigger_config
         ? JSON.parse(automation.trigger_config)
         : { conditions: [] };
@@ -430,16 +497,22 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
-      // 3. Concurrency check (per-event-instance)
+      // Concurrency guard: never start a second run while one is active for this
+      // key. For slack this also covers the brief window before a run has created
+      // its session (no steerable row yet), so a reply racing the initial trigger
+      // gets the "already active" notice instead of a second session.
       const activeRun = await store.getActiveRunForKey(automation.id, event.concurrencyKey);
       if (activeRun) {
+        if (event.source === "slack") {
+          await this.recordSlackSkip(store, automation.id, event, "concurrent_run_active");
+          concurrencySkipped = true;
+        }
         skipped++;
         continue;
       }
 
-      // 4. Create run (dedup via unique index on trigger_key)
+      // Create run (dedup via unique index on trigger_key)
       const runId = generateId();
-      const now = Date.now();
       try {
         await store.insertRun({
           id: runId,
@@ -454,6 +527,7 @@ export class SchedulerDO extends DurableObject<Env> {
           created_at: now,
           trigger_key: event.triggerKey,
           concurrency_key: event.concurrencyKey,
+          ...(event.source === "slack" ? slackRunMetadata(event) : {}),
         });
       } catch (e) {
         if (isDuplicateKeyError(e)) {
@@ -463,7 +537,7 @@ export class SchedulerDO extends DurableObject<Env> {
         throw e;
       }
 
-      // 5. Create session + send prompt (with event context prepended)
+      // Create session + send prompt (with event context prepended)
       try {
         const instructions = `${event.contextBlock}\n---\n\n${automation.instructions}`;
         const { sessionId } = await this.createSessionForAutomation(automation, runId);
@@ -482,6 +556,10 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
+    if (event.source === "slack" && concurrencySkipped) {
+      await this.notifySlackConcurrencySkip(event);
+    }
+
     this.log.info("Event processed", {
       event: "scheduler.event_processed",
       source: event.source,
@@ -489,10 +567,11 @@ export class SchedulerDO extends DurableObject<Env> {
       trigger_key: event.triggerKey,
       triggered,
       skipped,
+      steered,
       candidates: candidates.length,
     });
 
-    return new Response(JSON.stringify({ triggered, skipped }), {
+    return new Response(JSON.stringify({ triggered, skipped, steered }), {
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -597,6 +676,8 @@ export class SchedulerDO extends DurableObject<Env> {
       automationId: string;
       runId: string;
       sessionId: string;
+      /** Optional for resilience to version skew; the bot falls back to a reaction clear. */
+      messageId?: string;
       success: boolean;
       error?: string;
     };
@@ -648,9 +729,134 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
+    // Slack-triggered runs post the agent's result into the triggering message's
+    // thread and clear the `eyes` reaction when they finish. The scheduler owns
+    // this fan-out (not the session callback path) because the message
+    // coordinates live on the run row. Best-effort.
+    const slackMeta = getSlackRunMetadata(run);
+    if (slackMeta) {
+      const automation = await store.getById(body.automationId);
+      await this.notifySlackCompletion(run, slackMeta, {
+        sessionId: body.sessionId,
+        messageId: body.messageId ?? "",
+        success: body.success,
+        error: body.error,
+        repoFullName: formatAutomationTargetLabel(automation),
+        model: automation?.model ?? "",
+        reasoningEffort: automation?.reasoning_effort ?? undefined,
+      });
+    }
+
     return new Response(JSON.stringify({ ok: true }), {
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  /**
+   * Persist a `skipped` run for a slack event dropped by the per-thread
+   * concurrency guard, carrying the same message coordinates a materialized run
+   * would. Best-effort observability; `recordSkippedRun` swallows the unexpected
+   * duplicate-key case internally.
+   */
+  private async recordSlackSkip(
+    store: AutomationStore,
+    automationId: string,
+    event: SlackAutomationEvent,
+    reason: string
+  ): Promise<void> {
+    await store.recordSkippedRun({
+      id: generateId(),
+      automationId,
+      skipReason: reason,
+      concurrencyKey: event.concurrencyKey,
+      runMetadata: slackRunMetadata(event),
+    });
+  }
+
+  /**
+   * Tell the slack-bot to post a slack-triggered run's result into the triggering
+   * message's thread and clear the `eyes` reaction, via its
+   * `/callbacks/automation-complete` endpoint. Signs the body with
+   * `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the bot's other callbacks).
+   * No-ops when the run has no triggering message, when `SLACK_BOT` is unbound, or
+   * when the secret is unset — all best-effort.
+   */
+  private async notifySlackCompletion(
+    run: AutomationRunRow,
+    meta: SlackRunMetadata,
+    ctx: SlackCompletionContext
+  ): Promise<void> {
+    const binding = this.env.SLACK_BOT;
+    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    if (!binding || !secret) return;
+
+    const body = buildSlackCompletionNotification(meta, ctx);
+    if (!body) return;
+
+    try {
+      const signature = await computeHmacHex(JSON.stringify(body), secret);
+      const response = await binding.fetch("https://internal/callbacks/automation-complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, signature }),
+      });
+      if (!response.ok) {
+        this.log.warn("Slack completion callback failed", {
+          event: "scheduler.slack_complete_failed",
+          automation_id: run.automation_id,
+          run_id: run.id,
+          http_status: response.status,
+        });
+      }
+    } catch (e) {
+      this.log.warn("Slack completion callback errored", {
+        event: "scheduler.slack_complete_failed",
+        automation_id: run.automation_id,
+        run_id: run.id,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
+  }
+
+  /**
+   * Post a best-effort ephemeral "a run is already active for this thread"
+   * notice to the message author when a slack event is dropped by the
+   * per-thread concurrency guard. No-ops without a binding/secret/actor.
+   */
+  private async notifySlackConcurrencySkip(event: SlackAutomationEvent): Promise<void> {
+    const binding = this.env.SLACK_BOT;
+    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    if (!binding || !secret) return;
+
+    const body = buildSlackSkipNotification({
+      channelId: event.channelId,
+      actorUserId: event.actorUserId,
+      threadTs: event.threadTs,
+      ts: event.ts,
+    });
+    if (!body) return;
+
+    try {
+      const signature = await computeHmacHex(JSON.stringify(body), secret);
+      const response = await binding.fetch("https://internal/callbacks/automation-skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, signature }),
+      });
+      if (!response.ok) {
+        this.log.warn("Slack skip callback failed", {
+          event: "scheduler.slack_skip_failed",
+          channel: event.channelId,
+          http_status: response.status,
+        });
+      }
+    } catch (e) {
+      this.log.warn("Slack skip callback errored", {
+        event: "scheduler.slack_skip_failed",
+        channel: event.channelId,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
   }
 
   // ─── Health check ────────────────────────────────────────────────────────
@@ -675,6 +881,7 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
+    const repository = await resolveAutomationRepository(this.env, automation);
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -696,19 +903,24 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
+    const repoOwner = repository?.repoOwner ?? null;
+    const repoName = repository?.repoName ?? null;
+    const repoId = repository?.repoId ?? null;
+    const baseBranch = repository?.baseBranch ?? null;
+
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
-      resolveCodeServerEnabled(this.env.DB, automation.repo_owner, automation.repo_name),
-      resolveSandboxSettings(this.env.DB, automation.repo_owner, automation.repo_name),
+      resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),
+      resolveSandboxSettings(this.env.DB, repoOwner, repoName),
     ]);
 
     await initializeSession(
       this.env,
       {
         sessionId,
-        repoOwner: automation.repo_owner,
-        repoName: automation.repo_name,
-        repoId: automation.repo_id,
-        defaultBranch: automation.base_branch,
+        repoOwner,
+        repoName,
+        repoId,
+        defaultBranch: baseBranch,
         title: `[Auto] ${automation.name}`,
         model: automation.model,
         reasoningEffort: automation.reasoning_effort,
@@ -739,9 +951,6 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string,
     instructionsOverride?: string
   ): Promise<void> {
-    const doId = this.env.SESSION.idFromName(sessionId);
-    const stub = this.env.SESSION.get(doId);
-
     const callbackContext: AutomationCallbackContext = {
       source: "automation",
       automationId: automation.id,
@@ -749,15 +958,81 @@ export class SchedulerDO extends DurableObject<Env> {
       automationName: automation.name,
     };
 
+    await this.enqueueSessionPrompt(sessionId, {
+      content: instructionsOverride ?? automation.instructions,
+      authorId: automation.created_by,
+      source: "automation",
+      callbackContext,
+    });
+  }
+
+  /**
+   * Route a follow-up slack message in a thread to its run's existing session as
+   * the next turn — whether that run is still in flight, completed, or failed —
+   * so every reply in the thread continues the same session, like the interactive
+   * @mention path. If the session has gone idle the prompt re-spawns/restores it
+   * in the background; its reply posts back in-thread via the slack completion
+   * callback (source "slack"), exactly like an interactive follow-up. Returns
+   * false when the enqueue fails, so the caller can fall through to the trigger
+   * path (stale-session recovery).
+   */
+  private async steerSession(
+    sessionId: string,
+    automation: AutomationRow,
+    event: SlackAutomationEvent
+  ): Promise<boolean> {
+    const callbackContext: SlackCallbackContext = {
+      source: "slack",
+      channel: event.channelId,
+      // Post in the existing thread; for a reply, threadTs is the thread root.
+      threadTs: event.threadTs ?? event.ts,
+      // React on (and later clear) the follow-up message itself.
+      reactionMessageTs: event.ts,
+      repoFullName: formatAutomationTargetLabel(automation),
+      model: automation.model,
+      reasoningEffort: automation.reasoning_effort ?? undefined,
+    };
+
+    try {
+      await this.enqueueSessionPrompt(sessionId, {
+        content: event.text,
+        authorId: `slack:${event.actorUserId}`,
+        source: "slack",
+        callbackContext,
+      });
+      this.log.info("Steered thread session with slack follow-up", {
+        event: "scheduler.slack_steer",
+        automation_id: automation.id,
+        session_id: sessionId,
+        channel: event.channelId,
+      });
+      return true;
+    } catch (e) {
+      this.log.warn("Failed to steer thread session; falling through to trigger path", {
+        event: "scheduler.slack_steer_failed",
+        automation_id: automation.id,
+        session_id: sessionId,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+      return false;
+    }
+  }
+
+  /** Enqueue a prompt onto a session's queue via its DO `/internal/prompt` route. */
+  private async enqueueSessionPrompt(
+    sessionId: string,
+    body: {
+      content: string;
+      authorId: string;
+      source: string;
+      callbackContext: AutomationCallbackContext | SlackCallbackContext;
+    }
+  ): Promise<void> {
+    const stub = this.env.SESSION.get(this.env.SESSION.idFromName(sessionId));
     const promptResponse = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content: instructionsOverride ?? automation.instructions,
-        authorId: automation.created_by,
-        source: "automation",
-        callbackContext,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!promptResponse.ok) {
@@ -766,7 +1041,13 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 }
 
-function isDuplicateKeyError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("UNIQUE constraint failed");
+/** Serialized slack run metadata for a slack-origin event — shared by insertRun and recordSkippedRun. */
+function slackRunMetadata(
+  event: SlackAutomationEvent
+): Pick<AutomationRunRow, "trigger_run_metadata"> {
+  const metadata: SlackRunMetadata = {
+    channel: event.channelId,
+    messageTs: event.ts,
+  };
+  return { trigger_run_metadata: JSON.stringify(metadata) };
 }

@@ -19,6 +19,12 @@ export interface Env {
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
   APP_NAME?: string;
+  /**
+   * Kill switch for Slack channel-message automation triggers. The bot only
+   * ingests/forwards channel messages when this is exactly "true". Dark by
+   * default — any other value (or unset) disables the feature entirely.
+   */
+  SLACK_TRIGGERS_ENABLED?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;

@@ -1,9 +1,9 @@
 # Pre-Built Images
 
 Pre-built images make your sessions start faster. Instead of cloning your repository and installing
-dependencies every time you create a session, Open-Inspect keeps a ready-to-go snapshot of your repo
-that's refreshed automatically. New sessions start from this snapshot and only need to pull the
-latest commits — typically cutting startup from minutes to seconds.
+dependencies every time you create a session, Open-Inspect keeps a ready-to-go repo image artifact
+for your repo that's refreshed automatically. New sessions start from that artifact and only need to
+pull the latest commits — typically cutting startup from minutes to seconds.
 
 ---
 
@@ -17,16 +17,16 @@ Every time you start a new session without pre-built images, the sandbox has to:
 
 For large repositories with many dependencies, this can take anywhere from 30 seconds to several
 minutes. With pre-built images, all of that work is done ahead of time. Your session starts from a
-snapshot that already has the code and dependencies in place, and only needs to pull the last few
-minutes of changes.
+repo image artifact that already has the code and dependencies in place, and only needs to pull the
+last few minutes of changes.
 
 ---
 
 ## Getting Started
 
-Pre-built images are available when the deployment uses `sandbox_provider = "modal"` or
-`sandbox_provider = "vercel"`. Daytona deployments use persistent sandboxes instead, so the Images
-settings page is disabled for that backend.
+Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
+`sandbox_provider = "vercel"`, or `sandbox_provider = "opencomputer"`. Daytona deployments use
+persistent sandboxes instead, so the Images settings page is disabled for that backend.
 
 ### Enable for a Repository
 
@@ -72,16 +72,17 @@ The build process runs the same setup steps that a normal session would:
 
 1. Clones your repository
 2. Runs your `.openinspect/setup.sh` script (if you have one)
-3. Saves a snapshot of the resulting environment
+3. Saves a provider image artifact for the resulting environment
 
 Everything your setup script installs — dependencies, build artifacts, caches — is captured in the
-snapshot.
+image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
+snapshot, or OpenComputer checkpoint.
 
 ### What Happens When You Start a Session
 
 When you create a new session for a repository with a pre-built image:
 
-1. The sandbox starts from the saved snapshot (code + dependencies already present)
+1. The sandbox starts from the saved image artifact (code + dependencies already present)
 2. A fast git sync pulls any commits pushed since the image was built
 3. The coding agent starts immediately
 

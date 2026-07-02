@@ -40,4 +40,12 @@ describe("MetadataSection", () => {
     expect(screen.getByRole("link", { name: "#42" })).toBeInTheDocument();
     expect(screen.getByText("open")).toBeInTheDocument();
   });
+
+  it("renders an explicit no-repository row for repo-less sessions", () => {
+    render(
+      <MetadataSection createdAt={Date.now()} baseBranch={null} repoOwner={null} repoName={null} />
+    );
+
+    expect(screen.getByText("No repository")).toBeInTheDocument();
+  });
 });

@@ -232,6 +232,42 @@ export const automationTemplates: AutomationTemplate[] = [
     },
   },
   {
+    id: "auto-triage-slack-reports",
+    title: "Auto-triage Slack reports",
+    description:
+      "When a message in a watched Slack channel reports a bug or incident, investigate it and reply in the thread.",
+    categories: ["incidents"],
+    primaryOutput: "slack",
+    setupNote:
+      "Requires Slack triggers enabled, the bot invited to the channel, and a channel ID filled into the Slack Channel condition.",
+    prefill: {
+      name: "Auto-triage Slack reports",
+      triggerType: "slack_event",
+      eventType: "message.posted",
+      // The text_match keeps the trigger from firing on every channel message.
+      // The Slack Channel condition is intentionally omitted — add your own
+      // channel ID(s) on the form (a slack_event needs at least one).
+      triggerConfig: {
+        conditions: [
+          {
+            type: "text_match",
+            operator: "regex",
+            value: { pattern: "\\b(bug|broken|error|failing|down|incident)\\b", flags: "i" },
+          },
+        ],
+      },
+      instructions:
+        "A message was posted in a watched Slack channel (the message is shown above). Treat it as a " +
+        "bug or incident report and triage it against this repository.\n\n" +
+        "Investigate the most likely cause from the codebase: trace the described symptom to the " +
+        "responsible code, check recent related changes, and determine whether it is a real defect, a " +
+        "configuration problem, or expected behavior. When you have a concise, well-supported " +
+        "assessment — what is wrong, the relevant file references, and a recommended next step — that " +
+        "becomes the run result posted back into the thread. Do not open a pull request unless the fix " +
+        "is small and clearly correct.",
+    },
+  },
+  {
     id: "dependency-digest",
     title: "Weekly dependency digest",
     description:

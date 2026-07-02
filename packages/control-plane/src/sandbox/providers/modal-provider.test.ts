@@ -16,6 +16,10 @@ import type {
   RestoreSandboxResponse,
   SnapshotSandboxRequest,
   SnapshotSandboxResponse,
+  BuildRepoImageRequest,
+  BuildRepoImageResponse,
+  DeleteProviderImageRequest,
+  DeleteProviderImageResponse,
 } from "../client";
 
 // ==================== Mock Factories ====================
@@ -25,6 +29,8 @@ function createMockModalClient(
     createSandbox: (req: CreateSandboxRequest) => Promise<CreateSandboxResponse>;
     restoreSandbox: (req: RestoreSandboxRequest) => Promise<RestoreSandboxResponse>;
     snapshotSandbox: (req: SnapshotSandboxRequest) => Promise<SnapshotSandboxResponse>;
+    buildRepoImage: (req: BuildRepoImageRequest) => Promise<BuildRepoImageResponse>;
+    deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
 ): ModalClient {
   return {
@@ -47,6 +53,18 @@ function createMockModalClient(
       async (): Promise<SnapshotSandboxResponse> => ({
         success: true,
         imageId: "image-123",
+      })
+    ),
+    buildRepoImage: vi.fn(
+      async (): Promise<BuildRepoImageResponse> => ({
+        buildId: "build-123",
+        status: "building",
+      })
+    ),
+    deleteProviderImage: vi.fn(
+      async (req: DeleteProviderImageRequest): Promise<DeleteProviderImageResponse> => ({
+        providerImageId: req.providerImageId,
+        deleted: true,
       })
     ),
     ...overrides,
@@ -463,6 +481,52 @@ describe("ModalSandboxProvider", () => {
       expect(result.providerObjectId).toBe("modal-obj-xyz");
       expect(result.status).toBe("created");
       expect(result.createdAt).toBe(1234567890);
+    });
+  });
+
+  describe("repo image builds", () => {
+    it("triggers repo image builds through the Modal client", async () => {
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client);
+      const correlation = { request_id: "request-1", trace_id: "trace-1" };
+
+      const result = await provider.triggerRepoImageBuild({
+        buildId: "build-123",
+        repoOwner: "acme",
+        repoName: "repo",
+        defaultBranch: "develop",
+        callbackUrl: "https://worker.test/repo-images/build-complete",
+        userEnvVars: { FOO: "bar" },
+        buildTimeoutMs: 1_800_000,
+        correlation,
+      });
+
+      expect(result).toEqual({ buildId: "build-123", status: "building" });
+      expect(client.buildRepoImage).toHaveBeenCalledWith(
+        {
+          repoOwner: "acme",
+          repoName: "repo",
+          defaultBranch: "develop",
+          buildId: "build-123",
+          callbackUrl: "https://worker.test/repo-images/build-complete",
+          userEnvVars: { FOO: "bar" },
+          buildTimeoutSeconds: 1800,
+        },
+        correlation
+      );
+    });
+
+    it("deletes provider images through the Modal client", async () => {
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client);
+      const correlation = { request_id: "request-1", trace_id: "trace-1" };
+
+      await provider.deleteProviderImage("modal-image-1", correlation);
+
+      expect(client.deleteProviderImage).toHaveBeenCalledWith(
+        { providerImageId: "modal-image-1" },
+        correlation
+      );
     });
   });
 

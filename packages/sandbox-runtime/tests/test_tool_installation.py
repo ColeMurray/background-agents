@@ -42,6 +42,7 @@ def _patch_paths(
             .replace("/app/sandbox_runtime/bin", str(bin_src))
             .replace("/app/opencode-deps", str(deps_cache))
             .replace("/usr/local/bin", str(bin_dest))
+            .replace("/home/sandbox/.local/bin", str(bin_dest))
         )
         yield
 
@@ -228,6 +229,38 @@ class TestInstallTools:
         js_files = list(tool_dest.glob("*.js"))
         assert len(js_files) == 3
 
+    def test_repository_tools_skipped_without_repository(self, tmp_path):
+        """Repo-only PR tools are skipped, but child-spawn tools remain available."""
+        sup = _make_supervisor()
+        sup.repo_owner = ""
+        sup.repo_name = ""
+        sup.has_repository = False
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+
+        legacy_tool = tmp_path / "app" / "sandbox" / "inspect-plugin.js"
+        legacy_tool.parent.mkdir(parents=True)
+        legacy_tool.write_text("// legacy")
+
+        tools_dir = tmp_path / "app" / "sandbox" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "_bridge-client.js").write_text("// bridge")
+        (tools_dir / "spawn-task.js").write_text("// spawn")
+        (tools_dir / "get-task-status.js").write_text("// get")
+        (tools_dir / "get-task-status-format.js").write_text("// format")
+        (tools_dir / "cancel-task.js").write_text("// cancel")
+
+        with _patch_paths(legacy=legacy_tool, tools=tools_dir):
+            sup._install_tools(workdir)
+
+        tool_dest = workdir / ".opencode" / "tool"
+        assert (tool_dest / "_bridge-client.js").exists()
+        assert not (tool_dest / "create-pull-request.js").exists()
+        assert (tool_dest / "spawn-task.js").exists()
+        assert (tool_dest / "get-task-status.js").exists()
+        assert (tool_dest / "get-task-status-format.js").exists()
+        assert (tool_dest / "cancel-task.js").exists()
+
     def test_slack_notify_installed_when_enabled(self, tmp_path):
         """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true."""
         sup = _make_supervisor()
@@ -254,7 +287,7 @@ class TestInstallBinScripts:
     """Cases for _install_bin_scripts() standalone CLI installation."""
 
     def test_scripts_installed_to_bin(self, tmp_path):
-        """JS scripts in bin/ should be copied to /usr/local/bin/ without .js extension."""
+        """JS scripts in bin/ should be copied to /usr/local/bin without .js extension."""
         sup = _make_supervisor()
 
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
@@ -273,6 +306,32 @@ class TestInstallBinScripts:
         assert installed.exists()
         assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
         assert installed.stat().st_mode & 0o755
+
+    def test_scripts_installed_to_configured_bin(self, tmp_path, monkeypatch):
+        """OPENINSPECT_BIN_INSTALL_DIR can override the install directory."""
+        sup = _make_supervisor()
+
+        src = tmp_path / "app" / "sandbox_runtime" / "bin"
+        src.mkdir(parents=True)
+        (src / "upload-media.js").write_text("#!/usr/bin/env node\n// upload cli")
+
+        default_dest = tmp_path / "usr-local-bin"
+        default_dest.mkdir()
+        user_dest = tmp_path / "configured-bin"
+        monkeypatch.setenv("OPENINSPECT_BIN_INSTALL_DIR", str(user_dest))
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy",
+            tools=tmp_path / "no-tools",
+            bin_src=src,
+            bin_dest=default_dest,
+        ):
+            sup._install_bin_scripts()
+
+        installed = user_dest / "upload-media"
+        assert installed.exists()
+        assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
+        assert not (default_dest / "upload-media").exists()
 
     def test_non_js_files_skipped(self, tmp_path):
         """Non-.js files in bin/ should not be installed."""

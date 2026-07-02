@@ -7,6 +7,7 @@ import { formatSessionCost } from "@/lib/session-cost";
 import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
+import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact } from "@/types/session";
 import {
   ClockIcon,
@@ -24,10 +25,10 @@ interface MetadataSectionProps {
   createdAt: number;
   model?: string;
   reasoningEffort?: string;
-  baseBranch: string;
+  baseBranch: string | null;
   branchName?: string;
-  repoOwner?: string;
-  repoName?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
   artifacts?: Artifact[];
   parentSessionId?: string | null;
   totalCost?: number;
@@ -58,6 +59,7 @@ export function MetadataSection({
   );
   const branchUrl =
     branchName && repoOwner && repoName ? getScmBranchUrl(repoOwner, repoName, branchName) : null;
+  const hasRepositoryMetadata = repoOwner !== undefined && repoName !== undefined;
 
   const handleCopyBranch = async () => {
     if (branchName) {
@@ -184,17 +186,21 @@ export function MetadataSection({
       )}
 
       {/* Repository tag */}
-      {repoOwner && repoName && (
+      {hasRepositoryMetadata && (
         <div className="flex items-center gap-2 text-sm">
           <RepoIcon className="w-4 h-4 text-muted-foreground" />
-          <a
-            href={getScmRepoUrl(repoOwner, repoName)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-accent hover:underline"
-          >
-            {repoOwner}/{repoName}
-          </a>
+          {repoOwner && repoName ? (
+            <a
+              href={getScmRepoUrl(repoOwner, repoName)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent hover:underline"
+            >
+              {repoOwner}/{repoName}
+            </a>
+          ) : (
+            <span className="text-muted-foreground">{NO_REPOSITORY_LABEL}</span>
+          )}
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
-import { clearLocalCache, getAvailableRepos, getRoutingRules } from "./repos";
+import { clearLocalCache, getAvailableRepos, getRoutingRules, getWatchedChannels } from "./repos";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -199,5 +199,79 @@ describe("getAvailableRepos", () => {
 
     expect(second).toBe(first);
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("getWatchedChannels", () => {
+  beforeEach(() => {
+    clearLocalCache();
+    vi.clearAllMocks();
+  });
+
+  it("returns the watched channel set from the control plane and stores it in KV", async () => {
+    const env = makeEnv(jsonResponse({ channels: ["C1", "C2"] }));
+
+    const channels = await getWatchedChannels(env, "trace");
+
+    expect(channels).toEqual(new Set(["C1", "C2"]));
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
+      "slack:watched-channels",
+      JSON.stringify(["C1", "C2"]),
+      { expirationTtl: 300 }
+    );
+  });
+
+  it("returns an empty set when the response has no channels", async () => {
+    const env = makeEnv(jsonResponse({}));
+    expect(await getWatchedChannels(env)).toEqual(new Set());
+  });
+
+  it("fails closed to an empty set on a non-OK response with no cache", async () => {
+    const env = makeEnv(new Response("error", { status: 500 }));
+    expect(await getWatchedChannels(env)).toEqual(new Set());
+  });
+
+  it("fails closed to an empty set when the fetch throws and no cache exists", async () => {
+    const env = makeEnv(new Error("control plane unreachable"));
+    expect(await getWatchedChannels(env)).toEqual(new Set());
+  });
+
+  it("serves the watch-list from the KV cache without hitting the control plane", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue(["C7", "C8"]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
+      },
+    } as unknown as Env;
+
+    expect(await getWatchedChannels(env, "trace")).toEqual(new Set(["C7", "C8"]));
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:watched-channels", "json");
+    // KV is the cache: a hit short-circuits before the control plane is consulted.
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+  });
+
+  it("reads through the KV cache on a subsequent call (no in-memory tier)", async () => {
+    let stored: unknown = null;
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockImplementation(async () => stored),
+        put: vi.fn().mockImplementation(async (_key: string, value: string) => {
+          stored = JSON.parse(value);
+        }),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(jsonResponse({ channels: ["C1"] })),
+      },
+    } as unknown as Env;
+
+    expect(await getWatchedChannels(env)).toEqual(new Set(["C1"]));
+    expect(await getWatchedChannels(env)).toEqual(new Set(["C1"]));
+
+    // First call misses KV and hits the control plane; the second is served from KV.
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
+    expect(env.SLACK_KV.get).toHaveBeenCalledTimes(2);
   });
 });

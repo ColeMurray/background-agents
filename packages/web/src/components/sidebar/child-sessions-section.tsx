@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { CollapsibleSection } from "./collapsible-section";
 import { Badge } from "@/components/ui/badge";
 import { formatRelativeTime } from "@/lib/time";
+import { formatRepoLabel } from "@/lib/repo-label";
 import type { SessionItem } from "@/components/session-sidebar";
 
 interface ChildSessionsSectionProps {
@@ -57,7 +58,7 @@ export function ChildSessionsSection({ sessionId }: ChildSessionsSectionProps) {
                   {formatRelativeTime(child.updatedAt || child.createdAt)}
                 </span>
                 <span className="text-sm truncate">
-                  {child.title || `${child.repoOwner}/${child.repoName}`}
+                  {child.title || formatRepoLabel(child.repoOwner, child.repoName)}
                 </span>
               </div>
               <Badge variant={statusBadgeVariant(child.status)} className="shrink-0">

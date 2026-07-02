@@ -140,6 +140,27 @@ export function getPermalink(
   return slackGet(token, "chat.getPermalink", { channel, message_ts: messageTs });
 }
 
+/**
+ * Post an ephemeral message visible only to `user` in `channel` (optionally
+ * threaded). Used to surface best-effort notices — e.g. "a run is already
+ * active for this thread" — without adding noise for everyone else.
+ */
+export function postEphemeral(
+  token: string,
+  channel: string,
+  user: string,
+  text: string,
+  options?: { thread_ts?: string; blocks?: unknown[] }
+): Promise<SlackEnvelope<{ message_ts: string }>> {
+  return slackPost(token, "chat.postEphemeral", {
+    channel,
+    user,
+    text,
+    thread_ts: options?.thread_ts,
+    blocks: options?.blocks,
+  });
+}
+
 export function updateMessage(
   token: string,
   channel: string,
@@ -173,6 +194,23 @@ export function removeReaction(
   return slackPost(token, "reactions.remove", { channel, timestamp: messageTs, name });
 }
 
+/** Subset of the `auth.test` response the bot uses to learn its own identity. */
+export interface SlackAuthTestResult {
+  user_id: string;
+  user?: string;
+  team_id?: string;
+  team?: string;
+  bot_id?: string;
+}
+
+/**
+ * Call `auth.test` to resolve the identity of the token's bot user. The
+ * slack-bot uses the returned `user_id` to strip and suppress its own mentions.
+ */
+export function authTest(token: string): Promise<SlackEnvelope<SlackAuthTestResult>> {
+  return slackPost(token, "auth.test");
+}
+
 export interface SlackChannelInfo {
   id: string;
   name: string;
@@ -185,6 +223,64 @@ export function getChannelInfo(
   channelId: string
 ): Promise<SlackEnvelope<{ channel: SlackChannelInfo }>> {
   return slackGet(token, "conversations.info", { channel: channelId });
+}
+
+/** Raw `conversations.list` channel shape (subset the picker consumes). */
+interface SlackConversation {
+  id: string;
+  name: string;
+  is_private?: boolean;
+  is_member?: boolean;
+}
+
+/** Normalized channel for the automation channel picker. */
+export interface SlackChannelListing {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  /** Whether the bot is a member — only member channels deliver messages. */
+  isMember: boolean;
+}
+
+/**
+ * List the workspace's public + private channels via `conversations.list`,
+ * following `response_metadata.next_cursor` pagination and excluding archived
+ * channels. Requires the bot token's `channels:read` (public) and `groups:read`
+ * (private) scopes. Returns the SlackEnvelope failure arm on any page's error.
+ */
+export async function listChannels(
+  token: string
+): Promise<SlackEnvelope<{ channels: SlackChannelListing[] }>> {
+  const channels: SlackChannelListing[] = [];
+  let cursor: string | undefined;
+  // Bound the loop defensively: 1000/page × 20 pages caps at 20k channels.
+  for (let page = 0; page < 20; page++) {
+    const query: Record<string, string> = {
+      types: "public_channel,private_channel",
+      exclude_archived: "true",
+      limit: "1000",
+    };
+    if (cursor) query.cursor = cursor;
+
+    const res = await slackGet<{
+      channels: SlackConversation[];
+      response_metadata?: { next_cursor?: string };
+    }>(token, "conversations.list", query);
+    if (!res.ok) return res;
+
+    for (const c of res.channels) {
+      channels.push({
+        id: c.id,
+        name: c.name,
+        isPrivate: Boolean(c.is_private),
+        isMember: Boolean(c.is_member),
+      });
+    }
+
+    cursor = res.response_metadata?.next_cursor || undefined;
+    if (!cursor) break;
+  }
+  return { ok: true, channels };
 }
 
 export interface SlackThreadMessage {

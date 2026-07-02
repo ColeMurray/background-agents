@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { applyMigrations, MIGRATIONS } from "./schema";
+import { applyMigrations, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlStorage, SqlResult } from "./repository";
 
 /**
@@ -130,8 +130,12 @@ describe("applyMigrations", () => {
       { name: "scm_access_token_encrypted" },
       { name: "scm_token_expires_at" },
     ]);
-    // Migration 24 checks session columns — include base_branch so it skips the rename
-    mock.setData("PRAGMA table_info(session)", [{ name: "base_branch" }]);
+    // Migration 24 checks session columns.
+    mock.setData("PRAGMA table_info(session)", [
+      { name: "repo_owner", notnull: 0 },
+      { name: "repo_name", notnull: 0 },
+      { name: "base_branch", notnull: 0 },
+    ]);
     const originalExec = mock.sql.exec.bind(mock.sql);
     mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
       if (query.includes("ALTER TABLE")) {
@@ -187,5 +191,20 @@ describe("applyMigrations", () => {
     for (const insert of inserts) {
       expect(insert.params[1]).toBe(1000);
     }
+  });
+
+  it("does not execute transaction-control statements in migrations", () => {
+    applyMigrations(mock.sql);
+
+    const transactionControlStatements = mock.calls.filter((c) =>
+      /\b(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(c.query.trim())
+    );
+    expect(transactionControlStatements).toEqual([]);
+  });
+
+  it("keeps repository context consistent at the session table boundary", () => {
+    expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
+    expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");
+    expect(SCHEMA_SQL).toContain("repo_id IS NULL AND base_branch IS NULL");
   });
 });

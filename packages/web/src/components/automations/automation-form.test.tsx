@@ -58,6 +58,13 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+// The SlackChannelPicker (rendered for slack_channel conditions) lists channels via
+// useSession-backed SWR. The form tests don't exercise channel listing, so stub it out
+// to avoid needing a SessionProvider.
+vi.mock("@/hooks/use-slack-channels", () => ({
+  useSlackChannels: () => ({ channels: [], loading: false }),
+}));
+
 vi.mock("@/components/ui/combobox", () => ({
   Combobox: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
@@ -135,6 +142,131 @@ describe("automation cron submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("submits repo-less automations without repo fields", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Check incidents",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Inspect recent alerts and send a summary.",
+        }}
+      />
+    );
+
+    expect(screen.getByText("Select repository")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("No repository"));
+
+    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      name: "Check incidents",
+      instructions: "Inspect recent alerts and send a summary.",
+    });
+    expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].repoName).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].baseBranch).toBeUndefined();
+  });
+
+  it("omits repository fields when edit mode leaves repository context unchanged", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Daily review",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Review the repo.",
+          triggerType: "schedule",
+        }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].repoName).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].baseBranch).toBe("main");
+  });
+
+  it("submits null repository fields when edit mode clears repository context", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Daily review",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Review the repo.",
+          triggerType: "schedule",
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText("No repository"));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      repoOwner: null,
+      repoName: null,
+      baseBranch: null,
+    });
+  });
+
+  it("disables repo-less selection for GitHub event automations", () => {
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Review new PRs",
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+        }}
+      />
+    );
+    const noRepositoryRadio = () =>
+      container.querySelector<HTMLInputElement>('input[value="none"]')!;
+    const singleRepositoryRadio = () =>
+      container.querySelector<HTMLInputElement>('input[value="repository"]')!;
+
+    fireEvent.click(screen.getByText("No repository"));
+    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /GitHub Event/ }));
+
+    expect(noRepositoryRadio()).toBeDisabled();
+    expect(singleRepositoryRadio()).toBeChecked();
+    expect(screen.getByText("Select repository")).toBeInTheDocument();
+  });
+
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
     const onSubmit = vi.fn();
     const { container } = render(
@@ -162,6 +294,82 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       triggerConfig: { conditions: [] },
     });
+  });
+});
+
+describe("slack_event automation", () => {
+  const slackBase = {
+    name: "Triage Slack reports",
+    repoOwner: "open-inspect",
+    repoName: "background-agents",
+    baseBranch: "main",
+    model: "openai/gpt-5.4",
+    instructions: "Triage the reported issue.",
+    triggerType: "slack_event" as const,
+  };
+
+  const validConditions = {
+    conditions: [
+      { type: "slack_channel" as const, operator: "any_of" as const, value: ["C1"] },
+      { type: "text_match" as const, operator: "contains" as const, value: { pattern: "deploy" } },
+    ],
+  };
+
+  it("blocks submit until a slack_channel condition exists", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: { conditions: [] } }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+  });
+
+  it("submits a valid slack_event", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      triggerType: "slack_event",
+      triggerConfig: validConditions,
+    });
+  });
+
+  it("submits a slack_event with only a slack_channel condition (no text_match)", () => {
+    const onSubmit = vi.fn();
+    const channelOnly = {
+      conditions: [{ type: "slack_channel" as const, operator: "any_of" as const, value: ["C1"] }],
+    };
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: channelOnly }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ triggerConfig: channelOnly });
   });
 });
 

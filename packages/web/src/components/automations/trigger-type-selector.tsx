@@ -31,6 +31,11 @@ const TRIGGER_OPTIONS: TriggerOption[] = [
     description: "Trigger on PR, issue, or CI events",
   },
   {
+    type: "slack_event",
+    label: "Slack Message",
+    description: "Trigger on messages in watched channels",
+  },
+  {
     type: "linear_event",
     label: "Linear Event",
     description: "Trigger on Linear issue events",

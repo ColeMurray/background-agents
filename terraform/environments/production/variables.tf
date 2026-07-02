@@ -199,6 +199,12 @@ variable "enable_slack_bot" {
   }
 }
 
+variable "slack_triggers_enabled" {
+  description = "Kill switch for Slack channel-message automation triggers. When false (default), the slack-bot ignores channel messages and forwards nothing — the feature ships dark. Flip to true only after completing the rollout verification."
+  type        = bool
+  default     = false
+}
+
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string
@@ -343,6 +349,35 @@ variable "daytona_target" {
   default     = ""
 }
 
+variable "opencomputer_api_url" {
+  description = "Base URL for the OpenComputer REST API (e.g. https://api.opencomputer.dev)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_api_url)) > 0
+    error_message = "opencomputer_api_url must be set when sandbox_provider = 'opencomputer'."
+  }
+}
+
+variable "opencomputer_api_key" {
+  description = "API key for OpenComputer REST API (X-API-Key auth)"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_api_key)) > 0
+    error_message = "opencomputer_api_key must be set when sandbox_provider = 'opencomputer'."
+  }
+}
+
+variable "opencomputer_template" {
+  description = "Optional manual OpenComputer template/snapshot name to pin. When empty, Terraform builds and manages the base snapshot from the runtime source (like the Vercel and Modal base images)."
+  type        = string
+  default     = ""
+}
+
 variable "vercel_sandbox_token" {
   description = "Vercel API token for the Vercel Sandbox API"
   type        = string
@@ -407,14 +442,20 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', or 'vercel'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', or 'opencomputer'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', or 'vercel'."
+    condition     = contains(["modal", "daytona", "vercel", "opencomputer"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', or 'opencomputer'."
   }
+}
+
+variable "sandbox_inactivity_timeout_ms" {
+  description = "Milliseconds of sandbox inactivity before OpenInspect snapshots and stops the sandbox when no clients are connected."
+  type        = number
+  default     = 600000
 }
 
 variable "web_platform" {

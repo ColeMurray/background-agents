@@ -37,9 +37,13 @@ notification controls and safety notes are covered near the end.
 | Set personal defaults       | Use the Slack app's **Home** tab for model, reasoning effort, and branch   |
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
 | Ask the agent to post Slack | Enable agent notifications, then explicitly ask the agent to post to Slack |
+| Auto-trigger from a channel | Opt-in: watch a channel so matching messages start an automation           |
 
-Open-Inspect does not use slash commands today. In channels, it responds to `@mentions`, not every
-message posted in the channel.
+Open-Inspect does not use slash commands today. In channels, it normally responds only to
+`@mentions`, not to every message. The optional
+[channel-message triggers](#channel-message-triggers) feature can additionally start an
+**automation** from non-mention messages that match conditions you configure; it is disabled by
+default and must be enabled by an operator.
 
 ---
 
@@ -120,7 +124,7 @@ A top-level Slack request starts a new Slack thread. Reply in that thread to sen
 to the same Open-Inspect session. This applies in both channels and DMs: in a direct message, the
 follow-up still needs to be a thread reply, not a fresh top-level DM.
 
-Open-Inspect keeps the Slack thread connected to the session for about 24 hours. If you reply after
+Open-Inspect keeps the Slack thread connected to the session for about 7 days. If you reply after
 that mapping expires, or if you reply outside the thread, the bot may start repository selection
 again and create a new session.
 
@@ -181,9 +185,9 @@ Slack thread continue the existing session.
 
 ## Optional Agent Notifications
 
-Slack-started sessions always get their normal thread replies and completion messages. Agent
-notifications are separate: they let an agent post an extra message to a Slack channel when you
-explicitly ask for it:
+Interactive Slack sessions (DMs and `@mentions`) always get their normal thread replies and
+completion messages. Agent notifications are separate: they let an agent post an extra message to a
+Slack channel when you explicitly ask for it:
 
 ```text
 When you finish, post a short summary to #eng-updates.
@@ -217,6 +221,67 @@ The Slack settings page includes a workspace-wide mentions policy for direct use
 
 Broadcast mention tokens such as `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^...>` are
 always stripped from agent notification messages.
+
+---
+
+## Channel Message Triggers
+
+Channel message triggers let an **automation** start a session when someone posts a matching message
+in a watched channel — without `@mentioning` the bot. This is distinct from the interactive
+`@mention` flow: it is driven by [automations](../AUTOMATIONS.md#slack-message-triggers) with
+keyword, substring, or regex conditions.
+
+The feature is **disabled by default** and gated by the `SLACK_TRIGGERS_ENABLED` deployment flag.
+When the flag is off, the bot ignores channel messages and forwards nothing; authoring a Slack
+automation in the web app is still allowed, but it will not run until the flag is enabled.
+
+### Slack app setup
+
+In addition to the standard event subscription the bot already uses, enable the bot to receive
+ordinary channel messages:
+
+- **Event subscriptions**: subscribe to `message.channels` (public channels). Add `message.groups`
+  if you also want to watch private channels.
+- **Bot token scopes**: `channels:history` (public) and, for private channels, `groups:history`.
+- Invite the bot to every channel you intend to watch. The bot only sees messages in channels it is
+  a member of.
+
+Then, in the web app, create a **Slack Message** automation and add a **Slack Channel** condition
+(pick channels by name; channel IDs also work as a fallback). Optionally add a **Message Text**
+condition to filter by content. See
+[Slack Message Triggers](../AUTOMATIONS.md#slack-message-triggers) for the full field reference.
+
+### Run feedback
+
+- A triggering message gets a 👀 reaction while its run is in flight.
+- When the run finishes, the agent's final response is posted into the triggering message's thread
+  (with links to any pull requests and the full session), and the reaction is cleared. A failed run
+  posts a short failure notice instead.
+- Every reply in a thread continues the same session — during the run and after it finishes — for up
+  to 7 days after the thread's first trigger, like replying in an `@mention` thread. The reply is
+  routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone idle),
+  gets its own 👀 reaction and in-thread response, and does **not** need to match the trigger's text
+  condition — conditions gate new runs, not replies that continue a thread. A reply more than 7 days
+  after the first trigger starts a fresh run.
+
+### Threat model
+
+Channel triggers widen who can start a coding session, so weigh the following before enabling them:
+
+- **Any member of a watched channel can trigger a run** simply by posting a matching message. Treat
+  every watched channel as a list of people authorized to start sessions against the automation's
+  repository.
+- **Prefer an allowlist.** Add a **Slack User** condition (`include`) so only specific people can
+  trigger the automation, and keep watched channels small and trusted.
+- **Message text reaches the agent.** The triggering message becomes part of the prompt. Scope the
+  automation's instructions defensively and rely on the deployment's repository access boundary —
+  the same GitHub App installation limits used elsewhere apply here too.
+- **Regex conditions run untimed.** Conditions are evaluated with the native regex engine and no
+  per-match timeout; a pathological pattern is an operator-authored risk. Patterns are length-capped
+  and validated at save time, and the `SLACK_TRIGGERS_ENABLED` flag is the kill switch if a bad
+  pattern degrades automation dispatch.
+- **The kill switch is immediate.** Setting `SLACK_TRIGGERS_ENABLED` back to `false` stops the bot
+  from ingesting or forwarding channel messages right away.
 
 ---
 
@@ -261,8 +326,8 @@ dropdown expires after one hour.
 
 ### A follow-up started a new session
 
-Reply inside the same Slack thread as the original request. Thread-to-session mappings last about 24
-hours, so older threads may need a fresh request.
+Reply inside the same Slack thread as the original request. Thread-to-session mappings last about 7
+days, so older threads may need a fresh request.
 
 ### The wrong model or branch was used
 

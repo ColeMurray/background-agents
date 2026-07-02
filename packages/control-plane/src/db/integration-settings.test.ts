@@ -890,6 +890,23 @@ describe("IntegrationSettingsStore", () => {
       });
     });
 
+    it("round-trips a global slack default model", async () => {
+      await store.setGlobal("slack", {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.model).toBe("anthropic/claude-sonnet-4-6");
+    });
+
+    it("rejects invalid slack default models", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { model: "not-a-real-model" },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("accepts every valid mentionsPolicy value at global level", async () => {
       for (const policy of ["allow", "escape", "strip"] as const) {
         await store.setGlobal("slack", { defaults: { mentionsPolicy: policy } });
@@ -935,6 +952,14 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setRepoSettings("slack", "acme/widgets", {
           mentionsPolicy: "escape",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects model at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          model: "anthropic/claude-sonnet-4-6",
         } as unknown as { agentNotificationsEnabled?: boolean })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });

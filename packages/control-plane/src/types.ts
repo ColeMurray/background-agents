@@ -9,6 +9,7 @@ import type {
   ParticipantRole,
   SessionStatus,
 } from "@open-inspect/shared";
+import { z } from "zod";
 
 export type {
   ArtifactType,
@@ -61,7 +62,9 @@ export interface Env {
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
+  ANTHROPIC_API_KEY?: string; // Anthropic API key for Claude models
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
+  OPENCOMPUTER_API_KEY?: string; // OpenComputer REST API key (X-API-Key auth + HMAC derivation)
   VERCEL_TOKEN?: string; // Vercel API access token for Sandbox API
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
@@ -82,7 +85,7 @@ export interface Env {
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", or "vercel"
+  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", or "opencomputer"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -91,6 +94,8 @@ export interface Env {
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
   DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES?: string; // Daytona archive interval in minutes
   DAYTONA_TARGET?: string; // Optional Daytona target name
+  OPENCOMPUTER_API_URL?: string; // OpenComputer REST API base URL
+  OPENCOMPUTER_TEMPLATE?: string; // Declarative template containing sandbox runtime
   VERCEL_PROJECT_ID?: string; // Vercel project ID used for Sandbox API scope
   VERCEL_TEAM_ID?: string; // Optional Vercel team ID used for Sandbox API scope
   VERCEL_BASE_SNAPSHOT_ID?: string; // Optional prebuilt base snapshot with sandbox runtime
@@ -178,10 +183,12 @@ export interface GitHubUser {
   avatar_url: string;
 }
 
-export interface GitHubTokenResponse {
-  access_token: string;
-  token_type: string;
-  scope: string;
-  refresh_token?: string;
-  expires_in?: number;
-}
+export const githubTokenResponseSchema = z.object({
+  access_token: z.string(),
+  token_type: z.string(),
+  scope: z.string(),
+  refresh_token: z.string().optional(),
+  expires_in: z.number().optional(),
+});
+
+export type GitHubTokenResponse = z.infer<typeof githubTokenResponseSchema>;

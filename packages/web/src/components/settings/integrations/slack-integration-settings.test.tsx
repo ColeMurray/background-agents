@@ -180,6 +180,52 @@ describe("SlackIntegrationSettings", () => {
     expect(body.settings.defaults?.mentionsPolicy).toBe("escape");
   });
 
+  it("saving a selected default model includes the model in global defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    const modelSection = screen.getByText("Default model").closest("div")!;
+    await user.click(within(modelSection).getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: "GPT 5.2" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
+    expect(body.settings.defaults?.model).toBe("openai/gpt-5.2");
+  });
+
+  it("clearing the selected default model omits model while preserving other defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          model: "openai/gpt-5.2",
+          mentionsPolicy: "strip",
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.click(screen.getByRole("button", { name: /use system default/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
+    expect(body.settings.defaults).toEqual({
+      agentNotificationsEnabled: true,
+      mentionsPolicy: "strip",
+      routingRules: [{ keyword: "frontend", target: "acme/web" }],
+    });
+  });
+
   it("renders populated settings with master switch on and policy 'strip'", () => {
     setupSWR({
       global: {

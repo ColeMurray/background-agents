@@ -11,6 +11,7 @@ import {
   type AutomationTriggerType,
   type AutomationEventSource,
   type TriggerCondition,
+  type TriggerConfig,
 } from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
@@ -21,6 +22,7 @@ import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { RadioCard } from "@/components/ui/form-controls";
 import {
   Select,
   SelectContent,
@@ -33,6 +35,7 @@ import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import { ConditionBuilder } from "./condition-builder";
 import { cn } from "@/lib/utils";
+import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -56,6 +59,10 @@ const DEFAULT_REASONING_VALUE = "__default__";
 // packages/control-plane/src/routes/automations.ts.
 const INSTRUCTIONS_MAX_LENGTH = 15000;
 const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
+
+function requiresRepositoryContext(triggerType: AutomationTriggerType): boolean {
+  return triggerType === "github_event" || triggerType === "linear_event";
+}
 
 const toOption = (tz: string) => ({ value: tz, label: tz.replace(/_/g, " ") });
 
@@ -81,9 +88,9 @@ function FieldDescription({
 
 export interface AutomationFormValues {
   name: string;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  baseBranch?: string | null;
   model: string;
   reasoningEffort: string | null;
   scheduleCron: string;
@@ -91,7 +98,7 @@ export interface AutomationFormValues {
   instructions: string;
   triggerType: AutomationTriggerType;
   eventType?: string;
-  triggerConfig?: { conditions: TriggerCondition[] };
+  triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
 }
 
@@ -105,8 +112,16 @@ interface AutomationFormProps {
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
+  const initialRepositoryKey =
+    initialValues?.repoOwner && initialValues?.repoName
+      ? `${initialValues.repoOwner}/${initialValues.repoName}`.toLowerCase()
+      : "";
+  const initialUsesRepository = initialRepositoryKey.length > 0;
 
   const [name, setName] = useState(initialValues?.name ?? "");
+  const [usesRepository, setUsesRepository] = useState(
+    mode === "create" ? true : initialUsesRepository
+  );
   const [selectedRepo, setSelectedRepo] = useState(
     initialValues?.repoOwner && initialValues?.repoName
       ? `${initialValues.repoOwner}/${initialValues.repoName}`
@@ -114,7 +129,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   );
   const repoOwner = selectedRepo.split("/")[0] ?? "";
   const repoName = selectedRepo.split("/")[1] ?? "";
-  const { branches, loading: loadingBranches } = useBranches(repoOwner, repoName);
+  const { branches, loading: loadingBranches } = useBranches(
+    usesRepository ? repoOwner : "",
+    usesRepository ? repoName : ""
+  );
   const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
   const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState(initialValues?.reasoningEffort ?? "");
@@ -126,6 +144,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>(
     initialValues?.triggerType ?? "schedule"
   );
+  const repositoryRequired = requiresRepositoryContext(triggerType);
   const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
   const [eventTypeError, setEventTypeError] = useState("");
   const [conditions, setConditions] = useState<TriggerCondition[]>(
@@ -134,7 +153,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [sentryClientSecret, setSentryClientSecret] = useState("");
 
   const isSchedule = triggerType === "schedule";
+  const isSlack = triggerType === "slack_event";
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
+  // Mirror the server rule: a slack_event needs a slack_channel. A text_match is
+  // optional — without one it fires on every message in the watched channel.
+  const slackConditionsValid = !isSlack || conditions.some((c) => c.type === "slack_channel");
 
   // The model we display and submit. The selector only lists enabled models, so
   // a disabled default (blank create), a disabled saved model (edit), or a
@@ -170,6 +193,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     }
   }, [showEventTypeSelector, eventType]);
 
+  useEffect(() => {
+    if (repositoryRequired && !usesRepository) {
+      setUsesRepository(true);
+    }
+  }, [repositoryRequired, usesRepository]);
+
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
       setSelectedRepo(repoFullName);
@@ -179,13 +208,33 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     [repos]
   );
 
+  const handleRepositorySelectionChange = useCallback(
+    (nextUsesRepository: boolean) => {
+      if (repositoryRequired && !nextUsesRepository) return;
+      setUsesRepository(nextUsesRepository);
+      if (!nextUsesRepository) {
+        setSelectedRepo("");
+        setBaseBranch("");
+      }
+    },
+    [repositoryRequired]
+  );
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // Block until enabled models load: resolvedModel can't coerce against an
     // unknown set, so submitting now could persist a disabled model.
     if (loadingModels) return;
-    if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
+    if (
+      !name.trim() ||
+      (usesRepository && !selectedRepo) ||
+      !instructions.trim() ||
+      !isScheduleValid
+    ) {
+      return;
+    }
     if (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim()) return;
+    if (!slackConditionsValid) return;
     if (showEventTypeSelector && !eventType) {
       setEventTypeError("Event type is required.");
       return;
@@ -193,9 +242,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
     const values: AutomationFormValues = {
       name: name.trim(),
-      repoOwner,
-      repoName,
-      baseBranch,
       model: resolvedModel,
       reasoningEffort:
         reasoningEffort && isValidReasoningEffort(resolvedModel, reasoningEffort)
@@ -206,6 +252,30 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       instructions: instructions.trim(),
       triggerType,
     };
+    if (mode === "create") {
+      if (usesRepository) {
+        values.repoOwner = repoOwner;
+        values.repoName = repoName;
+        values.baseBranch = baseBranch;
+      }
+    } else {
+      const currentRepositoryKey = usesRepository ? selectedRepo.toLowerCase() : "";
+      const repositoryContextChanged = currentRepositoryKey !== initialRepositoryKey;
+
+      if (repositoryContextChanged) {
+        if (usesRepository) {
+          values.repoOwner = repoOwner;
+          values.repoName = repoName;
+          values.baseBranch = baseBranch;
+        } else {
+          values.repoOwner = null;
+          values.repoName = null;
+          values.baseBranch = null;
+        }
+      } else if (usesRepository) {
+        values.baseBranch = baseBranch;
+      }
+    }
 
     if (!isSchedule) {
       // Don't send schedule fields for non-schedule types
@@ -221,10 +291,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       }
     }
 
-    if (mode === "edit") {
-      delete (values as Partial<AutomationFormValues>).repoOwner;
-      delete (values as Partial<AutomationFormValues>).repoName;
-    }
     onSubmit(values);
   };
 
@@ -258,6 +324,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               webhook: "Inbound Webhook",
               github_event: "GitHub Event",
               linear_event: "Linear Event",
+              slack_event: "Slack Message",
             }[triggerType] || triggerType}
             <span className="text-xs ml-2">(cannot be changed)</span>
           </div>
@@ -281,69 +348,100 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         />
       </div>
 
-      {/* Repository */}
+      {/* Repository Configuration */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Repository</label>
-        <Combobox
-          value={selectedRepo}
-          onChange={handleRepoChange}
-          items={repos.map((repo) => ({
-            value: repo.fullName,
-            label: repo.name,
-            description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
-          }))}
-          searchable
-          searchPlaceholder="Search repositories..."
-          filterFn={(option, query) =>
-            option.label.toLowerCase().includes(query) ||
-            (option.description?.toLowerCase().includes(query) ?? false) ||
-            String(option.value).toLowerCase().includes(query)
-          }
-          dropdownWidth="w-72"
-          disabled={loadingRepos || mode === "edit"}
-          triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
-        >
-          <RepoIcon className="w-4 h-4 text-muted-foreground" />
-          <span className="truncate flex-1 text-left">
-            {loadingRepos ? "Loading..." : displayRepoName}
-          </span>
-          <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-        </Combobox>
-        <FieldDescription>
-          Runs clone and execute against this repository.
-          {mode === "edit" ? " The repository cannot be changed after creation." : ""}
-        </FieldDescription>
+        <label className="block text-sm font-medium text-foreground mb-1.5">
+          Repository Configuration
+        </label>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <RadioCard
+            name="repositoryContext"
+            value="repository"
+            checked={usesRepository}
+            onChange={() => handleRepositorySelectionChange(true)}
+            label="Single repository"
+            description="Clone one repository and branch for each run."
+          />
+          <RadioCard
+            name="repositoryContext"
+            value="none"
+            checked={!usesRepository}
+            onChange={() => handleRepositorySelectionChange(false)}
+            disabled={repositoryRequired}
+            label={NO_REPOSITORY_LABEL}
+            description={
+              repositoryRequired
+                ? "Repository-scoped triggers need a repository."
+                : "Run without cloning a repository."
+            }
+          />
+        </div>
       </div>
 
+      {/* Repository */}
+      {usesRepository && (
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-1.5">Repository</label>
+          <Combobox
+            value={selectedRepo}
+            onChange={handleRepoChange}
+            items={repos.map((repo) => ({
+              value: repo.fullName,
+              label: repo.name,
+              description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
+            }))}
+            searchable
+            searchPlaceholder="Search repositories..."
+            filterFn={(option, query) =>
+              option.label.toLowerCase().includes(query) ||
+              (option.description?.toLowerCase().includes(query) ?? false) ||
+              String(option.value).toLowerCase().includes(query)
+            }
+            dropdownWidth="w-72"
+            disabled={loadingRepos}
+            triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+          >
+            <RepoIcon className="w-4 h-4 text-muted-foreground" />
+            <span className="truncate flex-1 text-left">
+              {loadingRepos ? "Loading..." : displayRepoName}
+            </span>
+            <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
+          </Combobox>
+          <FieldDescription>Runs clone and execute against this repository.</FieldDescription>
+        </div>
+      )}
+
       {/* Branch */}
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Branch</label>
-        <Combobox
-          value={baseBranch}
-          onChange={setBaseBranch}
-          items={branches.map((b) => ({
-            value: b.name,
-            label: b.name,
-          }))}
-          searchable
-          searchPlaceholder="Search branches..."
-          filterFn={(option, query) => option.label.toLowerCase().includes(query)}
-          dropdownWidth="w-56"
-          disabled={!selectedRepo || loadingBranches}
-          triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
-        >
-          <BranchIcon className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="truncate flex-1 text-left">
-            {loadingBranches ? "Loading..." : baseBranch || "Select branch"}
-          </span>
-          <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-        </Combobox>
-        <FieldDescription>
-          Default branch checked out when a session run starts. Selecting a repository resets this
-          to that repo&apos;s default branch. To filter pull requests by merge target, add a Target
-          branch condition below; Head branch matches the PR source branch.
-        </FieldDescription>
-      </div>
+      {usesRepository && (
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-1.5">Branch</label>
+          <Combobox
+            value={baseBranch}
+            onChange={setBaseBranch}
+            items={branches.map((b) => ({
+              value: b.name,
+              label: b.name,
+            }))}
+            searchable
+            searchPlaceholder="Search branches..."
+            filterFn={(option, query) => option.label.toLowerCase().includes(query)}
+            dropdownWidth="w-56"
+            disabled={!selectedRepo || loadingBranches}
+            triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+          >
+            <BranchIcon className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="truncate flex-1 text-left">
+              {loadingBranches ? "Loading..." : baseBranch || "Select branch"}
+            </span>
+            <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
+          </Combobox>
+          <FieldDescription>
+            Default branch checked out when a session run starts. Selecting a repository resets this
+            to that repo&apos;s default branch. To filter pull requests by merge target, add a
+            Target branch condition below; Head branch matches the PR source branch.
+          </FieldDescription>
+        </div>
+      )}
 
       {/* Model */}
       <div>
@@ -511,6 +609,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             Optional filters on incoming events. When you add conditions, every condition must pass
             before a run starts.
           </FieldDescription>
+          {isSlack && !slackConditionsValid && (
+            <p className="mt-1 text-xs text-destructive">
+              Slack triggers require at least one Slack Channel condition.
+            </p>
+          )}
         </div>
       )}
 
@@ -565,9 +668,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             submitting ||
             loadingModels ||
             !name.trim() ||
-            !selectedRepo ||
+            (usesRepository && !selectedRepo) ||
             !instructions.trim() ||
             !isScheduleValid ||
+            !slackConditionsValid ||
             (showEventTypeSelector && !eventType) ||
             (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())
           }

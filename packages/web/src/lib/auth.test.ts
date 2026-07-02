@@ -6,7 +6,7 @@ import {
   applyJwtClaims,
   applySessionUser,
   getStaticSignInReason,
-  getVerifiedPrimaryGitHubEmail,
+  getVerifiedGitHubEmails,
 } from "./auth";
 
 vi.mock("@open-inspect/shared", () => ({
@@ -268,10 +268,99 @@ describe("authOptions signIn", () => {
     // The org fallback is GitHub-only, so a non-GitHub token never reaches GitHub.
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("admits a GitHub user whose non-primary verified email matches the domain allowlist", async () => {
+    // The core behavior of PR #829: the gate considers ALL verified emails, not
+    // just the primary. Here the primary (personal.com) does not match but a
+    // non-primary verified company.com email does. Before the fix this user was
+    // silently denied because only user.email (the primary) was checked.
+    const { authOptions } = await importAuthModule({
+      ALLOWED_EMAIL_DOMAINS: "company.com",
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "github", access_token: "gho_token" },
+        profile: {
+          login: "octocat",
+          verifiedEmails: [
+            { email: "octo@personal.com", primary: true, verified: true, visibility: "private" },
+            { email: "octo@company.com", primary: false, verified: true, visibility: null },
+          ],
+        },
+        user: { email: "octo@personal.com" },
+      } as never)
+    ).resolves.toBe(true);
+
+    expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
+      login: "octocat",
+      decision: "allow",
+      reason: "email_domain_allowlist",
+    });
+  });
+
+  it("denies a GitHub user when none of the verified emails match the allowlists", async () => {
+    const { authOptions } = await importAuthModule({
+      ALLOWED_EMAIL_DOMAINS: "company.com",
+      ALLOWED_EMAILS: "exact@gmail.com",
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "github", access_token: "gho_token" },
+        profile: {
+          login: "stranger",
+          verifiedEmails: [
+            {
+              email: "stranger@personal.com",
+              primary: true,
+              verified: true,
+              visibility: "private",
+            },
+            { email: "stranger@other.com", primary: false, verified: true, visibility: null },
+          ],
+        },
+        user: { email: "stranger@personal.com" },
+      } as never)
+    ).resolves.toBe(false);
+
+    expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
+      login: "stranger",
+      decision: "deny",
+      reason: "no_matching_policy",
+    });
+  });
+
+  it("does not trust user.email for the GitHub email/domain gate when verified emails are unavailable", async () => {
+    // Fail-closed guard: if the verified-email fetch came back empty (e.g.
+    // /user/emails 403'd for lack of the Email-addresses permission), the gate
+    // must NOT fall back to user.email — that value is not independently verified
+    // here. A user.email on an allowed domain must still be denied.
+    const { authOptions } = await importAuthModule({
+      ALLOWED_EMAIL_DOMAINS: "company.com",
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "github", access_token: "gho_token" },
+        profile: { login: "octocat", verifiedEmails: [] },
+        user: { email: "octo@company.com" },
+      } as never)
+    ).resolves.toBe(false);
+
+    expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
+      login: "octocat",
+      decision: "deny",
+      reason: "no_matching_policy",
+    });
+  });
 });
 
-describe("getVerifiedPrimaryGitHubEmail", () => {
-  it("returns the verified primary GitHub email", async () => {
+describe("getVerifiedGitHubEmails", () => {
+  it("returns all verified emails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify([
@@ -281,10 +370,13 @@ describe("getVerifiedPrimaryGitHubEmail", () => {
       )
     );
 
-    await expect(getVerifiedPrimaryGitHubEmail("token")).resolves.toBe("user@company.com");
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([
+      { email: "other@example.com", primary: false, verified: true, visibility: "private" },
+      { email: "user@company.com", primary: true, verified: true, visibility: "private" },
+    ]);
   });
 
-  it("rejects an unverified primary GitHub email", async () => {
+  it("excludes unverified emails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify([
@@ -293,13 +385,40 @@ describe("getVerifiedPrimaryGitHubEmail", () => {
       )
     );
 
-    await expect(getVerifiedPrimaryGitHubEmail("token")).resolves.toBeNull();
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
   });
 
-  it("returns null when GitHub email lookup fails", async () => {
+  it("returns empty array when GitHub email lookup fails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
 
-    await expect(getVerifiedPrimaryGitHubEmail("token")).resolves.toBeNull();
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+  });
+
+  it("hints at the missing Email-addresses permission on a 403", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
+
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-email-fetch] request failed",
+      expect.objectContaining({
+        status: 403,
+        hint: expect.stringContaining("Email addresses"),
+      })
+    );
+  });
+
+  it("does not attach the permission hint on non-403 failures", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 500 }));
+
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-email-fetch] request failed",
+      expect.not.objectContaining({ hint: expect.anything() })
+    );
   });
 });
 
@@ -312,7 +431,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: false } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -323,7 +442,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "false" } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -334,7 +453,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: {} as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -345,7 +464,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: true } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBe("email_allowlist");
@@ -356,7 +475,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "true" } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBe("email_allowlist");
@@ -367,7 +486,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "True" } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBe("email_allowlist");
@@ -378,7 +497,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: true } as unknown as Profile,
-          email: "stranger@gmail.com",
+          emails: ["stranger@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -391,7 +510,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "github",
           profile: { login: "octocat" } as unknown as Profile,
-          email: "octo@company.com",
+          emails: ["octo@company.com"],
           config: cfg({ allowedUsers: ["octocat"] }),
         })
       ).toBe("username_allowlist");
@@ -402,7 +521,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "github",
           profile: { login: "stranger" } as unknown as Profile,
-          email: "stranger@other.com",
+          emails: ["stranger@other.com"],
           config: cfg({ allowedDomains: ["company.com"], allowedUsers: ["octocat"] }),
         })
       ).toBeNull();
@@ -413,7 +532,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: undefined,
           profile: { login: "octocat" } as unknown as Profile,
-          email: "octo@company.com",
+          emails: ["octo@company.com"],
           config: cfg({ allowedUsers: ["octocat"] }),
         })
       ).toBe("username_allowlist");
@@ -429,7 +548,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "gitlab",
           profile: { email_verified: true } as unknown as Profile,
-          email: "user@company.com",
+          emails: ["user@company.com"],
           config: cfg({ allowedDomains: ["company.com"] }),
         })
       ).toBeNull();

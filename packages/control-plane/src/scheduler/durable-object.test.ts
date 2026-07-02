@@ -21,6 +21,14 @@ vi.mock("cloudflare:workers", () => ({
   },
 }));
 
+const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
+
+vi.mock("../source-control", () => ({
+  createSourceControlProviderFromEnv: vi.fn(() => ({
+    checkRepositoryAccess: mockCheckRepositoryAccess,
+  })),
+}));
+
 // Must import AFTER vi.mock so the hoisted mock is in place
 const { SchedulerDO } = await import("./durable-object");
 
@@ -31,6 +39,9 @@ function createMockStore() {
   return {
     getOverdueAutomations: vi.fn().mockResolvedValue([]),
     getActiveRunForAutomation: vi.fn().mockResolvedValue(null),
+    getActiveRunForKey: vi.fn().mockResolvedValue(null),
+    getLatestSteerableRunForThread: vi.fn().mockResolvedValue(null),
+    recordSkippedRun: vi.fn().mockResolvedValue(undefined),
     createRunAndAdvanceSchedule: vi.fn().mockResolvedValue(undefined),
     insertRun: vi.fn().mockResolvedValue(undefined),
     updateRun: vi.fn().mockResolvedValue(undefined),
@@ -73,6 +84,15 @@ vi.mock("../db/user-store", () => ({
   UserStore: vi.fn().mockImplementation(function () {
     return {
       getIdentity: mockUserStoreGetIdentity,
+    };
+  }),
+}));
+
+const mockGetSlackAutomationsForChannel = vi.fn().mockResolvedValue([]);
+vi.mock("../db/slack-channel-store", () => ({
+  SlackChannelStore: vi.fn().mockImplementation(function () {
+    return {
+      getSlackAutomationsForChannel: mockGetSlackAutomationsForChannel,
     };
   }),
 }));
@@ -154,6 +174,33 @@ async function getInitBody(fetchMock: ReturnType<typeof vi.fn>): Promise<Record<
   return JSON.parse(String(init?.body)) as Record<string, unknown>;
 }
 
+async function getPromptBody(
+  fetchMock: ReturnType<typeof vi.fn>
+): Promise<Record<string, unknown>> {
+  const promptCall = fetchMock.mock.calls.find((call) => {
+    const input = call[0];
+    const url =
+      typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+    return new URL(url).pathname === "/internal/prompt";
+  });
+
+  expect(promptCall).toBeDefined();
+  const [input, init] = promptCall!;
+  if (input instanceof Request) {
+    return (await input.json()) as Record<string, unknown>;
+  }
+  return JSON.parse(String(init?.body)) as Record<string, unknown>;
+}
+
+function promptCallCount(fetchMock: ReturnType<typeof vi.fn>): number {
+  return fetchMock.mock.calls.filter((call) => {
+    const input = call[0];
+    const url =
+      typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+    return new URL(url).pathname === "/internal/prompt";
+  }).length;
+}
+
 function createEnv(overrides?: Partial<Env>): Env {
   const sessionStub = createMockSessionStub();
   return {
@@ -200,12 +247,61 @@ const sampleAutomation = {
   deleted_at: null,
 };
 
+const sampleSlackAutomation = {
+  ...sampleAutomation,
+  id: "auto-slack",
+  name: "Slack triage",
+  trigger_type: "slack_event",
+  schedule_cron: null,
+  next_run_at: null,
+  event_type: "message.posted",
+  trigger_config: JSON.stringify({
+    conditions: [
+      { type: "slack_channel", operator: "any_of", value: ["C1"] },
+      { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
+    ],
+  }),
+};
+
+function makeSlackEvent(overrides?: Record<string, unknown>) {
+  const ts = "1700000000.000200";
+  return {
+    source: "slack",
+    eventType: "message.posted",
+    triggerKey: `slack:msg:C1:${ts}`,
+    concurrencyKey: "slack:C1:thread-root",
+    contextBlock: "A message was posted in #ops.",
+    meta: {},
+    channelId: "C1",
+    threadTs: "1700000000.000100",
+    ts,
+    actorUserId: "U1",
+    text: "please deploy the api",
+    ...overrides,
+  };
+}
+
+function slackEventRequest(overrides?: Record<string, unknown>): Request {
+  return new Request("http://internal/internal/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(makeSlackEvent(overrides)),
+  });
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("SchedulerDO", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStore = createMockStore();
+    mockGetSlackAutomationsForChannel.mockResolvedValue([]);
+    mockCheckRepositoryAccess.mockResolvedValue({
+      repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
+      defaultBranch: "main",
+    });
   });
 
   describe("/internal/health", () => {
@@ -273,6 +369,134 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(200);
       const initBody = await getInitBody(fetchMock);
       expect(initBody.reasoningEffort).toBe("high");
+    });
+
+    it("uses the resolved repository for session creation", async () => {
+      const automation = {
+        ...sampleAutomation,
+        repo_owner: "ACME",
+        repo_name: "Web-App",
+        repo_id: 111,
+        base_branch: "release",
+      };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+      mockCheckRepositoryAccess.mockResolvedValue({
+        repoId: 98765,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "main",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockCheckRepositoryAccess).toHaveBeenCalledWith({
+        owner: "ACME",
+        name: "Web-App",
+      });
+
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.repoOwner).toBe("acme");
+      expect(initBody.repoName).toBe("web-app");
+      expect(initBody.repoId).toBe(98765);
+      expect(initBody.defaultBranch).toBe("release");
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoOwner: "acme",
+          repoName: "web-app",
+          baseBranch: "release",
+        })
+      );
+    });
+
+    it("creates sessions with null repo fields for repo-less automations", async () => {
+      const automation = {
+        ...sampleAutomation,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockCheckRepositoryAccess).not.toHaveBeenCalled();
+
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.repoOwner).toBeNull();
+      expect(initBody.repoName).toBeNull();
+      expect(initBody.repoId).toBeNull();
+      expect(initBody.defaultBranch).toBeNull();
+      expect(initBody.codeServerEnabled).toBe(false);
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+        })
+      );
+    });
+
+    it("falls back to the repository default branch during target resolution", async () => {
+      const automation = { ...sampleAutomation, base_branch: "" };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+      mockCheckRepositoryAccess.mockResolvedValue({
+        repoId: 12345,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "develop",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.defaultBranch).toBe("develop");
+    });
+
+    it("fails the run when target repository access is unavailable", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockCheckRepositoryAccess.mockResolvedValue(null);
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ processed: number; failed: number }>();
+      expect(body.processed).toBe(0);
+      expect(body.failed).toBe(1);
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: "Repository is not accessible for the configured SCM provider",
+        })
+      );
     });
 
     it("passes resolved code-server and sandbox settings into automation sessions", async () => {
@@ -837,6 +1061,67 @@ describe("SchedulerDO", () => {
       expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
+    it("uses a no-repository label for slack completion callbacks", async () => {
+      mockStore.getRunById.mockResolvedValue({
+        id: "run-1",
+        automation_id: "auto-slack",
+        status: "running",
+        session_id: "sess-1",
+        scheduled_at: now,
+        started_at: now,
+        completed_at: null,
+        created_at: now,
+        skip_reason: null,
+        failure_reason: null,
+        trigger_run_metadata: JSON.stringify({
+          channel: "C1",
+          messageTs: "1700000000.000200",
+        }),
+      });
+      mockStore.getById.mockResolvedValue({
+        ...sampleSlackAutomation,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createSchedulerDO(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          INTERNAL_CALLBACK_SECRET: "test-secret",
+        })
+      );
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-slack",
+            runId: "run-1",
+            sessionId: "sess-1",
+            messageId: "msg-1",
+            success: true,
+          }),
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(slackFetch).toHaveBeenCalledOnce();
+      const [, init] = slackFetch.mock.calls[0];
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        channel: "C1",
+        reactionMessageTs: "1700000000.000200",
+        repoFullName: "No repository",
+        sessionId: "sess-1",
+        messageId: "msg-1",
+      });
+      expect(body.signature).toEqual(expect.any(String));
+    });
+
     it("marks run as failed and increments failures on failure", async () => {
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
@@ -1039,6 +1324,226 @@ describe("SchedulerDO", () => {
           (data as Record<string, unknown> | undefined)?.event === "scheduler.fail_track_error"
       );
       expect(failTrackCall).toBeDefined();
+    });
+  });
+
+  describe("/internal/event — slack thread continuity", () => {
+    it("steers the thread session even when the follow-up fails trigger conditions", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "active-run",
+        status: "running",
+        session_id: "sess-running",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      // A natural follow-up reply won't repeat the "deploy" trigger keyword, yet
+      // it must still steer the thread's session — conditions gate new runs only.
+      const res = await scheduler.fetch(
+        slackEventRequest({ text: "thanks — also update the changelog" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+      // The continuity lookup is scoped to the thread's concurrency key and a
+      // 7-day window measured from now.
+      expect(mockStore.getLatestSteerableRunForThread).toHaveBeenCalledWith(
+        "auto-slack",
+        "slack:C1:thread-root",
+        expect.any(Number)
+      );
+      const sinceMs = mockStore.getLatestSteerableRunForThread.mock.calls[0]?.[2] as number;
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      expect(sinceMs).toBeGreaterThanOrEqual(Date.now() - sevenDaysMs - 1000);
+      expect(sinceMs).toBeLessThanOrEqual(Date.now() - sevenDaysMs + 1000);
+
+      // The follow-up was enqueued onto the existing session as a slack-sourced
+      // turn, so its reply posts back in-thread via /callbacks/complete.
+      const promptBody = await getPromptBody(fetchMock);
+      expect(promptBody.source).toBe("slack");
+      expect(promptBody.content).toBe("thanks — also update the changelog");
+      expect(promptBody.authorId).toBe("slack:U1");
+      expect(promptBody.callbackContext).toMatchObject({
+        source: "slack",
+        channel: "C1",
+        threadTs: "1700000000.000100",
+        reactionMessageTs: "1700000000.000200",
+        repoFullName: "acme/web-app",
+      });
+
+      // A steer is not a new trigger and not a skip.
+      expect(mockStore.insertRun).not.toHaveBeenCalled();
+      expect(mockStore.recordSkippedRun).not.toHaveBeenCalled();
+    });
+
+    it("continues the same session on a reply after the run has completed", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      // The thread's run finished, but its session is still steerable within the
+      // window — like replying after an @mention turn ends.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "done-run",
+        status: "completed",
+        session_id: "sess-done",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        slackEventRequest({ text: "actually, can you also bump the version?" })
+      );
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+      const promptBody = await getPromptBody(fetchMock);
+      expect(promptBody.source).toBe("slack");
+      expect(promptBody.content).toBe("actually, can you also bump the version?");
+      // Routed to the completed run's session — no new run, and the concurrency
+      // guard is never consulted (the steer short-circuits the loop).
+      expect(mockStore.insertRun).not.toHaveBeenCalled();
+      expect(mockStore.getActiveRunForKey).not.toHaveBeenCalled();
+    });
+
+    it("uses a no-repository label when steering a repo-less automation thread", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([
+        {
+          ...sampleSlackAutomation,
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        },
+      ]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "active-run",
+        status: "running",
+        session_id: "sess-running",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        slackEventRequest({ text: "thanks — also check the rollout" })
+      );
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+      const promptBody = await getPromptBody(fetchMock);
+      expect(promptBody.callbackContext).toMatchObject({
+        source: "slack",
+        repoFullName: "No repository",
+      });
+    });
+
+    it("anchors the thread to the message ts for a top-level (non-reply) follow-up", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "active-run",
+        status: "running",
+        session_id: "sess-running",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      // No threadTs → the follow-up should anchor to its own ts.
+      await scheduler.fetch(slackEventRequest({ threadTs: undefined }));
+
+      const promptBody = await getPromptBody(fetchMock);
+      expect(promptBody.callbackContext).toMatchObject({
+        threadTs: "1700000000.000200",
+        reactionMessageTs: "1700000000.000200",
+      });
+    });
+
+    it("starts a fresh run when no steerable session exists (outside the window)", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      // Outside the continuity window → no steerable run, and no active run.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
+
+      const scheduler = createSchedulerDO();
+      // Matching text so the trigger conditions pass.
+      const res = await scheduler.fetch(slackEventRequest());
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(mockStore.insertRun).toHaveBeenCalledWith(
+        expect.objectContaining({ automation_id: "auto-slack", status: "starting" })
+      );
+    });
+
+    it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      // Run is still starting → not yet steerable, but it blocks a second run.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue({
+        id: "starting-run",
+        status: "starting",
+        session_id: null,
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(slackEventRequest());
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(mockStore.recordSkippedRun).toHaveBeenCalled();
+      // No prompt reached any session.
+      expect(promptCallCount(fetchMock)).toBe(0);
+    });
+
+    it("falls through to a new trigger when steering the session fails", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      // A completed run is steerable, but the enqueue will fail; with the run no
+      // longer active, the reply is re-evaluated as a new trigger (it matches),
+      // mirroring the @mention path's stale-session → new-session recovery.
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "done-run",
+        status: "completed",
+        session_id: "sess-done",
+      });
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
+
+      // Session DO rejects every fetch → steerSession fails AND the fresh run's
+      // session init fails, so the run is created then marked failed.
+      const failingStub = {
+        fetch: vi.fn().mockResolvedValue(new Response("boom", { status: 500 })),
+      } as never;
+      const env = createEnv();
+      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(slackEventRequest());
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      // Steer failed → fell through → matched conditions → fresh run created
+      // (insertRun) but its session init failed, so triggered stays 0.
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(mockStore.insertRun).toHaveBeenCalledWith(
+        expect.objectContaining({ automation_id: "auto-slack", status: "starting" })
+      );
+      // Not treated as a concurrency skip.
+      expect(mockStore.recordSkippedRun).not.toHaveBeenCalled();
     });
   });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clientMessageSchema,
   createSessionRequestSchema,
   sandboxEventSchema,
   spawnChildSessionRequestSchema,
@@ -22,9 +23,45 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("rejects a malformed session creation request", () => {
+    it("parses a valid repo-less session creation request", () => {
+      const result = createSessionRequestSchema.safeParse({
+        title: "Incident sweep",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a partial repository session creation request", () => {
       const result = createSessionRequestSchema.safeParse({
         repoOwner: "open-inspect",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a whitespace-only partial repository session creation request", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: "   ",
+        repoName: "background-agents",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects whitespace-only repository identifiers", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: "   ",
+        repoName: "\t",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects branch without repository context", () => {
+      const result = createSessionRequestSchema.safeParse({
+        title: "Incident sweep",
+        branch: "main",
       });
 
       expect(result.success).toBe(false);
@@ -92,6 +129,53 @@ describe("boundary schemas", () => {
     });
   });
 
+  describe("clientMessageSchema", () => {
+    it("parses a valid prompt with attachments", () => {
+      const result = clientMessageSchema.safeParse({
+        type: "prompt",
+        content: "Investigate the failing build",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "high",
+        attachments: [
+          {
+            type: "file",
+            name: "error.log",
+            content: "stack trace",
+            mimeType: "text/plain",
+          },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed partial subscribe message", () => {
+      const result = clientMessageSchema.safeParse({
+        type: "subscribe",
+        token: "ws-token",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("parses presence messages with an omitted cursor", () => {
+      const result = clientMessageSchema.safeParse({
+        type: "presence",
+        status: "idle",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("parses fetch history messages with an omitted cursor", () => {
+      const result = clientMessageSchema.safeParse({
+        type: "fetch_history",
+      });
+
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe("userPreferencesRequestSchema", () => {
     it("parses a valid user preferences request", () => {
       const result = userPreferencesRequestSchema.safeParse({
@@ -139,6 +223,29 @@ describe("boundary schemas", () => {
       const result = spawnContextSchema.safeParse({
         repoOwner: "open-inspect",
         repoName: "background-agents",
+        repoId: null,
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        owner: {
+          userId: "user-1",
+          scmUserId: null,
+          scmLogin: null,
+          scmName: null,
+          scmEmail: null,
+          scmAccessTokenEncrypted: null,
+          scmRefreshTokenEncrypted: null,
+          scmTokenExpiresAt: null,
+        },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("parses a repo-less spawn context", () => {
+      const result = spawnContextSchema.safeParse({
+        repoOwner: null,
+        repoName: null,
         repoId: null,
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: null,

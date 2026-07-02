@@ -6,6 +6,7 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
+import { formatRepoLabel } from "@/lib/repo-label";
 import {
   isUnarchivedSessionListKey,
   removeSessionFromList,
@@ -139,8 +140,8 @@ function ArchivedSessionRow({
   session: SessionItem;
   onUnarchive: (id: string) => void;
 }) {
-  const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
-  const repoInfo = `${session.repoOwner}/${session.repoName}`;
+  const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
+  const displayTitle = session.title || repoInfo;
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   return (

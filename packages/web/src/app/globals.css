@@ -24,7 +24,8 @@ pre code.hljs {
  * To change the color palette, update only these variables.
  */
 
-:root {
+:root,
+:root.light {
   /* Core backgrounds */
   --background: #f8f8f6;
   --foreground: #1a1a1a;

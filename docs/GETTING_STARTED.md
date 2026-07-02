@@ -15,11 +15,11 @@ This guide walks you through deploying your own instance of Open-Inspect using T
 
 Open-Inspect uses Terraform to automate deployment across multiple cloud providers:
 
-| Provider                                          | Purpose                          | What Terraform Creates                                                   |
-| ------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------ |
-| **Cloudflare**                                    | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                     |
-| **Vercel** _or_ **Cloudflare Workers**            | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)        |
-| **Modal**, **Daytona**, _or_ **Vercel Sandboxes** | Sandbox execution infrastructure | Modal app deployment, Daytona API config, _or_ Vercel Sandbox API config |
+| Provider                                                            | Purpose                          | What Terraform Creates                                                                                     |
+| ------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Cloudflare**                                                      | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                       |
+| **Vercel** _or_ **Cloudflare Workers**                              | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                          |
+| **Modal**, **Daytona**, **Vercel Sandboxes**, _or_ **OpenComputer** | Sandbox execution infrastructure | Modal app deployment, Daytona API config, Vercel Sandbox API config, _or_ OpenComputer template/API config |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -36,17 +36,18 @@ Open-Inspect uses Terraform to automate deployment across multiple cloud provide
 
 Create accounts on these services before continuing:
 
-| Service                                             | Purpose                                                        |
-| --------------------------------------------------- | -------------------------------------------------------------- |
-| [Cloudflare](https://dash.cloudflare.com)           | Control plane hosting (+ web app if using Cloudflare platform) |
-| [Vercel](https://vercel.com) _(optional)_           | Web application hosting (only if `web_platform = "vercel"`)    |
-| [Modal](https://modal.com) _(optional)_             | Sandbox infrastructure when `sandbox_provider = "modal"`       |
-| [Daytona](https://app.daytona.io) _(optional)_      | Sandbox infrastructure when `sandbox_provider = "daytona"`     |
-| [Vercel Sandboxes](https://vercel.com) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "vercel"`      |
-| [GitHub](https://github.com/settings/developers)    | OAuth + repository access                                      |
-| [Anthropic](https://console.anthropic.com)          | Claude API                                                     |
-| [Slack](https://api.slack.com/apps) _(optional)_    | Slack bot integration                                          |
-| GitHub App Webhooks _(optional)_                    | GitHub bot (PR reviews)                                        |
+| Service                                                   | Purpose                                                         |
+| --------------------------------------------------------- | --------------------------------------------------------------- |
+| [Cloudflare](https://dash.cloudflare.com)                 | Control plane hosting (+ web app if using Cloudflare platform)  |
+| [Vercel](https://vercel.com) _(optional)_                 | Web application hosting (only if `web_platform = "vercel"`)     |
+| [Modal](https://modal.com) _(optional)_                   | Sandbox infrastructure when `sandbox_provider = "modal"`        |
+| [Daytona](https://app.daytona.io) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
+| [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
+| [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
+| [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
+| [Anthropic](https://console.anthropic.com)                | Claude API                                                      |
+| [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
+| GitHub App Webhooks _(optional)_                          | GitHub bot (PR reviews)                                         |
 
 ### Required Tools
 
@@ -211,6 +212,20 @@ for the full runtime, snapshot, and resource configuration model.
 > sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
 > Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
 
+### OpenComputer
+
+> Only required when `sandbox_provider = "opencomputer"`.
+
+1. Create an OpenComputer API key.
+2. Set `sandbox_provider = "opencomputer"` in `terraform.tfvars`.
+3. Set `opencomputer_api_url` and `opencomputer_api_key`.
+4. Leave `opencomputer_template = ""` to let Terraform build the OpenInspect runtime template, or
+   set it to an existing OpenComputer template name.
+5. Run `terraform apply`.
+
+For the full template build and runtime details, see
+[OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md).
+
 ### Anthropic
 
 1. Go to [Anthropic Console](https://console.anthropic.com)
@@ -253,21 +268,27 @@ access.
    - Members: **Read-only**
    - For existing GitHub Apps, republish the permission change and request/approve installation
      updates before testing org membership sign-in.
-7. Click **"Create GitHub App"**
-8. Note the **App ID** and **Client ID** (top of page)
-9. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
-   Secret**
-10. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
-11. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
+7. Set **Account permissions**:
+   - Email addresses: **Read-only** _(required for `ALLOWED_EMAILS`/`ALLOWED_EMAIL_DOMAINS`; without
+     it the app cannot read verified emails and those allowlists silently deny every GitHub
+     sign-in)_
+   - For existing GitHub Apps, republish the permission change and request/approve installation
+     updates, otherwise the added permission does not apply to current installs.
+8. Click **"Create GitHub App"**
+9. Note the **App ID** and **Client ID** (top of page)
+10. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
+    Secret**
+11. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
+12. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
     ```bash
     openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
       -in ~/Downloads/your-app-name.*.private-key.pem \
       -out private-key-pkcs8.pem
     ```
-12. **Install the app** on your account/organization:
+13. **Install the app** on your account/organization:
     - Click "Install App" in the sidebar
     - Select the repositories you want Open-Inspect to access
-13. Note the **Installation ID** from the URL after installing:
+14. Note the **Installation ID** from the URL after installing:
     ```
     https://github.com/settings/installations/INSTALLATION_ID
     ```
@@ -607,7 +628,12 @@ The App Home provides a settings interface where users can configure their prefe
    ```
    https://open-inspect-slack-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/interactions
    ```
-4. Click **Save Changes**
+4. Under **Select Menus**, enter **Options Load URL** using the same endpoint:
+   ```
+   https://open-inspect-slack-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/interactions
+   ```
+   This is required for searchable Slack repository pickers that use external data sources.
+5. Click **Save Changes**
 
 ### Invite the Bot to Channels
 
@@ -942,7 +968,9 @@ If the bot doesn't see the original message when tagged in a thread reply:
    private channels). These are required by the `conversations.replies` API to fetch thread
    messages.
 2. Verify the bot has `channels:read` and `groups:read` scopes. These are required by
-   `conversations.info` to fetch channel name and description for context.
+   `conversations.info` to fetch channel name and description for context, and by
+   `conversations.list` to populate the automation channel picker. If the picker shows no channels,
+   check these scopes and that the bot is invited to the target channel.
 3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
    take effect.
 

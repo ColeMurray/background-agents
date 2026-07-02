@@ -33,8 +33,8 @@ const FALLBACK_REPOS: RepoConfig[] = [];
 const LOCAL_CACHE_TTL_MS = 60 * 1000;
 
 /**
- * Expiration for the shared KV caches (repos + routing rules), in seconds —
- * the unit Cloudflare KV's `expirationTtl` expects.
+ * Expiration for the shared KV caches (repos, routing rules, watched channels),
+ * in seconds — the unit Cloudflare KV's `expirationTtl` expects.
  */
 const KV_CACHE_TTL_SECONDS = 300;
 
@@ -56,6 +56,8 @@ let routingRulesLocalCache: {
 } | null = null;
 
 const ROUTING_RULES_CACHE_KEY = "slack:routing-rules";
+
+const WATCHED_CHANNELS_CACHE_KEY = "slack:watched-channels";
 
 /**
  * Convert a control plane repo to a RepoConfig.
@@ -275,6 +277,73 @@ async function getRoutingRulesFromCache(env: Env): Promise<SlackRoutingRule[]> {
     });
   }
   return [];
+}
+
+/**
+ * Channel IDs watched by enabled `slack_event` automations, used to pre-filter
+ * inbound channel messages. KV-backed with no in-memory tier: served from the
+ * KV last-known-good copy and refreshed from the control plane on a miss.
+ * **Fails closed** to an empty set — an unknown watch-list forwards no channel
+ * messages, so an outage pauses triggers rather than forwarding every message.
+ */
+export async function getWatchedChannels(env: Env, traceId?: string): Promise<Set<string>> {
+  const kv = createKvCacheStore(env.SLACK_KV);
+
+  try {
+    const cached = await kv.get(WATCHED_CHANNELS_CACHE_KEY, "json");
+    if (Array.isArray(cached)) {
+      return new Set(cached as string[]);
+    }
+  } catch (e) {
+    log.warn("kv.get", {
+      key_prefix: "watched_channels_cache",
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
+
+  const startTime = Date.now();
+  try {
+    const response = await controlPlaneFetch(
+      env,
+      "/integration-settings/slack/watched-channels",
+      traceId
+    );
+
+    if (!response.ok) {
+      log.warn("control_plane.fetch_watched_channels", {
+        trace_id: traceId,
+        outcome: "error",
+        http_status: response.status,
+        duration_ms: Date.now() - startTime,
+      });
+      return new Set();
+    }
+
+    const data = (await response.json()) as { channels?: string[] };
+    const channels = Array.isArray(data.channels) ? data.channels : [];
+
+    try {
+      await kv.put(WATCHED_CHANNELS_CACHE_KEY, JSON.stringify(channels), {
+        expirationTtl: KV_CACHE_TTL_SECONDS,
+      });
+    } catch (e) {
+      log.warn("kv.put", {
+        trace_id: traceId,
+        key_prefix: "watched_channels_cache",
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
+
+    return new Set(channels);
+  } catch (e) {
+    log.warn("control_plane.fetch_watched_channels", {
+      trace_id: traceId,
+      outcome: "error",
+      error: e instanceof Error ? e : new Error(String(e)),
+      duration_ms: Date.now() - startTime,
+    });
+    return new Set();
+  }
 }
 
 /**

@@ -261,7 +261,7 @@ function GlobalSettingsSection({
   };
 
   return (
-    <Section title="Defaults & Scope" description="Global behavior and repository targeting.">
+    <Section title="Defaults & Scope" description="Global behavior and repository scope.">
       {error && <Message tone="error" text={error} />}
 
       <label

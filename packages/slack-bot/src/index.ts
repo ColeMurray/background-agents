@@ -26,8 +26,9 @@ import {
 import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
+import { handleChannelTrigger } from "./channel-trigger";
+import { getAuthHeaders } from "./internal-auth";
 import { callbacksRouter } from "./callbacks";
-import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import { createLogger } from "./logger";
 import { createKvCacheStore } from "@open-inspect/shared";
 import { getUserRepoBranchPreference } from "./branch-preferences";
@@ -36,25 +37,18 @@ import { handleAppHomeInteractionRoute, publishAppHome } from "./app-home";
 import {
   SELECT_REPO_ACTION_ID,
   SELECT_REPO_QUICK_PICK_ACTION_ID,
+  baseActionId,
   getRepoClarificationOptions,
   buildRepoClarificationBlocks,
 } from "./repo-clarification";
 import { getResolvedUserPreferences } from "./user-preferences";
+import { getAvailableModels, getSlackDefaultModel } from "./app-home/models";
 import { slackInteractionPayloadSchema } from "./interaction-payload";
 
 const log = createLogger("handler");
+const THREAD_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 type BackgroundTaskScheduler = (promise: Promise<void>) => void;
-
-/**
- * Build authenticated headers for control plane requests.
- */
-async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
-  return {
-    "Content-Type": "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-}
 
 /**
  * Create a session via the control plane.
@@ -223,7 +217,7 @@ async function lookupThreadSession(
 
 /**
  * Store a session mapping for a thread.
- * TTL is 24 hours by default.
+ * TTL is THREAD_SESSION_TTL_SECONDS by default.
  */
 async function storeThreadSession(
   env: Env,
@@ -234,7 +228,7 @@ async function storeThreadSession(
   try {
     const key = getThreadSessionKey(channel, threadTs);
     await createKvCacheStore(env.SLACK_KV).put(key, JSON.stringify(session), {
-      expirationTtl: 86400, // 24 hours
+      expirationTtl: THREAD_SESSION_TTL_SECONDS,
     });
   } catch (e) {
     log.error("kv.put", {
@@ -377,7 +371,14 @@ async function startSessionAndSendPrompt(
   channelDescription?: string,
   traceId?: string
 ): Promise<{ sessionId: string } | null> {
-  const userPrefs = await getResolvedUserPreferences(env, userId);
+  const [availableModels, slackDefaultModel] = await Promise.all([
+    getAvailableModels(env, traceId),
+    getSlackDefaultModel(env, traceId),
+  ]);
+  const userPrefs = await getResolvedUserPreferences(env, userId, {
+    defaultModel: slackDefaultModel ?? env.DEFAULT_MODEL,
+    enabledModels: availableModels.map((modelOption) => modelOption.value),
+  });
   const model = userPrefs.model;
   const reasoningEffort = userPrefs.reasoningEffort;
   const globalBranch = userPrefs.branch;
@@ -744,6 +745,14 @@ async function handleSlackEvent(
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
     await handleAppMention(event as Required<typeof event>, env, traceId, scheduleBackground);
+    return;
+  }
+
+  // Handle ambient channel messages as potential automation triggers.
+  // `handleChannelTrigger` applies the kill switch, candidacy, and watched-channel
+  // gates; non-candidates (DMs already handled above, mentions, bot posts) are dropped.
+  if (event.type === "message") {
+    await handleChannelTrigger(event, env, traceId);
   }
 }
 
@@ -923,7 +932,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       `I couldn't determine which repository you're referring to. ${result.reasoning}`,
       {
         thread_ts: threadTs || ts,
-        blocks: buildRepoClarificationBlocks(result.reasoning, result.alternatives),
+        blocks: buildRepoClarificationBlocks(result.reasoning, result.alternatives, repos),
       }
     );
     return;
@@ -1193,7 +1202,8 @@ async function handleSlackInteraction(
   const messageTs = payload.message?.ts;
   const threadTs = payload.message?.thread_ts;
 
-  switch (action.action_id) {
+  // Collapse a quick-pick's per-button action_id back to the bare constant before matching.
+  switch (baseActionId(action.action_id)) {
     case SELECT_REPO_ACTION_ID:
     case SELECT_REPO_QUICK_PICK_ACTION_ID: {
       if (!channel || !messageTs) return;

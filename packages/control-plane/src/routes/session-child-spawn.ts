@@ -76,7 +76,16 @@ async function handleSpawnChild(
   );
 
   if (!spawnContextRes.ok) {
-    return error("Failed to get parent session context", 500);
+    let message = "Failed to get parent session context";
+    try {
+      const body = (await spawnContextRes.json()) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.length > 0) {
+        message = body.error;
+      }
+    } catch {
+      // Keep the generic fallback when the session runtime did not return JSON.
+    }
+    return error(message, spawnContextRes.status);
   }
 
   const parsedSpawnContext = spawnContextSchema.safeParse(await spawnContextRes.json());
@@ -85,11 +94,21 @@ async function handleSpawnChild(
   }
   const spawnContext = parsedSpawnContext.data;
 
-  if (
-    (body.repoOwner && body.repoOwner.toLowerCase() !== spawnContext.repoOwner.toLowerCase()) ||
-    (body.repoName && body.repoName.toLowerCase() !== spawnContext.repoName.toLowerCase())
-  ) {
-    return error("Child sessions must use the same repository as the parent", 403);
+  const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
+  const requestedRepoName = body.repoName?.trim().toLowerCase() || null;
+  if ((requestedRepoOwner === null) !== (requestedRepoName === null)) {
+    return error("repoOwner and repoName must be provided together", 400);
+  }
+
+  const parentRepoOwner = spawnContext.repoOwner?.toLowerCase() ?? null;
+  const parentRepoName = spawnContext.repoName?.toLowerCase() ?? null;
+  if (requestedRepoOwner || requestedRepoName) {
+    if (!parentRepoOwner || !parentRepoName) {
+      return error("Cannot add repository context to a repo-less child session", 403);
+    }
+    if (requestedRepoOwner !== parentRepoOwner || requestedRepoName !== parentRepoName) {
+      return error("Child sessions must use the same repository as the parent", 403);
+    }
   }
 
   const rawModel = body.model ?? spawnContext.model;
@@ -124,7 +143,8 @@ async function handleSpawnChild(
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,
     repoId: spawnContext.repoId,
-    branch: spawnContext.baseBranch ?? "main",
+    branch:
+      spawnContext.repoOwner && spawnContext.repoName ? (spawnContext.baseBranch ?? "main") : null,
     title: body.title,
     model,
     reasoningEffort,

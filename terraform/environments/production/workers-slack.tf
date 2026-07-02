@@ -50,6 +50,9 @@ module "slack_bot_worker" {
     { name = "APP_NAME", value = var.app_name },
     { name = "DEFAULT_MODEL", value = "claude-haiku-4-5" },
     { name = "CLASSIFICATION_MODEL", value = "claude-haiku-4-5" },
+    # Kill switch for Slack channel-message triggers; the bot only ingests/
+    # forwards channel messages when this is exactly "true" (dark by default).
+    { name = "SLACK_TRIGGERS_ENABLED", value = var.slack_triggers_enabled ? "true" : "false" },
   ]
 
   secrets = [

@@ -210,6 +210,28 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("omits repo tag for no-repository sandboxes", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      repoOwner: null,
+      repoName: null,
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      REPO_OWNER: "",
+      REPO_NAME: "",
+    });
+    expect(createCall.tags).toEqual({
+      openinspect_framework: "open-inspect",
+      openinspect_session_id: "session-123",
+      openinspect_expected_sandbox_id: "sandbox-456",
+    });
+  });
+
   it("caps the default sandbox timeout at Vercel's 45 minute limit", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);

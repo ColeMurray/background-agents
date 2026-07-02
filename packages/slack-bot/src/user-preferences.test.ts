@@ -1,7 +1,11 @@
 import { getDefaultReasoningEffort } from "@open-inspect/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./types";
-import { getUserPreferences, updateUserPreferences } from "./user-preferences";
+import {
+  getUserPreferences,
+  resolveUserPreferences,
+  updateUserPreferences,
+} from "./user-preferences";
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -45,8 +49,11 @@ describe("updateUserPreferences", () => {
 
     const prefs = await getUserPreferences(env, "U123");
     expect(prefs?.model).toBe("anthropic/claude-haiku-4-5");
-    expect(prefs?.reasoningEffort).toBe(getDefaultReasoningEffort("anthropic/claude-haiku-4-5"));
+    expect(prefs?.reasoningEffort).toBeUndefined();
     expect(prefs?.branch).toBe("staging");
+
+    const resolved = resolveUserPreferences(prefs, env.DEFAULT_MODEL);
+    expect(resolved.reasoningEffort).toBe(getDefaultReasoningEffort("anthropic/claude-haiku-4-5"));
   });
 
   it("distinguishes an omitted branch from an explicit clear", async () => {
@@ -68,5 +75,164 @@ describe("updateUserPreferences", () => {
     expect(prefs?.model).toBe("anthropic/claude-haiku-4-5");
     expect(prefs?.reasoningEffort).toBe("max");
     expect(prefs?.branch).toBeUndefined();
+  });
+
+  it("does not persist a model when only branch is changed", async () => {
+    const env = makeEnv();
+
+    await updateUserPreferences(env, "U123", { branch: "feature/test" });
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBeUndefined();
+    expect(prefs?.branch).toBe("feature/test");
+  });
+
+  it("preserves an existing stored model when only branch is changed", async () => {
+    const env = makeEnv();
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        model: "openai/gpt-5.2",
+        updatedAt: 1,
+      })
+    );
+
+    await updateUserPreferences(env, "U123", { branch: "feature/test" });
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBe("openai/gpt-5.2");
+    expect(prefs?.branch).toBe("feature/test");
+  });
+
+  it("preserves reasoning effort on branch updates using the Slack default model context", async () => {
+    const env = makeEnv();
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        reasoningEffort: "none",
+        updatedAt: 1,
+      })
+    );
+
+    await updateUserPreferences(
+      env,
+      "U123",
+      { branch: "feature/test" },
+      {
+        defaultModel: "openai/gpt-5.2",
+        enabledModels: ["openai/gpt-5.2"],
+      }
+    );
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBeUndefined();
+    expect(prefs?.reasoningEffort).toBe("none");
+    expect(prefs?.branch).toBe("feature/test");
+  });
+
+  it("does not persist a model when only reasoning effort is changed", async () => {
+    const env = makeEnv();
+
+    await updateUserPreferences(
+      env,
+      "U123",
+      { reasoningEffort: "none" },
+      {
+        defaultModel: "openai/gpt-5.2",
+        enabledModels: ["openai/gpt-5.2"],
+      }
+    );
+
+    const prefs = await getUserPreferences(env, "U123");
+    expect(prefs?.model).toBeUndefined();
+    expect(prefs?.reasoningEffort).toBe("none");
+  });
+});
+
+describe("resolveUserPreferences", () => {
+  it("uses the Slack default model when no model is stored", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["anthropic/claude-sonnet-4-6"]
+    );
+
+    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("uses a stored model before the Slack default", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"]
+    );
+
+    expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
+  });
+
+  it("uses the Slack default before the shared default for invalid stored models", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "not-a-real-model",
+        updatedAt: 1,
+      },
+      "openai/gpt-5.2",
+      ["anthropic/claude-sonnet-4-6", "openai/gpt-5.2"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.2");
+  });
+
+  it("falls back when the App Home model is no longer enabled", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]
+    );
+
+    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("uses the first enabled model when neither preferred nor default is enabled", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["openai/gpt-5.2"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.2");
+  });
+
+  it("validates stored reasoning effort against the resolved Slack default model", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        reasoningEffort: "none",
+        updatedAt: 1,
+      },
+      "openai/gpt-5.2",
+      ["openai/gpt-5.2"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.2");
+    expect(resolved.reasoningEffort).toBe("none");
   });
 });
