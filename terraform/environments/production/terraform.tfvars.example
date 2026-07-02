@@ -89,8 +89,6 @@ vercel_sandbox_project_id = "" # e.g., "prj_xxxxxxxxxxxxxxxxxxxx"
 opencomputer_api_url = "https://app.opencomputer.dev/api"
 opencomputer_api_key = ""
 opencomputer_template = ""
-# opencomputer_project_id = "" # Optional project/workspace scope
-# opencomputer_target     = "" # Optional target/region/cell
 
 # =============================================================================
 # GitHub App Credentials

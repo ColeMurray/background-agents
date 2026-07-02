@@ -124,8 +124,8 @@ class SessionConfig(BaseModel):
     """Configuration passed to sandbox for a session."""
 
     session_id: str
-    repo_owner: str
-    repo_name: str
+    repo_owner: str | None = None
+    repo_name: str | None = None
     branch: str | None = None
     base_sha: str | None = None
     opencode_session_id: str | None = None

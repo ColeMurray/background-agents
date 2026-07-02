@@ -72,6 +72,21 @@ def require_valid_control_plane_url(url: str | None) -> None:
         )
 
 
+def _normalize_optional_repository_context(
+    repo_owner: str | None, repo_name: str | None
+) -> tuple[str | None, str | None]:
+    normalized_owner = repo_owner.strip() if isinstance(repo_owner, str) else None
+    normalized_name = repo_name.strip() if isinstance(repo_name, str) else None
+    normalized_owner = normalized_owner or None
+    normalized_name = normalized_name or None
+    if (normalized_owner is None) != (normalized_name is None):
+        raise HTTPException(
+            status_code=400,
+            detail="repo_owner and repo_name must be provided together",
+        )
+    return normalized_owner, normalized_name
+
+
 @app.function(
     image=function_image,
     secrets=[github_app_secrets, internal_api_secret],
@@ -121,12 +136,18 @@ async def api_create_sandbox(
 
         snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
-        fallback_clone_token = resolve_clone_token() if snapshot_id else None
+        repo_owner, repo_name = _normalize_optional_repository_context(
+            request.get("repo_owner"),
+            request.get("repo_name"),
+        )
+        fallback_clone_token = (
+            resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
+        )
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             branch=request.get("branch"),
             opencode_session_id=request.get("opencode_session_id"),
             provider=request.get("provider", "anthropic"),
@@ -135,8 +156,8 @@ async def api_create_sandbox(
         )
 
         config = SandboxConfig(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
             snapshot_id=snapshot_id,
             session_config=session_config,
@@ -166,6 +187,10 @@ async def api_create_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        raise
     except Exception as e:
         outcome = "error"
         http_status = 500
@@ -430,9 +455,13 @@ async def api_restore_sandbox(
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
+        repo_owner, repo_name = _normalize_optional_repository_context(
+            session_config.get("repo_owner") if isinstance(session_config, dict) else None,
+            session_config.get("repo_name") if isinstance(session_config, dict) else None,
+        )
 
         manager = SandboxManager()
-        clone_token = resolve_clone_token()
+        clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
         code_server_enabled = bool(request.get("code_server_enabled", False))
         agent_slack_notify_enabled = bool(request.get("agent_slack_notify_enabled", False))

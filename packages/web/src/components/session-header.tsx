@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarIcon } from "@/components/ui/icons";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { formatRepoLabel } from "@/lib/repo-label";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
@@ -37,11 +38,14 @@ export function SessionHeader({
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen, toggle } = useSidebarContext();
-  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
-  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
-  const repoLabel =
-    resolvedRepoOwner && resolvedRepoName
-      ? `${resolvedRepoOwner}/${resolvedRepoName}`
+  const hasFallbackSessionInfo =
+    fallbackSessionInfo.repoOwner !== null ||
+    fallbackSessionInfo.repoName !== null ||
+    fallbackSessionInfo.title !== null;
+  const repoLabel = sessionState
+    ? formatRepoLabel(sessionState.repoOwner, sessionState.repoName)
+    : hasFallbackSessionInfo
+      ? formatRepoLabel(fallbackSessionInfo.repoOwner, fallbackSessionInfo.repoName)
       : "Loading session...";
   const baseResolvedTitle = sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 

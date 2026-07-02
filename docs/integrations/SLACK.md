@@ -124,7 +124,7 @@ A top-level Slack request starts a new Slack thread. Reply in that thread to sen
 to the same Open-Inspect session. This applies in both channels and DMs: in a direct message, the
 follow-up still needs to be a thread reply, not a fresh top-level DM.
 
-Open-Inspect keeps the Slack thread connected to the session for about 24 hours. If you reply after
+Open-Inspect keeps the Slack thread connected to the session for about 7 days. If you reply after
 that mapping expires, or if you reply outside the thread, the bot may start repository selection
 again and create a new session.
 
@@ -258,11 +258,11 @@ condition to filter by content. See
   (with links to any pull requests and the full session), and the reaction is cleared. A failed run
   posts a short failure notice instead.
 - Every reply in a thread continues the same session — during the run and after it finishes — for up
-  to 24 hours after the thread's first trigger, like replying in an `@mention` thread. The reply is
+  to 7 days after the thread's first trigger, like replying in an `@mention` thread. The reply is
   routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone idle),
   gets its own 👀 reaction and in-thread response, and does **not** need to match the trigger's text
-  condition — conditions gate new runs, not replies that continue a thread. A reply more than 24
-  hours after the first trigger starts a fresh run.
+  condition — conditions gate new runs, not replies that continue a thread. A reply more than 7 days
+  after the first trigger starts a fresh run.
 
 ### Threat model
 
@@ -326,8 +326,8 @@ dropdown expires after one hour.
 
 ### A follow-up started a new session
 
-Reply inside the same Slack thread as the original request. Thread-to-session mappings last about 24
-hours, so older threads may need a fresh request.
+Reply inside the same Slack thread as the original request. Thread-to-session mappings last about 7
+days, so older threads may need a fresh request.
 
 ### The wrong model or branch was used
 
