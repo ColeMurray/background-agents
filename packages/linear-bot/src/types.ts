@@ -2,6 +2,8 @@
  * Type definitions for the Linear bot.
  */
 
+import { z } from "zod";
+
 /**
  * Cloudflare Worker environment bindings.
  */
@@ -36,19 +38,21 @@ export interface Env {
 
 // ─── OAuth Types ─────────────────────────────────────────────────────────────
 
-export interface OAuthTokenResponse {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  refresh_token: string;
-  scope?: string;
-}
+export const oauthTokenResponseSchema = z.object({
+  access_token: z.string(),
+  token_type: z.string(),
+  expires_in: z.number(),
+  refresh_token: z.string(),
+  scope: z.string().optional(),
+});
+export type OAuthTokenResponse = z.infer<typeof oauthTokenResponseSchema>;
 
-export interface StoredTokenData {
-  access_token: string;
-  refresh_token: string;
-  expires_at: number;
-}
+export const storedTokenDataSchema = z.object({
+  access_token: z.string(),
+  refresh_token: z.string(),
+  expires_at: z.number(),
+});
+export type StoredTokenData = z.infer<typeof storedTokenDataSchema>;
 
 // ─── Repo / Config Types ─────────────────────────────────────────────────────
 

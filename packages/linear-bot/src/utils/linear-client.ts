@@ -2,7 +2,14 @@
  * Linear API client utilities — OAuth + raw GraphQL.
  */
 
-import type { Env, OAuthTokenResponse, StoredTokenData, LinearIssueDetails } from "../types";
+import {
+  oauthTokenResponseSchema,
+  storedTokenDataSchema,
+  type Env,
+  type OAuthTokenResponse,
+  type StoredTokenData,
+  type LinearIssueDetails,
+} from "../types";
 import { timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./crypto";
 import { createLogger } from "../logger";
@@ -49,7 +56,7 @@ export async function exchangeCodeForToken(
     throw new Error(`Token exchange failed: ${errText}`);
   }
 
-  const tokenData = (await tokenRes.json()) as OAuthTokenResponse;
+  const tokenData = parseOAuthTokenResponse(await tokenRes.json());
   const workspaceInfo = await getWorkspaceInfo(tokenData.access_token);
 
   const stored: StoredTokenData = {
@@ -68,7 +75,7 @@ export async function getOAuthToken(env: Env, orgId: string): Promise<string | n
 
   let tokenData: StoredTokenData;
   try {
-    tokenData = JSON.parse(raw) as StoredTokenData;
+    tokenData = parseStoredTokenData(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -119,7 +126,7 @@ export async function getOAuthToken(env: Env, orgId: string): Promise<string | n
       return null;
     }
 
-    const refreshed = (await res.json()) as OAuthTokenResponse;
+    const refreshed = parseOAuthTokenResponse(await res.json());
     const newStored: StoredTokenData = {
       access_token: refreshed.access_token,
       refresh_token: refreshed.refresh_token,
@@ -456,4 +463,16 @@ async function getWorkspaceInfo(accessToken: string): Promise<{ id: string; name
   const org = data.data?.viewer?.organization;
   if (!org) throw new Error("No organization found in response");
   return { id: org.id, name: org.name };
+}
+
+function parseOAuthTokenResponse(value: unknown): OAuthTokenResponse {
+  const parsed = oauthTokenResponseSchema.safeParse(value);
+  if (!parsed.success) throw new Error("Invalid Linear OAuth token response");
+  return parsed.data;
+}
+
+function parseStoredTokenData(value: unknown): StoredTokenData {
+  const parsed = storedTokenDataSchema.safeParse(value);
+  if (!parsed.success) throw new Error("Invalid stored Linear OAuth token data");
+  return parsed.data;
 }
