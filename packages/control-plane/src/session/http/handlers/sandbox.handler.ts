@@ -271,6 +271,12 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       if (!session) {
         return Response.json({ error: "No session" }, { status: 404 });
       }
+      if (!session.repo_owner || !session.repo_name) {
+        return Response.json(
+          { error: "SCM credentials require a repository context" },
+          { status: 400 }
+        );
+      }
 
       const result = await deps.getScmCredentials();
       if (!result.ok) {

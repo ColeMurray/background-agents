@@ -289,8 +289,11 @@ export class McpServerStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async getDecryptedForSession(repoOwner: string, repoName: string): Promise<McpServerConfig[]> {
-    const repoFullName = `${repoOwner}/${repoName}`.toLowerCase();
+  async getDecryptedForSession(
+    repoOwner: string | null,
+    repoName: string | null
+  ): Promise<McpServerConfig[]> {
+    const repoFullName = repoOwner && repoName ? `${repoOwner}/${repoName}`.toLowerCase() : null;
     const { results } = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE enabled = 1 ORDER BY name")
       .all<McpServerRow>();
@@ -298,6 +301,7 @@ export class McpServerStore {
     const filtered = results.filter((row) => {
       const scopes = parseRepoScopes(row.repo_scope);
       if (!scopes) return true;
+      if (!repoFullName) return false;
       return scopes.some((s) => s.toLowerCase() === repoFullName);
     });
 

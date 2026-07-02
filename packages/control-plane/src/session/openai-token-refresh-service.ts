@@ -13,7 +13,7 @@ const OPENAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 type OpenAITokenState =
   | { type: "cached"; accessToken: string; expiresIn: number; accountId?: string }
-  | { type: "refresh"; refreshToken: string; source: "repo" | "global"; repoId: number };
+  | { type: "refresh"; refreshToken: string; source: "repo" | "global"; repoId: number | null };
 
 export type OpenAITokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn?: number; accountId?: string }
@@ -70,7 +70,7 @@ export class OpenAITokenRefreshService {
   private getTokenStateFromSecrets(
     secrets: Record<string, string>,
     source: "repo" | "global",
-    repoId: number
+    repoId: number | null
   ): OpenAITokenState | null {
     if (!secrets.OPENAI_OAUTH_REFRESH_TOKEN) {
       return null;
@@ -98,13 +98,16 @@ export class OpenAITokenRefreshService {
   }
 
   private async readTokenState(session: SessionRow): Promise<OpenAITokenState | null> {
-    const repoId = await this.ensureRepoId(session);
+    let repoId: number | null = null;
+    if (session.repo_owner && session.repo_name) {
+      repoId = await this.ensureRepoId(session);
 
-    const repoStore = new RepoSecretsStore(this.db, this.encryptionKey);
-    const repoSecrets = await repoStore.getDecryptedSecrets(repoId);
-    const repoState = this.getTokenStateFromSecrets(repoSecrets, "repo", repoId);
-    if (repoState) {
-      return repoState;
+      const repoStore = new RepoSecretsStore(this.db, this.encryptionKey);
+      const repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+      const repoState = this.getTokenStateFromSecrets(repoSecrets, "repo", repoId);
+      if (repoState) {
+        return repoState;
+      }
     }
 
     const globalStore = new GlobalSecretsStore(this.db, this.encryptionKey);
@@ -132,6 +135,13 @@ export class OpenAITokenRefreshService {
       }
 
       if (tokenState.source === "repo") {
+        if (tokenState.repoId === null || !session.repo_owner || !session.repo_name) {
+          return {
+            ok: false,
+            status: 400,
+            error: "Repository-scoped OpenAI tokens require a repository context",
+          };
+        }
         const repoStore = new RepoSecretsStore(this.db, this.encryptionKey);
         await repoStore.setSecrets(
           tokenState.repoId,

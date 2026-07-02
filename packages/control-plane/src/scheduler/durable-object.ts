@@ -10,16 +10,17 @@
 
 import { DurableObject } from "cloudflare:workers";
 import {
+  automationEventSchema,
   nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
   computeHmacHex,
   type AutomationCallbackContext,
-  type AutomationEvent,
   type SlackAutomationEvent,
   type SlackCallbackContext,
   type TriggerConfig,
 } from "@open-inspect/shared";
+import { z } from "zod";
 import {
   AutomationStore,
   toAutomationRun,
@@ -46,6 +47,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
+import { resolveAutomationRepository } from "../automation/repository";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -69,6 +71,34 @@ const RECOVERY_SWEEP_LIMIT = 50;
  * does not slide — a reply after the window forks a fresh run.
  */
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function formatAutomationTargetLabel(
+  automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
+): string {
+  return automation?.repo_owner && automation?.repo_name
+    ? `${automation.repo_owner}/${automation.repo_name}`
+    : "No repository";
+}
+
+const manualTriggerBodySchema = z.object({
+  automationId: z.string().min(1),
+});
+
+const runCompleteBodySchema = z.object({
+  automationId: z.string(),
+  runId: z.string(),
+  sessionId: z.string(),
+  messageId: z.string().optional(),
+  success: z.boolean(),
+  error: z.string().optional(),
+});
+
+function badJsonRequest(message: string): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status: 400,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -404,7 +434,12 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Event handler ───────────────────────────────────────────────────────
 
   private async handleEvent(request: Request): Promise<Response> {
-    const event = (await request.json()) as AutomationEvent;
+    const parsedEvent = automationEventSchema.safeParse(await request.json());
+    if (!parsedEvent.success) {
+      return badJsonRequest("Invalid automation event");
+    }
+
+    const event = parsedEvent.data;
     const store = new AutomationStore(this.env.DB);
 
     // 1. Find matching automations
@@ -570,15 +605,10 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
   private async handleTrigger(request: Request): Promise<Response> {
-    const body = (await request.json()) as { automationId: string };
-    const { automationId } = body;
+    const parsedBody = manualTriggerBodySchema.safeParse(await request.json());
+    if (!parsedBody.success) return badJsonRequest("automationId required");
 
-    if (!automationId) {
-      return new Response(JSON.stringify({ error: "automationId required" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    const { automationId } = parsedBody.data;
 
     const store = new AutomationStore(this.env.DB);
     const automation = await store.getById(automationId);
@@ -663,15 +693,10 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Run complete callback ───────────────────────────────────────────────
 
   private async handleRunComplete(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      automationId: string;
-      runId: string;
-      sessionId: string;
-      /** Optional for resilience to version skew; the bot falls back to a reaction clear. */
-      messageId?: string;
-      success: boolean;
-      error?: string;
-    };
+    const parsedBody = runCompleteBodySchema.safeParse(await request.json());
+    if (!parsedBody.success) return badJsonRequest("Invalid run-complete callback");
+
+    const body = parsedBody.data;
 
     const store = new AutomationStore(this.env.DB);
 
@@ -732,7 +757,7 @@ export class SchedulerDO extends DurableObject<Env> {
         messageId: body.messageId ?? "",
         success: body.success,
         error: body.error,
-        repoFullName: automation ? `${automation.repo_owner}/${automation.repo_name}` : "",
+        repoFullName: formatAutomationTargetLabel(automation),
         model: automation?.model ?? "",
         reasoningEffort: automation?.reasoning_effort ?? undefined,
       });
@@ -872,6 +897,7 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
+    const repository = await resolveAutomationRepository(this.env, automation);
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -893,19 +919,24 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
+    const repoOwner = repository?.repoOwner ?? null;
+    const repoName = repository?.repoName ?? null;
+    const repoId = repository?.repoId ?? null;
+    const baseBranch = repository?.baseBranch ?? null;
+
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
-      resolveCodeServerEnabled(this.env.DB, automation.repo_owner, automation.repo_name),
-      resolveSandboxSettings(this.env.DB, automation.repo_owner, automation.repo_name),
+      resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),
+      resolveSandboxSettings(this.env.DB, repoOwner, repoName),
     ]);
 
     await initializeSession(
       this.env,
       {
         sessionId,
-        repoOwner: automation.repo_owner,
-        repoName: automation.repo_name,
-        repoId: automation.repo_id,
-        defaultBranch: automation.base_branch,
+        repoOwner,
+        repoName,
+        repoId,
+        defaultBranch: baseBranch,
         title: `[Auto] ${automation.name}`,
         model: automation.model,
         reasoningEffort: automation.reasoning_effort,
@@ -973,7 +1004,7 @@ export class SchedulerDO extends DurableObject<Env> {
       threadTs: event.threadTs ?? event.ts,
       // React on (and later clear) the follow-up message itself.
       reactionMessageTs: event.ts,
-      repoFullName: `${automation.repo_owner}/${automation.repo_name}`,
+      repoFullName: formatAutomationTargetLabel(automation),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
     };

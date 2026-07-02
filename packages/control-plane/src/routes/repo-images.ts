@@ -11,6 +11,7 @@
 import { RepoImageStore } from "../db/repo-images";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
+import { RepoImageError } from "../repo-images/errors";
 import { getRepoImagesUnsupportedMessage } from "../repo-images/provider-policy";
 import { createRepoImageBuildWorkflowFromEnv } from "../repo-images/workflow";
 import type {
@@ -79,8 +80,6 @@ async function workflowResultToResponse(
   }
 
   switch (result.type) {
-    case "build_triggered":
-      return json({ buildId: result.buildId, status: "building" });
     case "completion_accepted":
       return json({ ok: true, snapshotPending: true });
     case "build_ready":
@@ -92,25 +91,38 @@ async function workflowResultToResponse(
       return json({ ok: true, superseded: true });
     case "build_failed":
       return json({ ok: true });
-    case "invalid_callback":
-      return error(result.message, 400);
-    case "callback_auth_rejected":
-      return error(result.message, 401);
-    case "callback_auth_unavailable":
-      return error(result.message, 500);
-    case "repository_not_installed":
-      return error(result.message, 404);
-    case "repo_image_workflow_unavailable":
-    case "repo_image_provider_unconfigured":
-      return error(result.message, 503);
-    case "completion_not_accepted":
-    case "failure_not_accepted":
-      return error(result.message, 409);
-    case "workflow_failed":
-      return error(result.message, 500);
     default: {
       const exhaustive: never = result;
       return error(`Unhandled workflow result: ${String(exhaustive)}`, 500);
+    }
+  }
+}
+
+function repoImageErrorToResponse(errorValue: unknown): Response {
+  if (!(errorValue instanceof RepoImageError)) throw errorValue;
+
+  switch (errorValue.code) {
+    case "repository_not_installed":
+      return error(errorValue.message, 404);
+    case "invalid_callback":
+      return error(errorValue.message, 400);
+    case "callback_auth_rejected":
+      return error(errorValue.message, 401);
+    case "completion_not_accepted":
+    case "failure_not_accepted":
+      return error(errorValue.message, 409);
+    case "workflow_unavailable":
+    case "provider_unconfigured":
+      return error(errorValue.message, 503);
+    case "planning_failed":
+    case "trigger_failed":
+    case "callback_auth_unavailable":
+    case "build_complete_failed":
+    case "build_failed_update_failed":
+      return error(errorValue.message, 500);
+    default: {
+      const exhaustive: never = errorValue.code;
+      return error(`Unhandled repo image error: ${String(exhaustive)}`, 500);
     }
   }
 }
@@ -157,7 +169,11 @@ async function parseRepoImageCallbackBody<T>(request: Request): Promise<T | Resp
   }
 
   try {
-    return JSON.parse(bodyText) as T;
+    const parsed: unknown = JSON.parse(bodyText);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return error("Invalid JSON body", 400);
+    }
+    return parsed as T;
   } catch {
     return error("Invalid JSON body", 400);
   }
@@ -231,13 +247,17 @@ async function handleBuildComplete(
   const completion = buildCompleteCommand(body);
   if (completion instanceof Response) return completion;
 
-  const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildComplete({
-    completion,
-    authorizationHeader: request.headers.get("Authorization"),
-    callbackToken: getRepoImageCallbackBearerToken(request),
-    context: workflowContext(ctx),
-  });
-  return workflowResultToResponse(result, ctx);
+  try {
+    const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildComplete({
+      completion,
+      authorizationHeader: request.headers.get("Authorization"),
+      callbackToken: getRepoImageCallbackBearerToken(request),
+      context: workflowContext(ctx),
+    });
+    return workflowResultToResponse(result, ctx);
+  } catch (e) {
+    return repoImageErrorToResponse(e);
+  }
 }
 
 /**
@@ -260,13 +280,17 @@ async function handleBuildFailed(
   const failure = buildFailedCommand(body);
   if (failure instanceof Response) return failure;
 
-  const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildFailed({
-    failure,
-    authorizationHeader: request.headers.get("Authorization"),
-    callbackToken: getRepoImageCallbackBearerToken(request),
-    context: workflowContext(ctx),
-  });
-  return workflowResultToResponse(result, ctx);
+  try {
+    const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildFailed({
+      failure,
+      authorizationHeader: request.headers.get("Authorization"),
+      callbackToken: getRepoImageCallbackBearerToken(request),
+      context: workflowContext(ctx),
+    });
+    return workflowResultToResponse(result, ctx);
+  } catch (e) {
+    return repoImageErrorToResponse(e);
+  }
 }
 
 /**
@@ -289,12 +313,16 @@ async function handleTriggerBuild(
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
 
-  const result = await createRepoImageBuildWorkflowFromEnv(env).triggerBuild(
-    params.owner,
-    params.name,
-    workflowContext(ctx)
-  );
-  return workflowResultToResponse(result, ctx);
+  try {
+    const result = await createRepoImageBuildWorkflowFromEnv(env).triggerBuild(
+      params.owner,
+      params.name,
+      workflowContext(ctx)
+    );
+    return json({ buildId: result.buildId, status: "building" });
+  } catch (e) {
+    return repoImageErrorToResponse(e);
+  }
 }
 
 /**

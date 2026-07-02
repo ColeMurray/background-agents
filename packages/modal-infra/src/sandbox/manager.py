@@ -60,6 +60,14 @@ def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
     )
 
 
+def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
+    has_owner = bool(repo_owner)
+    has_name = bool(repo_name)
+    if has_owner != has_name:
+        raise ValueError("repo_owner and repo_name must be provided together")
+    return has_owner
+
+
 def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
     """Map sandbox settings to Modal resource kwargs.
 
@@ -87,8 +95,8 @@ def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
 class SandboxConfig:
     """Configuration for creating a sandbox."""
 
-    repo_owner: str
-    repo_name: str
+    repo_owner: str | None
+    repo_name: str | None
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
     snapshot_id: str | None = None
     session_config: SessionConfig | None = None
@@ -384,10 +392,14 @@ class SandboxManager:
         start_time = time.time()
 
         # Use provided sandbox_id from control plane, or generate one
+        has_repository = _has_repository(config.repo_owner, config.repo_name)
         if config.sandbox_id:
             sandbox_id = config.sandbox_id
         else:
-            sandbox_id = f"sandbox-{config.repo_owner}-{config.repo_name}-{int(time.time() * 1000)}"
+            sandbox_name = (
+                f"{config.repo_owner}-{config.repo_name}" if has_repository else "no-repository"
+            )
+            sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
         # Prepare environment variables (user vars first, system vars override)
         env_vars: dict[str, str] = {}
@@ -401,16 +413,18 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": config.control_plane_url,
                 "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
-                "REPO_OWNER": config.repo_owner,
-                "REPO_NAME": config.repo_name,
+                "REPO_OWNER": config.repo_owner or "",
+                "REPO_NAME": config.repo_name or "",
             }
         )
 
-        self._inject_vcs_env_vars(
-            env_vars,
-            clone_token=config.fallback_clone_token,
-            include_github_cli_aliases=bool(config.fallback_clone_token),
-        )
+        if has_repository:
+            fallback_clone_token = config.fallback_clone_token
+            self._inject_vcs_env_vars(
+                env_vars,
+                clone_token=fallback_clone_token,
+                include_github_cli_aliases=bool(fallback_clone_token),
+            )
 
         code_server_password: str | None = None
         if config.code_server_enabled:
@@ -726,17 +740,19 @@ class SandboxManager:
 
         # Handle both SessionConfig and dict
         if isinstance(session_config, dict):
-            repo_owner = session_config.get("repo_owner", "")
-            repo_name = session_config.get("repo_name", "")
+            repo_owner = session_config.get("repo_owner")
+            repo_name = session_config.get("repo_name")
             session_config_json = json.dumps(session_config)
         else:
             repo_owner = session_config.repo_owner
             repo_name = session_config.repo_name
             session_config_json = session_config.model_dump_json()
+        has_repository = _has_repository(repo_owner, repo_name)
 
         # Use provided sandbox_id or generate one
         if not sandbox_id:
-            sandbox_id = f"sandbox-{repo_owner}-{repo_name}-{int(time.time() * 1000)}"
+            sandbox_name = f"{repo_owner}-{repo_name}" if has_repository else "no-repository"
+            sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
         # Lookup the image by ID
         image = modal.Image.from_id(snapshot_image_id)
@@ -753,23 +769,23 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": control_plane_url,
                 "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
-                "REPO_OWNER": repo_owner,
-                "REPO_NAME": repo_name,
+                "REPO_OWNER": repo_owner or "",
+                "REPO_NAME": repo_name or "",
                 "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone
                 "SESSION_CONFIG": session_config_json,
             }
         )
 
-        # Snapshot restore still passes the clone token through. Snapshots
-        # taken before the credential-helper migration ship an entrypoint
-        # that reads VCS_CLONE_TOKEN from env and embeds it in the origin
-        # URL — without it, those legacy snapshots can't fetch. New
-        # entrypoints ignore the env var and route through the helper.
-        # GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too so the gh
-        # CLI keeps working on snapshots predating the gh wrapper.
-        self._inject_vcs_env_vars(
-            env_vars, clone_token=clone_token, include_github_cli_aliases=True
-        )
+        if has_repository:
+            # Snapshot restore still passes the clone token through for
+            # repo-backed sandboxes. Snapshots taken before the credential-helper
+            # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env
+            # and embeds it in the origin URL; without it, those legacy snapshots
+            # can't fetch. GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too
+            # so the gh CLI keeps working on snapshots predating the gh wrapper.
+            self._inject_vcs_env_vars(
+                env_vars, clone_token=clone_token, include_github_cli_aliases=True
+            )
 
         code_server_password: str | None = None
         if code_server_enabled:

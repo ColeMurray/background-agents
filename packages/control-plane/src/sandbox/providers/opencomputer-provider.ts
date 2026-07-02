@@ -42,12 +42,15 @@ import {
 
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
-const OPENCOMPUTER_PROVIDER_TIMEOUT_FALLBACK_SECONDS = 10 * 60;
 const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
   "OI_REPO_IMAGE_BUILD_ID",
   "OI_REPO_IMAGE_CALLBACK_URL",
   "OI_REPO_IMAGE_CALLBACK_TOKEN",
+] as const;
+const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
+  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
+  "OI_REPO_IMAGE_CALLBACK_SECRET",
 ] as const;
 
 export interface TriggerOpenComputerRepoImageBuildConfig {
@@ -58,6 +61,7 @@ export interface TriggerOpenComputerRepoImageBuildConfig {
   callbackUrl: string;
   callbackToken: string;
   userEnvVars?: Record<string, string>;
+  cloneToken?: string;
   buildTimeoutSeconds?: number;
   onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
 }
@@ -73,6 +77,11 @@ export interface OpenComputerProviderConfig {
   codeServerPasswordSecret: string;
   /** Provider-level LLM credentials to expose to the sandbox runtime. */
   llmEnvVars?: Record<string, string | undefined>;
+}
+
+interface PreparedOpenComputerEnvironment {
+  envVars: Record<string, string>;
+  secretEnvVars?: Record<string, string>;
 }
 
 export class OpenComputerSandboxProvider implements SandboxProvider {
@@ -95,34 +104,34 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
-      const envVars = await this.buildRuntimeEnvVars(config, {
+      const environment = await this.buildRuntimeEnvironment(config, {
         fromRepoImage: !!config.repoImageId,
         repoImageSha: config.repoImageSha ?? undefined,
       });
-      secretStore = await this.createSecretStoreFor(config.sessionId, config.userEnvVars);
+      secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
       const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
       const sandbox = config.repoImageId
         ? await this.client.forkFromCheckpoint({
             checkpointId: config.repoImageId,
             name: config.sandboxId,
-            env: envVars,
+            env: environment.envVars,
             labels,
-            timeoutSeconds,
+            ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
           })
         : await this.client.createSandbox({
             name: config.sandboxId,
             template: this.client.config.template,
-            env: envVars,
+            env: environment.envVars,
             labels,
-            timeoutSeconds,
+            ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
-            projectId: this.client.config.projectId,
-            target: this.client.config.target,
           });
       providerObjectId = sandbox.id;
-      await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
+      if (timeoutSeconds !== undefined) {
+        await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
+      }
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -164,21 +173,23 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
-      const envVars = await this.buildRuntimeEnvVars(config, { restoredFromSnapshot: true });
-      secretStore = await this.createSecretStoreFor(config.sessionId, config.userEnvVars);
+      const environment = await this.buildRuntimeEnvironment(config, {
+        restoredFromSnapshot: true,
+      });
+      secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
+      const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
       const sandbox = await this.client.forkFromCheckpoint({
         checkpointId: config.snapshotImageId,
         name: config.sandboxId,
-        env: envVars,
+        env: environment.envVars,
         labels: this.buildLabels(config),
-        timeoutSeconds: resolveOpenComputerTimeoutSeconds(config.timeoutSeconds),
+        ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
-      await this.client.setSandboxTimeout(
-        providerObjectId,
-        resolveOpenComputerTimeoutSeconds(config.timeoutSeconds)
-      );
+      if (timeoutSeconds !== undefined) {
+        await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
+      }
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -268,10 +279,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       }
 
       if (wokeSandbox) {
-        await this.client.setSandboxTimeout(
-          config.providerObjectId,
-          resolveOpenComputerTimeoutSeconds(config.timeoutSeconds)
-        );
+        const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
+        if (timeoutSeconds !== undefined) {
+          await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
+        }
         await this.client.startRuntime(config.providerObjectId);
       }
 
@@ -344,14 +355,15 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     config: TriggerOpenComputerRepoImageBuildConfig
   ): Promise<TriggerOpenComputerRepoImageBuildResult> {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
+    let providerObjectId: string | undefined;
     try {
       const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
-      const envVars = await this.buildBuildEnvVars(config);
-      secretStore = await this.createSecretStoreFor(config.buildId, config.userEnvVars);
+      const environment = await this.buildBuildEnvironment(config);
+      secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
       const sandbox = await this.client.createSandbox({
         name: sandboxName,
         template: this.client.config.template,
-        env: envVars,
+        env: environment.envVars,
         labels: {
           openinspect_framework: "open-inspect",
           openinspect_provider: "opencomputer",
@@ -361,9 +373,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         },
         timeoutSeconds: config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
         secretStore: secretStore?.name,
-        projectId: this.client.config.projectId,
-        target: this.client.config.target,
       });
+      providerObjectId = sandbox.id;
 
       if (config.onProviderSessionCreated) {
         await config.onProviderSessionCreated(sandbox.id);
@@ -381,6 +392,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
       return { buildId: config.buildId, status: "building" };
     } catch (error) {
+      if (providerObjectId) {
+        await this.cleanupSandboxAfterFailedCreate(providerObjectId, config.buildId);
+      }
       if (secretStore) {
         try {
           await this.client.deleteSecretStore(secretStore.id);
@@ -410,31 +424,25 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
   }
 
-  private async buildRuntimeEnvVars(
+  private async buildRuntimeEnvironment(
     config: CreateSandboxConfig | RestoreConfig,
     mode: {
       restoredFromSnapshot?: boolean;
       fromRepoImage?: boolean;
       repoImageSha?: string;
     } = {}
-  ): Promise<Record<string, string>> {
-    const envVars: Record<string, string> = {};
+  ): Promise<PreparedOpenComputerEnvironment> {
+    const environment = this.prepareEnvironment(config.userEnvVars);
+    const { envVars } = environment;
     const sessionConfig = buildSessionConfig(config);
-
-    for (const [name, value] of Object.entries(config.userEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
-    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
 
     Object.assign(envVars, {
       PYTHONUNBUFFERED: "1",
       SANDBOX_ID: config.sandboxId,
       CONTROL_PLANE_URL: config.controlPlaneUrl,
       SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-      REPO_OWNER: config.repoOwner,
-      REPO_NAME: config.repoName,
+      REPO_OWNER: config.repoOwner ?? "",
+      REPO_NAME: config.repoName ?? "",
       SESSION_CONFIG: JSON.stringify(sessionConfig),
     });
 
@@ -450,19 +458,22 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     if (mode.fromRepoImage) {
       envVars.FROM_REPO_IMAGE = "true";
       envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
+      if (!envVars.VCS_CLONE_TOKEN) {
+        envVars.VCS_CLONE_TOKEN = "";
+      }
     }
 
     // OpenComputer forks (repo-image create + snapshot restore) inherit the
     // source sandbox's persisted env. Repo-image checkpoints are taken from a
     // build sandbox, so its build-mode markers — IMAGE_BUILD_MODE plus the
-    // repo-image build-callback vars — leak into the forked session unless we
-    // override them here, making the supervisor re-enter image-build mode
-    // (booting "build" instead of "repo_image", then failing the already-
-    // completed build-complete callback). A runtime session is never an image
-    // build, so force the markers off. IMAGE_BUILD_MODE is checked as
-    // === "true" in entrypoint.py, so "false" disables it.
+    // repo-image build-callback vars — and one-shot clone token leak into the
+    // forked session unless we override them here, making the supervisor
+    // re-enter image-build mode (booting "build" instead of "repo_image", then
+    // failing the already-completed build-complete callback). A runtime session
+    // is never an image build, so force the markers off. IMAGE_BUILD_MODE is
+    // checked as === "true" in entrypoint.py, so "false" disables it.
     envVars.IMAGE_BUILD_MODE = "false";
-    for (const key of REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
 
     if (this.providerConfig.scmProvider === "gitlab") {
       envVars.VCS_HOST = "gitlab.com";
@@ -472,20 +483,16 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       envVars.VCS_CLONE_USERNAME = "x-access-token";
     }
 
-    return envVars;
+    return environment;
   }
 
-  private async buildBuildEnvVars(
+  private async buildBuildEnvironment(
     config: TriggerOpenComputerRepoImageBuildConfig
-  ): Promise<Record<string, string>> {
-    const envVars: Record<string, string> = {};
-
-    for (const [name, value] of Object.entries(config.userEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
-    for (const [name, value] of Object.entries(this.providerConfig.llmEnvVars ?? {})) {
-      if (value) envVars[name] = value;
-    }
+  ): Promise<PreparedOpenComputerEnvironment> {
+    const environment = this.prepareEnvironment(config.userEnvVars, {
+      scrubReservedRepoImageEnv: true,
+    });
+    const { envVars } = environment;
 
     Object.assign(envVars, {
       PYTHONUNBUFFERED: "1",
@@ -506,8 +513,30 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       envVars.VCS_HOST = "github.com";
       envVars.VCS_CLONE_USERNAME = "x-access-token";
     }
+    if (config.cloneToken) {
+      envVars.VCS_CLONE_TOKEN = config.cloneToken;
+    }
 
-    return envVars;
+    return environment;
+  }
+
+  private prepareEnvironment(
+    userEnvVars: Record<string, string> | undefined,
+    options: { scrubReservedRepoImageEnv?: boolean } = {}
+  ): PreparedOpenComputerEnvironment {
+    const envVars: Record<string, string> = {};
+    copyDefinedEnvVars(envVars, this.providerConfig.llmEnvVars);
+    copyDefinedEnvVars(envVars, userEnvVars);
+
+    const secretEnvVars = copyDefinedEnvVars({}, userEnvVars);
+    if (options.scrubReservedRepoImageEnv) {
+      for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+        delete envVars[key];
+        delete secretEnvVars[key];
+      }
+    }
+
+    return { envVars, secretEnvVars };
   }
 
   private async createSecretStoreFor(
@@ -599,7 +628,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       openinspect_framework: "open-inspect",
       openinspect_provider: "opencomputer",
       openinspect_session_id: config.sessionId,
-      openinspect_repo: `${config.repoOwner}/${config.repoName}`,
+      ...(config.repoOwner && config.repoName
+        ? { openinspect_repo: `${config.repoOwner}/${config.repoName}` }
+        : {}),
       openinspect_expected_sandbox_id: config.sandboxId,
     };
   }
@@ -684,8 +715,18 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 }
 
-function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number {
-  return timeoutSeconds ?? OPENCOMPUTER_PROVIDER_TIMEOUT_FALLBACK_SECONDS;
+function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number | undefined {
+  return timeoutSeconds;
+}
+
+function copyDefinedEnvVars(
+  target: Record<string, string>,
+  source: Record<string, string | undefined> | undefined
+): Record<string, string> {
+  for (const [name, value] of Object.entries(source ?? {})) {
+    if (value) target[name] = value;
+  }
+  return target;
 }
 
 export function createOpenComputerProvider(

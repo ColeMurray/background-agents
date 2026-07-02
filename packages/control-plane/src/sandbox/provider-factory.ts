@@ -70,8 +70,6 @@ function createOpenComputerProviderFromEnv(env: Env): OpenComputerSandboxProvide
     apiUrl: env.OPENCOMPUTER_API_URL,
     apiKey: env.OPENCOMPUTER_API_KEY,
     template: env.OPENCOMPUTER_TEMPLATE,
-    projectId: env.OPENCOMPUTER_PROJECT_ID,
-    target: env.OPENCOMPUTER_TARGET,
   });
 
   return createOpenComputerProvider(client, {

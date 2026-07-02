@@ -3,9 +3,9 @@
  *
  * When the classifier can't decide which repository a Slack message refers to,
  * the bot posts a clarification message: the classifier's ranked guesses as
- * one-click quick-pick buttons, plus a searchable external_select over every
- * repo. This module owns that UI — the options Slack queries as the user types,
- * the quick-pick buttons, and the message blocks themselves.
+ * one-click quick-pick buttons, plus a repository picker. This module owns that
+ * UI — the options Slack queries as the user types, the quick-pick buttons, and
+ * the message blocks themselves.
  */
 
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
@@ -14,8 +14,10 @@ import { plainTextOption } from "./slack-options";
 import type {
   SlackActionsBlock,
   SlackButtonElement,
+  SlackExternalSelectElement,
   SlackSectionBlock,
   SlackSelectOption,
+  SlackStaticSelectElement,
 } from "./slack-blocks";
 import type { Env, RepoConfig } from "./types";
 
@@ -28,10 +30,26 @@ import type { Env, RepoConfig } from "./types";
 export const SELECT_REPO_ACTION_ID = "select_repo";
 
 /**
- * Action ID for the one-click quick-pick buttons that surface the classifier's
- * ranked alternatives. Routed through the same selection path as the picker.
+ * Action ID prefix for the one-click quick-pick buttons that surface the
+ * classifier's ranked alternatives. Routed through the same selection path as
+ * the picker; each button gets a unique suffix via {@link quickPickActionId}.
  */
 export const SELECT_REPO_QUICK_PICK_ACTION_ID = "select_repo_quick_pick";
+
+/** Unique per-button action_id; Slack requires action_id uniqueness within an actions block. */
+export function quickPickActionId(index: number): string {
+  return `${SELECT_REPO_QUICK_PICK_ACTION_ID}:${index}`;
+}
+
+/**
+ * Collapse a quick-pick's per-button action_id back to the bare constant so the
+ * interactions handler can match it; other action_ids pass through unchanged.
+ */
+export function baseActionId(actionId: string): string {
+  return actionId.startsWith(`${SELECT_REPO_QUICK_PICK_ACTION_ID}:`)
+    ? SELECT_REPO_QUICK_PICK_ACTION_ID
+    : actionId;
+}
 
 /**
  * Cap on quick-pick buttons in the clarification message. The classifier rarely
@@ -63,6 +81,27 @@ export async function getRepoClarificationOptions(
   return repos.slice(0, MAX_REPO_SUGGESTION_OPTIONS).map(toRepoSelectOption);
 }
 
+function buildRepoPickerAccessory(
+  repos: RepoConfig[]
+): SlackStaticSelectElement | SlackExternalSelectElement {
+  if (repos.length > 0 && repos.length <= MAX_REPO_SUGGESTION_OPTIONS) {
+    return {
+      type: "static_select",
+      placeholder: { type: "plain_text", text: "Select a repository" },
+      options: repos.map(toRepoSelectOption),
+      action_id: SELECT_REPO_ACTION_ID,
+    };
+  }
+
+  return {
+    type: "external_select",
+    placeholder: { type: "plain_text", text: "Select a repository" },
+    // 0 so the list appears on open; typing filters across all repos.
+    min_query_length: 0,
+    action_id: SELECT_REPO_ACTION_ID,
+  };
+}
+
 /**
  * One-click buttons for the classifier's ranked alternatives, capped at
  * MAX_REPO_QUICK_PICKS. Each carries the repo id and routes through the same
@@ -72,9 +111,9 @@ export function buildRepoQuickPickButtons(alternatives: RepoConfig[]): SlackButt
   const picks = alternatives.slice(0, MAX_REPO_QUICK_PICKS);
   const ambiguousNames = duplicateDisplayNames(picks);
 
-  return picks.map((repo) => ({
+  return picks.map((repo, index) => ({
     type: "button",
-    action_id: SELECT_REPO_QUICK_PICK_ACTION_ID,
+    action_id: quickPickActionId(index),
     // Two repos can share a displayName (e.g. the same repo name under different
     // owners); fall back to the unambiguous fullName for the colliding picks.
     text: plainTextOption(ambiguousNames.has(repo.displayName) ? repo.fullName : repo.displayName),
@@ -102,9 +141,11 @@ function duplicateDisplayNames(repos: RepoConfig[]): Set<string> {
  */
 export function buildRepoClarificationBlocks(
   reasoning: string,
-  alternatives: RepoConfig[] | undefined
+  alternatives: RepoConfig[] | undefined,
+  repos: RepoConfig[]
 ): Array<SlackSectionBlock | SlackActionsBlock> {
   const quickPicks = alternatives?.length ? buildRepoQuickPickButtons(alternatives) : [];
+  const usesInlinePicker = repos.length > 0 && repos.length <= MAX_REPO_SUGGESTION_OPTIONS;
 
   const blocks: Array<SlackSectionBlock | SlackActionsBlock> = [
     {
@@ -126,16 +167,12 @@ export function buildRepoClarificationBlocks(
       type: "mrkdwn",
       text:
         quickPicks.length > 0
-          ? "Or search for another repository:"
+          ? usesInlinePicker
+            ? "Or choose another repository:"
+            : "Or search for another repository:"
           : "Which repository should I work with?",
     },
-    accessory: {
-      type: "external_select",
-      placeholder: { type: "plain_text", text: "Select a repository" },
-      // 0 so the list appears on open; typing filters across all repos.
-      min_query_length: 0,
-      action_id: SELECT_REPO_ACTION_ID,
-    },
+    accessory: buildRepoPickerAccessory(repos),
   });
 
   return blocks;

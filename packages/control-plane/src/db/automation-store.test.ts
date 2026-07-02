@@ -143,6 +143,27 @@ describe("toAutomation", () => {
     const automation = toAutomation({ ...sampleRow, enabled: 0 });
     expect(automation.enabled).toBe(false);
   });
+
+  it("maps repo-less automations with nullable repo fields", () => {
+    const automation = toAutomation({
+      ...sampleRow,
+      repo_owner: null,
+      repo_name: null,
+      repo_id: null,
+      base_branch: null,
+    });
+
+    expect(automation.repoOwner).toBeNull();
+    expect(automation.repoName).toBeNull();
+    expect(automation.baseBranch).toBeNull();
+    expect(automation.repoId).toBeNull();
+  });
+
+  it("rejects partial repository fields", () => {
+    expect(() => toAutomation({ ...sampleRow, repo_name: null })).toThrow(
+      "Automation repository context must include repo_owner and repo_name together"
+    );
+  });
 });
 
 describe("toAutomationRun", () => {
@@ -174,6 +195,55 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("INSERT INTO automations");
       expect(statements[0].params[0]).toBe("auto_test1");
       expect(statements[0].params[1]).toBe("Daily sync");
+      expect(statements[0].params[2]).toBe("acme");
+      expect(statements[0].params[3]).toBe("web-app");
+    });
+
+    it("rejects repo-less rows with branch metadata", async () => {
+      const { db } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await expect(
+        store.create({
+          ...sampleRow,
+          repo_owner: null,
+          repo_name: null,
+          base_branch: "main",
+          repo_id: null,
+        })
+      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
+    });
+  });
+
+  describe("update", () => {
+    it("rejects branch updates that would leave a repo-less row with branch metadata", async () => {
+      const { db } = createFakeD1({
+        firstResult: {
+          ...sampleRow,
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        },
+      });
+      const store = new AutomationStore(db);
+
+      await expect(store.update(sampleRow.id, { base_branch: "main" })).rejects.toThrow(
+        "Automation base_branch and repo_id require repository context"
+      );
+    });
+
+    it("rejects clearing repository fields while leaving the existing branch", async () => {
+      const { db } = createFakeD1({ firstResult: sampleRow });
+      const store = new AutomationStore(db);
+
+      await expect(
+        store.update(sampleRow.id, {
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+        })
+      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
     });
   });
 

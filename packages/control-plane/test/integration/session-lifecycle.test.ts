@@ -18,9 +18,9 @@ describe("GET /internal/state", () => {
 
     expect(state.sandbox).not.toBeNull();
     expect(state.sandbox!.id).toEqual(expect.any(String));
-    // Status may be "pending" or "spawning" depending on whether warmSandbox()
-    // has begun the spawn attempt (it fires via ctx.waitUntil).
-    expect(["pending", "spawning"]).toContain(state.sandbox!.status);
+    // Status depends on how far the background warmSandbox() waitUntil has run.
+    // In CI the provider call can fail before this state read completes.
+    expect(["pending", "spawning", "failed"]).toContain(state.sandbox!.status);
   });
 
   it("state reflects custom model", async () => {

@@ -200,6 +200,96 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", { body: validBody });
       expect(res.status).toBe(201);
       expect(mockStore.create).toHaveBeenCalledTimes(1);
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+        })
+      );
+    });
+
+    it("creates repo-less automation without repo fields", async () => {
+      const noRepoRow = {
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      };
+      mockStore.create.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(noRepoRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Incident sweep",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Check recent incidents and summarize.",
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        })
+      );
+    });
+
+    it("rejects repo-less repo-scoped triggers", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "PR review",
+          instructions: "Review the PR.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName are required for repo-scoped triggers",
+      });
+    });
+
+    it("rejects partial repository fields", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Partial repo",
+          repoOwner: "acme",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName must be provided together",
+      });
+    });
+
+    it("rejects baseBranch without repository context", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Branch without repo",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run without a repository.",
+          baseBranch: "main",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "baseBranch requires repoOwner and repoName",
+      });
+      expect(mockStore.create).not.toHaveBeenCalled();
     });
 
     it("resolves user_id when scmUserId is provided", async () => {
@@ -420,6 +510,110 @@ describe("automation route handlers", () => {
         "auto-1",
         expect.objectContaining({ model: "openai/gpt-5.4", reasoning_effort: null })
       );
+    });
+
+    it("clears repository context when explicit null repo fields are supplied", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.update.mockResolvedValue({
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: null, repoName: null },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.update).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        })
+      );
+    });
+
+    it("rejects clearing repository context on repo-scoped automations", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        event_type: "pull_request.opened",
+        schedule_cron: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: null, repoName: null },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName are required for repo-scoped triggers",
+      });
+      expect(mockStore.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects repository context updates with only one repo field", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: null },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName must be provided together",
+      });
+      expect(mockStore.update).not.toHaveBeenCalled();
+    });
+
+    it("replaces repository context when repo fields are supplied", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.update.mockResolvedValue({
+        ...sampleRow,
+        repo_owner: "acme",
+        repo_name: "web-app",
+        repo_id: 12345,
+        base_branch: "main",
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: "Acme", repoName: "Web-App" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.update).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+        })
+      );
+    });
+
+    it("rejects branch updates without repository context", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { baseBranch: "main" },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: "baseBranch requires repoOwner and repoName",
+      });
     });
 
     it("returns 400 for invalid reasoning effort in update", async () => {

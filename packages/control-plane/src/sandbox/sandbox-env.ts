@@ -19,25 +19,25 @@ import type { McpServerConfig } from "@open-inspect/shared";
 /** Canonical `SESSION_CONFIG` payload handed to the sandbox runtime. */
 export interface SessionConfigPayload {
   session_id: string;
-  repo_owner: string;
-  repo_name: string;
+  repo_owner: string | null;
+  repo_name: string | null;
   provider: string;
   model: string;
   /** Omitted from the serialized payload when undefined. */
   mcp_servers?: McpServerConfig[];
   /** Omitted from the serialized payload when undefined. */
-  branch?: string;
+  branch?: string | null;
 }
 
 /** Provider-agnostic inputs needed to assemble a {@link SessionConfigPayload}. */
 export interface SessionConfigInput {
   sessionId: string;
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   provider: string;
   model: string;
   mcpServers?: McpServerConfig[];
-  branch?: string;
+  branch?: string | null;
 }
 
 /**
@@ -45,7 +45,8 @@ export interface SessionConfigInput {
  *
  * `mcp_servers` is always set (left undefined when absent) so `JSON.stringify`
  * omits it — matching how the runtime treats an absent key and an empty list
- * identically. `branch` is only set when provided.
+ * identically. `branch` is only omitted when undefined; null is serialized to
+ * explicitly represent a no-repository session.
  */
 export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayload {
   const payload: SessionConfigPayload = {
@@ -56,7 +57,7 @@ export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayl
     model: input.model,
     mcp_servers: input.mcpServers,
   };
-  if (input.branch) {
+  if (input.branch !== undefined) {
     payload.branch = input.branch;
   }
   return payload;

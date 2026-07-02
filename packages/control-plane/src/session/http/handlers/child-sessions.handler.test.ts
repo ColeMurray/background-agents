@@ -213,6 +213,29 @@ describe("createChildSessionsHandler", () => {
     });
   });
 
+  it("maps repo-less spawn context from session and owner participant", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(
+      createSession({
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      })
+    );
+    repository.listParticipants.mockReturnValue([createParticipant()]);
+
+    const response = handler.getSpawnContext();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      baseBranch: null,
+    });
+  });
+
   it("propagates non-default branch in spawn context", async () => {
     const { handler, getSession, repository } = createHandler();
     getSession.mockReturnValue(createSession({ base_branch: "feature/branch-fix" }));

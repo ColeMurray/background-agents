@@ -103,9 +103,9 @@ export interface SessionParticipant {
 export interface Session {
   id: string;
   title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;
@@ -344,9 +344,9 @@ export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
 export interface SessionState {
   id: string;
   title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
   branchName: string | null;
   status: SessionStatus;
   sandboxStatus: SandboxStatus;
@@ -378,9 +378,9 @@ export interface ParticipantPresence {
 const sessionStateSchema = z.object({
   id: z.string(),
   title: z.string().nullable(),
-  repoOwner: z.string(),
-  repoName: z.string(),
-  baseBranch: z.string(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  baseBranch: z.string().nullable(),
   branchName: z.string().nullable(),
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
@@ -639,39 +639,76 @@ export type CallbackContext =
   | LinearCallbackContext
   | AutomationCallbackContext;
 
+function hasRepositoryIdentifier(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+interface CreateSessionRepositoryFields {
+  repoOwner?: string | null;
+  repoName?: string | null;
+  branch?: string;
+}
+
+function hasMatchingRepositoryIdentifiers(data: CreateSessionRepositoryFields): boolean {
+  return hasRepositoryIdentifier(data.repoOwner) === hasRepositoryIdentifier(data.repoName);
+}
+
+function hasRepositoryForBranch(data: CreateSessionRepositoryFields): boolean {
+  return hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim();
+}
+
 // API response types
-export const createSessionRequestSchema = z.object({
-  repoOwner: z.string(),
-  repoName: z.string(),
+const createSessionRequestBaseSchema = z.object({
+  repoOwner: z.string().trim().min(1).nullish(),
+  repoName: z.string().trim().min(1).nullish(),
   title: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   branch: z.string().optional(),
 });
 
+export const createSessionRequestSchema = createSessionRequestBaseSchema
+  .refine(hasMatchingRepositoryIdentifiers, {
+    message: "repoOwner and repoName must be provided together",
+    path: ["repoName"],
+  })
+  .refine(hasRepositoryForBranch, {
+    message: "branch requires repoOwner and repoName",
+    path: ["branch"],
+  });
+
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
-export const createSessionInputSchema = createSessionRequestSchema.extend({
-  userId: z.string().optional(),
-  spawnSource: spawnSourceSchema.optional(),
-  authProvider: z.enum(["github", "google"]).optional(),
-  authUserId: z.string().optional(),
-  authEmail: z.string().optional(),
-  authName: z.string().optional(),
-  authAvatarUrl: z.string().optional(),
-  scmUserId: z.string().optional(),
-  scmLogin: z.string().optional(),
-  scmName: z.string().optional(),
-  scmEmail: z.string().optional(),
-  scmAvatarUrl: z.string().optional(),
-  actorUserId: z.string().optional(),
-  actorDisplayName: z.string().optional(),
-  actorEmail: z.string().optional(),
-  actorAvatarUrl: z.string().optional(),
-  scmToken: z.string().optional(),
-  scmRefreshToken: z.string().optional(),
-  scmTokenExpiresAt: z.number().optional(),
-});
+export const createSessionInputSchema = createSessionRequestBaseSchema
+  .extend({
+    userId: z.string().optional(),
+    spawnSource: spawnSourceSchema.optional(),
+    authProvider: z.enum(["github", "google"]).optional(),
+    authUserId: z.string().optional(),
+    authEmail: z.string().optional(),
+    authName: z.string().optional(),
+    authAvatarUrl: z.string().optional(),
+    scmUserId: z.string().optional(),
+    scmLogin: z.string().optional(),
+    scmName: z.string().optional(),
+    scmEmail: z.string().optional(),
+    scmAvatarUrl: z.string().optional(),
+    actorUserId: z.string().optional(),
+    actorDisplayName: z.string().optional(),
+    actorEmail: z.string().optional(),
+    actorAvatarUrl: z.string().optional(),
+    scmToken: z.string().optional(),
+    scmRefreshToken: z.string().optional(),
+    scmTokenExpiresAt: z.number().optional(),
+  })
+  .refine(hasMatchingRepositoryIdentifiers, {
+    message: "repoOwner and repoName must be provided together",
+    path: ["repoName"],
+  })
+  .refine(hasRepositoryForBranch, {
+    message: "branch requires repoOwner and repoName",
+    path: ["branch"],
+  });
 
 export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 
@@ -698,34 +735,38 @@ export interface ListSessionsResponse {
 // --- Agent-spawned sub-sessions ---
 
 /** Request body for POST /sessions/:parentId/children */
-export interface SpawnChildSessionRequest {
-  title: string;
-  prompt: string;
-  repoOwner?: string;
-  repoName?: string;
-  model?: string;
-  reasoningEffort?: string;
-}
+export const spawnChildSessionRequestSchema = z.object({
+  title: z.string(),
+  prompt: z.string(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
+export type SpawnChildSessionRequest = z.infer<typeof spawnChildSessionRequestSchema>;
 
 /** Returned by parent DO's GET /internal/spawn-context */
-export interface SpawnContext {
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  model: string;
-  reasoningEffort: string | null;
-  baseBranch: string | null;
-  owner: {
-    userId: string;
-    scmUserId: string | null;
-    scmLogin: string | null;
-    scmName: string | null;
-    scmEmail: string | null;
-    scmAccessTokenEncrypted: string | null;
-    scmRefreshTokenEncrypted: string | null;
-    scmTokenExpiresAt: number | null;
-  };
-}
+export const spawnContextSchema = z.object({
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  repoId: z.number().nullable(),
+  model: z.string(),
+  reasoningEffort: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  owner: z.object({
+    userId: z.string(),
+    scmUserId: z.string().nullable(),
+    scmLogin: z.string().nullable(),
+    scmName: z.string().nullable(),
+    scmEmail: z.string().nullable(),
+    scmAccessTokenEncrypted: z.string().nullable(),
+    scmRefreshTokenEncrypted: z.string().nullable(),
+    scmTokenExpiresAt: z.number().nullable(),
+  }),
+});
+
+export type SpawnContext = z.infer<typeof spawnContextSchema>;
 
 /** Returned by child DO's GET /internal/child-summary */
 export interface ChildSessionFinalResponse extends AgentResponse {
@@ -747,8 +788,8 @@ export interface ChildSessionDetail {
     id: string;
     title: string;
     status: SessionStatus;
-    repoOwner: string;
-    repoName: string;
+    repoOwner: string | null;
+    repoName: string | null;
     branchName: string | null;
     model: string;
     createdAt: number;
@@ -832,10 +873,6 @@ import type { TriggerConfig } from "../triggers/conditions";
 export interface Automation {
   id: string;
   name: string;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
-  repoId: number | null;
   instructions: string;
   triggerType: AutomationTriggerType;
   scheduleCron: string | null;
@@ -851,13 +888,14 @@ export interface Automation {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
+  repoId: number | null;
 }
 
 export interface CreateAutomationRequest {
   name: string;
-  repoOwner: string;
-  repoName: string;
-  baseBranch?: string;
   instructions: string;
   triggerType?: AutomationTriggerType;
   scheduleCron?: string;
@@ -867,16 +905,21 @@ export interface CreateAutomationRequest {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  baseBranch?: string | null;
 }
 
 export interface UpdateAutomationRequest {
   name?: string;
   instructions?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
-  baseBranch?: string;
+  baseBranch?: string | null;
   eventType?: string;
   triggerConfig?: TriggerConfig;
 }

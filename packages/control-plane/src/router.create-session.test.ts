@@ -28,7 +28,10 @@ describe("handleCreateSession D1 ordering", () => {
     } as never);
   });
 
-  async function createSessionRequest(env: Record<string, unknown>): Promise<Response> {
+  async function createSessionRequestWithBody(
+    env: Record<string, unknown>,
+    body: Record<string, unknown>
+  ): Promise<Response> {
     const token = await generateInternalToken(secret);
 
     return handleRequest(
@@ -38,15 +41,19 @@ describe("handleCreateSession D1 ordering", () => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          repoOwner: "Acme",
-          repoName: "Web-App",
-          title: "Test session",
-          model: "anthropic/claude-haiku-4-5",
-        }),
+        body: JSON.stringify(body),
       }),
       env as never
     );
+  }
+
+  async function createSessionRequest(env: Record<string, unknown>): Promise<Response> {
+    return createSessionRequestWithBody(env, {
+      repoOwner: "Acme",
+      repoName: "Web-App",
+      title: "Test session",
+      model: "anthropic/claude-haiku-4-5",
+    });
   }
 
   async function invalidCreateSessionRequest(body: string): Promise<Response> {
@@ -116,6 +123,74 @@ describe("handleCreateSession D1 ordering", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "JSON body must be an object" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("creates a repo-less public session without resolving the repo", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      title: "No repo",
+      model: "anthropic/claude-haiku-4-5",
+    });
+
+    expect(response.status).toBe(201);
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: null,
+        repoName: null,
+        baseBranch: null,
+      })
+    );
+    expect(initFetch).toHaveBeenCalledOnce();
+  });
+
+  it("rejects whitespace-only repository fields as invalid before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest(
+      JSON.stringify({
+        repoOwner: "   ",
+        repoName: "\t",
+        title: "No repo",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid session request body" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("rejects partial repository payloads as invalid before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest(
+      JSON.stringify({
+        repoOwner: "Acme",
+        title: "Partial repo",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid session request body" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("rejects one-sided blank repository payloads as invalid before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest(
+      JSON.stringify({
+        repoOwner: "Acme",
+        repoName: " ",
+        title: "Partial repo",
+        model: "anthropic/claude-haiku-4-5",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid session request body" });
     expect(resolveRepoOrError).not.toHaveBeenCalled();
   });
 

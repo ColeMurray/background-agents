@@ -77,7 +77,7 @@ export function LinearIntegrationSettings() {
     <div>
       <h3 className="text-lg font-semibold text-foreground mb-1">Linear Agent</h3>
       <p className="text-sm text-muted-foreground mb-6">
-        Configure model defaults, repository targeting, and runtime behavior for Linear-triggered
+        Configure model defaults, repository scope, and runtime behavior for Linear-triggered
         sessions.
       </p>
 
@@ -257,7 +257,7 @@ function GlobalSettingsSection({
   return (
     <Section
       title="Defaults & Scope"
-      description="Global model, fallback behavior, and repository targeting."
+      description="Global model, fallback behavior, and repository scope."
     >
       {error && <Message tone="error" text={error} />}
 
