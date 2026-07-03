@@ -128,6 +128,31 @@ describe("boundary schemas", () => {
         expect(result.data.ackId).toBe("ack-1");
       }
     });
+
+    it("parses step finish events with structured token usage", () => {
+      const tokenUsage = {
+        total: 223,
+        input: 219,
+        output: 4,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      };
+
+      const result = sandboxEventSchema.safeParse({
+        type: "step_finish",
+        messageId: "message-1",
+        cost: 0.001,
+        tokens: tokenUsage,
+        reason: "end_turn",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.tokens).toEqual(tokenUsage);
+      }
+    });
   });
 
   describe("clientMessageSchema", () => {

@@ -88,6 +88,32 @@ const spawnSourceSchema = z.enum([
 ]);
 
 const recordSchema = z.record(z.string(), z.unknown());
+const tokenUsageDetailsSchema = z
+  .object({
+    total: z.number().optional(),
+    input: z.number().optional(),
+    output: z.number().optional(),
+    reasoning: z.number().optional(),
+    cache: z
+      .object({
+        read: z.number().optional(),
+        write: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+  .refine(
+    (usage) =>
+      typeof usage.total === "number" ||
+      typeof usage.input === "number" ||
+      typeof usage.output === "number" ||
+      typeof usage.reasoning === "number" ||
+      typeof usage.cache?.read === "number" ||
+      typeof usage.cache?.write === "number",
+    { message: "Expected at least one token usage count" }
+  );
+const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
 
 // Participant in a session
 export interface SessionParticipant {
@@ -270,7 +296,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
     cost: z.number().optional(),
-    tokens: z.number().optional(),
+    tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
   }),
