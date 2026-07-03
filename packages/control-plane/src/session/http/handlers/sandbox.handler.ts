@@ -5,21 +5,24 @@ import {
   type CreateMediaArtifactRequest,
   type SessionArtifact,
 } from "@open-inspect/shared";
-import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
+import type { SandboxEvent, ServerMessage } from "../../../types";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
+import { z } from "zod";
 
-interface AddParticipantRequest {
-  userId: string;
-  scmLogin?: string;
-  scmName?: string;
-  scmEmail?: string;
-  role?: string;
-}
+const addParticipantRequestSchema = z.object({
+  userId: z.string(),
+  scmLogin: z.string().optional(),
+  scmName: z.string().optional(),
+  scmEmail: z.string().optional(),
+  role: z.enum(["owner", "member"]).optional(),
+});
+
+type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
   repository: Pick<
@@ -143,7 +146,19 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
     },
 
     async addParticipant(request: Request): Promise<Response> {
-      const body = (await request.json()) as AddParticipantRequest;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid participant body" }, { status: 400 });
+      }
+
+      const result = addParticipantRequestSchema.safeParse(raw);
+      if (!result.success) {
+        return Response.json({ error: "Invalid participant body" }, { status: 400 });
+      }
+
+      const body: AddParticipantRequest = result.data;
 
       const id = deps.generateId();
       const now = deps.now();
@@ -154,7 +169,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
-        role: (body.role ?? "member") as ParticipantRole,
+        role: body.role ?? "member",
         joinedAt: now,
       });
 

@@ -60,6 +60,92 @@ describe("createMessagesHandler", () => {
     });
   });
 
+  it("enqueues prompt with optional boundary fields", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.enqueuePrompt).mockResolvedValue({
+      messageId: "msg-1",
+      status: "queued",
+    });
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "hello",
+          authorId: "user-1",
+          source: "web",
+          model: "openai/gpt-5.5",
+          reasoningEffort: "medium",
+          attachments: [{ type: "text", name: "notes.txt", url: "https://example.com/notes.txt" }],
+          callbackContext: { source: "slack" },
+          authorDisplayName: "Ada Lovelace",
+          authorEmail: "ada@example.com",
+          authorLogin: "ada",
+          scmUserId: "github-1",
+          scmAccessTokenEncrypted: "access-token",
+          scmRefreshTokenEncrypted: "refresh-token",
+          scmTokenExpiresAt: 1234,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(messageService.enqueuePrompt).toHaveBeenCalledWith({
+      content: "hello",
+      authorId: "user-1",
+      source: "web",
+      model: "openai/gpt-5.5",
+      reasoningEffort: "medium",
+      attachments: [{ type: "text", name: "notes.txt", url: "https://example.com/notes.txt" }],
+      callbackContext: { source: "slack" },
+      authorDisplayName: "Ada Lovelace",
+      authorEmail: "ada@example.com",
+      authorLogin: "ada",
+      scmUserId: "github-1",
+      scmAccessTokenEncrypted: "access-token",
+      scmRefreshTokenEncrypted: "refresh-token",
+      scmTokenExpiresAt: 1234,
+    });
+  });
+
+  it("returns 400 for partial prompt requests", async () => {
+    const { handler, messageService } = createHandler();
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "hello", source: "web" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid prompt request" });
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for malformed prompt fields", async () => {
+    const { handler, messageService } = createHandler();
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "hello",
+          authorId: "user-1",
+          source: "web",
+          attachments: [{}],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid prompt request" });
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
   it("logs and rethrows when enqueue prompt parsing fails", async () => {
     const { handler, log } = createHandler();
 

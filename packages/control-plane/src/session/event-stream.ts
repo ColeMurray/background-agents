@@ -5,6 +5,7 @@ import type {
   SandboxEvent,
   ServerMessage,
 } from "../types";
+import { sandboxEventSchema } from "@open-inspect/shared";
 import { encodeEventTimelineCursor, type EventListCursor } from "./event-cursor";
 import type { EventRow } from "./types";
 import type { SessionRepository } from "./repository";
@@ -88,7 +89,10 @@ function parseSandboxEvents(rows: EventRow[]): SandboxEvent[] {
   const events: SandboxEvent[] = [];
   for (const row of rows) {
     try {
-      events.push(JSON.parse(row.data) as SandboxEvent);
+      const result = sandboxEventSchema.safeParse(JSON.parse(row.data));
+      if (result.success) {
+        events.push(result.data);
+      }
     } catch {
       // Preserve existing replay/history behavior: malformed events are skipped.
     }
