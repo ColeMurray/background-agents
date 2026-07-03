@@ -77,18 +77,30 @@ type RepositorySelectionRequest =
   | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
+ * Thrown by {@link parseRepositorySelection} when the `repositories` payload is
+ * invalid. Route handlers catch it and answer 400 — the parser stays free of
+ * HTTP concerns (mirrors normalizeOptionalRepositoryPair / RepositoryPairValidationError).
+ */
+class RepositorySelectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepositorySelectionError";
+  }
+}
+
+/**
  * Parse the repository selection from a create/update body. `unchanged` means
  * the body did not touch the selection (create treats that as empty).
+ *
+ * @throws RepositorySelectionError when the `repositories` payload is invalid.
  */
-function parseRepositorySelection(body: {
-  repositories?: unknown;
-}): RepositorySelectionRequest | Response {
+function parseRepositorySelection(body: { repositories?: unknown }): RepositorySelectionRequest {
   if (body.repositories === undefined) return { kind: "unchanged" };
   const parsed = automationRepositoriesInputSchema.safeParse(body.repositories);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
-    return error(`repositories${path}: ${issue?.message ?? "invalid"}`, 400);
+    throw new RepositorySelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
   }
   return { kind: "replace", repositories: parsed.data };
 }
@@ -98,17 +110,13 @@ function parseRepositorySelection(body: {
  * repository; fan-out over several is a schedule/manual-only product scope
  * (event fan-out semantics are undefined, not technically prevented).
  */
-function validateRepositoryCount(
-  triggerType: AutomationTriggerType,
-  count: number
-): Response | null {
+function validateRepositoryCount(triggerType: AutomationTriggerType, count: number): void {
   if (count === 0 && (triggerType === "github_event" || triggerType === "linear_event")) {
-    return error("Repository-scoped triggers require exactly one repository", 400);
+    throw new RepositorySelectionError("Repository-scoped triggers require exactly one repository");
   }
   if (count > 1 && triggerType !== "schedule") {
-    return error("Multi-repository selections require a schedule trigger", 400);
+    throw new RepositorySelectionError("Multi-repository selections require a schedule trigger");
   }
-  return null;
 }
 
 /**
@@ -237,8 +245,13 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  const selection = parseRepositorySelection(body);
-  if (selection instanceof Response) return selection;
+  let selection: RepositorySelectionRequest;
+  try {
+    selection = parseRepositorySelection(body);
+  } catch (e) {
+    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    throw e;
+  }
   const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
 
   // Validate trigger type
@@ -254,8 +267,12 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
-  const countError = validateRepositoryCount(triggerType, requestedRepositories.length);
-  if (countError) return countError;
+  try {
+    validateRepositoryCount(triggerType, requestedRepositories.length);
+  } catch (e) {
+    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    throw e;
+  }
 
   const isSchedule = triggerType === "schedule";
 
@@ -545,16 +562,25 @@ async function handleUpdateAutomation(
   // active-invocation guard. In-flight invocations already materialized their
   // children from their firing-time snapshot, so an edit cannot corrupt them;
   // it simply applies from the next invocation.
-  const selection = parseRepositorySelection(body);
-  if (selection instanceof Response) return selection;
+  let selection: RepositorySelectionRequest;
+  try {
+    selection = parseRepositorySelection(body);
+  } catch (e) {
+    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    throw e;
+  }
 
   let replacementRepositories: AutomationRepositoryInsert[] | null = null;
   if (selection.kind === "replace") {
-    const countError = validateRepositoryCount(
-      existing.trigger_type as AutomationTriggerType,
-      selection.repositories.length
-    );
-    if (countError) return countError;
+    try {
+      validateRepositoryCount(
+        existing.trigger_type as AutomationTriggerType,
+        selection.repositories.length
+      );
+    } catch (e) {
+      if (e instanceof RepositorySelectionError) return error(e.message, 400);
+      throw e;
+    }
     const resolved = await resolveRepositorySelection(env, selection.repositories, ctx);
     if (resolved instanceof Response) return resolved;
     replacementRepositories = resolved;
