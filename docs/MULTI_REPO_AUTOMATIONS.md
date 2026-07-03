@@ -1,0 +1,288 @@
+# Multi-Repository Automations
+
+This document records the design decisions behind multi-repository automations: extending an
+automation's repository context from zero-or-one repository to a set of up to ten, with each firing
+fanning out into one session per repository.
+
+## Goal
+
+Support recurring maintenance across a set of repositories — for example checking `AGENTS.md` in ten
+repositories every week, updating each independently, and opening one pull request per repository
+where changes are needed.
+
+## The model
+
+```
+automation ── repositories (0..10, the live selection)
+    │
+    └── invocation                 one per firing (schedule tick, Trigger Now, or event)
+          │                        carries the firing-scoped keys and skip reason
+          └── runs (0..10)         one per repository, each linked to one session
+                └── session        ordinary sandbox session; owns branch, artifacts, PR
+```
+
+Every firing — single-repo, multi-repo, repo-less, or skipped — takes the same path: it records one
+`automation_invocations` row, and unless it was skipped, one `automation_runs` child per repository.
+There is no separate single-repo pipeline and no group-of-N special case; a single-repo firing is
+simply an invocation with one run.
+
+**API ↔ UI vocabulary.** The API speaks `automation / repository / invocation / run / session`. The
+UI keeps its established "run" copy: the history section is still titled "Run History", the empty
+state still says "No runs yet.", and an invocation of one renders exactly like the flat run row
+always did. A fan-out invocation renders as one expandable history row whose children are
+_repository_ rows.
+
+## Decisions
+
+### Should multi-repo automations create one session per repo?
+
+Answer: yes. A multi-repo firing fans out into one child session per selected repository.
+
+Reasoning: the session model is single-repository — each session has one repository, base branch,
+sync state, artifacts, and pull-request flow. Keeping sessions single-repo avoids cross-repo
+checkout and PR coordination inside one sandbox. Fan-out is the v1 execution shape; a future
+_workspace_ variant (one session that clones several repositories for atomic cross-repo work) is a
+separate follow-up and does not change this model — it would be a property of the session, not of
+the automation.
+
+### How is a firing stored?
+
+Answer: as a thin `automation_invocations` row plus per-repository `automation_runs` children. The
+invocation row stores identity, source, the firing-scoped dedup/concurrency keys, and a skip reason
+— **not** a status.
+
+Reasoning: a stored aggregate status must be kept consistent with the children by read-modify-write,
+and any crash or race between "last child completed" and "parent updated" wedges the automation.
+Deriving status from the children (one SQL fragment, one TypeScript twin) makes the wedge class
+unrepresentable.
+
+### How is invocation status derived?
+
+- no children → `skipped`
+- any child `starting`/`running` → `starting` / `running`
+- all children terminal: all skipped → `skipped`; none failed → `completed`; none completed →
+  `failed`; a mix → `partial_failed`
+
+`partial_failed` preserves the distinction between "the sweep failed everywhere" and "one repository
+failed while nine completed".
+
+### What does the run history depend on — the live selection or the firing?
+
+Answer: the firing. Every run snapshots its repository (`repo_owner/repo_name/repo_id/base_branch`)
+at firing time; history rendering and the session-creation path read the snapshot, never the
+automation's current repository set.
+
+Reasoning: this is the firing-record lesson from Ona's design (their trigger context is copied into
+each execution "for immutability"). Once history is self-contained, editing the repository set can
+never corrupt it — which is why there is **no edit-while-active guard and no cardinality freeze**:
+you can add or remove repositories at any time, including while an invocation is in flight.
+In-flight children keep their snapshots; the next firing uses the new set. Earlier drafts blocked
+repository edits while a run was active and froze 0/1/N cardinality once history existed; both
+guards existed only to protect readers that re-queried the live selection, and snapshots remove that
+dependency.
+
+### Where does the repository selection live?
+
+Answer: in a normalized `automation_repositories` table — the single source of truth, exposed as
+`Automation.repositories`. The legacy `automations.repo_owner/repo_name/repo_id/base_branch` columns
+survive one release as a compatibility mirror of `repositories[0]` (dual-written only for
+0/1-repository automations) and are then dropped.
+
+Reasoning: repository rows need validation, counting, joins, and per-repo fields (base branch today,
+possibly per-repo overrides later). A JSON blob would push parsing into every reader; a mode enum
+would pack count, absence, and trigger compatibility into one field. Zero rows = repo-less
+automation, one row = single-repo, N rows = fan-out — behavior derives from the data.
+
+### Is there a minimum repository count?
+
+Answer: no. `repositories` accepts 0 to `MAX_AUTOMATION_REPOSITORIES` (10) entries; one-element
+selections are fine.
+
+Reasoning: with a unified pipeline there is no separate "multi-repo mode" for a minimum to protect.
+Requiring 2+ existed to keep two pipelines apart; that fork no longer exists.
+
+### Which trigger types support multiple repositories?
+
+Answer: schedule and manual "Trigger Now" only, in v1. Event triggers (GitHub, Linear, Sentry,
+webhook, Slack) stay at 0 or 1 repository.
+
+Reasoning: this is a product scope cut, not an implementation limit — nothing in the unified
+pipeline prevents an event invocation from having N children. What is undefined is the product
+semantics: should a PR event on repository X fan out work to Y and Z? How does per-key concurrency
+(for example per-PR) compose with N children per firing? Until those questions have answers, event
+automations keep their current shape. The initial use case is scheduled maintenance.
+
+### Which branch does each repository use?
+
+Answer: each repository entry carries its own `baseBranch`; when omitted it resolves to that
+repository's default branch at save time. There is no cross-repo carryover — a branch set for one
+repository never leaks onto another.
+
+### Should duplicate repositories be silently deduplicated?
+
+Answer: no. Duplicates (after trim + lowercase normalization) are rejected with a validation error.
+
+Reasoning: silent deduplication makes the API surprising — a client submits one count and persists
+another. The UI prevents duplicates; the server enforces the invariant.
+
+### What if one repository becomes inaccessible?
+
+Answer: fail only that child and continue launching the others. If _every_ repository fails
+resolution, the invocation is born terminal: it finalizes immediately and counts one failure,
+matching the old single-repo behavior for revoked installations.
+
+Reasoning: one stale permission or renamed repository should not block maintenance across the rest
+of the set. The failed child carries the failure reason; the invocation derives `partial_failed`.
+
+### Should fan-out be concurrent?
+
+Answer: yes — all repositories of one firing launch concurrently, with the selection capped at
+`MAX_AUTOMATION_REPOSITORIES` (10). Across one scheduler tick, child launches are additionally
+budgeted (~50) so a tick full of 10-repo automations cannot exhaust the Workers subrequest limit;
+automations past the budget stay overdue and are picked up next tick.
+
+### What happens if the next schedule fires while an invocation is active?
+
+Answer: the firing is skipped — recorded as a childless invocation with skip reason
+`concurrent_run_active` — and the schedule advances. Scheduled and manual firings block on the whole
+automation; event firings block per concurrency key (an active PR-42 run does not block PR-43). A
+manual "Trigger Now" against an active invocation is rejected with `409` rather than recorded.
+
+Reasoning: recurring maintenance should not overlap itself. Two details are load-bearing: the skip
+is recorded **atomically with the schedule advance** (one D1 batch), so a crash between the two can
+never make the tick re-collide on the same cron slot forever; and skip invocations never carry the
+event `trigger_key`, so a skip never consumes the dedup slot of the real event delivery.
+
+### Should skipped firings count as failures?
+
+Answer: no. A childless skipped invocation never touches `consecutive_failures`.
+
+Reasoning: the active invocation is already the operational signal; counting the skipped follow-up
+would double-count one long-running sweep and could auto-pause a recoverable automation.
+
+### Should repeated partial failures auto-pause the automation?
+
+Answer: yes. Any invocation with at least one failed child counts **one** failure toward the same
+3-strike auto-pause threshold as a fully failed invocation. The failure is counted when the first
+child fails (via a compare-and-set stamp on the invocation, `failure_counted_at`, so concurrent
+completion callbacks, launch failures, and recovery sweeps count it exactly once), not when the last
+child finishes.
+
+Reasoning: a weekly sweep that fails one repository every week is still broken and should not run
+unattended forever. Counting early keeps parity with the old behavior, where a failure incremented
+the counter the moment it happened.
+
+### Should auto-pause cancel in-flight children?
+
+Answer: no. Auto-pause stops future firings; children that already started run to completion.
+
+Reasoning: sibling repositories may still finish successfully after the first failure. Letting them
+continue preserves useful work and gives the history an accurate final outcome.
+
+### When does the failure counter reset?
+
+Answer: only when an invocation finishes with **every** child completed. `partial_failed` never
+resets the counter.
+
+Reasoning: a fully successful sweep means the automation has recovered; a partially successful one
+does not. This matches the single-repo behavior (one completed run resets) because a single-repo
+invocation with a completed child _is_ an all-completed invocation. Crash windows around
+finalization are closed by a bounded recovery sweep that finds recent all-terminal invocations with
+missed accounting.
+
+### Should manual "Trigger Now" affect the schedule?
+
+Answer: no. Manual invocations never advance or delay `next_run_at`; the cron cadence stays fixed.
+Manual firings are allowed while the automation is paused (operators need to verify a fix before
+resuming), a successful manual invocation resets the failure counter without resuming, and a failed
+one counts toward auto-pause like any other.
+
+### How do retries work?
+
+Answer: there is no modeled retry in v1 — parity with the previous behavior. An invocation runs each
+repository exactly once; a failed child stays failed. The operator recourse is "Trigger Now", which
+starts a fresh invocation across the full selection. The anticipated future shape is a "re-run
+failed repositories" affordance that creates a **new invocation linked to the original** (snapshot =
+the failed subset) rather than mutating history; Ona — the closest analog — likewise ships no
+automatic retry, only structured error metadata.
+
+### How should the repository picker work?
+
+Answer: the selection drives everything — no mode switch to understand first. Selecting no
+repository creates a repo-less automation, one repository a single-repo automation, several (on
+schedule triggers) a fan-out automation. The form always submits the full `repositories` list.
+
+### Should instructions be per-repository?
+
+Answer: no. One shared instruction prompt; each child session receives its own repository context.
+Per-repo overrides can be added later if a real use case appears.
+
+### How should pull requests work?
+
+Answer: unchanged. Each child session owns its repository, branch, artifacts, and PR creation. The
+invocation aggregates links for display only; there is no cross-repository "mega" PR.
+
+## API surface
+
+- `GET /automations/:id/invocations` — the history endpoint: one entry per firing
+  (`{invocations, total}`), each carrying its child `runs` with repository snapshots. `total` counts
+  invocations.
+- `POST /automations/:id/trigger` — returns `201 {invocationId, runs}` (plus a deprecated `run`
+  field mirroring `runs[0]`); `409` when blocked by an active invocation.
+- Repository selection is written via `repositories: [{repoOwner, repoName, baseBranch?}]` on
+  create/update. The scalar `repoOwner/repoName/baseBranch` request fields survive one release as
+  single-repo sugar (normalized server-side into a one-element `repositories`; sending both forms is
+  rejected).
+
+### Deprecated for one release, then removed together
+
+| Artifact                                                                                | Why it exists                                                                                                                                                               |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /automations/:id/runs` alias                                                       | Serves the exact pre-invocations shape (flattened child runs, virtual rows for childless skips, old `total` math) so web bundles deployed before the cutover keep rendering |
+| `Automation.repoOwner/repoName/repoId/baseBranch` response mirrors of `repositories[0]` | Stops a stale edit form from null-clearing the repository set and keeps stale list pages rendering repo names                                                               |
+| Scalar-trio request sugar                                                               | Lets pre-cutover clients keep creating single-repo automations                                                                                                              |
+| `run` field in the trigger response                                                     | Pre-fan-out response shape                                                                                                                                                  |
+
+A second follow-up release then drops the transitional dual-write and the frozen legacy columns
+(`automations.repo_*`; `automation_runs.trigger_key/concurrency_key/trigger_run_metadata` and the
+`idx_runs_trigger_key` index that still guards rollback-window event dedup).
+
+## Deployment notes
+
+### Migration 0030 partial-apply recovery
+
+Migration `0030` (repositories + invocations + backfill) is replay-safe by construction: it is safe
+to rerun if the SQL succeeds but the version marker insert fails, if an older attempt added only
+some columns, or if a replay resumes midway. Do not add migration-runner special cases and do not
+manually mark it applied unless a schema inspection shows the database is already correct. If a
+rerun still fails, inspect the D1 error and the current schema first.
+
+### Rollback within the soak window
+
+New code dual-writes the legacy `automations.repo_*` columns for 0/1-repository automations, so
+rolled-back code executes and event-matches the dominant workload correctly. Two caveats:
+
+- **Pause multi-repo automations before rolling back.** Old code cannot see repository rows, so a
+  multi-repo automation would fire repo-less under it.
+- Automations created _under old code_ during a rollback window have no repository rows, and runs
+  created then have `invocation_id NULL`. Re-deploying forward repairs both by re-running the 0030
+  backfill statements (they are idempotent set-based inserts).
+
+## Addendum — Ona correspondence
+
+Ona (gitpod.io) is the one comparable product whose background-agent fan-out matches this
+architecture; its resource grain maps one-to-one and served as calibration for the unified pipeline,
+the firing-time snapshot, and derived status:
+
+| Ona                              | Open-Inspect | Notes                                                                                     |
+| -------------------------------- | ------------ | ----------------------------------------------------------------------------------------- |
+| `Workflow`                       | automation   | Triggers + action spec                                                                    |
+| `WorkflowExecution`              | invocation   | One per firing; Ona copies the trigger context into it at firing time — the snapshot idea |
+| `WorkflowExecutionAction`        | run          | One per repository; carries per-repo failure detail                                       |
+| `Environment` + `AgentExecution` | session      | Sandbox + agent conversation, backlinked both ways                                        |
+
+Ona also runs single-repo firings through the same pipeline (an execution with one action — no
+cardinality fork), stores per-state counters instead of a stored aggregate status, and models repo
+scope as a oneof that includes an org-wide search selector — the natural v2 of our
+`automation_repositories` table (the rows would become the resolved per-firing snapshot while the
+selector lives on the automation).
