@@ -23,7 +23,7 @@ import {
   toAutomation,
   toAutomationRun,
   type AutomationRow,
-  type NewAutomationRepository,
+  type AutomationRepositoryInsert,
   repositoryScalarMirror,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
@@ -171,7 +171,7 @@ async function resolveRepositorySelection(
   env: Env,
   repositories: NormalizedRepositoryInput[],
   ctx: RequestContext
-): Promise<NewAutomationRepository[] | Response> {
+): Promise<AutomationRepositoryInsert[] | Response> {
   const resolved = await Promise.all(
     repositories.map((repository) =>
       resolveRepoOrError(env, repository.repoOwner, repository.repoName, ctx, logger)
@@ -613,7 +613,7 @@ async function handleUpdateAutomation(
   const selection = parseRepositorySelection(body);
   if (selection instanceof Response) return selection;
 
-  let replacementRepositories: NewAutomationRepository[] | null = null;
+  let replacementRepositories: AutomationRepositoryInsert[] | null = null;
   if (selection.kind === "replace") {
     const countError = validateRepositoryCount(
       existing.trigger_type as AutomationTriggerType,

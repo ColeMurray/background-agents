@@ -1,4 +1,4 @@
-import type { NewAutomationRepository } from "../db/automation-store";
+import type { AutomationRepositoryInsert } from "../db/automation-store";
 import type { Env } from "../types";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 
@@ -17,7 +17,7 @@ export interface ResolvedAutomationRepository {
  * child still gets a repository snapshot.
  */
 export interface AutomationRepositoryResolution {
-  requested: NewAutomationRepository;
+  requested: AutomationRepositoryInsert;
   repository: ResolvedAutomationRepository | null;
   error: string | null;
 }
@@ -29,7 +29,7 @@ export interface AutomationRepositoryResolution {
  */
 export async function resolveAutomationRepositories(
   env: Env,
-  repositories: NewAutomationRepository[],
+  repositories: AutomationRepositoryInsert[],
   sourceControlProvider?: SourceControlProvider
 ): Promise<AutomationRepositoryResolution[]> {
   if (repositories.length === 0) return [];

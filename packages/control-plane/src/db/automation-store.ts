@@ -87,7 +87,7 @@ export interface AutomationRepositoryRow {
 }
 
 /** Repository values for insert/replace (timestamps and owner id supplied by the store). */
-export type NewAutomationRepository = Pick<
+export type AutomationRepositoryInsert = Pick<
   AutomationRepositoryRow,
   "repo_owner" | "repo_name" | "repo_id" | "base_branch"
 >;
@@ -99,7 +99,7 @@ export type NewAutomationRepository = Pick<
  * automations.
  */
 export function repositoryScalarMirror(
-  repositories: NewAutomationRepository[]
+  repositories: AutomationRepositoryInsert[]
 ): Pick<AutomationRow, "repo_owner" | "repo_name" | "repo_id" | "base_branch"> {
   if (repositories.length === 1) {
     const [repository] = repositories;
@@ -556,7 +556,7 @@ export class AutomationStore {
   /** INSERT statements for an automation's repository rows (composable into a batch). */
   bindRepositoryInserts(
     automationId: string,
-    repositories: NewAutomationRepository[],
+    repositories: AutomationRepositoryInsert[],
     now: number
   ): D1PreparedStatement[] {
     return repositories.map((repository) =>
@@ -586,7 +586,7 @@ export class AutomationStore {
    */
   bindReplaceRepositories(
     automationId: string,
-    repositories: NewAutomationRepository[],
+    repositories: AutomationRepositoryInsert[],
     now: number
   ): D1PreparedStatement[] {
     const mirror = repositoryScalarMirror(repositories);
@@ -613,7 +613,7 @@ export class AutomationStore {
 
   async replaceRepositories(
     automationId: string,
-    repositories: NewAutomationRepository[]
+    repositories: AutomationRepositoryInsert[]
   ): Promise<void> {
     await this.db.batch(this.bindReplaceRepositories(automationId, repositories, Date.now()));
   }

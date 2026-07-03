@@ -30,7 +30,7 @@ import {
   type AutomationRunRow,
   type AutomationInvocationRow,
   type InvocationOverlapScope,
-  type NewAutomationRepository,
+  type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import {
@@ -134,7 +134,7 @@ interface StartInvocationParams {
   /** Source-specific JSON stored on the invocation (slack message coordinates). */
   triggerMetadata?: string | null;
   /** Pre-fetched repository selection (the tick passes its batched fetch). */
-  repositories?: NewAutomationRepository[];
+  repositories?: AutomationRepositoryInsert[];
   instructionsOverride?: string;
 }
 

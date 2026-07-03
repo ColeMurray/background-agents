@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NewAutomationRepository } from "../db/automation-store";
+import type { AutomationRepositoryInsert } from "../db/automation-store";
 import type { Env } from "../types";
 import type { SourceControlProvider } from "../source-control";
 import { resolveAutomationRepositories } from "./repository";
 
-function repo(overrides?: Partial<NewAutomationRepository>): NewAutomationRepository {
+function repo(overrides?: Partial<AutomationRepositoryInsert>): AutomationRepositoryInsert {
   return {
     repo_owner: "acme",
     repo_name: "web-app",
