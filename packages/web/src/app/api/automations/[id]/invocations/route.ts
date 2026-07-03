@@ -5,11 +5,6 @@ import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
-/**
- * @deprecated The UI reads /invocations; this proxy stays one release so
- * browser tabs still running the previous bundle keep a working history list.
- * Remove together with the control plane's /runs alias endpoint.
- */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -17,14 +12,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
 
   const { id } = await params;
-  const path = buildControlPlanePath(`/automations/${id}/runs`, request.nextUrl.searchParams);
+  const path = buildControlPlanePath(
+    `/automations/${id}/invocations`,
+    request.nextUrl.searchParams
+  );
 
   try {
     const response = await controlPlaneFetch(path);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to fetch automation runs:", error);
-    return NextResponse.json({ error: "Failed to fetch automation runs" }, { status: 500 });
+    console.error("Failed to fetch automation invocations:", error);
+    return NextResponse.json({ error: "Failed to fetch automation invocations" }, { status: 500 });
   }
 }

@@ -3,7 +3,7 @@ import { useSession } from "next-auth/react";
 import type {
   Automation,
   ListAutomationsResponse,
-  ListAutomationRunsResponse,
+  ListAutomationInvocationsResponse,
 } from "@open-inspect/shared";
 
 export function useAutomations() {
@@ -35,15 +35,15 @@ export function useAutomation(id: string | undefined) {
   };
 }
 
-export function useAutomationRuns(id: string | undefined, limit = 20, offset = 0) {
+export function useAutomationInvocations(id: string | undefined, limit = 20, offset = 0) {
   const { data: session } = useSession();
 
-  const { data, isLoading, mutate } = useSWR<ListAutomationRunsResponse>(
-    session && id ? `/api/automations/${id}/runs?limit=${limit}&offset=${offset}` : null
+  const { data, isLoading, mutate } = useSWR<ListAutomationInvocationsResponse>(
+    session && id ? `/api/automations/${id}/invocations?limit=${limit}&offset=${offset}` : null
   );
 
   return {
-    runs: data?.runs ?? [],
+    invocations: data?.invocations ?? [],
     total: data?.total ?? 0,
     loading: isLoading,
     mutate,
