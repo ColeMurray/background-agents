@@ -85,6 +85,7 @@ export {
   type OpenComputerRestConfig,
   type OpenComputerSandboxResponse,
   type OpenComputerCreateSandboxParams,
+  type OpenComputerDeleteSandboxOptions,
 } from "./opencomputer-rest-client";
 export {
   resolveSandboxBackendName,

@@ -94,7 +94,7 @@ export class OpenComputerRepoImageBuildAdapter implements RepoImageBuildAdapter<
   ): Promise<void> {
     if (!providerSessionId) return;
     try {
-      await this.provider.deleteSandbox(providerSessionId);
+      await this.provider.deleteSandbox(providerSessionId, { deleteSecretStore: true });
     } catch (error) {
       logger.warn("repo_image.opencomputer_build_cleanup_failed", {
         build_id: buildId,

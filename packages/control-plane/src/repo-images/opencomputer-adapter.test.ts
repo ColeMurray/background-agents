@@ -100,7 +100,9 @@ describe("OpenComputerRepoImageBuildAdapter", () => {
       correlation,
     });
 
-    expect(provider.deleteSandbox).toHaveBeenCalledWith("oc-session-1");
+    expect(provider.deleteSandbox).toHaveBeenCalledWith("oc-session-1", {
+      deleteSecretStore: true,
+    });
     expect(provider.deleteProviderImage).toHaveBeenCalledWith("oc-checkpoint-1", "oc-session-1");
   });
 });
