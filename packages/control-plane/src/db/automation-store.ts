@@ -216,7 +216,9 @@ export function deriveInvocationStatus(counts: {
   failed: number;
   completed: number;
   skipped: number;
-  starting?: number;
+  // Required: distinguishes "starting" from "running". InvocationRunAggregate
+  // folds both into `active` and has no `starting`, so it must not be passed here.
+  starting: number;
 }): AutomationInvocationStatus {
   if (counts.total === 0) return "skipped";
   if (counts.active > 0) {

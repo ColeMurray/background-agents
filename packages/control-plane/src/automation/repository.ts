@@ -6,7 +6,9 @@ import { createSourceControlProviderFromEnv, type SourceControlProvider } from "
 export interface ResolvedAutomationRepository {
   repoOwner: string;
   repoName: string;
-  repoId: number | null;
+  // Access-checked at resolution, so always present (unlike the stored
+  // AutomationRepositoryInsert.repo_id, which can be null).
+  repoId: number;
   baseBranch: string;
 }
 
