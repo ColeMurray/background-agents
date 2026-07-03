@@ -27,7 +27,16 @@ cloudflare_api_token = ""
 cloudflare_account_id = ""
 
 # Cloudflare zone ID (optional, only needed for custom domains)
+# In the Cloudflare dashboard, open the domain's Overview and use "Copy zone ID".
 # cloudflare_zone_id = ""
+
+# Custom domain (hostname) for the Cloudflare web Worker (optional).
+# Only used when web_platform = "cloudflare". Requires cloudflare_zone_id above
+# and a zone you control. Cloudflare provisions the DNS record + edge cert and
+# the web app URL becomes https://<this-hostname> instead of the workers.dev URL
+# (the workers.dev route is disabled). Remember to update the GitHub/Google
+# OAuth callback URLs to the new hostname.
+# cloudflare_custom_domain = "" # e.g., "app.example.com"
 
 # Cloudflare Workers subdomain (found in Workers & Pages -> Overview, bottom-right of panel)
 # This is the subdomain used for workers.dev URLs (e.g., "myaccount" in "worker.myaccount.workers.dev")
