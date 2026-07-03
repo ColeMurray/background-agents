@@ -142,7 +142,7 @@ async function handleListAutomations(
   const result = await store.list({ repoOwner, repoName });
 
   return json({
-    automations: result.automations.map(toAutomation),
+    automations: result.automations.map((row) => toAutomation(row)),
     total: result.total,
   });
 }

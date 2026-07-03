@@ -1064,6 +1064,8 @@ export interface UpdateAutomationRequest {
 export interface AutomationRun {
   id: string;
   automationId: string;
+  /** The firing this run belongs to. Never null after the 0030 backfill. */
+  invocationId: string | null;
   sessionId: string | null;
   status: AutomationRunStatus;
   skipReason: string | null;
@@ -1074,8 +1076,18 @@ export interface AutomationRun {
   createdAt: number;
   sessionTitle: string | null;
   artifactSummary: string | null;
+  /** @deprecated Firing-scoped keys live on the invocation; null on new runs. */
   triggerKey: string | null;
+  /** @deprecated See {@link AutomationRun.triggerKey}. */
   concurrencyKey: string | null;
+  /**
+   * Repository snapshot taken at firing time — history never depends on the
+   * live selection. Null for repo-less runs and legacy session-less rows.
+   */
+  repoOwner: string | null;
+  repoName: string | null;
+  repoId: number | null;
+  baseBranch: string | null;
 }
 
 export interface ListAutomationsResponse {

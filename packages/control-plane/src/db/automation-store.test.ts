@@ -117,6 +117,11 @@ const sampleRunRow: AutomationRunRow = {
   created_at: now,
   trigger_key: null,
   concurrency_key: null,
+  invocation_id: null,
+  repo_owner: null,
+  repo_name: null,
+  repo_id: null,
+  base_branch: null,
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

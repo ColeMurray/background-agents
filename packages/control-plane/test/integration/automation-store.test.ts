@@ -55,6 +55,11 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     created_at: now,
     trigger_key: null,
     concurrency_key: null,
+    invocation_id: null,
+    repo_owner: null,
+    repo_name: null,
+    repo_id: null,
+    base_branch: null,
     ...overrides,
   };
 }
@@ -178,14 +183,44 @@ describe("AutomationStore (D1 integration)", () => {
       expect(result.automations).toHaveLength(2);
     });
 
-    it("filters by repo owner and name", async () => {
+    it("filters by repo owner and name via repository rows", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-c", repo_owner: "acme", repo_name: "api" }));
+      await store.replaceRepositories("auto-c", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+      ]);
       await store.create(makeAutomation({ id: "auto-d", repo_owner: "acme", repo_name: "web" }));
+      await store.replaceRepositories("auto-d", [
+        { repo_owner: "acme", repo_name: "web", repo_id: 2, base_branch: null },
+      ]);
 
       const result = await store.list({ repoOwner: "acme", repoName: "api" });
       expect(result.total).toBe(1);
       expect(result.automations[0].id).toBe("auto-c");
+    });
+
+    it("matches multi-repository automations on any selected repository", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(
+        makeAutomation({
+          id: "auto-multi",
+          repo_owner: null,
+          repo_name: null,
+          base_branch: null,
+          repo_id: null,
+        })
+      );
+      await store.replaceRepositories("auto-multi", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+        { repo_owner: "acme", repo_name: "web", repo_id: 2, base_branch: "develop" },
+      ]);
+
+      const byApi = await store.list({ repoOwner: "acme", repoName: "api" });
+      expect(byApi.automations.map((a) => a.id)).toEqual(["auto-multi"]);
+      const byWeb = await store.list({ repoOwner: "acme", repoName: "web" });
+      expect(byWeb.automations.map((a) => a.id)).toEqual(["auto-multi"]);
+      const byOther = await store.list({ repoOwner: "acme", repoName: "other" });
+      expect(byOther.total).toBe(0);
     });
 
     it("excludes soft-deleted automations", async () => {
@@ -672,6 +707,9 @@ describe("AutomationStore (D1 integration)", () => {
           event_type: "pull_request.opened",
         })
       );
+      await store.replaceRepositories("auto-ev1", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+      ]);
       await store.create(
         makeAutomation({
           id: "auto-ev2",
@@ -681,6 +719,9 @@ describe("AutomationStore (D1 integration)", () => {
           event_type: "issues.opened",
         })
       );
+      await store.replaceRepositories("auto-ev2", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+      ]);
 
       const results = await store.getAutomationsForEvent(
         "acme",
