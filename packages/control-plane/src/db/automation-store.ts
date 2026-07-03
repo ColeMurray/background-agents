@@ -448,6 +448,9 @@ export class AutomationStore {
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
+    // Repository fields are deliberately absent: the selection lives in
+    // automation_repositories, and the scalar mirror is written only by
+    // bindReplaceRepositories (the single dual-write site).
     const allowedFields: (keyof AutomationRow)[] = [
       "name",
       "instructions",
@@ -455,10 +458,6 @@ export class AutomationStore {
       "schedule_tz",
       "model",
       "reasoning_effort",
-      "repo_owner",
-      "repo_name",
-      "repo_id",
-      "base_branch",
       "next_run_at",
       "enabled",
       "consecutive_failures",
@@ -488,17 +487,6 @@ export class AutomationStore {
   }
 
   async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
-    if (
-      "repo_owner" in fields ||
-      "repo_name" in fields ||
-      "repo_id" in fields ||
-      "base_branch" in fields
-    ) {
-      const current = await this.getById(id);
-      if (!current) return null;
-      assertAutomationRepositoryFields({ ...current, ...fields });
-    }
-
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
     return this.getById(id);
@@ -1152,6 +1140,65 @@ export class AutomationStore {
       ),
       total,
     };
+  }
+
+  /**
+   * Flattened run list for the DEPRECATED GET /automations/:id/runs alias:
+   * child runs in firing order plus VIRTUAL rows for childless skipped
+   * invocations, shaped like the legacy skipped run rows (id = invocation id)
+   * so stale web bundles keep a row per firing and their pagination math.
+   * Firing keys are surfaced from the invocation for new rows. Removed with
+   * the alias.
+   */
+  async listRunsFlattenedForAutomation(
+    automationId: string,
+    options: { limit: number; offset: number }
+  ): Promise<{ runs: EnrichedRunRow[]; total: number }> {
+    const [countResult, pageResult] = await this.db.batch([
+      this.db
+        .prepare(
+          `SELECT
+             (SELECT COUNT(*) FROM automation_runs WHERE automation_id = ?)
+             + (SELECT COUNT(*) FROM automation_invocations i
+                WHERE i.automation_id = ? AND i.skip_reason IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM automation_runs r2 WHERE r2.invocation_id = i.id))
+             AS count`
+        )
+        .bind(automationId, automationId),
+      this.db
+        .prepare(
+          `SELECT * FROM (
+             SELECT r.id, r.automation_id, r.invocation_id, r.session_id, r.status,
+                    r.skip_reason, r.failure_reason, r.scheduled_at, r.started_at,
+                    r.completed_at, r.created_at,
+                    COALESCE(i.trigger_key, r.trigger_key) AS trigger_key,
+                    COALESCE(i.concurrency_key, r.concurrency_key) AS concurrency_key,
+                    r.repo_owner, r.repo_name, r.repo_id, r.base_branch,
+                    s.title AS session_title, NULL AS artifact_summary
+             FROM automation_runs r
+             LEFT JOIN automation_invocations i ON i.id = r.invocation_id
+             LEFT JOIN sessions s ON r.session_id = s.id
+             WHERE r.automation_id = ?
+             UNION ALL
+             SELECT i.id, i.automation_id, i.id, NULL, 'skipped',
+                    i.skip_reason, NULL, COALESCE(i.scheduled_at, i.created_at), NULL,
+                    i.created_at, i.created_at,
+                    i.trigger_key,
+                    i.concurrency_key,
+                    NULL, NULL, NULL, NULL,
+                    NULL, NULL
+             FROM automation_invocations i
+             WHERE i.automation_id = ? AND i.skip_reason IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM automation_runs r2 WHERE r2.invocation_id = i.id)
+           )
+           ORDER BY created_at DESC
+           LIMIT ? OFFSET ?`
+        )
+        .bind(automationId, automationId, options.limit, options.offset),
+    ]);
+
+    const total = (countResult.results?.[0] as { count: number } | undefined)?.count ?? 0;
+    return { runs: (pageResult.results ?? []) as EnrichedRunRow[], total };
   }
 
   // --- Invocation finalization sweep (D2c) ---

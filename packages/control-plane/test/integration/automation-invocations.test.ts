@@ -1094,4 +1094,164 @@ describe("automation invocations (D1 integration)", () => {
       expect(automation.repoName).toBeNull();
     });
   });
+
+  // ─── Deprecated /runs alias + invocations listing over mixed history ───────
+
+  describe("flattened runs alias over mixed history", () => {
+    /**
+     * One automation with all three history shapes at once:
+     *  - a pre-0030 legacy run, backfilled into an invocation of 1  (t=1000)
+     *  - a childless skipped invocation                             (t=2000)
+     *  - a multi-repo invocation with two children                  (t=3000)
+     */
+    async function seedMixedHistory(automationId: string): Promise<AutomationStore> {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: automationId }));
+
+      await seedLegacyRun({
+        id: "run-legacy",
+        automation_id: automationId,
+        status: "completed",
+        scheduled_at: 1_000,
+        completed_at: 1_500,
+        created_at: 1_000,
+        trigger_key: "issue:7",
+        concurrency_key: "issue:7",
+      });
+      await replayBackfill();
+
+      await store.insertSkippedInvocation(
+        makeInvocation(automationId, {
+          id: "inv-skip",
+          source: "schedule",
+          scheduled_at: 2_000,
+          skip_reason: "concurrent_run_active",
+          created_at: 2_000,
+          updated_at: 2_000,
+        })
+      );
+
+      await store.insertInvocationGuarded({
+        invocation: makeInvocation(automationId, {
+          id: "inv-multi",
+          source: "schedule",
+          scheduled_at: 3_000,
+          concurrency_key: "firing-key",
+          created_at: 3_000,
+          updated_at: 3_000,
+        }),
+        children: [
+          makeChild(automationId, {
+            id: "run-web",
+            status: "completed",
+            scheduled_at: 3_000,
+            completed_at: 3_500,
+            created_at: 3_000,
+            repo_owner: "acme",
+            repo_name: "web-app",
+            repo_id: 1,
+            base_branch: "main",
+          }),
+          makeChild(automationId, {
+            id: "run-api",
+            status: "completed",
+            scheduled_at: 3_000,
+            completed_at: 3_600,
+            created_at: 3_001,
+            repo_owner: "acme",
+            repo_name: "api",
+            repo_id: 2,
+            base_branch: "develop",
+          }),
+        ],
+        overlapScope: { kind: "automation" },
+      });
+
+      return store;
+    }
+
+    it("flattens children, injects virtual skip rows, and counts one row per firing unit", async () => {
+      const store = await seedMixedHistory("auto-alias");
+
+      const { runs, total } = await store.listRunsFlattenedForAutomation("auto-alias", {
+        limit: 50,
+        offset: 0,
+      });
+
+      // 3 real runs (legacy + two children) + 1 virtual skip row.
+      expect(total).toBe(4);
+      expect(runs.map((run) => run.id)).toEqual(["run-api", "run-web", "inv-skip", "run-legacy"]);
+
+      // Virtual row: shaped like a legacy skipped run, id = invocation id.
+      const virtualSkip = runs.find((run) => run.id === "inv-skip")!;
+      expect(virtualSkip).toMatchObject({
+        invocation_id: "inv-skip",
+        session_id: null,
+        status: "skipped",
+        skip_reason: "concurrent_run_active",
+        scheduled_at: 2_000,
+        repo_owner: null,
+        repo_name: null,
+      });
+
+      // New-pipeline children surface firing keys from their invocation
+      // (their own frozen columns are NULL).
+      const child = runs.find((run) => run.id === "run-web")!;
+      expect(child.concurrency_key).toBe("firing-key");
+      expect(child.repo_owner).toBe("acme");
+      expect(child.repo_name).toBe("web-app");
+
+      // Backfilled legacy rows keep their original key values.
+      const legacy = runs.find((run) => run.id === "run-legacy")!;
+      expect(legacy.trigger_key).toBe("issue:7");
+      expect(legacy.concurrency_key).toBe("issue:7");
+    });
+
+    it("paginates the flattened view with a stable total", async () => {
+      const store = await seedMixedHistory("auto-alias-page");
+
+      const first = await store.listRunsFlattenedForAutomation("auto-alias-page", {
+        limit: 2,
+        offset: 0,
+      });
+      const second = await store.listRunsFlattenedForAutomation("auto-alias-page", {
+        limit: 2,
+        offset: 2,
+      });
+
+      expect(first.total).toBe(4);
+      expect(second.total).toBe(4);
+      expect(first.runs.map((run) => run.id)).toEqual(["run-api", "run-web"]);
+      expect(second.runs.map((run) => run.id)).toEqual(["inv-skip", "run-legacy"]);
+    });
+
+    it("lists invocations over the same mixed history — one entry per firing", async () => {
+      const store = await seedMixedHistory("auto-alias-inv");
+
+      const { invocations, total } = await store.listInvocations("auto-alias-inv", {
+        limit: 50,
+        offset: 0,
+      });
+
+      expect(total).toBe(3);
+      expect(invocations.map((invocation) => invocation.id)).toEqual([
+        "inv-multi",
+        "inv-skip",
+        "run-legacy",
+      ]);
+
+      const multi = invocations[0];
+      expect(multi.status).toBe("completed");
+      expect(multi.runs.map((run) => run.repoName)).toEqual(["web-app", "api"]);
+
+      const skip = invocations[1];
+      expect(skip.status).toBe("skipped");
+      expect(skip.skipReason).toBe("concurrent_run_active");
+      expect(skip.runs).toEqual([]);
+
+      const legacy = invocations[2];
+      expect(legacy.status).toBe("completed");
+      expect(legacy.runs.map((run) => run.id)).toEqual(["run-legacy"]);
+    });
+  });
 });

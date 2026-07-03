@@ -221,34 +221,25 @@ describe("AutomationStore", () => {
   });
 
   describe("update", () => {
-    it("rejects branch updates that would leave a repo-less row with branch metadata", async () => {
-      const { db } = createFakeD1({
-        firstResult: {
-          ...sampleRow,
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-          base_branch: null,
-        },
+    it("ignores repository scalar fields — the mirror is written only by bindReplaceRepositories", async () => {
+      const { db, statements } = createFakeD1({ firstResult: sampleRow });
+      const store = new AutomationStore(db);
+
+      await store.update(sampleRow.id, {
+        name: "Renamed",
+        repo_owner: "other",
+        repo_name: "repo",
+        repo_id: 999,
+        base_branch: "dev",
       });
-      const store = new AutomationStore(db);
 
-      await expect(store.update(sampleRow.id, { base_branch: "main" })).rejects.toThrow(
-        "Automation base_branch and repo_id require repository context"
-      );
-    });
-
-    it("rejects clearing repository fields while leaving the existing branch", async () => {
-      const { db } = createFakeD1({ firstResult: sampleRow });
-      const store = new AutomationStore(db);
-
-      await expect(
-        store.update(sampleRow.id, {
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-        })
-      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
+      const updateStatement = statements.find((s) => s.sql.includes("UPDATE automations SET"));
+      expect(updateStatement).toBeDefined();
+      expect(updateStatement!.sql).toContain("name = ?");
+      expect(updateStatement!.sql).not.toContain("repo_owner");
+      expect(updateStatement!.sql).not.toContain("repo_name");
+      expect(updateStatement!.sql).not.toContain("repo_id");
+      expect(updateStatement!.sql).not.toContain("base_branch");
     });
   });
 

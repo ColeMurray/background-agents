@@ -8,31 +8,44 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { automationRoutes } from "./automations";
-import type { RequestContext } from "./shared";
+import { resolveRepoOrError, type RequestContext } from "./shared";
 import type { Env } from "../types";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockStore = {
   list: vi.fn(),
-  create: vi.fn(),
   getById: vi.fn(),
   update: vi.fn(),
   softDelete: vi.fn(),
   pause: vi.fn(),
   resume: vi.fn(),
   getActiveRunForAutomation: vi.fn(),
-  listRunsForAutomation: vi.fn(),
   getRunById: vi.fn(),
+  getRepositoriesForAutomation: vi.fn(),
+  getRepositoriesForAutomationIds: vi.fn(),
+  bindAutomationInsert: vi.fn(),
+  bindAutomationUpdate: vi.fn(),
+  bindRepositoryInserts: vi.fn(),
+  bindReplaceRepositories: vi.fn(),
+  listInvocations: vi.fn(),
+  listRunsFlattenedForAutomation: vi.fn(),
 };
 
-vi.mock("../db/automation-store", () => ({
-  AutomationStore: vi.fn().mockImplementation(function () {
-    return mockStore;
-  }),
-  toAutomation: vi.fn((row: unknown) => row),
-  toAutomationRun: vi.fn((row: unknown) => row),
-}));
+/** Shared D1 batch spy — createEnv wires it as env.DB.batch. */
+const mockBatch = vi.fn();
+
+vi.mock("../db/automation-store", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    AutomationStore: vi.fn().mockImplementation(function () {
+      return mockStore;
+    }),
+    toAutomation: vi.fn((row: unknown) => row),
+    toAutomationRun: vi.fn((row: unknown) => row),
+  };
+});
 
 const mockUserStore = {
   resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", isNew: false }),
@@ -75,7 +88,7 @@ function getHandler(method: string, path: string) {
 
 function createEnv(): Env {
   return {
-    DB: {} as D1Database,
+    DB: { batch: mockBatch } as unknown as D1Database,
     SESSION: {} as DurableObjectNamespace,
     SCHEDULER: {
       idFromName: vi.fn().mockReturnValue("fake-id"),
@@ -152,6 +165,21 @@ const sampleRow = {
 describe("automation route handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Defaults every test can override; re-set here so per-test overrides
+    // (mockClear keeps implementations) cannot leak across tests.
+    mockStore.getRepositoriesForAutomation.mockResolvedValue([]);
+    mockStore.getRepositoriesForAutomationIds.mockResolvedValue(new Map());
+    mockStore.bindAutomationInsert.mockReturnValue({ sql: "insert-automation" });
+    mockStore.bindAutomationUpdate.mockReturnValue({ sql: "update-automation" });
+    mockStore.bindRepositoryInserts.mockReturnValue([{ sql: "insert-repositories" }]);
+    mockStore.bindReplaceRepositories.mockReturnValue([{ sql: "replace-repositories" }]);
+    mockBatch.mockResolvedValue([]);
+    vi.mocked(resolveRepoOrError).mockResolvedValue({
+      repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
+      defaultBranch: "main",
+    });
   });
 
   describe("GET /automations (list)", () => {
@@ -194,13 +222,14 @@ describe("automation route handlers", () => {
     };
 
     it("creates automation with valid input", async () => {
-      mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", { body: validBody });
       expect(res.status).toBe(201);
-      expect(mockStore.create).toHaveBeenCalledTimes(1);
-      expect(mockStore.create).toHaveBeenCalledWith(
+
+      // Scalar sugar → one repository row plus the scalar mirror, persisted
+      // in a single atomic batch.
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
         expect.objectContaining({
           repo_owner: "acme",
           repo_name: "web-app",
@@ -208,6 +237,105 @@ describe("automation route handlers", () => {
           base_branch: "main",
         })
       );
+      expect(mockStore.bindRepositoryInserts).toHaveBeenCalledWith(
+        "generated-id",
+        [{ repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" }],
+        expect.any(Number)
+      );
+      expect(mockBatch).toHaveBeenCalledTimes(1);
+      expect(mockBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([{ sql: "insert-automation" }, { sql: "insert-repositories" }])
+      );
+    });
+
+    it("creates a multi-repository automation from the repositories list", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Fan-out sync",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          repositories: [
+            { repoOwner: "Acme", repoName: "Web-App" },
+            { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+          ],
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindRepositoryInserts).toHaveBeenCalledWith(
+        "generated-id",
+        [
+          { repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" },
+          { repo_owner: "acme", repo_name: "api", repo_id: 12345, base_branch: "develop" },
+        ],
+        expect.any(Number)
+      );
+      // Multi-repo selections have no scalar mirror.
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        })
+      );
+    });
+
+    it("rejects sending both repositories and the scalar repo fields", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          ...validBody,
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "Provide either repositories or the repoOwner/repoName fields, not both",
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate repositories in the list", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Dup",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          repositories: [
+            { repoOwner: "acme", repoName: "web-app" },
+            { repoOwner: "ACME", repoName: "Web-App" },
+          ],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json<{ error: string }>();
+      expect(body.error).toContain("repositories");
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("rejects multi-repository selections on non-schedule triggers", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Webhook fan-out",
+          instructions: "Run tests",
+          triggerType: "webhook",
+          repositories: [
+            { repoOwner: "acme", repoName: "web-app" },
+            { repoOwner: "acme", repoName: "api" },
+          ],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "Multi-repository selections require a schedule trigger",
+      });
     });
 
     it("creates repo-less automation without repo fields", async () => {
@@ -218,7 +346,6 @@ describe("automation route handlers", () => {
         repo_id: null,
         base_branch: null,
       };
-      mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(noRepoRow);
 
       const res = await callRoute("POST", "/automations", {
@@ -231,13 +358,18 @@ describe("automation route handlers", () => {
       });
 
       expect(res.status).toBe(201);
-      expect(mockStore.create).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
         expect.objectContaining({
           repo_owner: null,
           repo_name: null,
           repo_id: null,
           base_branch: null,
         })
+      );
+      expect(mockStore.bindRepositoryInserts).toHaveBeenCalledWith(
+        "generated-id",
+        [],
+        expect.any(Number)
       );
     });
 
@@ -289,11 +421,10 @@ describe("automation route handlers", () => {
       expect(await res.json()).toEqual({
         error: "baseBranch requires repoOwner and repoName",
       });
-      expect(mockStore.create).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("resolves user_id when scmUserId is provided", async () => {
-      mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", {
@@ -308,24 +439,24 @@ describe("automation route handlers", () => {
           providerLogin: "alice",
         })
       );
-      expect(mockStore.create).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
         expect.objectContaining({ user_id: "resolved-user-1" })
       );
     });
 
     it("creates automation with null user_id when scmUserId is missing", async () => {
-      mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", { body: validBody });
 
       expect(res.status).toBe(201);
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-      expect(mockStore.create).toHaveBeenCalledWith(expect.objectContaining({ user_id: null }));
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: null })
+      );
     });
 
     it("resolves user_id for a Google automation (auth* fields, no scmUserId)", async () => {
-      mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", {
@@ -346,13 +477,12 @@ describe("automation route handlers", () => {
           providerEmail: "pm@corp.com",
         })
       );
-      expect(mockStore.create).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
         expect.objectContaining({ user_id: "resolved-user-1" })
       );
     });
 
     it("stores reasoning effort when valid for the selected model", async () => {
-      mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
 
       const res = await callRoute("POST", "/automations", {
@@ -360,7 +490,7 @@ describe("automation route handlers", () => {
       });
 
       expect(res.status).toBe(201);
-      expect(mockStore.create).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
         expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoning_effort: "high" })
       );
     });
@@ -466,28 +596,29 @@ describe("automation route handlers", () => {
   describe("PUT /automations/:id (update)", () => {
     it("updates automation fields", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.update.mockResolvedValue({ ...sampleRow, name: "Updated" });
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: { name: "Updated" },
       });
       expect(res.status).toBe(200);
-      expect(mockStore.update).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
         expect.objectContaining({ name: "Updated" })
+      );
+      expect(mockBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([{ sql: "update-automation" }])
       );
     });
 
     it("updates reasoning effort when valid for the selected model", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.update.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: { reasoningEffort: "high" },
       });
 
       expect(res.status).toBe(200);
-      expect(mockStore.update).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
         expect.objectContaining({ reasoning_effort: "high" })
       );
@@ -495,18 +626,13 @@ describe("automation route handlers", () => {
 
     it("clears incompatible reasoning effort when model changes", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "max" });
-      mockStore.update.mockResolvedValue({
-        ...sampleRow,
-        model: "openai/gpt-5.4",
-        reasoning_effort: null,
-      });
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: { model: "openai/gpt-5.4" },
       });
 
       expect(res.status).toBe(200);
-      expect(mockStore.update).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
         expect.objectContaining({ model: "openai/gpt-5.4", reasoning_effort: null })
       );
@@ -514,27 +640,19 @@ describe("automation route handlers", () => {
 
     it("clears repository context when explicit null repo fields are supplied", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.update.mockResolvedValue({
-        ...sampleRow,
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: { repoOwner: null, repoName: null },
       });
 
       expect(res.status).toBe(200);
-      expect(mockStore.update).toHaveBeenCalledWith(
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-          base_branch: null,
-        })
+        [],
+        expect.any(Number)
+      );
+      expect(mockBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([{ sql: "replace-repositories" }])
       );
     });
 
@@ -554,7 +672,7 @@ describe("automation route handlers", () => {
       expect(await res.json()).toEqual({
         error: "repoOwner and repoName are required for repo-scoped triggers",
       });
-      expect(mockStore.update).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("rejects repository context updates with only one repo field", async () => {
@@ -568,33 +686,148 @@ describe("automation route handlers", () => {
       expect(await res.json()).toEqual({
         error: "repoOwner and repoName must be provided together",
       });
-      expect(mockStore.update).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("replaces repository context when repo fields are supplied", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.update.mockResolvedValue({
-        ...sampleRow,
-        repo_owner: "acme",
-        repo_name: "web-app",
-        repo_id: 12345,
-        base_branch: "main",
-      });
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: { repoOwner: "Acme", repoName: "Web-App" },
       });
 
       expect(res.status).toBe(200);
-      expect(mockStore.update).toHaveBeenCalledWith(
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({
+        [{ repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" }],
+        expect.any(Number)
+      );
+    });
+
+    it("resets the branch to the resolved default when the repository changes", async () => {
+      // Existing automation tracks acme/web-app@main; retargeting must take the
+      // NEW repo's default branch, never carry the previous row's branch over.
+      mockStore.getById.mockResolvedValue(sampleRow);
+      vi.mocked(resolveRepoOrError).mockResolvedValue({
+        repoId: 777,
+        repoOwner: "acme",
+        repoName: "api",
+        defaultBranch: "trunk",
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: "acme", repoName: "api" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledWith(
+        "auto-1",
+        [{ repo_owner: "acme", repo_name: "api", repo_id: 777, base_branch: "trunk" }],
+        expect.any(Number)
+      );
+    });
+
+    it("replaces the whole selection from the repositories list", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          repositories: [
+            { repoOwner: "acme", repoName: "web-app" },
+            { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+          ],
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledWith(
+        "auto-1",
+        [
+          { repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" },
+          { repo_owner: "acme", repo_name: "api", repo_id: 12345, base_branch: "develop" },
+        ],
+        expect.any(Number)
+      );
+    });
+
+    it("applies repository-set edits without consulting active runs", async () => {
+      // Snapshots on runs make edits safe mid-invocation — there is no
+      // active-run guard on the repository selection.
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          repositories: [
+            { repoOwner: "acme", repoName: "api" },
+            { repoOwner: "acme", repoName: "cli" },
+          ],
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledTimes(1);
+    });
+
+    it("applies baseBranch to the single selected repository", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.getRepositoriesForAutomation.mockResolvedValue([
+        {
+          automation_id: "auto-1",
           repo_owner: "acme",
           repo_name: "web-app",
           repo_id: 12345,
           base_branch: "main",
-        })
+          created_at: now,
+          updated_at: now,
+        },
+      ]);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { baseBranch: "release" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledWith(
+        "auto-1",
+        [{ repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "release" }],
+        expect.any(Number)
       );
+    });
+
+    it("rejects a bare baseBranch on multi-repository automations", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.getRepositoriesForAutomation.mockResolvedValue([
+        {
+          automation_id: "auto-1",
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          automation_id: "auto-1",
+          repo_owner: "acme",
+          repo_name: "api",
+          repo_id: 777,
+          base_branch: "main",
+          created_at: now,
+          updated_at: now,
+        },
+      ]);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { baseBranch: "release" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error:
+          "baseBranch applies per repository on multi-repository automations; resend repositories",
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("rejects branch updates without repository context", async () => {
@@ -657,13 +890,12 @@ describe("automation route handlers", () => {
 
     it("recomputes next_run_at when schedule changes", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.update.mockResolvedValue(sampleRow);
 
       await callRoute("PUT", "/automations/auto-1", {
         body: { scheduleCron: "0 12 * * *" },
       });
 
-      expect(mockStore.update).toHaveBeenCalledWith(
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
         expect.objectContaining({
           schedule_cron: "0 12 * * *",
@@ -776,10 +1008,48 @@ describe("automation route handlers", () => {
     });
   });
 
-  describe("GET /automations/:id/runs (list runs)", () => {
-    it("returns runs for automation", async () => {
+  describe("GET /automations/:id/invocations (list invocations)", () => {
+    it("returns invocations for automation", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.listRunsForAutomation.mockResolvedValue({
+      mockStore.listInvocations.mockResolvedValue({
+        invocations: [{ id: "inv-1", status: "completed", runs: [{ id: "run-1" }] }],
+        total: 1,
+      });
+
+      const res = await callRoute("GET", "/automations/auto-1/invocations");
+      expect(res.status).toBe(200);
+
+      const body = await res.json<{ invocations: unknown[]; total: number }>();
+      expect(body.invocations).toHaveLength(1);
+      expect(body.total).toBe(1);
+    });
+
+    it("returns 404 when automation not found", async () => {
+      mockStore.getById.mockResolvedValue(null);
+
+      const res = await callRoute("GET", "/automations/missing/invocations");
+      expect(res.status).toBe(404);
+    });
+
+    it("respects limit and offset params", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.listInvocations.mockResolvedValue({ invocations: [], total: 0 });
+
+      await callRoute("GET", "/automations/auto-1/invocations", {
+        query: { limit: "5", offset: "10" },
+      });
+
+      expect(mockStore.listInvocations).toHaveBeenCalledWith("auto-1", {
+        limit: 5,
+        offset: 10,
+      });
+    });
+  });
+
+  describe("GET /automations/:id/runs (deprecated flattened alias)", () => {
+    it("returns flattened runs for automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.listRunsFlattenedForAutomation.mockResolvedValue({
         runs: [{ id: "run-1", status: "completed" }],
         total: 1,
       });
@@ -801,13 +1071,13 @@ describe("automation route handlers", () => {
 
     it("respects limit and offset params", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.listRunsForAutomation.mockResolvedValue({ runs: [], total: 0 });
+      mockStore.listRunsFlattenedForAutomation.mockResolvedValue({ runs: [], total: 0 });
 
       await callRoute("GET", "/automations/auto-1/runs", {
         query: { limit: "5", offset: "10" },
       });
 
-      expect(mockStore.listRunsForAutomation).toHaveBeenCalledWith("auto-1", {
+      expect(mockStore.listRunsFlattenedForAutomation).toHaveBeenCalledWith("auto-1", {
         limit: 5,
         offset: 10,
       });
@@ -815,13 +1085,13 @@ describe("automation route handlers", () => {
 
     it("caps limit at 100", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockStore.listRunsForAutomation.mockResolvedValue({ runs: [], total: 0 });
+      mockStore.listRunsFlattenedForAutomation.mockResolvedValue({ runs: [], total: 0 });
 
       await callRoute("GET", "/automations/auto-1/runs", {
         query: { limit: "999" },
       });
 
-      expect(mockStore.listRunsForAutomation).toHaveBeenCalledWith("auto-1", {
+      expect(mockStore.listRunsFlattenedForAutomation).toHaveBeenCalledWith("auto-1", {
         limit: 100,
         offset: 0,
       });
