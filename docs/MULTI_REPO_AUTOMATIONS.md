@@ -72,14 +72,13 @@ Answer: the firing. Every run snapshots its repository (`repo_owner/repo_name/re
 at firing time; history rendering and the session-creation path read the snapshot, never the
 automation's current repository set.
 
-Reasoning: this is the firing-record lesson from Ona's design (their trigger context is copied into
-each execution "for immutability"). Once history is self-contained, editing the repository set can
-never corrupt it — which is why there is **no edit-while-active guard and no cardinality freeze**:
-you can add or remove repositories at any time, including while an invocation is in flight.
-In-flight children keep their snapshots; the next firing uses the new set. Earlier drafts blocked
-repository edits while a run was active and froze 0/1/N cardinality once history existed; both
-guards existed only to protect readers that re-queried the live selection, and snapshots remove that
-dependency.
+Reasoning: copying each firing's trigger context into an immutable record makes history
+self-contained. Once history is self-contained, editing the repository set can never corrupt it —
+which is why there is **no edit-while-active guard and no cardinality freeze**: you can add or
+remove repositories at any time, including while an invocation is in flight. In-flight children keep
+their snapshots; the next firing uses the new set. Earlier drafts blocked repository edits while a
+run was active and froze 0/1/N cardinality once history existed; both guards existed only to protect
+readers that re-queried the live selection, and snapshots remove that dependency.
 
 ### Where does the repository selection live?
 
@@ -203,8 +202,7 @@ Answer: there is no modeled retry in v1 — parity with the previous behavior. A
 repository exactly once; a failed child stays failed. The operator recourse is "Trigger Now", which
 starts a fresh invocation across the full selection. The anticipated future shape is a "re-run
 failed repositories" affordance that creates a **new invocation linked to the original** (snapshot =
-the failed subset) rather than mutating history; Ona — the closest analog — likewise ships no
-automatic retry, only structured error metadata.
+the failed subset) rather than mutating history.
 
 ### How should the repository picker work?
 
@@ -267,22 +265,3 @@ rolled-back code executes and event-matches the dominant workload correctly. Two
 - Automations created _under old code_ during a rollback window have no repository rows, and runs
   created then have `invocation_id NULL`. Re-deploying forward repairs both by re-running the 0030
   backfill statements (they are idempotent set-based inserts).
-
-## Addendum — Ona correspondence
-
-Ona (gitpod.io) is the one comparable product whose background-agent fan-out matches this
-architecture; its resource grain maps one-to-one and served as calibration for the unified pipeline,
-the firing-time snapshot, and derived status:
-
-| Ona                              | Open-Inspect | Notes                                                                                     |
-| -------------------------------- | ------------ | ----------------------------------------------------------------------------------------- |
-| `Workflow`                       | automation   | Triggers + action spec                                                                    |
-| `WorkflowExecution`              | invocation   | One per firing; Ona copies the trigger context into it at firing time — the snapshot idea |
-| `WorkflowExecutionAction`        | run          | One per repository; carries per-repo failure detail                                       |
-| `Environment` + `AgentExecution` | session      | Sandbox + agent conversation, backlinked both ways                                        |
-
-Ona also runs single-repo firings through the same pipeline (an execution with one action — no
-cardinality fork), stores per-state counters instead of a stored aggregate status, and models repo
-scope as a oneof that includes an org-wide search selector — the natural v2 of our
-`automation_repositories` table (the rows would become the resolved per-firing snapshot while the
-selector lives on the automation).
