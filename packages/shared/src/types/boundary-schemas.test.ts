@@ -59,6 +59,15 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
+    it("rejects empty-string repository identifiers instead of coercing to repo-less", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: "",
+        repoName: "",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
     it("rejects branch without repository context", () => {
       const result = createSessionRequestSchema.safeParse({
         title: "Incident sweep",

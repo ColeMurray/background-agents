@@ -162,7 +162,8 @@ class FakeD1Database {
         number,
       ];
       // INSERT OR IGNORE — skip if exists
-      if (!this.rows.has(id)) {
+      const inserted = !this.rows.has(id);
+      if (inserted) {
         this.rows.set(id, {
           id,
           title,
@@ -187,7 +188,7 @@ class FakeD1Database {
           updated_at: updatedAt,
         });
       }
-      return { meta: { changes: this.rows.has(id) ? 1 : 0 } };
+      return { meta: { changes: inserted ? 1 : 0 } };
     }
 
     if (QUERY_PATTERNS.UPDATE_STATUS.test(normalized)) {
@@ -413,10 +414,13 @@ describe("SessionIndexStore", () => {
       );
     });
 
-    it("ignores duplicate inserts (INSERT OR IGNORE)", async () => {
+    it("throws instead of silently skipping a duplicate insert", async () => {
       const session = makeSession();
       await store.create(session);
-      await store.create(makeSession({ title: "Different Title" }));
+
+      await expect(store.create(makeSession({ title: "Different Title" }))).rejects.toThrow(
+        "Session index insert was skipped"
+      );
 
       const result = await store.get("test-id");
       expect(result?.title).toBe("Test Session");
