@@ -115,10 +115,6 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
     repositories: [
       { repoOwner: "test-owner", repoName: "test-repo", repoId: 1, baseBranch: "main" },
     ],
-    repoOwner: "test-owner",
-    repoName: "test-repo",
-    baseBranch: "main",
-    repoId: 1,
     instructions: "Test instructions",
     triggerType: "sentry",
     scheduleCron: null,

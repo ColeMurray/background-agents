@@ -32,8 +32,6 @@ function makeRun(overrides: Partial<AutomationRun> = {}): AutomationRun {
     createdAt: FIRED_AT,
     sessionTitle: "Nightly review",
     artifactSummary: null,
-    triggerKey: null,
-    concurrencyKey: null,
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 123,

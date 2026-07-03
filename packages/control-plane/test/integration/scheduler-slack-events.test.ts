@@ -16,10 +16,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Slack triage",
-    repo_owner: null,
-    repo_name: null,
-    base_branch: null,
-    repo_id: null,
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
     schedule_cron: null,
@@ -159,13 +155,22 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     // the SchedulerDO unit tests with a mocked session, so it doesn't attempt a
     // real sandbox spawn here.)
     const concurrencyKey = "slack:C1:thread-1";
+    // The active run's concurrency key lives on its invocation.
+    const activeInvId = "inv-active-1";
+    await env.DB.prepare(
+      `INSERT INTO automation_invocations
+         (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+          trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+       VALUES (?, ?, 'event', NULL, 'slack:msg:C1:first', ?, NULL, NULL, NULL, ?, ?)`
+    )
+      .bind(activeInvId, id, concurrencyKey, Date.now(), Date.now())
+      .run();
     await seedRun(
       makeRunRow(id, {
         id: "active-1",
+        invocation_id: activeInvId,
         status: "starting",
         session_id: null,
-        concurrency_key: concurrencyKey,
-        trigger_key: "slack:msg:C1:first",
       })
     );
 

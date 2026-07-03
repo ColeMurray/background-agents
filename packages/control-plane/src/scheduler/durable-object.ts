@@ -261,8 +261,6 @@ export class SchedulerDO extends DurableObject<Env> {
               started_at: null,
               completed_at: null,
               created_at: now,
-              trigger_key: null,
-              concurrency_key: null,
               repo_owner: null,
               repo_name: null,
               repo_id: null,
@@ -281,8 +279,6 @@ export class SchedulerDO extends DurableObject<Env> {
             started_at: null,
             completed_at: resolution.error ? now : null,
             created_at: now,
-            trigger_key: null,
-            concurrency_key: null,
             repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
             repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
             repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
@@ -946,7 +942,7 @@ export class SchedulerDO extends DurableObject<Env> {
 
     // `run` (first child) is the deprecated pre-invocations response field;
     // removed with the other one-release compatibility artifacts.
-    return new Response(JSON.stringify({ invocationId: result.invocationId, runs, run: runs[0] }), {
+    return new Response(JSON.stringify({ invocationId: result.invocationId, runs }), {
       status: 201,
       headers: { "Content-Type": "application/json" },
     });
@@ -1034,12 +1030,9 @@ export class SchedulerDO extends DurableObject<Env> {
     // Slack-triggered runs post the agent's result into the triggering message's
     // thread and clear the `eyes` reaction when they finish. The scheduler owns
     // this fan-out (not the session callback path) because the message
-    // coordinates live on the invocation. Best-effort. The run-row fallback
-    // covers rollback-window rows that never got an invocation.
+    // coordinates live on the invocation. Best-effort.
     const invocation = run.invocation_id ? await store.getInvocationById(run.invocation_id) : null;
-    const slackMeta = parseSlackTriggerMetadata(
-      invocation?.trigger_metadata ?? run.trigger_run_metadata
-    );
+    const slackMeta = parseSlackTriggerMetadata(invocation?.trigger_metadata ?? null);
     if (slackMeta) {
       const automation = await store.getById(body.automationId);
       await this.notifySlackCompletion(run, slackMeta, {

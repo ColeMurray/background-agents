@@ -14,10 +14,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Test Automation",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
@@ -325,16 +321,16 @@ describe("SchedulerDO (integration)", () => {
 
       // Assert on the automation this test owns rather than only the tick's
       // global counters: auto-t3 must get exactly one skipped firing — a
-      // childless invocation, surfaced as a virtual row by the flattened
-      // view — and its schedule must advance into the future so it isn't
-      // re-skipped on every later tick.
-      const runs = await store.listRunsFlattenedForAutomation("auto-t3", {
+      // childless invocation — and its schedule must advance into the future so
+      // it isn't re-skipped on every later tick.
+      const { invocations } = await store.listInvocations("auto-t3", {
         limit: 10,
         offset: 0,
       });
-      const skippedRuns = runs.runs.filter((r) => r.status === "skipped");
-      expect(skippedRuns).toHaveLength(1);
-      expect(skippedRuns[0]!.skip_reason).toBe("concurrent_run_active");
+      const skipped = invocations.filter((inv) => inv.status === "skipped");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]!.skipReason).toBe("concurrent_run_active");
+      expect(skipped[0]!.runs).toHaveLength(0);
 
       const advanced = await store.getById("auto-t3");
       expect(advanced!.next_run_at).not.toBeNull();
@@ -544,8 +540,6 @@ describe("SchedulerDO (integration)", () => {
           started_at: child.status === "starting" ? null : now,
           completed_at: child.status === "failed" || child.status === "completed" ? now : null,
           created_at: now + index,
-          trigger_key: null,
-          concurrency_key: null,
           repo_owner: null,
           repo_name: null,
           repo_id: null,

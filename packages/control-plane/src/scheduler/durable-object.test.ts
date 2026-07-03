@@ -1604,21 +1604,30 @@ describe("SchedulerDO", () => {
       expect(body.signature).toEqual(expect.any(String));
     });
 
-    it("uses a no-repository label and the run-row metadata fallback for legacy rows", async () => {
+    it("labels a repo-less run as No repository", async () => {
       mockStore.getRunById.mockResolvedValue(
         sampleRunRow({
           automation_id: "auto-slack",
-          invocation_id: null,
+          invocation_id: "inv-slack",
           repo_owner: null,
           repo_name: null,
           repo_id: null,
           base_branch: null,
-          trigger_run_metadata: JSON.stringify({
-            channel: "C1",
-            messageTs: "1700000000.000200",
-          }),
         })
       );
+      mockStore.getInvocationById.mockResolvedValue({
+        id: "inv-slack",
+        automation_id: "auto-slack",
+        source: "event",
+        scheduled_at: null,
+        trigger_key: "slack:msg:C1:1700000000.000200",
+        concurrency_key: "slack:C1:thread-root",
+        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+        skip_reason: null,
+        failure_counted_at: null,
+        created_at: now,
+        updated_at: now,
+      });
       mockStore.getById.mockResolvedValue({
         ...sampleSlackAutomation,
         repo_owner: null,
@@ -1851,11 +1860,10 @@ describe("SchedulerDO", () => {
 
       const body = await res.json<{
         invocationId: string;
-        run: { status: string };
         runs: Array<{ status: string }>;
       }>();
       expect(body.invocationId).toEqual(expect.any(String));
-      expect(body.run.status).toBe("running");
+      expect(body.runs[0].status).toBe("running");
       expect(body.runs).toHaveLength(1);
     });
 
@@ -2086,12 +2094,10 @@ describe("SchedulerDO", () => {
         kind: "concurrencyKey",
         concurrencyKey: "slack:C1:thread-root",
       });
-      // Event children stay keyless — the keys live on the invocation.
+      // Event children carry no firing keys — the keys live on the invocation.
       expect(lastInsertedChildren()[0]).toMatchObject({
         automation_id: "auto-slack",
         status: "starting",
-        trigger_key: null,
-        concurrency_key: null,
       });
     });
 

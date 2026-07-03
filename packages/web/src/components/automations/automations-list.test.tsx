@@ -37,10 +37,6 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
     eventType: null,
     triggerConfig: null,
     repositories: [{ repoOwner: "acme", repoName: "web-app", repoId: 1, baseBranch: "main" }],
-    repoOwner: "acme",
-    repoName: "web-app",
-    baseBranch: "main",
-    repoId: 1,
     ...overrides,
   };
 }
@@ -70,10 +66,6 @@ describe("AutomationsList repository labels", () => {
           { repoOwner: "acme", repoName: "api", repoId: 2, baseBranch: "main" },
           { repoOwner: "acme", repoName: "docs", repoId: 3, baseBranch: "main" },
         ],
-        repoOwner: null,
-        repoName: null,
-        baseBranch: null,
-        repoId: null,
       }),
     ]);
     expect(screen.getByText("3 repositories")).toBeInTheDocument();
@@ -83,10 +75,6 @@ describe("AutomationsList repository labels", () => {
     renderList([
       makeAutomation({
         repositories: [],
-        repoOwner: null,
-        repoName: null,
-        baseBranch: null,
-        repoId: null,
       }),
     ]);
     expect(screen.getByText("No repository")).toBeInTheDocument();

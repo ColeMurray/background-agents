@@ -81,10 +81,6 @@ const now = Date.now();
 const sampleRow: AutomationRow = {
   id: "auto_test1",
   name: "Daily sync",
-  repo_owner: "acme",
-  repo_name: "web-app",
-  base_branch: "main",
-  repo_id: 12345,
   instructions: "Run daily sync tasks",
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
@@ -115,8 +111,6 @@ const sampleRunRow: AutomationRunRow = {
   started_at: null,
   completed_at: null,
   created_at: now,
-  trigger_key: null,
-  concurrency_key: null,
   invocation_id: null,
   repo_owner: null,
   repo_name: null,
@@ -128,11 +122,21 @@ const sampleRunRow: AutomationRunRow = {
 
 describe("toAutomation", () => {
   it("converts row to camelCase Automation", () => {
-    const automation = toAutomation(sampleRow);
+    const automation = toAutomation(sampleRow, [
+      {
+        automation_id: "auto_test1",
+        repo_owner: "acme",
+        repo_name: "web-app",
+        repo_id: 12345,
+        base_branch: "main",
+        created_at: now,
+        updated_at: now,
+      },
+    ]);
     expect(automation.id).toBe("auto_test1");
-    expect(automation.repoOwner).toBe("acme");
-    expect(automation.repoName).toBe("web-app");
-    expect(automation.baseBranch).toBe("main");
+    expect(automation.repositories).toEqual([
+      { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
+    ]);
     expect(automation.scheduleCron).toBe("0 9 * * *");
     expect(automation.scheduleTz).toBe("UTC");
     expect(automation.reasoningEffort).toBeNull();
@@ -145,29 +149,13 @@ describe("toAutomation", () => {
   });
 
   it("converts enabled=0 to false", () => {
-    const automation = toAutomation({ ...sampleRow, enabled: 0 });
+    const automation = toAutomation({ ...sampleRow, enabled: 0 }, []);
     expect(automation.enabled).toBe(false);
   });
 
-  it("maps repo-less automations with nullable repo fields", () => {
-    const automation = toAutomation({
-      ...sampleRow,
-      repo_owner: null,
-      repo_name: null,
-      repo_id: null,
-      base_branch: null,
-    });
-
-    expect(automation.repoOwner).toBeNull();
-    expect(automation.repoName).toBeNull();
-    expect(automation.baseBranch).toBeNull();
-    expect(automation.repoId).toBeNull();
-  });
-
-  it("rejects partial repository fields", () => {
-    expect(() => toAutomation({ ...sampleRow, repo_name: null })).toThrow(
-      "Automation repository context must include repo_owner and repo_name together"
-    );
+  it("maps repo-less automations to an empty repository list", () => {
+    const automation = toAutomation(sampleRow, []);
+    expect(automation.repositories).toEqual([]);
   });
 });
 
@@ -184,8 +172,6 @@ describe("toAutomationRun", () => {
     expect(run.sessionTitle).toBe("Test Session");
     expect(run.artifactSummary).toBe("2 artifacts");
     expect(run.status).toBe("starting");
-    expect(run.triggerKey).toBeNull();
-    expect(run.concurrencyKey).toBeNull();
   });
 });
 
@@ -200,46 +186,21 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("INSERT INTO automations");
       expect(statements[0].params[0]).toBe("auto_test1");
       expect(statements[0].params[1]).toBe("Daily sync");
-      expect(statements[0].params[2]).toBe("acme");
-      expect(statements[0].params[3]).toBe("web-app");
-    });
-
-    it("rejects repo-less rows with branch metadata", async () => {
-      const { db } = createFakeD1();
-      const store = new AutomationStore(db);
-
-      await expect(
-        store.create({
-          ...sampleRow,
-          repo_owner: null,
-          repo_name: null,
-          base_branch: "main",
-          repo_id: null,
-        })
-      ).rejects.toThrow("Automation base_branch and repo_id require repository context");
+      expect(statements[0].params[2]).toBe("Run daily sync tasks");
     });
   });
 
   describe("update", () => {
-    it("ignores repository scalar fields — the mirror is written only by bindReplaceRepositories", async () => {
+    it("writes only whitelisted fields", async () => {
       const { db, statements } = createFakeD1({ firstResult: sampleRow });
       const store = new AutomationStore(db);
 
-      await store.update(sampleRow.id, {
-        name: "Renamed",
-        repo_owner: "other",
-        repo_name: "repo",
-        repo_id: 999,
-        base_branch: "dev",
-      });
+      await store.update(sampleRow.id, { name: "Renamed" });
 
       const updateStatement = statements.find((s) => s.sql.includes("UPDATE automations SET"));
       expect(updateStatement).toBeDefined();
       expect(updateStatement!.sql).toContain("name = ?");
       expect(updateStatement!.sql).not.toContain("repo_owner");
-      expect(updateStatement!.sql).not.toContain("repo_name");
-      expect(updateStatement!.sql).not.toContain("repo_id");
-      expect(updateStatement!.sql).not.toContain("base_branch");
     });
   });
 
@@ -439,7 +400,7 @@ describe("isDuplicateKeyError", () => {
     expect(
       isDuplicateKeyError(
         new Error(
-          "D1_ERROR: UNIQUE constraint failed: automation_runs.automation_id, automation_runs.trigger_key"
+          "D1_ERROR: UNIQUE constraint failed: automation_invocations.automation_id, automation_invocations.trigger_key"
         )
       )
     ).toBe(true);

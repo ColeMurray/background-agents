@@ -21,10 +21,6 @@ import type {
 export interface AutomationRow {
   id: string;
   name: string;
-  repo_owner: string | null;
-  repo_name: string | null;
-  base_branch: string | null;
-  repo_id: number | null;
   instructions: string;
   trigger_type: string;
   schedule_cron: string | null;
@@ -57,18 +53,11 @@ export interface AutomationRunRow {
   started_at: number | null;
   completed_at: number | null;
   created_at: number;
-  /** Frozen legacy column — firing keys live on the invocation; NULL on new rows. */
-  trigger_key: string | null;
-  /** Frozen legacy column — see trigger_key. */
-  concurrency_key: string | null;
   /** Repository snapshot taken at firing time (null for repo-less runs). */
   repo_owner: string | null;
   repo_name: string | null;
   repo_id: number | null;
   base_branch: string | null;
-  // Source-specific run metadata as JSON. Frozen legacy column — firing
-  // metadata lives on the invocation; NULL on new rows.
-  trigger_run_metadata?: string | null;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
@@ -91,27 +80,6 @@ export type AutomationRepositoryInsert = Pick<
   AutomationRepositoryRow,
   "repo_owner" | "repo_name" | "repo_id" | "base_branch"
 >;
-
-/**
- * Scalar mirror values for the transitional dual-write: a single repository is
- * mirrored onto automations.repo_*, anything else clears them. Keeps rolled-
- * back code (which reads only the scalars) correct for 0/1-repository
- * automations.
- */
-export function repositoryScalarMirror(
-  repositories: AutomationRepositoryInsert[]
-): Pick<AutomationRow, "repo_owner" | "repo_name" | "repo_id" | "base_branch"> {
-  if (repositories.length === 1) {
-    const [repository] = repositories;
-    return {
-      repo_owner: repository.repo_owner,
-      repo_name: repository.repo_name,
-      repo_id: repository.repo_id,
-      base_branch: repository.base_branch,
-    };
-  }
-  return { repo_owner: null, repo_name: null, repo_id: null, base_branch: null };
-}
 
 export interface AutomationInvocationRow {
   id: string;
@@ -156,50 +124,14 @@ export function toAutomationRepository(row: AutomationRepositoryRow): Automation
   };
 }
 
-/**
- * Map an automation row plus its repository rows to the response shape.
- *
- * With no repository rows (omitted, or genuinely absent) the list is
- * synthesized from the scalar mirror. That keeps automations written by
- * rolled-back pre-invocations code (scalars only, no rows) rendering
- * correctly until the 0030 backfill repairs them; for anything written by
- * current code, empty rows imply cleared scalars, so the fallback yields the
- * same empty list. Removed with the scalar mirrors.
- */
+/** Map an automation row plus its repository rows to the response shape. */
 export function toAutomation(
   row: AutomationRow,
-  repositoryRows?: AutomationRepositoryRow[]
+  repositoryRows: AutomationRepositoryRow[]
 ): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)
     : null;
-
-  let repositories: AutomationRepository[];
-  if (repositoryRows && repositoryRows.length > 0) {
-    repositories = repositoryRows.map(toAutomationRepository);
-  } else {
-    if ((row.repo_owner === null) !== (row.repo_name === null)) {
-      throw new Error(
-        "Automation repository context must include repo_owner and repo_name together"
-      );
-    }
-    repositories =
-      row.repo_owner !== null && row.repo_name !== null
-        ? [
-            {
-              repoOwner: row.repo_owner,
-              repoName: row.repo_name,
-              repoId: row.repo_id,
-              baseBranch: row.base_branch,
-            },
-          ]
-        : [];
-  }
-
-  // Deprecated scalar mirrors: repositories[0] when exactly one repository,
-  // else null — keeps stale web bundles rendering and stops their edit forms
-  // from null-clearing the selection.
-  const mirror = repositories.length === 1 ? repositories[0] : null;
 
   return {
     id: row.id,
@@ -219,25 +151,8 @@ export function toAutomation(
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
     triggerConfig,
-    repositories,
-    repoOwner: mirror?.repoOwner ?? null,
-    repoName: mirror?.repoName ?? null,
-    baseBranch: mirror?.baseBranch ?? null,
-    repoId: mirror?.repoId ?? null,
+    repositories: repositoryRows.map(toAutomationRepository),
   };
-}
-
-function assertAutomationRepositoryFields(row: Partial<AutomationRow>): void {
-  const repoOwner = row.repo_owner ?? null;
-  const repoName = row.repo_name ?? null;
-
-  if ((repoOwner === null) !== (repoName === null)) {
-    throw new Error("Automation repository must include repo_owner and repo_name together");
-  }
-
-  if (repoOwner === null && (row.base_branch != null || row.repo_id != null)) {
-    throw new Error("Automation base_branch and repo_id require repository context");
-  }
 }
 
 export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
@@ -255,8 +170,6 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
     createdAt: row.created_at,
     sessionTitle: row.session_title,
     artifactSummary: row.artifact_summary,
-    triggerKey: row.trigger_key ?? null,
-    concurrencyKey: row.concurrency_key ?? null,
     repoOwner: row.repo_owner ?? null,
     repoName: row.repo_name ?? null,
     repoId: row.repo_id ?? null,
@@ -346,24 +259,18 @@ export class AutomationStore {
    * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
   bindAutomationInsert(row: AutomationRow): D1PreparedStatement {
-    assertAutomationRepositoryFields(row);
-
     return this.db
       .prepare(
         `INSERT INTO automations
-         (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+         (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
           event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
         row.name,
-        row.repo_owner,
-        row.repo_name,
-        row.base_branch,
-        row.repo_id,
         row.instructions,
         row.trigger_type,
         row.schedule_cron,
@@ -439,8 +346,7 @@ export class AutomationStore {
     const params: unknown[] = [];
 
     // Repository fields are deliberately absent: the selection lives in
-    // automation_repositories, and the scalar mirror is written only by
-    // bindReplaceRepositories (the single dual-write site).
+    // automation_repositories, written only by bindReplaceRepositories.
     const allowedFields: (keyof AutomationRow)[] = [
       "name",
       "instructions",
@@ -578,36 +484,17 @@ export class AutomationStore {
     );
   }
 
-  /**
-   * Statements replacing an automation's repository selection, including the
-   * transitional dual-write of the scalar mirror columns on `automations` —
-   * the ONE write site that still touches automations.repo_* (rollback cover
-   * for 0/1-repository automations; removed when the columns are dropped).
-   */
+  /** Statements replacing an automation's repository selection. */
   bindReplaceRepositories(
     automationId: string,
     repositories: AutomationRepositoryInsert[],
     now: number
   ): D1PreparedStatement[] {
-    const mirror = repositoryScalarMirror(repositories);
     return [
       this.db
         .prepare(`DELETE FROM automation_repositories WHERE automation_id = ?`)
         .bind(automationId),
       ...this.bindRepositoryInserts(automationId, repositories, now),
-      this.db
-        .prepare(
-          `UPDATE automations SET repo_owner = ?, repo_name = ?, repo_id = ?, base_branch = ?, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL`
-        )
-        .bind(
-          mirror.repo_owner,
-          mirror.repo_name,
-          mirror.repo_id,
-          mirror.base_branch,
-          now,
-          automationId
-        ),
     ];
   }
 
@@ -777,15 +664,11 @@ export class AutomationStore {
     scope: InvocationOverlapScope
   ): { sql: string; params: unknown[] } {
     if (scope.kind === "concurrencyKey") {
-      // COALESCE covers rows whose key still lives on the run: legacy history
-      // (backfilled invocations also carry it) and anything written by
-      // rolled-back code during a soak window. Simplified away when the frozen
-      // run columns are dropped.
       return {
         sql: `SELECT 1 FROM automation_runs ar
-              LEFT JOIN automation_invocations ai ON ai.id = ar.invocation_id
+              JOIN automation_invocations ai ON ai.id = ar.invocation_id
               WHERE ar.automation_id = ?
-                AND COALESCE(ai.concurrency_key, ar.concurrency_key) = ?
+                AND ai.concurrency_key = ?
                 AND ar.status IN ('starting', 'running')`,
         params: [automationId, scope.concurrencyKey],
       };
@@ -1059,65 +942,6 @@ export class AutomationStore {
     };
   }
 
-  /**
-   * Flattened run list for the DEPRECATED GET /automations/:id/runs alias:
-   * child runs in firing order plus VIRTUAL rows for childless skipped
-   * invocations, shaped like the legacy skipped run rows (id = invocation id)
-   * so stale web bundles keep a row per firing and their pagination math.
-   * Firing keys are surfaced from the invocation for new rows. Removed with
-   * the alias.
-   */
-  async listRunsFlattenedForAutomation(
-    automationId: string,
-    options: { limit: number; offset: number }
-  ): Promise<{ runs: EnrichedRunRow[]; total: number }> {
-    const [countResult, pageResult] = await this.db.batch([
-      this.db
-        .prepare(
-          `SELECT
-             (SELECT COUNT(*) FROM automation_runs WHERE automation_id = ?)
-             + (SELECT COUNT(*) FROM automation_invocations i
-                WHERE i.automation_id = ? AND i.skip_reason IS NOT NULL
-                  AND NOT EXISTS (SELECT 1 FROM automation_runs r2 WHERE r2.invocation_id = i.id))
-             AS count`
-        )
-        .bind(automationId, automationId),
-      this.db
-        .prepare(
-          `SELECT * FROM (
-             SELECT r.id, r.automation_id, r.invocation_id, r.session_id, r.status,
-                    r.skip_reason, r.failure_reason, r.scheduled_at, r.started_at,
-                    r.completed_at, r.created_at,
-                    COALESCE(i.trigger_key, r.trigger_key) AS trigger_key,
-                    COALESCE(i.concurrency_key, r.concurrency_key) AS concurrency_key,
-                    r.repo_owner, r.repo_name, r.repo_id, r.base_branch,
-                    s.title AS session_title, NULL AS artifact_summary
-             FROM automation_runs r
-             LEFT JOIN automation_invocations i ON i.id = r.invocation_id
-             LEFT JOIN sessions s ON r.session_id = s.id
-             WHERE r.automation_id = ?
-             UNION ALL
-             SELECT i.id, i.automation_id, i.id, NULL, 'skipped',
-                    i.skip_reason, NULL, COALESCE(i.scheduled_at, i.created_at), NULL,
-                    i.created_at, i.created_at,
-                    i.trigger_key,
-                    i.concurrency_key,
-                    NULL, NULL, NULL, NULL,
-                    NULL, NULL
-             FROM automation_invocations i
-             WHERE i.automation_id = ? AND i.skip_reason IS NOT NULL
-               AND NOT EXISTS (SELECT 1 FROM automation_runs r2 WHERE r2.invocation_id = i.id)
-           )
-           ORDER BY created_at DESC
-           LIMIT ? OFFSET ?`
-        )
-        .bind(automationId, automationId, options.limit, options.offset),
-    ]);
-
-    const total = (countResult.results?.[0] as { count: number } | undefined)?.count ?? 0;
-    return { runs: (pageResult.results ?? []) as EnrichedRunRow[], total };
-  }
-
   // --- Invocation finalization sweep (D2c) ---
 
   /**
@@ -1205,15 +1029,12 @@ export class AutomationStore {
     if (concurrencyKey === null) {
       return this.getActiveRunForAutomation(automationId);
     }
-    // Keys live on the invocation; COALESCE additionally covers rows whose key
-    // still sits on the run (rollback-window writes). Simplified away when the
-    // frozen run columns are dropped.
     return this.db
       .prepare(
         `SELECT r.* FROM automation_runs r
-         LEFT JOIN automation_invocations i ON i.id = r.invocation_id
+         JOIN automation_invocations i ON i.id = r.invocation_id
          WHERE r.automation_id = ?
-           AND COALESCE(i.concurrency_key, r.concurrency_key) = ?
+           AND i.concurrency_key = ?
            AND r.status IN ('starting', 'running')
          ORDER BY r.created_at DESC LIMIT 1`
       )
@@ -1225,8 +1046,9 @@ export class AutomationStore {
    * The most recent materialized run (any status, with a session) for a thread's
    * concurrency key, created at/after `sinceMs`. Powers Slack thread-session
    * continuity: a reply continues this run's session regardless of run status.
-   * Excludes skipped rows and not-yet-started runs (session_id NULL). Backed by
-   * idx_runs_thread_continuity (migration 0028).
+   * Excludes skipped rows and not-yet-started runs (session_id NULL). Served by
+   * idx_invocations_concurrency joined to idx_runs_invocation (keys live on the
+   * invocation).
    */
   async getLatestSteerableRunForThread(
     automationId: string,
@@ -1234,13 +1056,12 @@ export class AutomationStore {
     sinceMs: number
   ): Promise<AutomationRunRow | null> {
     if (concurrencyKey === null) return null;
-    // Same key-location tolerance as getActiveRunForKey.
     return this.db
       .prepare(
         `SELECT r.* FROM automation_runs r
-         LEFT JOIN automation_invocations i ON i.id = r.invocation_id
+         JOIN automation_invocations i ON i.id = r.invocation_id
          WHERE r.automation_id = ?
-           AND COALESCE(i.concurrency_key, r.concurrency_key) = ?
+           AND i.concurrency_key = ?
            AND r.session_id IS NOT NULL AND r.created_at >= ?
          ORDER BY r.created_at DESC LIMIT 1`
       )

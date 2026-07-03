@@ -15,10 +15,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Test Automation",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Investigate and fix",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
@@ -130,8 +126,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
 
       const run = runs[0]!;
       expect(run.automation_id).toBe(automationId);
-      // Firing keys live on the invocation; the child stays keyless.
-      expect(run.trigger_key).toBeNull();
+      // Firing keys live on the invocation, not the child run.
       expect(run.invocation_id).not.toBeNull();
       const invocation = await store.getInvocationById(run.invocation_id!);
       expect(invocation).toMatchObject({
@@ -298,15 +293,30 @@ describe("SchedulerDO /internal/event (integration)", () => {
 
       const concurrencyKey = `sentry_issue:concurrency-${Date.now()}`;
 
-      // A legacy-shaped active run carrying the key on the row (rollback-window
-      // shape) must still block — the overlap predicate COALESCEs both homes.
+      // An active run under an invocation carrying the concurrency key must
+      // block a new event for the same key.
+      const activeInvId = `inv-active-${Date.now()}`;
+      await env.DB.prepare(
+        `INSERT INTO automation_invocations
+           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+         VALUES (?, ?, 'event', NULL, ?, ?, NULL, NULL, NULL, ?, ?)`
+      )
+        .bind(
+          activeInvId,
+          automationId,
+          `sentry_issue:first-${Date.now()}`,
+          concurrencyKey,
+          Date.now(),
+          Date.now()
+        )
+        .run();
       await seedRun(
         makeRunRow(automationId, {
+          invocation_id: activeInvId,
           status: "running",
           session_id: "sess-existing",
           started_at: Date.now(),
-          concurrency_key: concurrencyKey,
-          trigger_key: `sentry_issue:first-${Date.now()}`,
         })
       );
 
@@ -325,7 +335,8 @@ describe("SchedulerDO /internal/event (integration)", () => {
       // Only the original run exists; the skip is a childless invocation.
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(1);
-      expect(runs[0]!.concurrency_key).toBe(concurrencyKey);
+      const activeInvocation = await store.getInvocationById(runs[0]!.invocation_id!);
+      expect(activeInvocation!.concurrency_key).toBe(concurrencyKey);
 
       const { invocations } = await store.listInvocations(automationId, {
         limit: 10,

@@ -114,27 +114,24 @@ for that provider.
 
 ### Automations
 
-| Endpoint                          | Method | Description                                                                      |
-| --------------------------------- | ------ | -------------------------------------------------------------------------------- |
-| `/automations`                    | GET    | List automations                                                                 |
-| `/automations`                    | POST   | Create automation                                                                |
-| `/automations/:id`                | GET    | Get automation                                                                   |
-| `/automations/:id`                | PUT    | Update automation                                                                |
-| `/automations/:id`                | DELETE | Soft-delete automation                                                           |
-| `/automations/:id/pause`          | POST   | Pause (stop firing)                                                              |
-| `/automations/:id/resume`         | POST   | Resume; resets the failure counter                                               |
-| `/automations/:id/trigger`        | POST   | Fire now → `201 {invocationId, runs}`, `409` if an invocation is active          |
-| `/automations/:id/invocations`    | GET    | Run history: one entry per firing, with child runs                               |
-| `/automations/:id/runs`           | GET    | **Deprecated alias** of the pre-invocations flat list; removed after one release |
-| `/automations/:id/runs/:runId`    | GET    | Get one run                                                                      |
-| `/automations/:id/regenerate-key` | POST   | Rotate a webhook automation's API key                                            |
+| Endpoint                          | Method | Description                                                             |
+| --------------------------------- | ------ | ----------------------------------------------------------------------- |
+| `/automations`                    | GET    | List automations                                                        |
+| `/automations`                    | POST   | Create automation                                                       |
+| `/automations/:id`                | GET    | Get automation                                                          |
+| `/automations/:id`                | PUT    | Update automation                                                       |
+| `/automations/:id`                | DELETE | Soft-delete automation                                                  |
+| `/automations/:id/pause`          | POST   | Pause (stop firing)                                                     |
+| `/automations/:id/resume`         | POST   | Resume; resets the failure counter                                      |
+| `/automations/:id/trigger`        | POST   | Fire now → `201 {invocationId, runs}`, `409` if an invocation is active |
+| `/automations/:id/invocations`    | GET    | Run history: one entry per firing, with child runs                      |
+| `/automations/:id/runs/:runId`    | GET    | Get one run                                                             |
+| `/automations/:id/regenerate-key` | POST   | Rotate a webhook automation's API key                                   |
 
 An automation selects 0–10 repositories (`repositories: [{repoOwner, repoName, baseBranch?}]`;
 multi-repo selections require a schedule trigger). Each firing records one **invocation**; a
 non-skipped invocation fans out into one **run** per repository, and each run links to one session.
-Runs snapshot their repository at firing time, so editing the selection never rewrites history. The
-`Automation.repoOwner/repoName/repoId/baseBranch` response fields are deprecated mirrors of
-`repositories[0]`, kept one release for stale web bundles. See
+Runs snapshot their repository at firing time, so editing the selection never rewrites history. See
 [docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.md) for the design decisions.
 
 An invocation's status is **derived from its child runs, never stored**: no children → `skipped`;
@@ -223,8 +220,8 @@ See `src/session/schema.ts` for full schema.
 
 Automations live in the shared D1 database (migrations in `terraform/d1/migrations/`):
 
-- `automations`: trigger, schedule, model, instructions, failure counter. The `repo_*` columns are a
-  deprecated single-repo mirror kept through the compatibility window.
+- `automations`: trigger, schedule, model, instructions, failure counter. The repository selection
+  lives in `automation_repositories`, not on this row.
 - `automation_repositories`: the live repository selection (0–10 rows per automation), unique per
   `(automation_id, repo_owner, repo_name)`.
 - `automation_invocations`: one thin row per firing — source, firing-scoped `trigger_key` (event
@@ -234,9 +231,7 @@ Automations live in the shared D1 database (migrations in `terraform/d1/migratio
   `src/db/automation-store.ts` is the single definition).
 - `automation_runs`: one row per repository per invocation, linked by `invocation_id`, carrying the
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
-  linkage. The row-level `trigger_key`/`concurrency_key`/`trigger_run_metadata` columns are frozen
-  legacy fields (kept, with `idx_runs_trigger_key`, for rollback-window compatibility) and are
-  dropped in the follow-up contract migration.
+  linkage. Firing keys live on the invocation, not the run.
 
 ## Token Encryption
 

@@ -1000,19 +1000,6 @@ export interface Automation {
   triggerConfig: TriggerConfig | null;
   /** Selected repositories (0..MAX_AUTOMATION_REPOSITORIES); the canonical repo representation. */
   repositories: AutomationRepository[];
-  /**
-   * @deprecated Mirrors repositories[0] when exactly one repository, else null. Kept one release
-   * so a stale web bundle round-trips edits without wiping the repo set (a pre-deploy tab seeds
-   * its form from these fields and submits explicit nulls when absent — the null-clears update
-   * contract would then erase the repo). Removed together with the /runs alias endpoint.
-   */
-  repoOwner: string | null;
-  /** @deprecated See {@link Automation.repoOwner}. */
-  repoName: string | null;
-  /** @deprecated See {@link Automation.repoOwner}. */
-  baseBranch: string | null;
-  /** @deprecated See {@link Automation.repoOwner}. */
-  repoId: number | null;
 }
 
 export interface CreateAutomationRequest {
@@ -1028,15 +1015,6 @@ export interface CreateAutomationRequest {
   sentryClientSecret?: string;
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories?: AutomationRepositoryInput[];
-  /**
-   * @deprecated Single-repository sugar, normalized server-side into a one-element
-   * `repositories`; sending both forms is rejected. Scheduled for removal — use `repositories`.
-   */
-  repoOwner?: string | null;
-  /** @deprecated See {@link CreateAutomationRequest.repoOwner}. */
-  repoName?: string | null;
-  /** @deprecated See {@link CreateAutomationRequest.repoOwner}. */
-  baseBranch?: string | null;
 }
 
 export interface UpdateAutomationRequest {
@@ -1050,15 +1028,6 @@ export interface UpdateAutomationRequest {
   triggerConfig?: TriggerConfig;
   /** Replaces the full repository selection when present. */
   repositories?: AutomationRepositoryInput[];
-  /**
-   * @deprecated Single-repository sugar (null clears the selection); rejected when
-   * `repositories` is also present. Scheduled for removal — use `repositories`.
-   */
-  repoOwner?: string | null;
-  /** @deprecated See {@link UpdateAutomationRequest.repoOwner}. */
-  repoName?: string | null;
-  /** @deprecated See {@link UpdateAutomationRequest.repoOwner}. */
-  baseBranch?: string | null;
 }
 
 export interface AutomationRun {
@@ -1076,10 +1045,6 @@ export interface AutomationRun {
   createdAt: number;
   sessionTitle: string | null;
   artifactSummary: string | null;
-  /** @deprecated Firing-scoped keys live on the invocation; null on new runs. */
-  triggerKey: string | null;
-  /** @deprecated See {@link AutomationRun.triggerKey}. */
-  concurrencyKey: string | null;
   /**
    * Repository snapshot taken at firing time — history never depends on the
    * live selection. Null for repo-less runs and legacy session-less rows.
@@ -1092,16 +1057,6 @@ export interface AutomationRun {
 
 export interface ListAutomationsResponse {
   automations: Automation[];
-  total: number;
-}
-
-/**
- * @deprecated Response shape of the deprecated GET /automations/:id/runs alias.
- * New clients use GET /automations/:id/invocations. Removed together with the
- * deprecated Automation scalar mirrors.
- */
-export interface ListAutomationRunsResponse {
-  runs: AutomationRun[];
   total: number;
 }
 

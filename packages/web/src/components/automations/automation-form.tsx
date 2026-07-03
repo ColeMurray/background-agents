@@ -325,8 +325,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       scheduleTz,
       instructions: instructions.trim(),
       triggerType,
-      // Always send the full selection — an empty list means repo-less. The
-      // deprecated repoOwner/repoName sugar is for external API clients only.
+      // Always send the full selection — an empty list means repo-less.
       repositories: selectedRepos.map((key) => {
         const [entryOwner = "", entryName = ""] = key.split("/");
         const entry: AutomationRepositoryInput = { repoOwner: entryOwner, repoName: entryName };

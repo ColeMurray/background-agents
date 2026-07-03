@@ -4,7 +4,6 @@ import {
   AutomationStore,
   deriveInvocationStatus,
   isDuplicateKeyError,
-  repositoryScalarMirror,
   type AutomationInvocationRow,
   type AutomationRow,
   type AutomationRunRow,
@@ -18,10 +17,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Test Automation",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
@@ -78,8 +73,6 @@ function makeChild(automationId: string, overrides?: Partial<AutomationRunRow>):
     started_at: null,
     completed_at: null,
     created_at: now,
-    trigger_key: null,
-    concurrency_key: null,
     repo_owner: null,
     repo_name: null,
     repo_id: null,
@@ -101,16 +94,12 @@ async function seedLegacyRun(run: {
   started_at?: number | null;
   completed_at?: number | null;
   created_at: number;
-  trigger_key?: string | null;
-  concurrency_key?: string | null;
-  trigger_run_metadata?: string | null;
 }): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO automation_runs
      (id, automation_id, session_id, status, skip_reason, failure_reason,
-      scheduled_at, started_at, completed_at, created_at, trigger_key,
-      concurrency_key, trigger_run_metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      scheduled_at, started_at, completed_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       run.id,
@@ -122,57 +111,9 @@ async function seedLegacyRun(run: {
       run.scheduled_at,
       run.started_at ?? null,
       run.completed_at ?? null,
-      run.created_at,
-      run.trigger_key ?? null,
-      run.concurrency_key ?? null,
-      run.trigger_run_metadata ?? null
+      run.created_at
     )
     .run();
-}
-
-async function seedSession(session: {
-  id: string;
-  repo_owner?: string | null;
-  repo_name?: string | null;
-  base_branch?: string | null;
-}): Promise<void> {
-  const now = Date.now();
-  await env.DB.prepare(
-    `INSERT INTO sessions (id, repo_owner, repo_name, base_branch, model, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'anthropic/claude-sonnet-4-6', 'completed', ?, ?)`
-  )
-    .bind(
-      session.id,
-      session.repo_owner ?? null,
-      session.repo_name ?? null,
-      session.base_branch ?? null,
-      now,
-      now
-    )
-    .run();
-}
-
-/**
- * Re-execute migration 0030's backfill statements (the INSERT/UPDATE half of
- * the file — DDL excluded) against the live database. This runs the REAL
- * migration SQL over legacy-shaped seed rows, and doubles as the test that the
- * statements are idempotent (they are the documented roll-forward repair
- * script).
- */
-async function replayBackfill(): Promise<void> {
-  const migration = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0030"));
-  expect(migration).toBeDefined();
-  const statements = migration!.queries.filter((query) => {
-    const body = query.replace(/^\s*--.*$/gm, "").trim();
-    return /^(INSERT INTO automation_(repositories|invocations)|UPDATE automation_runs)/i.test(
-      body
-    );
-  });
-  // repositories backfill, invocations backfill, invocation_id link, snapshot.
-  expect(statements).toHaveLength(4);
-  for (const sql of statements) {
-    await env.DB.prepare(sql).run();
-  }
 }
 
 async function countRows(table: string, where = "1=1"): Promise<number> {
@@ -185,258 +126,29 @@ async function countRows(table: string, where = "1=1"): Promise<number> {
 describe("automation invocations (D1 integration)", () => {
   beforeEach(cleanD1Tables);
 
-  // ─── 0030 backfill ─────────────────────────────────────────────────────────
+  // ─── 0030 invocation_id backfill ────────────────────────────────────────────
 
-  describe("0030 backfill replay", () => {
-    it("creates invocations of 1 for legacy runs with keys and skip data hoisted", async () => {
+  describe("0030 invocation_id backfill", () => {
+    it("links legacy runs (invocation_id IS NULL) to an invocation of themselves", async () => {
       const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-bf" }));
-
+      await store.create(makeAutomation({ id: "auto-link" }));
       await seedLegacyRun({
-        id: "run-sched",
-        automation_id: "auto-bf",
+        id: "run-legacy",
+        automation_id: "auto-link",
         status: "completed",
         scheduled_at: 1_000,
         completed_at: 1_500,
         created_at: 1_000,
       });
-      await seedLegacyRun({
-        id: "run-event",
-        automation_id: "auto-bf",
-        status: "completed",
-        scheduled_at: 2_000,
-        completed_at: 2_500,
-        created_at: 2_000,
-        trigger_key: "pr:42",
-        concurrency_key: "pr:42",
-        trigger_run_metadata: JSON.stringify({ channel: "C1" }),
-      });
-      await seedLegacyRun({
-        id: "run-skip",
-        automation_id: "auto-bf",
-        status: "skipped",
-        skip_reason: "concurrent_run_active",
-        scheduled_at: 3_000,
-        completed_at: 3_000,
-        created_at: 3_000,
-      });
+      expect(await countRows("automation_runs", "invocation_id IS NULL")).toBe(1);
 
-      await replayBackfill();
-
-      const scheduled = await store.getInvocationById("run-sched");
-      expect(scheduled).toMatchObject({
-        automation_id: "auto-bf",
-        source: "schedule",
-        scheduled_at: 1_000,
-        trigger_key: null,
-        skip_reason: null,
-        failure_counted_at: null,
-      });
-
-      const event = await store.getInvocationById("run-event");
-      expect(event).toMatchObject({
-        source: "event",
-        scheduled_at: null,
-        trigger_key: "pr:42",
-        concurrency_key: "pr:42",
-        trigger_metadata: JSON.stringify({ channel: "C1" }),
-      });
-
-      const skip = await store.getInvocationById("run-skip");
-      expect(skip).toMatchObject({ source: "schedule", skip_reason: "concurrent_run_active" });
-
-      expect(await countRows("automation_runs", "invocation_id IS NULL")).toBe(0);
-      expect(await countRows("automation_runs", "invocation_id = id")).toBe(3);
-    });
-
-    it("stamps failure_counted_at on failed legacy runs so the sweep never re-counts them", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-bf2" }));
-      await seedLegacyRun({
-        id: "run-failed",
-        automation_id: "auto-bf2",
-        status: "failed",
-        scheduled_at: 1_000,
-        completed_at: 1_800,
-        created_at: 1_000,
-      });
-
-      await replayBackfill();
-
-      const invocation = await store.getInvocationById("run-failed");
-      expect(invocation!.failure_counted_at).toBe(1_800);
-
-      const uncounted = await store.getUncountedFailedInvocations(0, 10);
-      expect(uncounted).toHaveLength(0);
-    });
-
-    it("snapshots run repositories from their sessions, not the automation row", async () => {
-      const store = new AutomationStore(env.DB);
-      // Automation has since been retargeted to a different repository.
-      await store.create(
-        makeAutomation({ id: "auto-retarget", repo_owner: "acme", repo_name: "new-repo" })
-      );
-      await seedSession({
-        id: "sess-old",
-        repo_owner: "acme",
-        repo_name: "old-repo",
-        base_branch: "develop",
-      });
-      await seedLegacyRun({
-        id: "run-old",
-        automation_id: "auto-retarget",
-        session_id: "sess-old",
-        status: "completed",
-        scheduled_at: 1_000,
-        completed_at: 1_500,
-        created_at: 1_000,
-      });
-      // Session-less run keeps a NULL snapshot.
-      await seedLegacyRun({
-        id: "run-no-session",
-        automation_id: "auto-retarget",
-        status: "failed",
-        scheduled_at: 2_000,
-        completed_at: 2_100,
-        created_at: 2_000,
-      });
-
-      await replayBackfill();
-
-      const withSession = await env.DB.prepare(
-        `SELECT repo_owner, repo_name, base_branch, repo_id FROM automation_runs WHERE id = 'run-old'`
-      ).first<{ repo_owner: string; repo_name: string; base_branch: string; repo_id: number }>();
-      expect(withSession).toMatchObject({
-        repo_owner: "acme",
-        repo_name: "old-repo",
-        base_branch: "develop",
-        repo_id: null,
-      });
-
-      const withoutSession = await env.DB.prepare(
-        `SELECT repo_owner, repo_name FROM automation_runs WHERE id = 'run-no-session'`
-      ).first<{ repo_owner: string | null; repo_name: string | null }>();
-      expect(withoutSession).toMatchObject({ repo_owner: null, repo_name: null });
-    });
-
-    it("scrubs blank legacy session repo values instead of copying half pairs", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-blank" }));
-      await seedSession({
-        id: "sess-blank",
-        repo_owner: "  ",
-        repo_name: "Repo-X",
-        base_branch: "main",
-      });
-      await seedLegacyRun({
-        id: "run-blank",
-        automation_id: "auto-blank",
-        session_id: "sess-blank",
-        status: "completed",
-        scheduled_at: 1_000,
-        completed_at: 1_100,
-        created_at: 1_000,
-      });
-
-      await replayBackfill();
-
-      const run = await env.DB.prepare(
-        `SELECT repo_owner, repo_name, base_branch FROM automation_runs WHERE id = 'run-blank'`
-      ).first<{
-        repo_owner: string | null;
-        repo_name: string | null;
-        base_branch: string | null;
-      }>();
-      expect(run).toMatchObject({ repo_owner: null, repo_name: null, base_branch: null });
-    });
-
-    it("backfills repository rows from automation scalars with trim/lowercase normalization", async () => {
-      const store = new AutomationStore(env.DB);
+      // 0030's link step: every pre-invocation run adopts its own id.
       await env.DB.prepare(
-        `INSERT INTO automations (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
-          trigger_type, schedule_tz, model, enabled, consecutive_failures, created_by, created_at, updated_at)
-         VALUES ('auto-norm', 'Legacy', '  Acme ', ' Web-App ', 'main', 7, 'x', 'schedule', 'UTC',
-                 'anthropic/claude-sonnet-4-6', 1, 0, 'user-1', 1000, 2000)`
+        "UPDATE automation_runs SET invocation_id = id WHERE invocation_id IS NULL"
       ).run();
-      await store.create(
-        makeAutomation({
-          id: "auto-deleted",
-          deleted_at: Date.now(),
-        })
-      );
-      await store.create(
-        makeAutomation({
-          id: "auto-repoless",
-          repo_owner: null,
-          repo_name: null,
-          base_branch: null,
-          repo_id: null,
-        })
-      );
 
-      await replayBackfill();
-
-      const rows = await store.getRepositoriesForAutomation("auto-norm");
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({
-        repo_owner: "acme",
-        repo_name: "web-app",
-        repo_id: 7,
-        base_branch: "main",
-        created_at: 1000,
-        updated_at: 2000,
-      });
-      expect(await store.getRepositoriesForAutomation("auto-deleted")).toHaveLength(0);
-      expect(await store.getRepositoriesForAutomation("auto-repoless")).toHaveLength(0);
-
-      // Idempotent: replaying the backfill neither duplicates nor overwrites.
-      await store.replaceRepositories("auto-norm", [
-        { repo_owner: "acme", repo_name: "renamed", repo_id: 8, base_branch: null },
-      ]);
-      await replayBackfill();
-      const after = await store.getRepositoriesForAutomation("auto-norm");
-      expect(after).toHaveLength(1);
-      expect(after[0].repo_name).toBe("renamed");
-    });
-
-    it("handles a 10k-run history with set-based statements", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-bulk" }));
-
-      const total = 10_000;
-      const chunkSize = 500;
-      for (let offset = 0; offset < total; offset += chunkSize) {
-        const values: string[] = [];
-        for (let i = offset; i < offset + chunkSize; i++) {
-          const status = i % 7 === 0 ? "failed" : "completed";
-          values.push(
-            `('run-bulk-${i}', 'auto-bulk', NULL, '${status}', NULL, NULL, ${i}, NULL, ${i + 50}, ${i}, NULL, NULL, NULL)`
-          );
-        }
-        await env.DB.prepare(
-          `INSERT INTO automation_runs
-           (id, automation_id, session_id, status, skip_reason, failure_reason,
-            scheduled_at, started_at, completed_at, created_at, trigger_key,
-            concurrency_key, trigger_run_metadata)
-           VALUES ${values.join(", ")}`
-        ).run();
-      }
-
-      await replayBackfill();
-
-      expect(await countRows("automation_invocations")).toBe(total);
       expect(await countRows("automation_runs", "invocation_id IS NULL")).toBe(0);
-      expect(await countRows("automation_invocations", "failure_counted_at IS NOT NULL")).toBe(
-        await countRows("automation_runs", "status = 'failed'")
-      );
-
-      const { invocations, total: listTotal } = await store.listInvocations("auto-bulk", {
-        limit: 20,
-        offset: 0,
-      });
-      expect(listTotal).toBe(total);
-      expect(invocations).toHaveLength(20);
-      expect(invocations[0].runs).toHaveLength(1);
+      expect(await countRows("automation_runs", "invocation_id = id")).toBe(1);
     });
   });
 
@@ -1037,88 +749,42 @@ describe("automation invocations (D1 integration)", () => {
 
   // ─── Scalar mirror ────────────────────────────────────────────────────────
 
-  describe("repository scalar mirror (transitional dual-write)", () => {
-    it("mirrors a single repository onto the automations row and clears it for multi", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-mirror" }));
+  // ─── Invocations listing over mixed history ───────────────────────────────
 
-      await store.replaceRepositories("auto-mirror", [
-        { repo_owner: "acme", repo_name: "api", repo_id: 5, base_branch: "develop" },
-      ]);
-      let row = await store.getById("auto-mirror");
-      expect(row).toMatchObject({
-        repo_owner: "acme",
-        repo_name: "api",
-        repo_id: 5,
-        base_branch: "develop",
-      });
-
-      await store.replaceRepositories("auto-mirror", [
-        { repo_owner: "acme", repo_name: "api", repo_id: 5, base_branch: null },
-        { repo_owner: "acme", repo_name: "web", repo_id: 6, base_branch: null },
-      ]);
-      row = await store.getById("auto-mirror");
-      expect(row).toMatchObject({
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-
-      expect(repositoryScalarMirror([])).toEqual({
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-    });
-
-    it("toAutomation mirrors repositories[0] only for single-repository automations", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-toauto" }));
-      await store.replaceRepositories("auto-toauto", [
-        { repo_owner: "acme", repo_name: "api", repo_id: 5, base_branch: null },
-        { repo_owner: "acme", repo_name: "web", repo_id: 6, base_branch: "develop" },
-      ]);
-
-      const row = await store.getById("auto-toauto");
-      const repositories = await store.getRepositoriesForAutomation("auto-toauto");
-      const { toAutomation } = await import("../../src/db/automation-store");
-      const automation = toAutomation(row!, repositories);
-
-      expect(automation.repositories).toEqual([
-        { repoOwner: "acme", repoName: "api", repoId: 5, baseBranch: null },
-        { repoOwner: "acme", repoName: "web", repoId: 6, baseBranch: "develop" },
-      ]);
-      expect(automation.repoOwner).toBeNull();
-      expect(automation.repoName).toBeNull();
-    });
-  });
-
-  // ─── Deprecated /runs alias + invocations listing over mixed history ───────
-
-  describe("flattened runs alias over mixed history", () => {
+  describe("invocations listing over mixed history", () => {
     /**
      * One automation with all three history shapes at once:
-     *  - a pre-0030 legacy run, backfilled into an invocation of 1  (t=1000)
-     *  - a childless skipped invocation                             (t=2000)
-     *  - a multi-repo invocation with two children                  (t=3000)
+     *  - an invocation of 1 (single completed child)   (t=1000)
+     *  - a childless skipped invocation                (t=2000)
+     *  - a multi-repo invocation with two children     (t=3000)
      */
     async function seedMixedHistory(automationId: string): Promise<AutomationStore> {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: automationId }));
 
-      await seedLegacyRun({
-        id: "run-legacy",
-        automation_id: automationId,
-        status: "completed",
-        scheduled_at: 1_000,
-        completed_at: 1_500,
-        created_at: 1_000,
-        trigger_key: "issue:7",
-        concurrency_key: "issue:7",
+      await store.insertInvocationGuarded({
+        invocation: makeInvocation(automationId, {
+          id: "inv-single",
+          source: "schedule",
+          scheduled_at: 1_000,
+          created_at: 1_000,
+          updated_at: 1_000,
+        }),
+        children: [
+          makeChild(automationId, {
+            id: "run-legacy",
+            status: "completed",
+            scheduled_at: 1_000,
+            completed_at: 1_500,
+            created_at: 1_000,
+            repo_owner: "acme",
+            repo_name: "web-app",
+            repo_id: 1,
+            base_branch: "main",
+          }),
+        ],
+        overlapScope: { kind: "automation" },
       });
-      await replayBackfill();
 
       await store.insertSkippedInvocation(
         makeInvocation(automationId, {
@@ -1170,65 +836,10 @@ describe("automation invocations (D1 integration)", () => {
       return store;
     }
 
-    it("flattens children, injects virtual skip rows, and counts one row per firing unit", async () => {
-      const store = await seedMixedHistory("auto-alias");
+    it("lists invocations over mixed history — one entry per firing", async () => {
+      const store = await seedMixedHistory("auto-list-inv");
 
-      const { runs, total } = await store.listRunsFlattenedForAutomation("auto-alias", {
-        limit: 50,
-        offset: 0,
-      });
-
-      // 3 real runs (legacy + two children) + 1 virtual skip row.
-      expect(total).toBe(4);
-      expect(runs.map((run) => run.id)).toEqual(["run-api", "run-web", "inv-skip", "run-legacy"]);
-
-      // Virtual row: shaped like a legacy skipped run, id = invocation id.
-      const virtualSkip = runs.find((run) => run.id === "inv-skip")!;
-      expect(virtualSkip).toMatchObject({
-        invocation_id: "inv-skip",
-        session_id: null,
-        status: "skipped",
-        skip_reason: "concurrent_run_active",
-        scheduled_at: 2_000,
-        repo_owner: null,
-        repo_name: null,
-      });
-
-      // New-pipeline children surface firing keys from their invocation
-      // (their own frozen columns are NULL).
-      const child = runs.find((run) => run.id === "run-web")!;
-      expect(child.concurrency_key).toBe("firing-key");
-      expect(child.repo_owner).toBe("acme");
-      expect(child.repo_name).toBe("web-app");
-
-      // Backfilled legacy rows keep their original key values.
-      const legacy = runs.find((run) => run.id === "run-legacy")!;
-      expect(legacy.trigger_key).toBe("issue:7");
-      expect(legacy.concurrency_key).toBe("issue:7");
-    });
-
-    it("paginates the flattened view with a stable total", async () => {
-      const store = await seedMixedHistory("auto-alias-page");
-
-      const first = await store.listRunsFlattenedForAutomation("auto-alias-page", {
-        limit: 2,
-        offset: 0,
-      });
-      const second = await store.listRunsFlattenedForAutomation("auto-alias-page", {
-        limit: 2,
-        offset: 2,
-      });
-
-      expect(first.total).toBe(4);
-      expect(second.total).toBe(4);
-      expect(first.runs.map((run) => run.id)).toEqual(["run-api", "run-web"]);
-      expect(second.runs.map((run) => run.id)).toEqual(["inv-skip", "run-legacy"]);
-    });
-
-    it("lists invocations over the same mixed history — one entry per firing", async () => {
-      const store = await seedMixedHistory("auto-alias-inv");
-
-      const { invocations, total } = await store.listInvocations("auto-alias-inv", {
+      const { invocations, total } = await store.listInvocations("auto-list-inv", {
         limit: 50,
         offset: 0,
       });
@@ -1237,7 +848,7 @@ describe("automation invocations (D1 integration)", () => {
       expect(invocations.map((invocation) => invocation.id)).toEqual([
         "inv-multi",
         "inv-skip",
-        "run-legacy",
+        "inv-single",
       ]);
 
       const multi = invocations[0];
@@ -1249,9 +860,9 @@ describe("automation invocations (D1 integration)", () => {
       expect(skip.skipReason).toBe("concurrent_run_active");
       expect(skip.runs).toEqual([]);
 
-      const legacy = invocations[2];
-      expect(legacy.status).toBe("completed");
-      expect(legacy.runs.map((run) => run.id)).toEqual(["run-legacy"]);
+      const single = invocations[2];
+      expect(single.status).toBe("completed");
+      expect(single.runs.map((run) => run.id)).toEqual(["run-legacy"]);
     });
   });
 });

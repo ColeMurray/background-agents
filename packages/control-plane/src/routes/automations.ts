@@ -24,7 +24,6 @@ import {
   toAutomationRun,
   type AutomationRow,
   type AutomationRepositoryInsert,
-  repositoryScalarMirror,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
@@ -32,12 +31,7 @@ import { resolveProviderIdentity, type SessionIdentityFields } from "../session/
 import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import {
-  automationRepositoriesInputSchema,
-  normalizeOptionalRepositoryPair,
-  RepositoryPairValidationError,
-  type RepositoryPair,
-} from "@open-inspect/shared";
+import { automationRepositoriesInputSchema } from "@open-inspect/shared";
 import type { RepositoryAccessResult } from "../source-control";
 import {
   type Route,
@@ -72,20 +66,6 @@ function resolveReasoningEffort(
   return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
 }
 
-function parseRepositoryContext(
-  input: { repoOwner?: string | null; repoName?: string | null },
-  partialMessage?: string
-): RepositoryPair | null | Response {
-  try {
-    return normalizeOptionalRepositoryPair(input, partialMessage);
-  } catch (e) {
-    if (e instanceof RepositoryPairValidationError) {
-      return error(e.message, 400);
-    }
-    throw e;
-  }
-}
-
 interface NormalizedRepositoryInput {
   repoOwner: string;
   repoName: string;
@@ -97,51 +77,20 @@ type RepositorySelectionRequest =
   | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
- * Parse the repository selection from a create/update body. Accepts the
- * canonical `repositories` list or the deprecated scalar repoOwner/repoName
- * sugar (normalized into a 0/1-element list; explicit nulls clear — the
- * null-clears update contract); sending both forms is a 400. `unchanged`
- * means the body did not touch the selection (create treats that as empty).
+ * Parse the repository selection from a create/update body. `unchanged` means
+ * the body did not touch the selection (create treats that as empty).
  */
 function parseRepositorySelection(body: {
   repositories?: unknown;
-  repoOwner?: string | null;
-  repoName?: string | null;
-  baseBranch?: string | null;
 }): RepositorySelectionRequest | Response {
-  const scalarPresent = "repoOwner" in body || "repoName" in body;
-
-  if (body.repositories !== undefined) {
-    if (scalarPresent || "baseBranch" in body) {
-      return error("Provide either repositories or the repoOwner/repoName fields, not both", 400);
-    }
-    const parsed = automationRepositoriesInputSchema.safeParse(body.repositories);
-    if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
-      return error(`repositories${path}: ${issue?.message ?? "invalid"}`, 400);
-    }
-    return { kind: "replace", repositories: parsed.data };
+  if (body.repositories === undefined) return { kind: "unchanged" };
+  const parsed = automationRepositoriesInputSchema.safeParse(body.repositories);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
+    return error(`repositories${path}: ${issue?.message ?? "invalid"}`, 400);
   }
-
-  if (!scalarPresent) return { kind: "unchanged" };
-
-  if ("repoOwner" in body !== "repoName" in body) {
-    return error("repoOwner and repoName must be provided together", 400);
-  }
-  const pair = parseRepositoryContext(body);
-  if (pair instanceof Response) return pair;
-  if (!pair) return { kind: "replace", repositories: [] };
-  return {
-    kind: "replace",
-    repositories: [
-      {
-        repoOwner: pair.repoOwner,
-        repoName: pair.repoName,
-        baseBranch: body.baseBranch?.trim() || null,
-      },
-    ],
-  };
+  return { kind: "replace", repositories: parsed.data };
 }
 
 /**
@@ -154,7 +103,7 @@ function validateRepositoryCount(
   count: number
 ): Response | null {
   if (count === 0 && (triggerType === "github_event" || triggerType === "linear_event")) {
-    return error("repoOwner and repoName are required for repo-scoped triggers", 400);
+    return error("Repository-scoped triggers require exactly one repository", 400);
   }
   if (count > 1 && triggerType !== "schedule") {
     return error("Multi-repository selections require a schedule trigger", 400);
@@ -307,13 +256,6 @@ async function handleCreateAutomation(
   }
   const countError = validateRepositoryCount(triggerType, requestedRepositories.length);
   if (countError) return countError;
-  if (
-    requestedRepositories.length === 0 &&
-    typeof body.baseBranch === "string" &&
-    body.baseBranch.trim()
-  ) {
-    return error("baseBranch requires repoOwner and repoName", 400);
-  }
 
   const isSchedule = triggerType === "schedule";
 
@@ -423,16 +365,9 @@ async function handleCreateAutomation(
   }
 
   const store = new AutomationStore(env.DB);
-  // Scalar columns hold the transitional single-repository mirror only; the
-  // repository rows in the same batch below are the source of truth.
-  const mirror = repositoryScalarMirror(newRepositories);
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
-    repo_owner: mirror.repo_owner,
-    repo_name: mirror.repo_name,
-    base_branch: mirror.base_branch,
-    repo_id: mirror.repo_id,
     instructions: body.instructions,
     trigger_type: triggerType,
     schedule_cron: body.scheduleCron ?? null,
@@ -620,35 +555,9 @@ async function handleUpdateAutomation(
       selection.repositories.length
     );
     if (countError) return countError;
-    if (
-      selection.repositories.length === 0 &&
-      typeof body.baseBranch === "string" &&
-      body.baseBranch.trim()
-    ) {
-      return error("baseBranch requires repoOwner and repoName", 400);
-    }
     const resolved = await resolveRepositorySelection(env, selection.repositories, ctx);
     if (resolved instanceof Response) return resolved;
     replacementRepositories = resolved;
-  } else if (body.baseBranch !== undefined) {
-    const current = await store.getRepositoriesForAutomation(id);
-    if (current.length === 0) {
-      return error("baseBranch requires repoOwner and repoName", 400);
-    }
-    if (current.length > 1) {
-      return error(
-        "baseBranch applies per repository on multi-repository automations; resend repositories",
-        400
-      );
-    }
-    replacementRepositories = [
-      {
-        repo_owner: current[0].repo_owner,
-        repo_name: current[0].repo_name,
-        repo_id: current[0].repo_id,
-        base_branch: body.baseBranch?.trim() || null,
-      },
-    ];
   }
 
   // Update event type — only for non-schedule types
@@ -936,37 +845,6 @@ async function handleListInvocations(
   });
 }
 
-/**
- * DEPRECATED alias serving the pre-invocations list shape ({runs, total},
- * flattened child runs plus virtual rows for childless skipped invocations) so
- * web bundles deployed before the invocations endpoint keep rendering and
- * paginating correctly. Removed together with the Automation scalar mirrors
- * after one release.
- */
-async function handleListRuns(
-  request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const automationId = match.groups?.id;
-  if (!automationId) return error("Automation ID required", 400);
-
-  const store = new AutomationStore(env.DB);
-
-  // Verify automation exists
-  const automation = await store.getById(automationId);
-  if (!automation) return error("Automation not found", 404);
-
-  const { limit, offset } = parseRunListParams(request);
-  const result = await store.listRunsFlattenedForAutomation(automationId, { limit, offset });
-
-  return json({
-    runs: result.runs.map(toAutomationRun),
-    total: result.total,
-  });
-}
-
 async function handleGetRun(
   _request: Request,
   env: Env,
@@ -1158,12 +1036,6 @@ export const automationRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/automations/:id/invocations"),
     handler: handleListInvocations,
-  },
-  {
-    // Deprecated alias — see handleListRuns.
-    method: "GET",
-    pattern: parsePattern("/automations/:id/runs"),
-    handler: handleListRuns,
   },
   {
     method: "GET",

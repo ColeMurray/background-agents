@@ -83,9 +83,7 @@ readers that re-queried the live selection, and snapshots remove that dependency
 ### Where does the repository selection live?
 
 Answer: in a normalized `automation_repositories` table — the single source of truth, exposed as
-`Automation.repositories`. The legacy `automations.repo_owner/repo_name/repo_id/base_branch` columns
-survive one release as a compatibility mirror of `repositories[0]` (dual-written only for
-0/1-repository automations) and are then dropped.
+`Automation.repositories`. The automation row itself holds no repository columns.
 
 Reasoning: repository rows need validation, counting, joins, and per-repo fields (base branch today,
 possibly per-repo overrides later). A JSON blob would push parsing into every reader; a mode enum
@@ -225,43 +223,24 @@ invocation aggregates links for display only; there is no cross-repository "mega
 - `GET /automations/:id/invocations` — the history endpoint: one entry per firing
   (`{invocations, total}`), each carrying its child `runs` with repository snapshots. `total` counts
   invocations.
-- `POST /automations/:id/trigger` — returns `201 {invocationId, runs}` (plus a deprecated `run`
-  field mirroring `runs[0]`); `409` when blocked by an active invocation.
+- `POST /automations/:id/trigger` — returns `201 {invocationId, runs}`; `409` when blocked by an
+  active invocation.
 - Repository selection is written via `repositories: [{repoOwner, repoName, baseBranch?}]` on
-  create/update. The scalar `repoOwner/repoName/baseBranch` request fields survive one release as
-  single-repo sugar (normalized server-side into a one-element `repositories`; sending both forms is
-  rejected).
-
-### Deprecated for one release, then removed together
-
-| Artifact                                                                                | Why it exists                                                                                                                                                               |
-| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /automations/:id/runs` alias                                                       | Serves the exact pre-invocations shape (flattened child runs, virtual rows for childless skips, old `total` math) so web bundles deployed before the cutover keep rendering |
-| `Automation.repoOwner/repoName/repoId/baseBranch` response mirrors of `repositories[0]` | Stops a stale edit form from null-clearing the repository set and keeps stale list pages rendering repo names                                                               |
-| Scalar-trio request sugar                                                               | Lets pre-cutover clients keep creating single-repo automations                                                                                                              |
-| `run` field in the trigger response                                                     | Pre-fan-out response shape                                                                                                                                                  |
-
-A second follow-up release then drops the transitional dual-write and the frozen legacy columns
-(`automations.repo_*`; `automation_runs.trigger_key/concurrency_key/trigger_run_metadata` and the
-`idx_runs_trigger_key` index that still guards rollback-window event dedup).
+  create/update.
 
 ## Deployment notes
 
-### Migration 0030 partial-apply recovery
+### Migrations 0030 + 0031
 
-Migration `0030` (repositories + invocations + backfill) is replay-safe by construction: it is safe
-to rerun if the SQL succeeds but the version marker insert fails, if an older attempt added only
-some columns, or if a replay resumes midway. Do not add migration-runner special cases and do not
-manually mark it applied unless a schema inspection shows the database is already correct. If a
-rerun still fails, inspect the D1 error and the current schema first.
+`0030` adds the `automation_repositories` and `automation_invocations` tables and backfills them
+from the pre-feature `automations.repo_*` scalars and the legacy `automation_runs` rows; it is
+replay-safe by construction (safe to rerun after a partial apply — a failed version-marker insert, a
+half-applied column add, or a midway replay). `0031` then drops the now-redundant scalar mirror and
+frozen firing-key columns (`automations.repo_*`;
+`automation_runs.trigger_key/concurrency_key/trigger_run_metadata`) and their indexes. The two apply
+in order, so the backfill always runs before the drop: an instance upgrading from before this
+feature migrates its existing automations and runs in the same deploy.
 
-### Rollback within the soak window
-
-New code dual-writes the legacy `automations.repo_*` columns for 0/1-repository automations, so
-rolled-back code executes and event-matches the dominant workload correctly. Two caveats:
-
-- **Pause multi-repo automations before rolling back.** Old code cannot see repository rows, so a
-  multi-repo automation would fire repo-less under it.
-- Automations created _under old code_ during a rollback window have no repository rows, and runs
-  created then have `invocation_id NULL`. Re-deploying forward repairs both by re-running the 0030
-  backfill statements (they are idempotent set-based inserts).
+Because `0031` drops columns the previous schema depended on, this feature is **not code-revertible
+without a database restore** — the pre-feature worker reads `automations.repo_*`, which no longer
+exist. Snapshot D1 before applying if you want a rollback path.
