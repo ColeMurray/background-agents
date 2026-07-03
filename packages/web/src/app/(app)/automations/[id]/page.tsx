@@ -23,13 +23,17 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { isOpen, toggle } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
-  const [historyOffset, setHistoryOffset] = useState(0);
+  // "Load more" grows the fetch limit rather than paging by offset: the
+  // endpoint returns newest-first, so a larger limit re-fetches the head plus
+  // the next page in one request. Fine at automation-history scale; revisit
+  // with real offset pagination if histories grow large.
+  const [extraHistoryLimit, setExtraHistoryLimit] = useState(0);
   const {
     invocations,
     total: totalInvocations,
     loading: loadingInvocations,
     mutate: mutateInvocations,
-  } = useAutomationInvocations(id, HISTORY_PAGE_SIZE + historyOffset, 0);
+  } = useAutomationInvocations(id, HISTORY_PAGE_SIZE + extraHistoryLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const reasoningLabel = automation
@@ -306,7 +310,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               total={totalInvocations}
               loading={loadingInvocations}
               hasMore={invocations.length < totalInvocations}
-              onLoadMore={() => setHistoryOffset((prev) => prev + HISTORY_PAGE_SIZE)}
+              onLoadMore={() => setExtraHistoryLimit((prev) => prev + HISTORY_PAGE_SIZE)}
             />
           </div>
         </div>

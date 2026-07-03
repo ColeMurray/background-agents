@@ -86,6 +86,7 @@ function createMockStore() {
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),
+    advanceNextRunAt: vi.fn().mockResolvedValue(true),
     bulkFailRuns: vi.fn().mockResolvedValue(undefined),
     bulkIncrementFailures: vi.fn().mockResolvedValue(new Map()),
   };
@@ -784,10 +785,7 @@ describe("SchedulerDO", () => {
       expect(body.skipped).toBe(1);
       expect(body.failed).toBe(0);
 
-      expect(mockStore.update).toHaveBeenCalledWith(
-        "auto-1",
-        expect.objectContaining({ next_run_at: expect.any(Number) })
-      );
+      expect(mockStore.advanceNextRunAt).toHaveBeenCalledWith("auto-1", expect.any(Number));
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
     });
 
@@ -825,6 +823,43 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(200);
       const body = await res.json<{ processed: number }>();
       expect(body.processed).toBe(5);
+      expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(5);
+    });
+
+    it("defers an automation whose children would overshoot the budget", async () => {
+      // Repo counts fill the budget unevenly: 10+10+10+10+9 = 49 admitted, so
+      // the sixth 10-repo firing (→59) must be deferred rather than launched.
+      // The pre-check catches this; the old check-after-launch path would have
+      // materialized all 10 children before noticing the overshoot.
+      const repoCounts = [10, 10, 10, 10, 9, 10];
+      const overdue = repoCounts.map((_, i) => ({ ...sampleAutomation, id: `auto-${i}` }));
+      mockStore.getOverdueAutomations.mockResolvedValue(overdue);
+      mockStore.getRepositoriesForAutomationIds.mockResolvedValue(
+        new Map(
+          overdue.map((automation, i) => [
+            automation.id,
+            Array.from({ length: repoCounts[i] }, (_, r) =>
+              repositoryRow(automation.id, { repo_name: `repo-${r}` })
+            ),
+          ])
+        )
+      );
+      mockCheckRepositoryAccess.mockImplementation(
+        async ({ name }: { owner: string; name: string }) => ({
+          repoId: 1,
+          repoOwner: "acme",
+          repoName: name,
+          defaultBranch: "main",
+        })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      // Five automations admitted (49 children); the sixth deferred to next tick.
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(5);
     });
 

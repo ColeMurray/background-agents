@@ -421,6 +421,24 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Advance next_run_at strictly forward. A duplicate cron firing that reaches
+   * the dedup path after a newer tick already advanced the schedule must not
+   * rewind it — an earlier next_run_at would leave the automation spuriously
+   * overdue and fire again. The monotonic guard writes only when the proposed
+   * time is later than the stored one (or none is set).
+   */
+  async advanceNextRunAt(id: string, nextRunAt: number): Promise<boolean> {
+    const now = Date.now();
+    const result = await this.db
+      .prepare(
+        "UPDATE automations SET next_run_at = ?, updated_at = ? WHERE id = ? AND (next_run_at IS NULL OR next_run_at < ?)"
+      )
+      .bind(nextRunAt, now, id, nextRunAt)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   // --- Repository selection (automation_repositories: single source of truth) ---
 
   async getRepositoriesForAutomation(automationId: string): Promise<AutomationRepositoryRow[]> {

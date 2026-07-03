@@ -8,10 +8,12 @@
 -- never stored. automation_runs keeps its shipped meaning: the per-repository,
 -- session-linked unit.
 --
--- Every backfill statement below is guarded (NOT EXISTS / IS NULL) so the file
--- doubles as the idempotent roll-forward repair script: after a rollback
--- window in which old code wrote scalar-only automations or invocation-less
--- runs, re-running the INSERT/UPDATE statements repairs them.
+-- The backfill statements below are each guarded (NOT EXISTS / IS NULL), so
+-- re-running them is idempotent — that is the roll-forward repair path for
+-- invocation-less legacy runs. The schema changes (ALTER ... ADD COLUMN) are
+-- NOT re-runnable (SQLite has no ADD COLUMN IF NOT EXISTS), so the runner
+-- applies this file exactly once via _schema_migrations; a manual repair
+-- re-runs the guarded backfills, not the whole file.
 
 -- ── 1. Repository selection ────────────────────────────────────────────────
 -- Single source of truth for an automation's repositories (0..N rows). The

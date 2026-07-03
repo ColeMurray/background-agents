@@ -144,6 +144,23 @@ describe("AutomationStore (D1 integration)", () => {
       expect(updated!.model).toBe("anthropic/claude-haiku-4-5");
     });
 
+    it("advanceNextRunAt only moves the schedule forward", async () => {
+      const store = new AutomationStore(env.DB);
+      const base = 1_000_000_000_000;
+      await store.create(makeAutomation({ id: "auto-adv", next_run_at: base }));
+
+      // An earlier time is rejected — a stale duplicate must not rewind the
+      // schedule (which would leave the automation spuriously overdue).
+      const rewound = await store.advanceNextRunAt("auto-adv", base - 60_000);
+      expect(rewound).toBe(false);
+      expect((await store.getById("auto-adv"))!.next_run_at).toBe(base);
+
+      // A strictly later time advances it.
+      const advanced = await store.advanceNextRunAt("auto-adv", base + 60_000);
+      expect(advanced).toBe(true);
+      expect((await store.getById("auto-adv"))!.next_run_at).toBe(base + 60_000);
+    });
+
     it("soft-deletes an automation", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-3" }));

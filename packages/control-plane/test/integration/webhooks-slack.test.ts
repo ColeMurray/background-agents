@@ -167,8 +167,8 @@ describe("POST /internal/slack-event (integration)", () => {
     // automation, carrying the event's dedup key.
     const store = new AutomationStore(env.DB);
     const { invocations } = await store.listInvocations(id, { limit: 10, offset: 0 });
-    const invocation = invocations.find((row) => row.id);
-    expect(invocation).toBeDefined();
+    expect(invocations).toHaveLength(1);
+    const invocation = invocations[0];
     expect(invocation!.runs).toHaveLength(1);
     const invocationRow = await store.getInvocationById(invocation!.id);
     expect(invocationRow!.trigger_key).toBe(body.triggerKey);

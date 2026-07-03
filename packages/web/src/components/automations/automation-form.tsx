@@ -360,15 +360,16 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     onSubmit(values);
   };
 
-  const filteredRepos = repos.filter((repo) => {
+  const filteredRepos = useMemo(() => {
     const query = repoQuery.trim().toLowerCase();
-    if (!query) return true;
-    return (
-      repo.fullName.toLowerCase().includes(query) ||
-      repo.name.toLowerCase().includes(query) ||
-      repo.owner.toLowerCase().includes(query)
+    if (!query) return repos;
+    return repos.filter(
+      (repo) =>
+        repo.fullName.toLowerCase().includes(query) ||
+        repo.name.toLowerCase().includes(query) ||
+        repo.owner.toLowerCase().includes(query)
     );
-  });
+  }, [repos, repoQuery]);
   const repositoryLabel =
     selectedRepos.length === 0
       ? NO_REPOSITORY_LABEL

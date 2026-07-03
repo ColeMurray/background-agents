@@ -12,7 +12,7 @@ where changes are needed.
 
 ## The model
 
-```
+```text
 automation ── repositories (0..10, the live selection)
     │
     └── invocation                 one per firing (schedule tick, Trigger Now, or event)

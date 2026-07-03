@@ -316,7 +316,9 @@ export class SchedulerDO extends DurableObject<Env> {
         // advance. The colliding firing owns this slot (cron double-fire) or
         // event (trigger_key dedup) — re-advance and stand down.
         if (source === "schedule" && params.advanceToNextRunAt !== undefined) {
-          await store.update(automation.id, { next_run_at: params.advanceToNextRunAt });
+          // Monotonic: never rewind the schedule. A stale duplicate for an old
+          // slot must not move next_run_at behind a newer tick's advance.
+          await store.advanceNextRunAt(automation.id, params.advanceToNextRunAt);
         }
         return { outcome: "deduplicated" };
       }
@@ -479,8 +481,16 @@ export class SchedulerDO extends DurableObject<Env> {
     );
 
     for (const [index, automation] of overdue.entries()) {
-      if (launchedChildren >= TICK_CHILD_LAUNCH_BUDGET) {
-        this.log.info("Tick child budget exhausted; remaining overdue deferred to next tick", {
+      const repositories = repositoriesByAutomation.get(automation.id) ?? [];
+      // Each repository launches one child (a repo-less automation launches one
+      // null-repo child), so estimate this firing's child count up front and
+      // defer whole automations that would push the tick past the budget.
+      // Checking before startInvocation prevents the overshoot where a firing
+      // materializes and launches up to 10 children before the budget is
+      // reconciled. Always admit the first automation so a tick makes progress.
+      const estimatedChildren = Math.max(repositories.length, 1);
+      if (launchedChildren > 0 && launchedChildren + estimatedChildren > TICK_CHILD_LAUNCH_BUDGET) {
+        this.log.info("Tick child budget reached; remaining overdue deferred to next tick", {
           event: "scheduler.tick_budget_exhausted",
           launched_children: launchedChildren,
           deferred: overdue.length - index,
@@ -498,7 +508,7 @@ export class SchedulerDO extends DurableObject<Env> {
           source: "schedule",
           scheduledAt: automation.next_run_at!,
           advanceToNextRunAt: nextRunAt,
-          repositories: repositoriesByAutomation.get(automation.id) ?? [],
+          repositories,
         });
 
         switch (result.outcome) {
