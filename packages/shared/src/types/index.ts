@@ -896,6 +896,90 @@ export type AutomationRunStatus = "starting" | "running" | "completed" | "failed
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
 
+/** Maximum repositories an automation can fan out across per invocation. */
+export const MAX_AUTOMATION_REPOSITORIES = 10;
+
+export interface RepositoryPair {
+  repoOwner: string;
+  repoName: string;
+}
+
+export class RepositoryPairValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepositoryPairValidationError";
+  }
+}
+
+/**
+ * Normalize an optional repository pair: trim + lowercase identifiers, map a
+ * blank pair to null. The single write-side normalization for scalar repo
+ * pairs — routes, stores, and resolvers must not roll their own.
+ *
+ * @throws RepositoryPairValidationError when only one identifier is present.
+ */
+export function normalizeOptionalRepositoryPair(
+  input: { repoOwner?: string | null; repoName?: string | null },
+  partialMessage = "repoOwner and repoName must be provided together"
+): RepositoryPair | null {
+  const repoOwner = input.repoOwner?.trim().toLowerCase() || null;
+  const repoName = input.repoName?.trim().toLowerCase() || null;
+
+  if ((repoOwner === null) !== (repoName === null)) {
+    throw new RepositoryPairValidationError(partialMessage);
+  }
+
+  return repoOwner && repoName ? { repoOwner, repoName } : null;
+}
+
+/** A repository selected on an automation (response shape, resolved). */
+export interface AutomationRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string | null;
+}
+
+/**
+ * One repository entry on a create/update request. Identifiers are normalized
+ * (trim + lowercase) by the schema, matching normalizeOptionalRepositoryPair —
+ * the list-entry twin of that scalar helper.
+ */
+export const automationRepositoryInputSchema = z
+  .object({
+    repoOwner: z.string().trim().min(1),
+    repoName: z.string().trim().min(1),
+    baseBranch: z.string().trim().min(1).nullish(),
+  })
+  .transform((entry) => ({
+    repoOwner: entry.repoOwner.toLowerCase(),
+    repoName: entry.repoName.toLowerCase(),
+    baseBranch: entry.baseBranch ?? null,
+  }));
+
+export type AutomationRepositoryInput = z.input<typeof automationRepositoryInputSchema>;
+
+/** Repository list for create/update requests: bounded and duplicate-free. */
+export const automationRepositoriesInputSchema = z
+  .array(automationRepositoryInputSchema)
+  .max(MAX_AUTOMATION_REPOSITORIES, {
+    message: `repositories must contain at most ${MAX_AUTOMATION_REPOSITORIES} entries`,
+  })
+  .superRefine((repositories, ctx) => {
+    const seen = new Set<string>();
+    repositories.forEach((repository, index) => {
+      const key = `${repository.repoOwner}/${repository.repoName}`;
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate repository: ${key}`,
+          path: [index],
+        });
+      }
+      seen.add(key);
+    });
+  });
+
 export interface Automation {
   id: string;
   name: string;
@@ -914,9 +998,20 @@ export interface Automation {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
+  /** Selected repositories (0..MAX_AUTOMATION_REPOSITORIES); the canonical repo representation. */
+  repositories: AutomationRepository[];
+  /**
+   * @deprecated Mirrors repositories[0] when exactly one repository, else null. Kept one release
+   * so a stale web bundle round-trips edits without wiping the repo set (a pre-deploy tab seeds
+   * its form from these fields and submits explicit nulls when absent — the null-clears update
+   * contract would then erase the repo). Removed together with the /runs alias endpoint.
+   */
   repoOwner: string | null;
+  /** @deprecated See {@link Automation.repoOwner}. */
   repoName: string | null;
+  /** @deprecated See {@link Automation.repoOwner}. */
   baseBranch: string | null;
+  /** @deprecated See {@link Automation.repoOwner}. */
   repoId: number | null;
 }
 
@@ -931,23 +1026,39 @@ export interface CreateAutomationRequest {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
+  repositories?: AutomationRepositoryInput[];
+  /**
+   * @deprecated Single-repository sugar, normalized server-side into a one-element
+   * `repositories`; sending both forms is rejected. Scheduled for removal — use `repositories`.
+   */
   repoOwner?: string | null;
+  /** @deprecated See {@link CreateAutomationRequest.repoOwner}. */
   repoName?: string | null;
+  /** @deprecated See {@link CreateAutomationRequest.repoOwner}. */
   baseBranch?: string | null;
 }
 
 export interface UpdateAutomationRequest {
   name?: string;
   instructions?: string;
-  repoOwner?: string | null;
-  repoName?: string | null;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
-  baseBranch?: string | null;
   eventType?: string;
   triggerConfig?: TriggerConfig;
+  /** Replaces the full repository selection when present. */
+  repositories?: AutomationRepositoryInput[];
+  /**
+   * @deprecated Single-repository sugar (null clears the selection); rejected when
+   * `repositories` is also present. Scheduled for removal — use `repositories`.
+   */
+  repoOwner?: string | null;
+  /** @deprecated See {@link UpdateAutomationRequest.repoOwner}. */
+  repoName?: string | null;
+  /** @deprecated See {@link UpdateAutomationRequest.repoOwner}. */
+  baseBranch?: string | null;
 }
 
 export interface AutomationRun {
@@ -972,8 +1083,50 @@ export interface ListAutomationsResponse {
   total: number;
 }
 
+/**
+ * @deprecated Response shape of the deprecated GET /automations/:id/runs alias.
+ * New clients use GET /automations/:id/invocations. Removed together with the
+ * deprecated Automation scalar mirrors.
+ */
 export interface ListAutomationRunsResponse {
   runs: AutomationRun[];
+  total: number;
+}
+
+export type AutomationInvocationSource = "schedule" | "manual" | "event";
+
+/**
+ * Derived from an invocation's child runs — never stored. Zero children ⇔
+ * skipped; `partial_failed` means the runs finished terminal with a mix of
+ * completed and failed.
+ */
+export type AutomationInvocationStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "partial_failed"
+  | "skipped";
+
+/** One firing of an automation: 0 runs when skipped, else one run per repository. */
+export interface AutomationInvocation {
+  id: string;
+  automationId: string;
+  status: AutomationInvocationStatus;
+  source: AutomationInvocationSource;
+  /** The cron slot this firing served; null for manual/event firings. */
+  scheduledAt: number | null;
+  /** Non-null ⇔ this firing was skipped (runs is then empty). */
+  skipReason: string | null;
+  createdAt: number;
+  /** Latest child completion; null until all runs are terminal. */
+  completedAt: number | null;
+  runs: AutomationRun[];
+}
+
+export interface ListAutomationInvocationsResponse {
+  invocations: AutomationInvocation[];
+  /** Counts invocations (each firing is one row regardless of fan-out width). */
   total: number;
 }
 

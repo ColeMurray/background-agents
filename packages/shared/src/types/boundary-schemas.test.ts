@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  automationRepositoriesInputSchema,
+  automationRepositoryInputSchema,
   clientMessageSchema,
   createSessionRequestSchema,
+  MAX_AUTOMATION_REPOSITORIES,
+  normalizeOptionalRepositoryPair,
+  RepositoryPairValidationError,
   sandboxEventSchema,
   serverMessageSchema,
   spawnChildSessionRequestSchema,
@@ -368,6 +373,128 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(false);
+    });
+  });
+});
+
+describe("automation repository schemas", () => {
+  describe("normalizeOptionalRepositoryPair", () => {
+    it("trims and lowercases a complete pair", () => {
+      expect(
+        normalizeOptionalRepositoryPair({ repoOwner: "  Acme  ", repoName: "  Web-App " })
+      ).toEqual({
+        repoOwner: "acme",
+        repoName: "web-app",
+      });
+    });
+
+    it("maps an absent pair to null", () => {
+      expect(normalizeOptionalRepositoryPair({})).toBeNull();
+      expect(normalizeOptionalRepositoryPair({ repoOwner: null, repoName: null })).toBeNull();
+      expect(normalizeOptionalRepositoryPair({ repoOwner: "   ", repoName: "" })).toBeNull();
+    });
+
+    it("throws RepositoryPairValidationError on a half pair", () => {
+      expect(() => normalizeOptionalRepositoryPair({ repoOwner: "acme" })).toThrow(
+        RepositoryPairValidationError
+      );
+      expect(() => normalizeOptionalRepositoryPair({ repoOwner: "  ", repoName: "web" })).toThrow(
+        "repoOwner and repoName must be provided together"
+      );
+    });
+
+    it("uses the provided message for half pairs", () => {
+      expect(() => normalizeOptionalRepositoryPair({ repoName: "web" }, "custom message")).toThrow(
+        "custom message"
+      );
+    });
+  });
+
+  describe("automationRepositoryInputSchema", () => {
+    it("normalizes identifiers and defaults baseBranch to null", () => {
+      const result = automationRepositoryInputSchema.safeParse({
+        repoOwner: " Acme ",
+        repoName: " Web-App ",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ repoOwner: "acme", repoName: "web-app", baseBranch: null });
+    });
+
+    it("keeps a trimmed baseBranch", () => {
+      const result = automationRepositoryInputSchema.safeParse({
+        repoOwner: "acme",
+        repoName: "web",
+        baseBranch: " develop ",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data?.baseBranch).toBe("develop");
+    });
+
+    it("rejects empty identifiers", () => {
+      expect(
+        automationRepositoryInputSchema.safeParse({ repoOwner: "", repoName: "web" }).success
+      ).toBe(false);
+      expect(
+        automationRepositoryInputSchema.safeParse({ repoOwner: "acme", repoName: "  " }).success
+      ).toBe(false);
+    });
+
+    it("rejects a whitespace-only baseBranch", () => {
+      const result = automationRepositoryInputSchema.safeParse({
+        repoOwner: "acme",
+        repoName: "web",
+        baseBranch: "   ",
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("automationRepositoriesInputSchema", () => {
+    it("accepts an empty list and a single repository", () => {
+      expect(automationRepositoriesInputSchema.safeParse([]).success).toBe(true);
+      expect(
+        automationRepositoriesInputSchema.safeParse([{ repoOwner: "acme", repoName: "web" }])
+          .success
+      ).toBe(true);
+    });
+
+    it("rejects more than MAX_AUTOMATION_REPOSITORIES entries", () => {
+      const repositories = Array.from({ length: MAX_AUTOMATION_REPOSITORIES + 1 }, (_, i) => ({
+        repoOwner: "acme",
+        repoName: `repo-${i}`,
+      }));
+
+      expect(automationRepositoriesInputSchema.safeParse(repositories).success).toBe(false);
+    });
+
+    it("accepts exactly MAX_AUTOMATION_REPOSITORIES entries", () => {
+      const repositories = Array.from({ length: MAX_AUTOMATION_REPOSITORIES }, (_, i) => ({
+        repoOwner: "acme",
+        repoName: `repo-${i}`,
+      }));
+
+      expect(automationRepositoriesInputSchema.safeParse(repositories).success).toBe(true);
+    });
+
+    it("rejects case-insensitive duplicate repositories", () => {
+      const result = automationRepositoriesInputSchema.safeParse([
+        { repoOwner: "Acme", repoName: "Web" },
+        { repoOwner: "acme", repoName: "web" },
+      ]);
+
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts the same repository name under different owners", () => {
+      const result = automationRepositoriesInputSchema.safeParse([
+        { repoOwner: "acme", repoName: "web" },
+        { repoOwner: "globex", repoName: "web" },
+      ]);
+
+      expect(result.success).toBe(true);
     });
   });
 });

@@ -31,6 +31,11 @@ import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
 import {
+  normalizeOptionalRepositoryPair,
+  RepositoryPairValidationError,
+  type RepositoryPair,
+} from "@open-inspect/shared";
+import {
   type Route,
   type RequestContext,
   parsePattern,
@@ -38,9 +43,6 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
-  normalizeOptionalRepositoryContext,
-  RepositoryContextValidationError,
-  type OptionalRepositoryContext,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -69,11 +71,11 @@ function resolveReasoningEffort(
 function parseRepositoryContext(
   input: { repoOwner?: string | null; repoName?: string | null },
   partialMessage?: string
-): OptionalRepositoryContext | Response {
+): RepositoryPair | null | Response {
   try {
-    return normalizeOptionalRepositoryContext(input, partialMessage);
+    return normalizeOptionalRepositoryPair(input, partialMessage);
   } catch (e) {
-    if (e instanceof RepositoryContextValidationError) {
+    if (e instanceof RepositoryPairValidationError) {
       return error(e.message, 400);
     }
     throw e;

@@ -112,6 +112,9 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
   return {
     id: "auto-test",
     name: "Test Automation",
+    repositories: [
+      { repoOwner: "test-owner", repoName: "test-repo", repoId: 1, baseBranch: "main" },
+    ],
     repoOwner: "test-owner",
     repoName: "test-repo",
     baseBranch: "main",

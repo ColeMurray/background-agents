@@ -7,6 +7,7 @@
 
 import type {
   Automation,
+  AutomationRepository,
   AutomationRun,
   AutomationRunStatus,
   TriggerConfig,
@@ -76,6 +77,21 @@ export function toAutomation(row: AutomationRow): Automation {
 
   const hasRepository = row.repo_owner !== null && row.repo_name !== null;
 
+  // Transitional: synthesized from the scalar columns, which are still the
+  // source of truth until automation_repositories lands with the store-layer
+  // commit (the scalars then become deprecated read-only mirrors).
+  const repositories: AutomationRepository[] =
+    row.repo_owner !== null && row.repo_name !== null
+      ? [
+          {
+            repoOwner: row.repo_owner,
+            repoName: row.repo_name,
+            repoId: row.repo_id,
+            baseBranch: row.base_branch,
+          },
+        ]
+      : [];
+
   return {
     id: row.id,
     name: row.name,
@@ -94,6 +110,7 @@ export function toAutomation(row: AutomationRow): Automation {
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
     triggerConfig,
+    repositories,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
     baseBranch: hasRepository ? row.base_branch : null,
