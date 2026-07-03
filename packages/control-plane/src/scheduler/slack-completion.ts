@@ -9,12 +9,11 @@
  * with no actor to address.
  */
 
-import type { AutomationRunRow } from "../db/automation-store";
-
 /**
- * Slack run coordinates captured at trigger time, serialized into the run's
- * generic `trigger_run_metadata` column (slack-origin runs only). `messageTs` is
- * the triggering message, used to clear the `eyes` reaction on completion.
+ * Slack coordinates captured at trigger time, serialized into the invocation's
+ * `trigger_metadata` column (slack-origin firings only; legacy rows carry the
+ * same JSON in the run's frozen `trigger_run_metadata`). `messageTs` is the
+ * triggering message, used to clear the `eyes` reaction on completion.
  */
 export interface SlackRunMetadata {
   channel: string;
@@ -22,16 +21,14 @@ export interface SlackRunMetadata {
 }
 
 /**
- * Parse a run row's `trigger_run_metadata` as slack coordinates — null when
- * absent (a non-slack run) or malformed. Completion is best-effort, so a parse
+ * Parse serialized trigger metadata as slack coordinates — null when absent
+ * (a non-slack firing) or malformed. Completion is best-effort, so a parse
  * failure silently no-ops rather than throwing into the dispatch path.
  */
-export function getSlackRunMetadata(
-  row: Pick<AutomationRunRow, "trigger_run_metadata">
-): SlackRunMetadata | null {
-  if (!row.trigger_run_metadata) return null;
+export function parseSlackTriggerMetadata(raw: string | null | undefined): SlackRunMetadata | null {
+  if (!raw) return null;
   try {
-    return JSON.parse(row.trigger_run_metadata) as SlackRunMetadata;
+    return JSON.parse(raw) as SlackRunMetadata;
   } catch {
     return null;
   }

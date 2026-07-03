@@ -2,12 +2,14 @@
  * Unit tests for SchedulerDO.
  *
  * Uses mocked D1 and SESSION namespace. For full integration tests
- * (with real D1 + workerd), see test/integration/scheduler.test.ts.
+ * (with real D1 + workerd), see test/integration/scheduler.test.ts and
+ * test/integration/automation-invocations.test.ts.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
+import type { InvocationRunAggregate } from "../db/automation-store";
 
 // Mock cloudflare:workers before importing SchedulerDO (extends DurableObject)
 vi.mock("cloudflare:workers", () => ({
@@ -34,6 +36,25 @@ const { SchedulerDO } = await import("./durable-object");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
+function aggregate(overrides?: Partial<InvocationRunAggregate>): InvocationRunAggregate {
+  return {
+    total: 1,
+    active: 1,
+    failed: 0,
+    completed: 0,
+    skipped: 0,
+    lastCompletedAt: null,
+    ...overrides,
+  };
+}
+
+/**
+ * insertInvocationGuarded params snapshotted at call time — the launch loop
+ * mutates its local child objects afterwards, so assertions about the
+ * inserted state must read these clones, not mock.calls.
+ */
+let capturedInvocationParams: Array<{ children: Array<Record<string, unknown>> }> = [];
+
 /** Minimal AutomationStore mock returned by new AutomationStore(db). */
 function createMockStore() {
   return {
@@ -41,10 +62,21 @@ function createMockStore() {
     getActiveRunForAutomation: vi.fn().mockResolvedValue(null),
     getActiveRunForKey: vi.fn().mockResolvedValue(null),
     getLatestSteerableRunForThread: vi.fn().mockResolvedValue(null),
-    recordSkippedRun: vi.fn().mockResolvedValue(undefined),
-    createRunAndAdvanceSchedule: vi.fn().mockResolvedValue(undefined),
-    insertRun: vi.fn().mockResolvedValue(undefined),
-    updateRun: vi.fn().mockResolvedValue(undefined),
+    getRepositoriesForAutomation: vi.fn().mockResolvedValue([]),
+    getRepositoriesForAutomationIds: vi.fn().mockResolvedValue(new Map()),
+    insertInvocationGuarded: vi.fn().mockImplementation(async (params: unknown) => {
+      capturedInvocationParams.push(
+        structuredClone(params) as { children: Array<Record<string, unknown>> }
+      );
+      return { inserted: true };
+    }),
+    insertSkippedInvocation: vi.fn().mockResolvedValue({ inserted: true }),
+    getInvocationById: vi.fn().mockResolvedValue(null),
+    getInvocationRunAggregate: vi.fn().mockResolvedValue(aggregate()),
+    tryMarkInvocationFailureCounted: vi.fn().mockResolvedValue(true),
+    getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),
+    getStaleFailureResetCandidates: vi.fn().mockResolvedValue([]),
+    updateRun: vi.fn().mockResolvedValue(true),
     getById: vi.fn().mockResolvedValue(null),
     getRunById: vi.fn().mockResolvedValue(null),
     countOverdue: vi.fn().mockResolvedValue(0),
@@ -61,12 +93,16 @@ function createMockStore() {
 
 let mockStore: ReturnType<typeof createMockStore>;
 
-vi.mock("../db/automation-store", () => ({
-  AutomationStore: vi.fn().mockImplementation(function () {
-    return mockStore;
-  }),
-  toAutomationRun: vi.fn((row: unknown) => row),
-}));
+vi.mock("../db/automation-store", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    AutomationStore: vi.fn().mockImplementation(function () {
+      return mockStore;
+    }),
+    toAutomationRun: vi.fn((row: unknown) => row),
+  };
+});
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
 const mockSessionStoreUpdateStatus = vi.fn().mockResolvedValue(undefined);
@@ -247,6 +283,48 @@ const sampleAutomation = {
   deleted_at: null,
 };
 
+function repositoryRow(automationId: string, overrides?: Record<string, unknown>) {
+  return {
+    automation_id: automationId,
+    repo_owner: "acme",
+    repo_name: "web-app",
+    repo_id: 12345,
+    base_branch: "release",
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+/** Point the tick's batched repository fetch at a selection for one automation. */
+function selectRepositories(automationId: string, rows: unknown[]) {
+  mockStore.getRepositoriesForAutomationIds.mockResolvedValue(new Map([[automationId, rows]]));
+  mockStore.getRepositoriesForAutomation.mockResolvedValue(rows);
+}
+
+function sampleRunRow(overrides?: Record<string, unknown>) {
+  return {
+    id: "run-1",
+    automation_id: "auto-1",
+    invocation_id: "inv-1",
+    status: "running",
+    session_id: "sess-1",
+    scheduled_at: now,
+    started_at: now,
+    completed_at: null,
+    created_at: now,
+    skip_reason: null,
+    failure_reason: null,
+    trigger_key: null,
+    concurrency_key: null,
+    repo_owner: "acme",
+    repo_name: "web-app",
+    repo_id: 12345,
+    base_branch: "main",
+    ...overrides,
+  };
+}
+
 const sampleSlackAutomation = {
   ...sampleAutomation,
   id: "auto-slack",
@@ -289,11 +367,19 @@ function slackEventRequest(overrides?: Record<string, unknown>): Request {
   });
 }
 
+/** All children handed to the last insertInvocationGuarded call, as inserted. */
+function lastInsertedChildren(): Array<Record<string, unknown>> {
+  const params = capturedInvocationParams.at(-1);
+  expect(params).toBeDefined();
+  return params!.children;
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("SchedulerDO", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capturedInvocationParams = [];
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);
     mockCheckRepositoryAccess.mockResolvedValue({
@@ -334,8 +420,9 @@ describe("SchedulerDO", () => {
       expect(body.failed).toBe(0);
     });
 
-    it("processes overdue automation and creates run", async () => {
+    it("starts an invocation for an overdue automation and launches its run", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
@@ -346,16 +433,70 @@ describe("SchedulerDO", () => {
       const body = await res.json<{ processed: number; skipped: number; failed: number }>();
       expect(body.processed).toBe(1);
 
-      expect(mockStore.createRunAndAdvanceSchedule).toHaveBeenCalledTimes(1);
+      expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
+      const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
+      expect(params.invocation).toMatchObject({
+        automation_id: "auto-1",
+        source: "schedule",
+        scheduled_at: sampleAutomation.next_run_at,
+      });
+      expect(params.overlapScope).toEqual({ kind: "automation" });
+      expect(params.advanceSchedule).toEqual({ nextRunAt: expect.any(Number) });
+      expect(params.children).toHaveLength(1);
+
       expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ status: "running" })
       );
     });
 
+    it("fans out one child per selected repository", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [
+        repositoryRow("auto-1", { repo_name: "web-app" }),
+        repositoryRow("auto-1", { repo_name: "api", base_branch: null }),
+      ]);
+      mockCheckRepositoryAccess.mockImplementation(
+        async ({ name }: { owner: string; name: string }) => ({
+          repoId: name === "api" ? 222 : 111,
+          repoOwner: "acme",
+          repoName: name,
+          defaultBranch: "main",
+        })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const children = lastInsertedChildren();
+      expect(children).toHaveLength(2);
+      expect(children[0]).toMatchObject({
+        repo_owner: "acme",
+        repo_name: "web-app",
+        repo_id: 111,
+        base_branch: "release",
+        status: "starting",
+      });
+      expect(children[1]).toMatchObject({
+        repo_owner: "acme",
+        repo_name: "api",
+        repo_id: 222,
+        base_branch: "main",
+        status: "starting",
+      });
+      // Both children share the invocation id.
+      expect(children[0].invocation_id).toBe(children[1].invocation_id);
+      // Both launched.
+      expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
+    });
+
     it("passes automation reasoning effort into created sessions", async () => {
       const automation = { ...sampleAutomation, reasoning_effort: "high" };
       mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
       const env = createEnv();
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -371,15 +512,9 @@ describe("SchedulerDO", () => {
       expect(initBody.reasoningEffort).toBe("high");
     });
 
-    it("uses the resolved repository for session creation", async () => {
-      const automation = {
-        ...sampleAutomation,
-        repo_owner: "ACME",
-        repo_name: "Web-App",
-        repo_id: 111,
-        base_branch: "release",
-      };
-      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+    it("snapshots the resolved repository onto the child and the session", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockCheckRepositoryAccess.mockResolvedValue({
         repoId: 98765,
         repoOwner: "acme",
@@ -398,8 +533,16 @@ describe("SchedulerDO", () => {
 
       expect(res.status).toBe(200);
       expect(mockCheckRepositoryAccess).toHaveBeenCalledWith({
-        owner: "ACME",
-        name: "Web-App",
+        owner: "acme",
+        name: "web-app",
+      });
+
+      // The selection's fixed branch wins over the repo default.
+      expect(lastInsertedChildren()[0]).toMatchObject({
+        repo_owner: "acme",
+        repo_name: "web-app",
+        repo_id: 98765,
+        base_branch: "release",
       });
 
       const initBody = await getInitBody(fetchMock);
@@ -417,14 +560,8 @@ describe("SchedulerDO", () => {
     });
 
     it("creates sessions with null repo fields for repo-less automations", async () => {
-      const automation = {
-        ...sampleAutomation,
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      };
-      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", []);
 
       const env = createEnv();
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -437,6 +574,16 @@ describe("SchedulerDO", () => {
 
       expect(res.status).toBe(200);
       expect(mockCheckRepositoryAccess).not.toHaveBeenCalled();
+
+      expect(lastInsertedChildren()).toEqual([
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+          status: "starting",
+        }),
+      ]);
 
       const initBody = await getInitBody(fetchMock);
       expect(initBody.repoOwner).toBeNull();
@@ -453,9 +600,9 @@ describe("SchedulerDO", () => {
       );
     });
 
-    it("falls back to the repository default branch during target resolution", async () => {
-      const automation = { ...sampleAutomation, base_branch: "" };
-      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+    it("falls back to the repository default branch when the selection has none", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1", { base_branch: null })]);
       mockCheckRepositoryAccess.mockResolvedValue({
         repoId: 12345,
         repoOwner: "acme",
@@ -477,9 +624,13 @@ describe("SchedulerDO", () => {
       expect(initBody.defaultBranch).toBe("develop");
     });
 
-    it("fails the run when target repository access is unavailable", async () => {
+    it("pre-fails the child when its repository is inaccessible (born-terminal invocation)", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockCheckRepositoryAccess.mockResolvedValue(null);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
 
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
@@ -490,17 +641,60 @@ describe("SchedulerDO", () => {
       const body = await res.json<{ processed: number; failed: number }>();
       expect(body.processed).toBe(0);
       expect(body.failed).toBe(1);
-      expect(mockStore.updateRun).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          status: "failed",
-          failure_reason: "Repository is not accessible for the configured SCM provider",
-        })
+
+      // The child is born failed inside the atomic batch — no separate update.
+      expect(lastInsertedChildren()[0]).toMatchObject({
+        status: "failed",
+        failure_reason: "Repository is not accessible for the configured SCM provider",
+        repo_owner: "acme",
+        repo_name: "web-app",
+      });
+
+      // Born-terminal: finalized immediately with one CAS-guarded strike.
+      expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+    });
+
+    it("one inaccessible repository never blocks its siblings", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [
+        repositoryRow("auto-1", { repo_name: "broken" }),
+        repositoryRow("auto-1", { repo_name: "web-app" }),
+      ]);
+      mockCheckRepositoryAccess.mockImplementation(
+        async ({ name }: { owner: string; name: string }) =>
+          name === "broken"
+            ? null
+            : { repoId: 1, repoOwner: "acme", repoName: name, defaultBranch: "main" }
       );
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 2, active: 1, failed: 1 })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ processed: number; failed: number }>();
+      expect(body.processed).toBe(1);
+
+      const children = lastInsertedChildren();
+      expect(children[0]).toMatchObject({ repo_name: "broken", status: "failed" });
+      expect(children[1]).toMatchObject({ repo_name: "web-app", status: "starting" });
+      // The healthy sibling launched.
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        children[1].id,
+        expect.objectContaining({ status: "running" })
+      );
+      // One strike for the invocation, not per failed child.
+      expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
     });
 
     it("passes resolved code-server and sandbox settings into automation sessions", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1", { base_branch: "main" })]);
 
       const env = createEnv({ DB: createIntegrationSettingsDbMock() });
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -517,7 +711,7 @@ describe("SchedulerDO", () => {
       expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [5173], terminalEnabled: true });
     });
 
-    it("skips automation with active run (concurrency guard)", async () => {
+    it("records an atomic childless skip when a run is active (concurrency guard)", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       mockStore.getActiveRunForAutomation.mockResolvedValue({
         id: "existing-run",
@@ -534,22 +728,112 @@ describe("SchedulerDO", () => {
       expect(body.skipped).toBe(1);
       expect(body.processed).toBe(0);
 
-      expect(mockStore.insertRun).toHaveBeenCalledWith(
+      // Childless skip invocation + schedule advance in ONE atomic call.
+      expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
         expect.objectContaining({
-          status: "skipped",
+          automation_id: "auto-1",
+          source: "schedule",
+          scheduled_at: sampleAutomation.next_run_at,
           skip_reason: "concurrent_run_active",
-        })
+        }),
+        { nextRunAt: expect.any(Number) }
+      );
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+    });
+
+    it("records the skip without re-advancing when the guarded insert loses the race", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      // Pre-check passes, but the batch's overlap predicate suppressed the
+      // insert (a run went active in between). The batch already advanced.
+      mockStore.insertInvocationGuarded.mockResolvedValue({ inserted: false });
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
       );
 
-      // Verify next_run_at was advanced to prevent repeat skip inserts
-      expect(mockStore.update).toHaveBeenCalledWith(
-        sampleAutomation.id,
-        expect.objectContaining({ next_run_at: expect.any(Number) })
+      expect(res.status).toBe(200);
+      const body = await res.json<{ skipped: number }>();
+      expect(body.skipped).toBe(1);
+
+      expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
+        expect.objectContaining({ skip_reason: "concurrent_run_active" }),
+        undefined
       );
     });
 
-    it("marks run as failed when session creation throws", async () => {
+    it("re-advances the schedule and stands down on a cron double-fire", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      // UNIQUE violation on the idempotency index rolls back the whole batch
+      // including the advance.
+      mockStore.insertInvocationGuarded.mockRejectedValue(
+        new Error(
+          "D1_ERROR: UNIQUE constraint failed: automation_invocations.automation_id, automation_invocations.scheduled_at"
+        )
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ skipped: number; failed: number }>();
+      expect(body.skipped).toBe(1);
+      expect(body.failed).toBe(0);
+
+      expect(mockStore.update).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ next_run_at: expect.any(Number) })
+      );
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+    });
+
+    it("stops pulling overdue automations once the child launch budget is spent", async () => {
+      // 6 automations × 10 repos = 60 children; the budget (50) admits 5.
+      const overdue = Array.from({ length: 6 }, (_, i) => ({
+        ...sampleAutomation,
+        id: `auto-${i}`,
+      }));
+      mockStore.getOverdueAutomations.mockResolvedValue(overdue);
+      mockStore.getRepositoriesForAutomationIds.mockResolvedValue(
+        new Map(
+          overdue.map((automation) => [
+            automation.id,
+            Array.from({ length: 10 }, (_, r) =>
+              repositoryRow(automation.id, { repo_name: `repo-${r}` })
+            ),
+          ])
+        )
+      );
+      mockCheckRepositoryAccess.mockImplementation(
+        async ({ name }: { owner: string; name: string }) => ({
+          repoId: 1,
+          repoOwner: "acme",
+          repoName: name,
+          defaultBranch: "main",
+        })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ processed: number }>();
+      expect(body.processed).toBe(5);
+      expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(5);
+    });
+
+    it("marks the child as failed when session creation throws", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
 
       const failingStub = {
         fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
@@ -576,6 +860,10 @@ describe("SchedulerDO", () => {
 
     it("auto-pauses after 3 consecutive failures", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
 
       const failingStub = {
@@ -593,6 +881,10 @@ describe("SchedulerDO", () => {
 
     it("does not auto-pause at fewer than 3 failures", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
       mockStore.incrementConsecutiveFailures.mockResolvedValue(2);
 
       const failingStub = {
@@ -608,10 +900,122 @@ describe("SchedulerDO", () => {
       expect(mockStore.autoPause).not.toHaveBeenCalled();
     });
 
-    it("recovers orphaned starting runs", async () => {
+    it("strikes once per invocation even when the CAS is already taken", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
+      mockStore.tryMarkInvocationFailureCounted.mockResolvedValue(false);
+
+      const failingStub = {
+        fetch: vi.fn().mockRejectedValue(new Error("fail")),
+      } as never;
+      const env = createEnv();
+      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+
+      const scheduler = createSchedulerDO(env);
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+    });
+
+    it("passes automation user_id to session index", async () => {
+      const automation = { ...sampleAutomation, user_id: "canonical-user-1" };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "canonical-user-1" })
+      );
+    });
+
+    it("falls back to identity lookup for legacy automations without user_id", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentity.mockResolvedValue({ userId: "looked-up-user" });
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockUserStoreGetIdentity).toHaveBeenCalledWith("github", "user-1");
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "looked-up-user" })
+      );
+    });
+
+    it("creates session with null userId when identity lookup finds nothing", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentity.mockResolvedValue(null);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: null })
+      );
+    });
+
+    it("swallows launch-failure tracking errors and logs scheduler.fail_track_error", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
+
+      const failingStub = {
+        fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
+      } as never;
+
+      const env = createEnv();
+      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+
+      const scheduler = createSchedulerDO(env);
+      const errorSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
+        .mockImplementation(() => {});
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
+      expect(body.failed).toBe(1);
+
+      const failTrackCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.fail_track_error" &&
+          (data as Record<string, unknown> | undefined)?.original_reason === "Session init failed"
+      );
+      expect(failTrackCall).toBeDefined();
+      expect(failTrackCall![1]).toMatchObject({
+        event: "scheduler.fail_track_error",
+        automation_id: "auto-1",
+        run_id: expect.any(String),
+        original_reason: "Session init failed",
+        error: "D1 timeout",
+      });
+
+      const tickErrorCall = errorSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.tick_error"
+      );
+      expect(tickErrorCall).toBeUndefined();
+    });
+
+    // ── Recovery sweep ──────────────────────────────────────────────────────
+
+    it("recovers orphaned starting runs (legacy rows use per-run accounting)", async () => {
       const orphanedRun = {
         id: "orphan-1",
         automation_id: "auto-1",
+        invocation_id: null,
         status: "starting",
         created_at: now - 10 * 60 * 1000,
       };
@@ -629,47 +1033,48 @@ describe("SchedulerDO", () => {
       expect(mockStore.bulkIncrementFailures).toHaveBeenCalledWith(new Map([["auto-1", 1]]));
     });
 
-    it("passes automation user_id to session index", async () => {
-      const automation = { ...sampleAutomation, user_id: "canonical-user-1" };
-      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+    it("applies one CAS-guarded strike per invocation for recovered children", async () => {
+      // Two stuck children of the SAME invocation → one strike, not two.
+      const orphanedRuns = [
+        {
+          id: "orphan-a",
+          automation_id: "auto-1",
+          invocation_id: "inv-9",
+          status: "starting",
+          created_at: now - 1,
+        },
+        {
+          id: "orphan-b",
+          automation_id: "auto-1",
+          invocation_id: "inv-9",
+          status: "starting",
+          created_at: now - 2,
+        },
+      ];
+      mockStore.getOrphanedStartingRuns.mockResolvedValue(orphanedRuns);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 2, active: 0, failed: 2 })
+      );
 
       const scheduler = createSchedulerDO();
       await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
-      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: "canonical-user-1" })
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["orphan-a", "orphan-b"],
+        "session_creation_timeout",
+        expect.any(Number)
       );
-    });
-
-    it("falls back to identity lookup for legacy automations without user_id", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
-      mockUserStoreGetIdentity.mockResolvedValue({ userId: "looked-up-user" });
-
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
-
-      expect(mockUserStoreGetIdentity).toHaveBeenCalledWith("github", "user-1");
-      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: "looked-up-user" })
-      );
-    });
-
-    it("creates session with null userId when identity lookup finds nothing", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
-      mockUserStoreGetIdentity.mockResolvedValue(null);
-
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
-
-      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: null })
-      );
+      expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledTimes(1);
+      expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledExactlyOnceWith("inv-9");
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledExactlyOnceWith("auto-1");
+      expect(mockStore.bulkIncrementFailures).not.toHaveBeenCalled();
     });
 
     it("recovers timed-out running runs", async () => {
       const timedOutRun = {
         id: "timeout-1",
         automation_id: "auto-1",
+        invocation_id: null,
         status: "running",
         started_at: now - 2 * 60 * 60 * 1000,
       };
@@ -690,6 +1095,7 @@ describe("SchedulerDO", () => {
       const timedOutRun = {
         id: "timeout-1",
         automation_id: "auto-1",
+        invocation_id: null,
         status: "running",
         started_at: now - 2 * 60 * 60 * 1000,
       };
@@ -728,9 +1134,27 @@ describe("SchedulerDO", () => {
 
     it("batches multiple orphaned runs into a single bulkFailRuns call", async () => {
       const orphanedRuns = [
-        { id: "orphan-a", automation_id: "auto-1", status: "starting", created_at: now - 1 },
-        { id: "orphan-b", automation_id: "auto-1", status: "starting", created_at: now - 2 },
-        { id: "orphan-c", automation_id: "auto-1", status: "starting", created_at: now - 3 },
+        {
+          id: "orphan-a",
+          automation_id: "auto-1",
+          invocation_id: null,
+          status: "starting",
+          created_at: now - 1,
+        },
+        {
+          id: "orphan-b",
+          automation_id: "auto-1",
+          invocation_id: null,
+          status: "starting",
+          created_at: now - 2,
+        },
+        {
+          id: "orphan-c",
+          automation_id: "auto-1",
+          invocation_id: null,
+          status: "starting",
+          created_at: now - 3,
+        },
       ];
       mockStore.getOrphanedStartingRuns.mockResolvedValue(orphanedRuns);
       mockStore.bulkIncrementFailures.mockResolvedValue(new Map([["auto-1", 3]]));
@@ -751,6 +1175,7 @@ describe("SchedulerDO", () => {
       const orphanedRun = {
         id: "orphan-1",
         automation_id: "auto-1",
+        invocation_id: null,
         status: "starting",
         created_at: now - 10 * 60 * 1000,
       };
@@ -782,12 +1207,14 @@ describe("SchedulerDO", () => {
         {
           id: "orphan-1",
           automation_id: "auto-1",
+          invocation_id: null,
           status: "starting",
           created_at: now - 10 * 60 * 1000,
         },
         {
           id: "orphan-2",
           automation_id: "auto-2",
+          invocation_id: null,
           status: "starting",
           created_at: now - 10 * 60 * 1000,
         },
@@ -846,6 +1273,7 @@ describe("SchedulerDO", () => {
       const orphanedRun = {
         id: "orphan-1",
         automation_id: "auto-1",
+        invocation_id: null,
         status: "starting",
         created_at: now - 10 * 60 * 1000,
       };
@@ -881,12 +1309,14 @@ describe("SchedulerDO", () => {
       const orphanedRun = {
         id: "orphan-1",
         automation_id: "auto-1",
+        invocation_id: null,
         status: "starting",
         created_at: now - 10 * 60 * 1000,
       };
       const timedOutRun = {
         id: "timeout-1",
         automation_id: "auto-2",
+        invocation_id: null,
         status: "running",
         started_at: now - 2 * 60 * 60 * 1000,
       };
@@ -941,6 +1371,7 @@ describe("SchedulerDO", () => {
       const orphanedRun = {
         id: "orphan-1",
         automation_id: "auto-1",
+        invocation_id: null,
         status: "starting",
         created_at: now - 10 * 60 * 1000,
       };
@@ -974,71 +1405,49 @@ describe("SchedulerDO", () => {
       });
     });
 
-    it("swallows failRunAndTrack errors and logs scheduler.fail_track_error", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
-      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+    // ── Finalization sweep (D2c) ────────────────────────────────────────────
 
-      const failingStub = {
-        fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
-      } as never;
-
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
-
-      const scheduler = createSchedulerDO(env);
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
-
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
+    it("counts missed failures for all-terminal invocations found by the sweep", async () => {
+      mockStore.getUncountedFailedInvocations.mockResolvedValue([
+        { id: "inv-crashed", automation_id: "auto-1" },
+      ]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 2, active: 0, failed: 1, completed: 1 })
       );
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.failed).toBe(1);
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
-      const failTrackCall = errorSpy.mock.calls.find(
-        ([, data]) =>
-          (data as Record<string, unknown> | undefined)?.event === "scheduler.fail_track_error"
+      expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-crashed");
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+    });
+
+    it("applies missed resets for failing automations whose latest invocation completed", async () => {
+      mockStore.getStaleFailureResetCandidates.mockResolvedValue([
+        { automation_id: "auto-1", invocation_id: "inv-ok" },
+      ]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 2, active: 0, failed: 0, completed: 2 })
       );
-      expect(failTrackCall).toBeDefined();
-      expect(failTrackCall![1]).toMatchObject({
-        event: "scheduler.fail_track_error",
-        automation_id: "auto-1",
-        run_id: expect.any(String),
-        original_reason: "Session init failed",
-        error: "D1 timeout",
-      });
 
-      const tickErrorCall = errorSpy.mock.calls.find(
-        ([, data]) =>
-          (data as Record<string, unknown> | undefined)?.event === "scheduler.tick_error"
-      );
-      expect(tickErrorCall).toBeUndefined();
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
+      expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
     });
   });
 
   describe("/internal/run-complete", () => {
     beforeEach(() => {
-      // run-complete handler validates that the run exists and is active
-      mockStore.getRunById.mockResolvedValue({
-        id: "run-1",
-        automation_id: "auto-1",
-        status: "running",
-        session_id: "sess-1",
-        scheduled_at: now,
-        started_at: now,
-        completed_at: null,
-        created_at: now,
-        skip_reason: null,
-        failure_reason: null,
-      });
+      mockStore.getRunById.mockResolvedValue(sampleRunRow());
     });
 
-    it("marks run as completed and resets failures on success", async () => {
+    it("marks run as completed and resets failures once every sibling completed", async () => {
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 0, completed: 1 })
+      );
+
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
         new Request("http://internal/internal/run-complete", {
@@ -1058,7 +1467,57 @@ describe("SchedulerDO", () => {
         status: "completed",
         completed_at: expect.any(Number),
       });
+      expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledWith("inv-1");
       expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+    });
+
+    it("does not reset while siblings are still active", async () => {
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 2, active: 1, failed: 0, completed: 1 })
+      );
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-1",
+            runId: "run-1",
+            sessionId: "sess-1",
+            success: true,
+          }),
+        })
+      );
+
+      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+    });
+
+    it("never resets after a partial failure, even when the invocation finishes", async () => {
+      // Sibling failed earlier (strike already taken via CAS); this success
+      // finishes the invocation as partial_failed — no reset.
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 2, active: 0, failed: 1, completed: 1 })
+      );
+      mockStore.tryMarkInvocationFailureCounted.mockResolvedValue(false);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-1",
+            runId: "run-1",
+            sessionId: "sess-1",
+            success: true,
+          }),
+        })
+      );
+
+      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
     });
 
     it("returns 400 for malformed run-complete callbacks", async () => {
@@ -1082,23 +1541,84 @@ describe("SchedulerDO", () => {
       expect(mockStore.updateRun).not.toHaveBeenCalled();
     });
 
-    it("uses a no-repository label for slack completion callbacks", async () => {
-      mockStore.getRunById.mockResolvedValue({
-        id: "run-1",
+    it("reads slack coordinates from the invocation and labels from the run snapshot", async () => {
+      mockStore.getRunById.mockResolvedValue(
+        sampleRunRow({
+          automation_id: "auto-slack",
+          invocation_id: "inv-slack",
+          trigger_run_metadata: null,
+        })
+      );
+      mockStore.getInvocationById.mockResolvedValue({
+        id: "inv-slack",
         automation_id: "auto-slack",
-        status: "running",
-        session_id: "sess-1",
-        scheduled_at: now,
-        started_at: now,
-        completed_at: null,
-        created_at: now,
+        source: "event",
+        scheduled_at: null,
+        trigger_key: "slack:msg:C1:1700000000.000200",
+        concurrency_key: "slack:C1:thread-root",
+        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
         skip_reason: null,
-        failure_reason: null,
-        trigger_run_metadata: JSON.stringify({
-          channel: "C1",
-          messageTs: "1700000000.000200",
-        }),
+        failure_counted_at: null,
+        created_at: now,
+        updated_at: now,
       });
+      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 0, completed: 1 })
+      );
+
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createSchedulerDO(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          INTERNAL_CALLBACK_SECRET: "test-secret",
+        })
+      );
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-slack",
+            runId: "run-1",
+            sessionId: "sess-1",
+            messageId: "msg-1",
+            success: true,
+          }),
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(slackFetch).toHaveBeenCalledOnce();
+      const [, init] = slackFetch.mock.calls[0];
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        channel: "C1",
+        reactionMessageTs: "1700000000.000200",
+        // Label reads the run's snapshot, not the automation row.
+        repoFullName: "acme/web-app",
+        sessionId: "sess-1",
+        messageId: "msg-1",
+      });
+      expect(body.signature).toEqual(expect.any(String));
+    });
+
+    it("uses a no-repository label and the run-row metadata fallback for legacy rows", async () => {
+      mockStore.getRunById.mockResolvedValue(
+        sampleRunRow({
+          automation_id: "auto-slack",
+          invocation_id: null,
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+          trigger_run_metadata: JSON.stringify({
+            channel: "C1",
+            messageTs: "1700000000.000200",
+          }),
+        })
+      );
       mockStore.getById.mockResolvedValue({
         ...sampleSlackAutomation,
         repo_owner: null,
@@ -1137,13 +1657,14 @@ describe("SchedulerDO", () => {
         channel: "C1",
         reactionMessageTs: "1700000000.000200",
         repoFullName: "No repository",
-        sessionId: "sess-1",
-        messageId: "msg-1",
       });
-      expect(body.signature).toEqual(expect.any(String));
     });
 
-    it("marks run as failed and increments failures on failure", async () => {
+    it("marks run as failed and takes the CAS-guarded strike on failure", async () => {
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
+      );
+
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
         new Request("http://internal/internal/run-complete", {
@@ -1165,22 +1686,16 @@ describe("SchedulerDO", () => {
         failure_reason: "Sandbox crashed",
         completed_at: expect.any(Number),
       });
+      expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-1");
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
-    it("ignores callback for already-completed run", async () => {
-      mockStore.getRunById.mockResolvedValue({
-        id: "run-1",
-        automation_id: "auto-1",
-        status: "failed",
-        session_id: "sess-1",
-        scheduled_at: now,
-        started_at: now,
-        completed_at: now,
-        created_at: now,
-        skip_reason: null,
-        failure_reason: "execution_timeout",
-      });
+    it("ignores callback when the guarded update finds the run already terminal", async () => {
+      mockStore.getRunById.mockResolvedValue(
+        sampleRunRow({ status: "failed", failure_reason: "execution_timeout", completed_at: now })
+      );
+      // The SQL guard suppresses the write.
+      mockStore.updateRun.mockResolvedValue(false);
 
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
@@ -1199,11 +1714,14 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(200);
       const body = await res.json<{ ok: boolean; ignored: boolean }>();
       expect(body.ignored).toBe(true);
-      expect(mockStore.updateRun).not.toHaveBeenCalled();
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
     });
 
     it("auto-pauses after run-complete pushes failures to 3", async () => {
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
+      );
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
 
       const scheduler = createSchedulerDO();
@@ -1287,7 +1805,7 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(404);
     });
 
-    it("returns 409 when active run exists", async () => {
+    it("returns 409 when active run exists, recording nothing", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
       mockStore.getActiveRunForAutomation.mockResolvedValue({ id: "run-active" });
 
@@ -1300,11 +1818,14 @@ describe("SchedulerDO", () => {
         })
       );
       expect(res.status).toBe(409);
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 
-    it("creates run and session on successful trigger", async () => {
+    it("creates an invocation and launches runs on successful trigger", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
 
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
@@ -1316,19 +1837,36 @@ describe("SchedulerDO", () => {
       );
 
       expect(res.status).toBe(201);
-      expect(mockStore.insertRun).toHaveBeenCalledWith(
-        expect.objectContaining({ automation_id: "auto-1", status: "starting" })
-      );
+      const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
+      expect(params.invocation).toMatchObject({
+        automation_id: "auto-1",
+        source: "manual",
+        scheduled_at: null,
+      });
+      expect(params.advanceSchedule).toBeUndefined();
       expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ status: "running" })
       );
+
+      const body = await res.json<{
+        invocationId: string;
+        run: { status: string };
+        runs: Array<{ status: string }>;
+      }>();
+      expect(body.invocationId).toEqual(expect.any(String));
+      expect(body.run.status).toBe("running");
+      expect(body.runs).toHaveLength(1);
     });
 
-    it("returns the normal 500 response when failRunAndTrack itself throws", async () => {
+    it("returns 500 when every launch fails, still recording the failed children", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
       mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
+      );
 
       const failingStub = {
         fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
@@ -1385,16 +1923,14 @@ describe("SchedulerDO", () => {
 
       expect(res.status).toBe(400);
       expect(mockGetSlackAutomationsForChannel).not.toHaveBeenCalled();
-      expect(mockStore.insertRun).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 
     it("steers the thread session even when the follow-up fails trigger conditions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
-        id: "active-run",
-        status: "running",
-        session_id: "sess-running",
-      });
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ id: "active-run", session_id: "sess-running" })
+      );
 
       const env = createEnv();
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -1434,23 +1970,22 @@ describe("SchedulerDO", () => {
         channel: "C1",
         threadTs: "1700000000.000100",
         reactionMessageTs: "1700000000.000200",
+        // Label reads the steered run's snapshot.
         repoFullName: "acme/web-app",
       });
 
       // A steer is not a new trigger and not a skip.
-      expect(mockStore.insertRun).not.toHaveBeenCalled();
-      expect(mockStore.recordSkippedRun).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
     });
 
     it("continues the same session on a reply after the run has completed", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // The thread's run finished, but its session is still steerable within the
       // window — like replying after an @mention turn ends.
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
-        id: "done-run",
-        status: "completed",
-        session_id: "sess-done",
-      });
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
+      );
 
       const env = createEnv();
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -1469,25 +2004,22 @@ describe("SchedulerDO", () => {
       expect(promptBody.content).toBe("actually, can you also bump the version?");
       // Routed to the completed run's session — no new run, and the concurrency
       // guard is never consulted (the steer short-circuits the loop).
-      expect(mockStore.insertRun).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       expect(mockStore.getActiveRunForKey).not.toHaveBeenCalled();
     });
 
-    it("uses a no-repository label when steering a repo-less automation thread", async () => {
-      mockGetSlackAutomationsForChannel.mockResolvedValue([
-        {
-          ...sampleSlackAutomation,
+    it("uses a no-repository label when steering a repo-less run's thread", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({
+          id: "active-run",
+          session_id: "sess-running",
           repo_owner: null,
           repo_name: null,
           repo_id: null,
           base_branch: null,
-        },
-      ]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
-        id: "active-run",
-        status: "running",
-        session_id: "sess-running",
-      });
+        })
+      );
 
       const env = createEnv();
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -1510,11 +2042,9 @@ describe("SchedulerDO", () => {
 
     it("anchors the thread to the message ts for a top-level (non-reply) follow-up", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
-        id: "active-run",
-        status: "running",
-        session_id: "sess-running",
-      });
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ id: "active-run", session_id: "sess-running" })
+      );
 
       const env = createEnv();
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -1531,7 +2061,7 @@ describe("SchedulerDO", () => {
       });
     });
 
-    it("starts a fresh run when no steerable session exists (outside the window)", async () => {
+    it("starts a fresh event invocation when no steerable session exists (outside the window)", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // Outside the continuity window → no steerable run, and no active run.
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
@@ -1543,9 +2073,26 @@ describe("SchedulerDO", () => {
 
       const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
       expect(body).toEqual({ triggered: 1, skipped: 0, steered: 0 });
-      expect(mockStore.insertRun).toHaveBeenCalledWith(
-        expect.objectContaining({ automation_id: "auto-slack", status: "starting" })
-      );
+
+      const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
+      expect(params.invocation).toMatchObject({
+        automation_id: "auto-slack",
+        source: "event",
+        trigger_key: "slack:msg:C1:1700000000.000200",
+        concurrency_key: "slack:C1:thread-root",
+        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+      });
+      expect(params.overlapScope).toEqual({
+        kind: "concurrencyKey",
+        concurrencyKey: "slack:C1:thread-root",
+      });
+      // Event children stay keyless — the keys live on the invocation.
+      expect(lastInsertedChildren()[0]).toMatchObject({
+        automation_id: "auto-slack",
+        status: "starting",
+        trigger_key: null,
+        concurrency_key: null,
+      });
     });
 
     it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {
@@ -1567,9 +2114,41 @@ describe("SchedulerDO", () => {
 
       const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
       expect(body).toEqual({ triggered: 0, skipped: 1, steered: 0 });
-      expect(mockStore.recordSkippedRun).toHaveBeenCalled();
+      // The skip is a childless invocation carrying the message coordinates
+      // but never the dedup trigger_key (a skip must not consume the slot).
+      expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          automation_id: "auto-slack",
+          source: "event",
+          skip_reason: "concurrent_run_active",
+          trigger_key: null,
+          concurrency_key: "slack:C1:thread-root",
+          trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+        }),
+        undefined
+      );
       // No prompt reached any session.
       expect(promptCallCount(fetchMock)).toBe(0);
+    });
+
+    it("deduplicates a redelivered event via the invocation trigger-key index", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
+      mockStore.insertInvocationGuarded.mockRejectedValue(
+        new Error(
+          "D1_ERROR: UNIQUE constraint failed: automation_invocations.automation_id, automation_invocations.trigger_key"
+        )
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(slackEventRequest());
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      // Dedup is a silent no-op — no skip row, no schedule advance.
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.update).not.toHaveBeenCalled();
     });
 
     it("falls through to a new trigger when steering the session fails", async () => {
@@ -1577,15 +2156,16 @@ describe("SchedulerDO", () => {
       // A completed run is steerable, but the enqueue will fail; with the run no
       // longer active, the reply is re-evaluated as a new trigger (it matches),
       // mirroring the @mention path's stale-session → new-session recovery.
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
-        id: "done-run",
-        status: "completed",
-        session_id: "sess-done",
-      });
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
+      );
       mockStore.getActiveRunForKey.mockResolvedValue(null);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
+      );
 
       // Session DO rejects every fetch → steerSession fails AND the fresh run's
-      // session init fails, so the run is created then marked failed.
+      // session init fails, so the child is created then marked failed.
       const failingStub = {
         fetch: vi.fn().mockResolvedValue(new Response("boom", { status: 500 })),
       } as never;
@@ -1596,14 +2176,16 @@ describe("SchedulerDO", () => {
       const res = await scheduler.fetch(slackEventRequest());
 
       const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      // Steer failed → fell through → matched conditions → fresh run created
-      // (insertRun) but its session init failed, so triggered stays 0.
+      // Steer failed → fell through → matched conditions → invocation created
+      // but its only child failed to launch, so triggered stays 0.
       expect(body).toEqual({ triggered: 0, skipped: 0, steered: 0 });
-      expect(mockStore.insertRun).toHaveBeenCalledWith(
-        expect.objectContaining({ automation_id: "auto-slack", status: "starting" })
+      expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          invocation: expect.objectContaining({ automation_id: "auto-slack", source: "event" }),
+        })
       );
       // Not treated as a concurrency skip.
-      expect(mockStore.recordSkippedRun).not.toHaveBeenCalled();
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
     });
   });
 

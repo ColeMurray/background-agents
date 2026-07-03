@@ -335,36 +335,6 @@ describe("AutomationStore", () => {
     });
   });
 
-  describe("createRunAndAdvanceSchedule", () => {
-    it("calls db.batch with insert and update", async () => {
-      const batchSpy = vi.fn().mockResolvedValue([
-        { results: [], success: true, meta: { duration: 0, changes: 1 } },
-        { results: [], success: true, meta: { duration: 0, changes: 1 } },
-      ]);
-
-      const fakeStmt = {
-        bind: vi.fn().mockReturnThis(),
-        run: vi.fn(),
-        first: vi.fn(),
-        all: vi.fn(),
-      };
-
-      const db = {
-        prepare: vi.fn().mockReturnValue(fakeStmt),
-        batch: batchSpy,
-      } as unknown as D1Database;
-
-      const store = new AutomationStore(db);
-      const nextRunAt = now + 86400000;
-
-      await store.createRunAndAdvanceSchedule(sampleRunRow, "auto_test1", nextRunAt);
-
-      expect(batchSpy).toHaveBeenCalledTimes(1);
-      // Two statements: INSERT run + UPDATE automation
-      expect(batchSpy.mock.calls[0][0]).toHaveLength(2);
-    });
-  });
-
   describe("getActiveRunForAutomation", () => {
     it("returns active run", async () => {
       const { db } = createFakeD1({ firstResult: sampleRunRow });
@@ -460,41 +430,6 @@ describe("AutomationStore", () => {
       const store = new AutomationStore(db);
       await store.updateRun("run_test1", {});
       expect(statements).toHaveLength(0);
-    });
-  });
-
-  describe("listRunsForAutomation", () => {
-    it("returns runs with enriched data", async () => {
-      const enrichedRow: EnrichedRunRow = {
-        ...sampleRunRow,
-        session_title: "Auto session",
-        artifact_summary: "1 artifacts",
-      };
-
-      const fakeStmt = {
-        bind: vi.fn().mockReturnThis(),
-        first: vi.fn().mockResolvedValue({ count: 1 }),
-        all: vi.fn().mockResolvedValue({
-          results: [enrichedRow],
-          success: true,
-          meta: { duration: 0 },
-        }),
-        run: vi.fn(),
-      };
-
-      const db = {
-        prepare: vi.fn().mockReturnValue(fakeStmt),
-      } as unknown as D1Database;
-
-      const store = new AutomationStore(db);
-      const result = await store.listRunsForAutomation("auto_test1", {
-        limit: 20,
-        offset: 0,
-      });
-
-      expect(result.total).toBe(1);
-      expect(result.runs).toHaveLength(1);
-      expect(result.runs[0].session_title).toBe("Auto session");
     });
   });
 });

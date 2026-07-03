@@ -1,12 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import {
-  AutomationStore,
-  type AutomationRow,
-  type AutomationRunRow,
-} from "../../src/db/automation-store";
+import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { SentryAutomationEvent, WebhookAutomationEvent } from "@open-inspect/shared";
 import { cleanD1Tables } from "./cleanup";
+import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 
 function getSchedulerStub() {
   const id = env.SCHEDULER.idFromName("global-scheduler");
@@ -39,25 +36,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     event_type: null,
     trigger_config: null,
     trigger_auth_data: null,
-    ...overrides,
-  };
-}
-
-function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): AutomationRunRow {
-  const now = Date.now();
-  return {
-    id: `run-${Math.random().toString(36).slice(2, 8)}`,
-    automation_id: automationId,
-    session_id: null,
-    status: "starting",
-    skip_reason: null,
-    failure_reason: null,
-    scheduled_at: now,
-    started_at: null,
-    completed_at: null,
-    created_at: now,
-    trigger_key: null,
-    concurrency_key: null,
     ...overrides,
   };
 }
@@ -125,7 +103,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
   // ─── Sentry event matching ───────────────────────────────────────────────
 
   describe("sentry event matching", () => {
-    it("triggers a matching sentry automation and creates a run", async () => {
+    it("triggers a matching sentry automation as an invocation of 1", async () => {
       const store = new AutomationStore(env.DB);
       const automationId = `auto-sentry-${Date.now()}`;
       await store.create(
@@ -144,17 +122,23 @@ describe("SchedulerDO /internal/event (integration)", () => {
       expect(res.status).toBe(200);
       const body = await res.json<{ triggered: number; skipped: number }>();
       // Session creation will fail in test env, but the run is still created.
-      // triggered may be 0 if session creation fails (failRunAndTrack catches it),
-      // but the run row should exist regardless.
+      // triggered may be 0 if session creation fails, but the row exists.
       expect(body.triggered + body.skipped).toBeLessThanOrEqual(1);
 
-      const runs = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs.total).toBeGreaterThanOrEqual(1);
+      const runs = await fetchRuns(automationId);
+      expect(runs.length).toBeGreaterThanOrEqual(1);
 
-      const run = runs.runs[0];
+      const run = runs[0]!;
       expect(run.automation_id).toBe(automationId);
-      expect(run.trigger_key).toBe(event.triggerKey);
-      expect(run.concurrency_key).toBe(event.concurrencyKey);
+      // Firing keys live on the invocation; the child stays keyless.
+      expect(run.trigger_key).toBeNull();
+      expect(run.invocation_id).not.toBeNull();
+      const invocation = await store.getInvocationById(run.invocation_id!);
+      expect(invocation).toMatchObject({
+        source: "event",
+        trigger_key: event.triggerKey,
+        concurrency_key: event.concurrencyKey,
+      });
     });
   });
 
@@ -181,12 +165,13 @@ describe("SchedulerDO /internal/event (integration)", () => {
       const body = await res.json<{ triggered: number; skipped: number }>();
       expect(body.triggered + body.skipped).toBeLessThanOrEqual(1);
 
-      const runs = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs.total).toBeGreaterThanOrEqual(1);
+      const runs = await fetchRuns(automationId);
+      expect(runs.length).toBeGreaterThanOrEqual(1);
 
-      const run = runs.runs[0];
+      const run = runs[0]!;
       expect(run.automation_id).toBe(automationId);
-      expect(run.trigger_key).toBe(event.triggerKey);
+      const invocation = await store.getInvocationById(run.invocation_id!);
+      expect(invocation!.trigger_key).toBe(event.triggerKey);
     });
   });
 
@@ -219,8 +204,8 @@ describe("SchedulerDO /internal/event (integration)", () => {
       expect(body.skipped).toBe(0);
 
       // Verify no run was created
-      const runs = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs.total).toBe(0);
+      const runs = await fetchRuns(automationId);
+      expect(runs).toHaveLength(0);
     });
 
     it("triggers when sentry_project condition matches", async () => {
@@ -245,8 +230,8 @@ describe("SchedulerDO /internal/event (integration)", () => {
       expect(res.status).toBe(200);
 
       // A run should be created (even though session creation fails)
-      const runs = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs.total).toBeGreaterThanOrEqual(1);
+      const runs = await fetchRuns(automationId);
+      expect(runs.length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -273,18 +258,25 @@ describe("SchedulerDO /internal/event (integration)", () => {
       const res1 = await sendEvent(event);
       expect(res1.status).toBe(200);
 
-      const runs1 = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs1.total).toBe(1);
+      const runs1 = await fetchRuns(automationId);
+      expect(runs1).toHaveLength(1);
 
-      // Second event with same trigger_key — should be skipped via UNIQUE constraint
-      const res2 = await sendEvent(event);
+      // Second event with the same trigger_key but a DIFFERENT concurrency key
+      // (so the per-key overlap guard cannot intercept it first) — rejected
+      // atomically by the invocation trigger-key index; a dedup is a silent
+      // no-op, not a skip row.
+      const res2 = await sendEvent({
+        ...event,
+        concurrencyKey: `sentry_issue:redelivery-${Date.now()}`,
+      });
       expect(res2.status).toBe(200);
       const body2 = await res2.json<{ triggered: number; skipped: number }>();
       expect(body2.skipped).toBe(1);
 
-      // Still only one run
-      const runs2 = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs2.total).toBe(1);
+      const runs2 = await fetchRuns(automationId);
+      expect(runs2).toHaveLength(1);
+      const { total } = await store.listInvocations(automationId, { limit: 10, offset: 0 });
+      expect(total).toBe(1);
     });
   });
 
@@ -306,9 +298,10 @@ describe("SchedulerDO /internal/event (integration)", () => {
 
       const concurrencyKey = `sentry_issue:concurrency-${Date.now()}`;
 
-      // Insert an active run with the same concurrency key
-      await store.insertRun(
-        makeRun(automationId, {
+      // A legacy-shaped active run carrying the key on the row (rollback-window
+      // shape) must still block — the overlap predicate COALESCEs both homes.
+      await seedRun(
+        makeRunRow(automationId, {
           status: "running",
           session_id: "sess-existing",
           started_at: Date.now(),
@@ -329,10 +322,52 @@ describe("SchedulerDO /internal/event (integration)", () => {
       expect(body.skipped).toBe(1);
       expect(body.triggered).toBe(0);
 
-      // Only the original run should exist — no new run created
-      const runs = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs.total).toBe(1);
-      expect(runs.runs[0].concurrency_key).toBe(concurrencyKey);
+      // Only the original run exists; the skip is a childless invocation.
+      const runs = await fetchRuns(automationId);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]!.concurrency_key).toBe(concurrencyKey);
+
+      const { invocations } = await store.listInvocations(automationId, {
+        limit: 10,
+        offset: 0,
+      });
+      const skips = invocations.filter((invocation) => invocation.status === "skipped");
+      expect(skips).toHaveLength(1);
+      expect(skips[0]!.skipReason).toBe("concurrent_run_active");
+    });
+
+    it("does not block a different concurrency key (per-key scope)", async () => {
+      const store = new AutomationStore(env.DB);
+      const automationId = `auto-perkey-${Date.now()}`;
+      await store.create(
+        makeAutomation({
+          id: automationId,
+          trigger_type: "sentry",
+          event_type: "issue.created",
+          schedule_cron: null,
+          next_run_at: null,
+        })
+      );
+
+      await seedRun(
+        makeRunRow(automationId, {
+          status: "running",
+          session_id: "sess-existing",
+          started_at: Date.now(),
+          concurrency_key: "sentry_issue:42",
+        })
+      );
+
+      const event = makeSentryEvent(automationId, {
+        concurrencyKey: "sentry_issue:43",
+        triggerKey: `sentry_issue:43-${Date.now()}`,
+      });
+      const res = await sendEvent(event);
+
+      expect(res.status).toBe(200);
+      // A new run was created despite the unrelated active run.
+      const runs = await fetchRuns(automationId);
+      expect(runs).toHaveLength(2);
     });
   });
 
@@ -362,8 +397,8 @@ describe("SchedulerDO /internal/event (integration)", () => {
       expect(body.skipped).toBe(0);
 
       // No runs created
-      const runs = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs.total).toBe(0);
+      const runs = await fetchRuns(automationId);
+      expect(runs).toHaveLength(0);
     });
 
     it("does not match a disabled webhook automation", async () => {
@@ -388,8 +423,8 @@ describe("SchedulerDO /internal/event (integration)", () => {
       expect(body.triggered).toBe(0);
       expect(body.skipped).toBe(0);
 
-      const runs = await store.listRunsForAutomation(automationId, { limit: 10, offset: 0 });
-      expect(runs.total).toBe(0);
+      const runs = await fetchRuns(automationId);
+      expect(runs).toHaveLength(0);
     });
   });
 });

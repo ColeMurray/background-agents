@@ -182,9 +182,10 @@ WHERE automation_runs.session_id = norm.session_id
 -- Cron idempotency now lives on automation_invocations (see the precondition
 -- note on step 4). The runs-side index must go: sibling children of one
 -- invocation share (automation_id, scheduled_at) and would collide on it.
--- idx_runs_trigger_key stays until the scheduler event path writes
--- invocations (its dedup depends on it; new-pipeline children leave
--- trigger_key NULL, which the partial index ignores).
+-- idx_runs_trigger_key is deliberately KEPT: new-pipeline children leave
+-- trigger_key NULL (which the partial index ignores), but rolled-back
+-- pre-invocations code still relies on it for event dedup. It is dropped
+-- together with the frozen run columns in the follow-up contract migration.
 DROP INDEX IF EXISTS idx_runs_idempotency;
 
 CREATE INDEX IF NOT EXISTS idx_runs_invocation

@@ -163,9 +163,14 @@ describe("POST /internal/slack-event (integration)", () => {
     expect(result.triggered).toBe(1);
     expect(result.skipped).toBe(0);
 
-    // The forward actually materialized a run for the seeded automation.
+    // The forward actually materialized an invocation (of 1) for the seeded
+    // automation, carrying the event's dedup key.
     const store = new AutomationStore(env.DB);
-    const runs = await store.listRunsForAutomation(id, { limit: 10, offset: 0 });
-    expect(runs.runs.some((r) => r.trigger_key === body.triggerKey)).toBe(true);
+    const { invocations } = await store.listInvocations(id, { limit: 10, offset: 0 });
+    const invocation = invocations.find((row) => row.id);
+    expect(invocation).toBeDefined();
+    expect(invocation!.runs).toHaveLength(1);
+    const invocationRow = await store.getInvocationById(invocation!.id);
+    expect(invocationRow!.trigger_key).toBe(body.triggerKey);
   });
 });

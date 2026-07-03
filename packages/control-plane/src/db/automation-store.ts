@@ -128,19 +128,6 @@ export interface AutomationInvocationRow {
 }
 
 /**
- * Insert shape for the legacy single-run creation paths, which predate
- * invocation linkage and repository snapshots. Only recordSkippedRun and the
- * scheduler's pre-unification insert sites use it; both go away with them.
- */
-type LegacyRunInsert = Omit<
-  AutomationRunRow,
-  "invocation_id" | "repo_owner" | "repo_name" | "repo_id" | "base_branch"
-> &
-  Partial<
-    Pick<AutomationRunRow, "invocation_id" | "repo_owner" | "repo_name" | "repo_id" | "base_branch">
-  >;
-
-/**
  * Overlap scope for a new invocation: schedule/manual firings block on any
  * active run of the automation; event firings block per concurrency key.
  */
@@ -172,9 +159,12 @@ export function toAutomationRepository(row: AutomationRepositoryRow): Automation
 /**
  * Map an automation row plus its repository rows to the response shape.
  *
- * When `repositoryRows` is omitted the list is synthesized from the scalar
- * columns — transitional for callers not yet fetching repository rows; every
- * caller passes rows once the route layer is on automation_repositories.
+ * With no repository rows (omitted, or genuinely absent) the list is
+ * synthesized from the scalar mirror. That keeps automations written by
+ * rolled-back pre-invocations code (scalars only, no rows) rendering
+ * correctly until the 0030 backfill repairs them; for anything written by
+ * current code, empty rows imply cleared scalars, so the fallback yields the
+ * same empty list. Removed with the scalar mirrors.
  */
 export function toAutomation(
   row: AutomationRow,
@@ -185,7 +175,7 @@ export function toAutomation(
     : null;
 
   let repositories: AutomationRepository[];
-  if (repositoryRows) {
+  if (repositoryRows && repositoryRows.length > 0) {
     repositories = repositoryRows.map(toAutomationRepository);
   } else {
     if ((row.repo_owner === null) !== (row.repo_name === null)) {
@@ -658,50 +648,6 @@ export class AutomationStore {
 
   // --- Run management ---
 
-  private bindRunInsert(run: LegacyRunInsert): D1PreparedStatement {
-    return this.db
-      .prepare(
-        `INSERT INTO automation_runs
-         (id, automation_id, session_id, status, skip_reason, failure_reason,
-          scheduled_at, started_at, completed_at, created_at, trigger_key, concurrency_key,
-          trigger_run_metadata)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        run.id,
-        run.automation_id,
-        run.session_id,
-        run.status,
-        run.skip_reason,
-        run.failure_reason,
-        run.scheduled_at,
-        run.started_at,
-        run.completed_at,
-        run.created_at,
-        run.trigger_key ?? null,
-        run.concurrency_key ?? null,
-        run.trigger_run_metadata ?? null
-      );
-  }
-
-  /** @deprecated Legacy single-run path; deleted when the scheduler moves to insertInvocationGuarded. */
-  async createRunAndAdvanceSchedule(
-    run: LegacyRunInsert,
-    automationId: string,
-    nextRunAt: number
-  ): Promise<void> {
-    const advanceSchedule = this.db
-      .prepare("UPDATE automations SET next_run_at = ?, updated_at = ? WHERE id = ?")
-      .bind(nextRunAt, Date.now(), automationId);
-
-    await this.db.batch([this.bindRunInsert(run), advanceSchedule]);
-  }
-
-  /** @deprecated Legacy single-run path; deleted when the scheduler moves to insertInvocationGuarded. */
-  async insertRun(run: LegacyRunInsert): Promise<void> {
-    await this.bindRunInsert(run).run();
-  }
-
   /**
    * Update an active run. SQL-guarded on `status IN ('starting','running')`:
    * a JS pre-check alone is a lost-update race under concurrent callbacks and
@@ -800,35 +746,6 @@ export class AutomationStore {
       )
       .bind(automationId)
       .first<AutomationRunRow>();
-  }
-
-  async listRunsForAutomation(
-    automationId: string,
-    options: { limit: number; offset: number }
-  ): Promise<{ runs: EnrichedRunRow[]; total: number }> {
-    const countResult = await this.db
-      .prepare("SELECT COUNT(*) as count FROM automation_runs WHERE automation_id = ?")
-      .bind(automationId)
-      .first<{ count: number }>();
-
-    const total = countResult?.count ?? 0;
-
-    const result = await this.db
-      .prepare(
-        `SELECT
-           r.*,
-           s.title as session_title,
-           NULL as artifact_summary
-         FROM automation_runs r
-         LEFT JOIN sessions s ON r.session_id = s.id
-         WHERE r.automation_id = ?
-         ORDER BY r.created_at DESC
-         LIMIT ? OFFSET ?`
-      )
-      .bind(automationId, options.limit, options.offset)
-      .all<EnrichedRunRow>();
-
-    return { runs: result.results || [], total };
   }
 
   async getRunById(automationId: string, runId: string): Promise<EnrichedRunRow | null> {
@@ -1279,52 +1196,6 @@ export class AutomationStore {
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), triggerType, eventType)
       .all<AutomationRow>();
     return result.results || [];
-  }
-
-  /**
-   * Record a `skipped` run for observability (concurrency skips).
-   * Leaves trigger_key null so repeated skips never collide on the dedup index
-   * (NULLs are distinct under the unique automation_id/trigger_key index).
-   * `runMetadata` carries the run's source-specific metadata as a unit — the same
-   * value a materialized run is inserted with — so there is no re-mapping.
-   */
-  async recordSkippedRun(params: {
-    id: string;
-    automationId: string;
-    skipReason: string;
-    concurrencyKey?: string | null;
-    runMetadata?: Pick<AutomationRunRow, "trigger_run_metadata">;
-  }): Promise<void> {
-    const now = Date.now();
-    try {
-      await this.insertRun({
-        id: params.id,
-        automation_id: params.automationId,
-        session_id: null,
-        status: "skipped",
-        skip_reason: params.skipReason,
-        failure_reason: null,
-        scheduled_at: now,
-        started_at: null,
-        completed_at: now,
-        created_at: now,
-        trigger_key: null,
-        concurrency_key: params.concurrencyKey ?? null,
-        invocation_id: null,
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-        ...params.runMetadata,
-      });
-    } catch (e) {
-      // Defensive only: the insert uses a fresh unique id and a null trigger_key
-      // (NULLs are distinct under the unique automation_id/trigger_key index), so
-      // a collision is not expected. Swallow one anyway so best-effort skip
-      // bookkeeping never throws into the dispatch path.
-      if (isDuplicateKeyError(e)) return;
-      throw e;
-    }
   }
 
   async getActiveRunForKey(

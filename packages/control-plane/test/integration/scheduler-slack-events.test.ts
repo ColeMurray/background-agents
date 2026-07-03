@@ -1,13 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import {
-  AutomationStore,
-  type AutomationRow,
-  type AutomationRunRow,
-} from "../../src/db/automation-store";
+import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared";
 import { cleanD1Tables } from "./cleanup";
+import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 
 function getSchedulerStub() {
   const id = env.SCHEDULER.idFromName("global-scheduler");
@@ -45,25 +42,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
       ],
     }),
     trigger_auth_data: null,
-    ...overrides,
-  };
-}
-
-function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): AutomationRunRow {
-  const now = Date.now();
-  return {
-    id: `run-${Math.random().toString(36).slice(2, 8)}`,
-    automation_id: automationId,
-    session_id: null,
-    status: "starting",
-    skip_reason: null,
-    failure_reason: null,
-    scheduled_at: now,
-    started_at: null,
-    completed_at: null,
-    created_at: now,
-    trigger_key: null,
-    concurrency_key: null,
     ...overrides,
   };
 }
@@ -112,6 +90,12 @@ async function seedSlackAutomation(
   return id;
 }
 
+/** The automation's invocations, newest first. */
+async function fetchInvocations(store: AutomationStore, automationId: string) {
+  const { invocations } = await store.listInvocations(automationId, { limit: 20, offset: 0 });
+  return invocations;
+}
+
 describe("SchedulerDO /internal/event — slack (integration)", () => {
   beforeEach(cleanD1Tables);
 
@@ -123,11 +107,12 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     const res = await sendEvent(event);
     expect(res.status).toBe(200);
 
-    const runs = await store.listRunsForAutomation(id, { limit: 10, offset: 0 });
-    expect(runs.total).toBeGreaterThanOrEqual(1);
-    const run = runs.runs.find((r) => r.trigger_key === event.triggerKey)!;
-    expect(run).toBeDefined();
-    const metadata = JSON.parse(run.trigger_run_metadata!);
+    const runs = await fetchRuns(id);
+    expect(runs.length).toBeGreaterThanOrEqual(1);
+    // The firing keys and message coordinates live on the invocation.
+    const invocation = await store.getInvocationById(runs[0]!.invocation_id!);
+    expect(invocation!.trigger_key).toBe(event.triggerKey);
+    const metadata = JSON.parse(invocation!.trigger_metadata!);
     expect(metadata.channel).toBe("C1");
     expect(metadata.messageTs).toBe(event.ts);
   });
@@ -141,8 +126,7 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     expect(body.triggered).toBe(0);
     expect(body.skipped).toBe(0);
 
-    const runs = await store.listRunsForAutomation(id, { limit: 10, offset: 0 });
-    expect(runs.total).toBe(0);
+    expect(await fetchRuns(id)).toHaveLength(0);
   });
 
   it("does not trigger when the channel is not watched (no candidate)", async () => {
@@ -162,8 +146,7 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     expect(body.triggered).toBe(0);
     expect(body.skipped).toBe(0);
 
-    const runs = await store.listRunsForAutomation(id, { limit: 10, offset: 0 });
-    expect(runs.total).toBe(0);
+    expect(await fetchRuns(id)).toHaveLength(0);
   });
 
   it("falls back to a concurrency skip when the active run has no session to steer", async () => {
@@ -176,8 +159,8 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     // the SchedulerDO unit tests with a mocked session, so it doesn't attempt a
     // real sandbox spawn here.)
     const concurrencyKey = "slack:C1:thread-1";
-    await store.insertRun(
-      makeRun(id, {
+    await seedRun(
+      makeRunRow(id, {
         id: "active-1",
         status: "starting",
         session_id: null,
@@ -194,10 +177,16 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     expect(body.triggered).toBe(0);
     expect(body.steered).toBe(0);
 
-    const runs = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
-    const skip = runs.runs.find((r) => r.skip_reason === "concurrent_run_active");
+    // The skip is a childless invocation carrying the message coordinates.
+    const invocations = await fetchInvocations(store, id);
+    const skip = invocations.find(
+      (invocation) => invocation.skipReason === "concurrent_run_active"
+    );
     expect(skip).toBeDefined();
-    expect(JSON.parse(skip!.trigger_run_metadata!).channel).toBe("C1");
+    expect(skip!.status).toBe("skipped");
+    expect(skip!.runs).toHaveLength(0);
+    const invocationRow = await store.getInvocationById(skip!.id);
+    expect(JSON.parse(invocationRow!.trigger_metadata!).channel).toBe("C1");
   });
 
   it("steers the running session on a follow-up reply instead of dropping it", async () => {
@@ -228,9 +217,11 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     }>();
     expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
-    // No concurrency-skip row recorded — the follow-up was steered, not dropped.
-    const runs = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
-    expect(runs.runs.find((r) => r.skip_reason === "concurrent_run_active")).toBeUndefined();
+    // No concurrency-skip invocation recorded — the follow-up was steered.
+    const invocations = await fetchInvocations(store, id);
+    expect(
+      invocations.find((invocation) => invocation.skipReason === "concurrent_run_active")
+    ).toBeUndefined();
   });
 
   it("continues the same session on a reply after the run has completed", async () => {
@@ -250,8 +241,9 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
 
     // Simulate the run finishing. Its session stays steerable within the window,
     // just like an @mention thread after a turn completes.
-    const afterRoot = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
-    const rootRun = afterRoot.runs.find((r) => r.trigger_key === "slack:msg:C1:root-done")!;
+    const afterRoot = await fetchRuns(id);
+    expect(afterRoot).toHaveLength(1);
+    const rootRun = afterRoot[0]!;
     expect(rootRun.session_id).toBeTruthy();
     await store.updateRun(rootRun.id, { status: "completed", completed_at: Date.now() });
 
@@ -272,13 +264,14 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     }>();
     expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
-    // The reply created no new run and recorded no skip — it reused the completed
-    // run's session. Exactly one materialized run remains (the completed root).
-    const afterReply = await store.listRunsForAutomation(id, { limit: 20, offset: 0 });
+    // The reply created no new run and recorded no skip — it reused the
+    // completed run's session. Exactly one materialized run remains.
+    const afterReply = await fetchRuns(id);
+    expect(afterReply).toHaveLength(1);
+    const invocations = await fetchInvocations(store, id);
     expect(
-      afterReply.runs.find((r) => r.trigger_key === "slack:msg:C1:reply-done")
+      invocations.find((invocation) => invocation.skipReason === "concurrent_run_active")
     ).toBeUndefined();
-    expect(afterReply.runs.find((r) => r.skip_reason === "concurrent_run_active")).toBeUndefined();
-    expect(afterReply.runs.filter((r) => r.trigger_key !== null)).toHaveLength(1);
+    expect(invocations).toHaveLength(1);
   });
 });
