@@ -43,6 +43,7 @@ const ZEN_MODELS = [
 ] as const;
 
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
+const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2"] as const;
 
 describe("model utilities", () => {
   it("keeps DEFAULT_MODEL valid", () => {
@@ -54,6 +55,7 @@ describe("model utilities", () => {
       ...ANTHROPIC_MODELS,
       ...OPENAI_MODELS,
       ...ZEN_MODELS,
+      ...ZAI_CODING_PLAN_MODELS,
       ...DEEPSEEK_MODELS,
     ]) {
       expect(isValidModel(model)).toBe(true);
@@ -174,11 +176,14 @@ describe("model utilities", () => {
       MODEL_OPTIONS.find((group) => group.category === "OpenCode Zen")?.models.map((m) => m.id)
     ).toEqual(ZEN_MODELS);
     expect(
+      MODEL_OPTIONS.find((group) => group.category === "Z.AI Coding Plan")?.models.map((m) => m.id)
+    ).toEqual(ZAI_CODING_PLAN_MODELS);
+    expect(
       MODEL_OPTIONS.find((group) => group.category === "DeepSeek")?.models.map((m) => m.id)
     ).toEqual(DEEPSEEK_MODELS);
 
     expect(DEFAULT_ENABLED_MODELS).toEqual([...ANTHROPIC_MODELS, ...OPENAI_MODELS]);
-    for (const optInModel of [...ZEN_MODELS, ...DEEPSEEK_MODELS]) {
+    for (const optInModel of [...ZEN_MODELS, ...ZAI_CODING_PLAN_MODELS, ...DEEPSEEK_MODELS]) {
       expect(DEFAULT_ENABLED_MODELS).not.toContain(optInModel);
     }
   });

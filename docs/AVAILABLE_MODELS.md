@@ -1,9 +1,9 @@
 # Available Models
 
 Open-Inspect exposes these models in the model picker and integration preferences. The default
-enabled set includes Anthropic and OpenAI models; OpenCode Zen models are available but must be
-enabled in **Settings > Models**. DeepSeek models are also opt-in and require `DEEPSEEK_API_KEY` to
-be available in the sandbox environment.
+enabled set includes Anthropic and OpenAI models. OpenCode Zen, Z.AI Coding Plan, and DeepSeek
+models are available but must be enabled in **Settings > Models**. Z.AI Coding Plan requires
+`ZHIPU_API_KEY`; DeepSeek requires `DEEPSEEK_API_KEY`.
 
 ## Anthropic
 
@@ -42,6 +42,14 @@ setup instructions.
 | `opencode/qwen3.7-max`  | Qwen3.7 Max  | Alibaba Cloud | Not supported     | N/A            |
 | `opencode/glm-5`        | GLM 5        | Z.ai 744B MoE | Not supported     | N/A            |
 | `opencode/glm-5.1`      | GLM 5.1      | Z.ai          | Not supported     | N/A            |
+
+## Z.AI Coding Plan
+
+Z.AI Coding Plan models require `ZHIPU_API_KEY` as a global or repository secret.
+
+| Model ID                  | Display name | Description      | Reasoning efforts | Default effort |
+| ------------------------- | ------------ | ---------------- | ----------------- | -------------- |
+| `zai-coding-plan/glm-5.2` | GLM 5.2      | Z.AI Coding Plan | Not supported     | N/A            |
 
 ## DeepSeek
 

@@ -20,10 +20,10 @@ That's it — the next sandbox you launch will have the secret available as an e
 
 ## Global vs. Repository Secrets
 
-| Scope          | Applies to        | Use case                                                              |
-| -------------- | ----------------- | --------------------------------------------------------------------- |
-| **Global**     | All repositories  | API keys shared across projects (`ANTHROPIC_API_KEY`, `DATABASE_URL`) |
-| **Repository** | One specific repo | Repo-specific credentials (`STRIPE_SECRET_KEY`, `AWS_ACCESS_KEY_ID`)  |
+| Scope          | Applies to        | Use case                                                               |
+| -------------- | ----------------- | ---------------------------------------------------------------------- |
+| **Global**     | All repositories  | API keys shared across projects (`ANTHROPIC_API_KEY`, `ZHIPU_API_KEY`) |
+| **Repository** | One specific repo | Repo-specific credentials (`STRIPE_SECRET_KEY`, `AWS_ACCESS_KEY_ID`)   |
 
 **Precedence**: Repository secrets override global secrets with the same key. When viewing a
 repository's secrets, inherited global keys are shown in a read-only section with a "Global" badge.
@@ -38,6 +38,7 @@ The most common example:
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona** or **Vercel** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
 | `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                                                                                |
+| `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                                    |
 
 > **Daytona and Vercel sandbox users**: If you plan to use Claude models, you must add
 > `ANTHROPIC_API_KEY` as a global secret after deploying. Without it, Claude sessions will fail with
@@ -115,6 +116,7 @@ If you try to save a reserved key, the UI will show a validation error.
 | ---------------------------- | ------ | ------------------------------------------------------------ |
 | `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona or Vercel sandboxes) |
 | `DEEPSEEK_API_KEY`           | Global | DeepSeek API access                                          |
+| `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                  |
 | `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
 | `OPENAI_OAUTH_ACCOUNT_ID`    | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
 | `DATABASE_URL`               | Repo   | Database connection string                                   |
@@ -129,7 +131,7 @@ If you try to save a reserved key, the UI will show a validation error.
 
 If you see "Model not found" errors, add the API key for your selected model provider as a global
 secret in Settings. For Claude on Daytona or Vercel, add `ANTHROPIC_API_KEY`. For DeepSeek, add
-`DEEPSEEK_API_KEY`.
+`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`.
 
 ### Secret not appearing in sandbox
 
