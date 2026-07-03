@@ -345,8 +345,10 @@ export class OpenComputerRestClient {
     });
   }
 
-  async deleteSandbox(id: string, options: OpenComputerDeleteSandboxOptions = {}): Promise<void> {
-    const query = options.deleteSecretStore ? "?deleteSecretStore=true" : "";
+  async deleteSandbox(id: string, options?: OpenComputerDeleteSandboxOptions): Promise<void> {
+    const params = new URLSearchParams();
+    if (options?.deleteSecretStore) params.set("deleteSecretStore", "true");
+    const query = params.toString() ? `?${params.toString()}` : "";
     await this.request<void>(
       "DELETE",
       `${this.expandPath(this.paths.sandbox, { id })}${query}`,

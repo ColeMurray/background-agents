@@ -348,11 +348,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     options?: OpenComputerDeleteSandboxOptions
   ): Promise<void> {
     try {
-      if (options) {
-        await this.client.deleteSandbox(providerObjectId, options);
-      } else {
-        await this.client.deleteSandbox(providerObjectId);
-      }
+      await this.client.deleteSandbox(providerObjectId, options);
     } catch (error) {
       if (error instanceof OpenComputerNotFoundError) return;
       throw this.classifyError("Failed to delete OpenComputer sandbox", error);
