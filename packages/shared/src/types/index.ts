@@ -33,6 +33,7 @@ export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" 
 export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
 export type EventType =
   | "heartbeat"
+  | "ready"
   | "token"
   | "tool_call"
   | "step_start"
@@ -372,12 +373,15 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
 
 /**
- * Replay history events, resilient to unknown/legacy shapes. Each event is
- * validated individually and dropped if it doesn't match, instead of failing
- * the whole `subscribed` message — a single unrecognized event must never wedge
- * session hydration (which strands the client on "loading session" forever).
+ * Sandbox event arrays for session hydration — both the initial `subscribed`
+ * replay and paginated `history_page` items, which read from the same event
+ * store. Resilient to unknown/legacy event shapes: each event is validated
+ * individually and dropped if it doesn't match, instead of failing the whole
+ * message. A single unrecognized event (e.g. a legacy type no longer in the
+ * schema) must never wedge session hydration and strand the client on
+ * "loading session" forever.
  */
-const replayEventsSchema = z.array(z.unknown()).transform((events) =>
+const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
   events.flatMap((event) => {
     const result = sandboxEventSchema.safeParse(event);
     return result.success ? [result.data] : [];
@@ -472,7 +476,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     participant: participantSummarySchema.optional(),
     replay: z
       .object({
-        events: replayEventsSchema,
+        events: tolerantSandboxEventsSchema,
         hasMore: z.boolean(),
         cursor: historyCursorSchema.nullable(),
       })
@@ -500,7 +504,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
   z.object({
     type: z.literal("history_page"),
-    items: z.array(sandboxEventSchema),
+    items: tolerantSandboxEventsSchema,
     hasMore: z.boolean(),
     cursor: historyCursorSchema.nullable(),
   }),

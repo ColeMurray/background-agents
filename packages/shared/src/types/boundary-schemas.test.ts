@@ -305,6 +305,23 @@ describe("boundary schemas", () => {
       }
     });
 
+    it("keeps recognized history_page items and drops unknown ones without failing", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "history_page",
+        items: [
+          { type: "some_legacy_event", foo: "bar", timestamp: 1 },
+          { type: "git_sync", status: "completed", sandboxId: "sandbox-1", timestamp: 2 },
+        ],
+        hasMore: false,
+        cursor: null,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success && result.data.type === "history_page") {
+        expect(result.data.items.map((item) => item.type)).toEqual(["git_sync"]);
+      }
+    });
+
     it("rejects a malformed partial sandbox event message", () => {
       const result = serverMessageSchema.safeParse({
         type: "sandbox_event",
