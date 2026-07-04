@@ -241,6 +241,18 @@ frozen firing-key columns (`automations.repo_*`;
 in order, so the backfill always runs before the drop: an instance upgrading from before this
 feature migrates its existing automations and runs in the same deploy.
 
+Dropping `automations.repo_*` needs a table rebuild (SQLite cannot `DROP COLUMN` a column named by a
+CHECK, and `0029` added `repo_*` CHECKs). D1 runs each migration as one FK-enforced transaction and
+rejects `PRAGMA foreign_keys = OFF` mid-transaction, and `defer_foreign_keys` does not rescue a
+_parent_ rebuild: `DROP TABLE automations` books a deferred FK violation for every child row
+(`automation_runs` / `automation_invocations` / `automation_repositories` all reference
+`automations(id)`), and the `RENAME` never credits them back, so the commit is refused once real
+child rows exist. `0031` therefore stages each child, drops the three child tables (releasing their
+FK claims), rebuilds `automations` clean, then recreates the children verbatim and repopulates them.
+Every id is preserved, so all foreign keys hold at commit. This was caught by a failed production
+apply — a plain `defer_foreign_keys` rebuild passes on an empty test DB but fails against a
+backfilled one.
+
 Because `0031` drops columns the previous schema depended on, this feature is **not code-revertible
 without a database restore** — the pre-feature worker reads `automations.repo_*`, which no longer
 exist. Snapshot D1 before applying if you want a rollback path.
