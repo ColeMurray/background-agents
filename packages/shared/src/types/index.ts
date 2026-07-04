@@ -277,6 +277,12 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     type: z.literal("heartbeat"),
     status: z.string(),
   }),
+  sandboxEventBaseSchema.extend({
+    // Emitted once when the sandbox bridge connects and OpenCode is ready.
+    // Present in essentially every session's replay history.
+    type: z.literal("ready"),
+    opencodeSessionId: z.string().nullable().optional(),
+  }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("token"),
     content: z.string(),
@@ -364,6 +370,19 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
+
+/**
+ * Replay history events, resilient to unknown/legacy shapes. Each event is
+ * validated individually and dropped if it doesn't match, instead of failing
+ * the whole `subscribed` message — a single unrecognized event must never wedge
+ * session hydration (which strands the client on "loading session" forever).
+ */
+const replayEventsSchema = z.array(z.unknown()).transform((events) =>
+  events.flatMap((event) => {
+    const result = sandboxEventSchema.safeParse(event);
+    return result.success ? [result.data] : [];
+  })
+);
 
 // WebSocket message types
 // Session state sent to clients
@@ -453,7 +472,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     participant: participantSummarySchema.optional(),
     replay: z
       .object({
-        events: z.array(sandboxEventSchema),
+        events: replayEventsSchema,
         hasMore: z.boolean(),
         cursor: historyCursorSchema.nullable(),
       })
