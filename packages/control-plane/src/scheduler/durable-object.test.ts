@@ -238,6 +238,14 @@ function promptCallCount(fetchMock: ReturnType<typeof vi.fn>): number {
   }).length;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function createEnv(overrides?: Partial<Env>): Env {
   const sessionStub = createMockSessionStub();
   return {
@@ -491,6 +499,65 @@ describe("SchedulerDO", () => {
       // Both children share the invocation id.
       expect(children[0].invocation_id).toBe(children[1].invocation_id);
       // Both launched.
+      expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
+    });
+
+    it("starts later child launches before earlier child sessions finish initializing", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [
+        repositoryRow("auto-1", { repo_name: "web-app" }),
+        repositoryRow("auto-1", { repo_name: "api", base_branch: null }),
+      ]);
+
+      const firstInit = deferred<Response>();
+      const firstInitStarted = deferred<void>();
+      const secondInitStarted = deferred<void>();
+      let initCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo, _init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.url;
+        const path = new URL(url).pathname;
+
+        if (path === "/internal/init") {
+          initCalls++;
+          if (initCalls === 1) {
+            firstInitStarted.resolve();
+            return firstInit.promise;
+          }
+          if (initCalls === 2) {
+            secondInitStarted.resolve();
+          }
+          return Response.json({ status: "ok" });
+        }
+
+        if (path === "/internal/prompt") {
+          return Response.json({ messageId: "msg-1", status: "queued" });
+        }
+
+        return new Response("Not Found", { status: 404 });
+      });
+
+      const env = createEnv();
+      vi.mocked(env.SESSION.get).mockReturnValue({ fetch: fetchMock } as never);
+
+      const scheduler = createSchedulerDO(env);
+      const tickPromise = scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      await firstInitStarted.promise;
+      const overlapped = await Promise.race([
+        secondInitStarted.promise.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+      ]);
+
+      try {
+        expect(overlapped).toBe(true);
+      } finally {
+        firstInit.resolve(Response.json({ status: "ok" }));
+        await tickPromise;
+      }
+
+      expect(initCalls).toBe(2);
       expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
     });
 

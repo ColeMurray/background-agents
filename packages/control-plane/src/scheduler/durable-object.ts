@@ -64,6 +64,12 @@ const MAX_PER_TICK = 25;
  */
 const TICK_CHILD_LAUNCH_BUDGET = 50;
 
+/**
+ * Smooths Modal cold-start / warm-pool pressure for multi-repo fan-out. The
+ * maximum fan-out is 10 repositories, so this only caps the per-invocation spike.
+ */
+const AUTOMATION_LAUNCH_CONCURRENCY = 4;
+
 /** Threshold for detecting orphaned "starting" runs (5 minutes). */
 const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
 
@@ -120,6 +126,26 @@ function badJsonRequest(message: string): Response {
     status: 400,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+async function runWithBoundedConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  run: (item: T) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) return;
+
+  let cursor = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await run(items[index]);
+    }
+  });
+
+  await Promise.all(workers);
 }
 
 interface StartInvocationParams {
@@ -332,9 +358,7 @@ export class SchedulerDO extends DurableObject<Env> {
       return this.recordOverlapSkip(store, params, { advanceSchedule: false });
     }
 
-    let launched = 0;
-    for (const child of children) {
-      if (child.status !== "starting") continue;
+    const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
         const { sessionId } = await this.createSessionForAutomationRun(automation, child);
         await this.sendPromptToSession(
@@ -350,7 +374,6 @@ export class SchedulerDO extends DurableObject<Env> {
         });
         child.status = "running";
         child.session_id = sessionId;
-        launched++;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         this.log.error("Failed to launch automation run", {
@@ -378,7 +401,11 @@ export class SchedulerDO extends DurableObject<Env> {
         child.status = "failed";
         child.failure_reason = message;
       }
-    }
+    };
+
+    const launchCandidates = children.filter((child) => child.status === "starting");
+    await runWithBoundedConcurrency(launchCandidates, AUTOMATION_LAUNCH_CONCURRENCY, launchChild);
+    const launched = launchCandidates.filter((child) => child.status === "running").length;
 
     // Pre-failed and launch-failed children have no callback coming — apply
     // the failure strike now (CAS-deduped). This is also the born-terminal
