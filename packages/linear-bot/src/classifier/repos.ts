@@ -4,6 +4,7 @@
  */
 
 import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
+import { controlPlaneReposResponseSchema, repoConfigSchema } from "@open-inspect/shared";
 import { buildInternalAuthHeaders } from "../utils/internal";
 import { createLogger } from "../logger";
 
@@ -59,7 +60,17 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
       return getFromCacheOrFallback(env);
     }
 
-    const data = (await response.json()) as ControlPlaneReposResponse;
+    const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.error("control_plane.fetch_repos", {
+        trace_id: traceId,
+        outcome: "error",
+        error_message: "Invalid repos response shape.",
+        duration_ms: Date.now() - startTime,
+      });
+      return getFromCacheOrFallback(env);
+    }
+    const data: ControlPlaneReposResponse = parsed.data;
     const repos = data.repos.map(toRepoConfig);
 
     localCache = { repos, timestamp: Date.now() };
@@ -96,9 +107,10 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
   try {
     const cached = await env.LINEAR_KV.get("repos:cache", "json");
-    if (cached && Array.isArray(cached)) {
+    const parsed = repoConfigSchema.array().safeParse(cached);
+    if (parsed.success) {
       log.info("control_plane.fetch_repos", { source: "kv_cache" });
-      return cached as RepoConfig[];
+      return parsed.data;
     }
   } catch (e) {
     log.warn("kv.get", {
