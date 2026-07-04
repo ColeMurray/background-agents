@@ -511,7 +511,6 @@ describe("SchedulerDO", () => {
 
       const firstInit = deferred<Response>();
       const firstInitStarted = deferred<void>();
-      const secondInitStarted = deferred<void>();
       let initCalls = 0;
       const fetchMock = vi.fn(async (input: RequestInfo, _init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
@@ -522,9 +521,6 @@ describe("SchedulerDO", () => {
           if (initCalls === 1) {
             firstInitStarted.resolve();
             return firstInit.promise;
-          }
-          if (initCalls === 2) {
-            secondInitStarted.resolve();
           }
           return Response.json({ status: "ok" });
         }
@@ -545,13 +541,11 @@ describe("SchedulerDO", () => {
       );
 
       await firstInitStarted.promise;
-      const overlapped = await Promise.race([
-        secondInitStarted.promise.then(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
-      ]);
 
       try {
-        expect(overlapped).toBe(true);
+        await vi.waitFor(() => {
+          expect(initCalls).toBe(2);
+        });
       } finally {
         firstInit.resolve(Response.json({ status: "ok" }));
         await tickPromise;

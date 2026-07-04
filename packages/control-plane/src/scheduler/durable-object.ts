@@ -128,26 +128,6 @@ function badJsonRequest(message: string): Response {
   });
 }
 
-async function runWithBoundedConcurrency<T>(
-  items: T[],
-  concurrency: number,
-  run: (item: T) => Promise<void>
-): Promise<void> {
-  if (items.length === 0) return;
-
-  let cursor = 0;
-  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
-  const workers = Array.from({ length: workerCount }, async () => {
-    for (;;) {
-      const index = cursor++;
-      if (index >= items.length) return;
-      await run(items[index]);
-    }
-  });
-
-  await Promise.all(workers);
-}
-
 interface StartInvocationParams {
   automation: AutomationRow;
   source: AutomationInvocationSource;
@@ -404,7 +384,17 @@ export class SchedulerDO extends DurableObject<Env> {
     };
 
     const launchCandidates = children.filter((child) => child.status === "starting");
-    await runWithBoundedConcurrency(launchCandidates, AUTOMATION_LAUNCH_CONCURRENCY, launchChild);
+    let nextLaunchIndex = 0;
+    const launchWorkerCount = Math.min(AUTOMATION_LAUNCH_CONCURRENCY, launchCandidates.length);
+    await Promise.all(
+      Array.from({ length: launchWorkerCount }, async () => {
+        for (;;) {
+          const child = launchCandidates[nextLaunchIndex++];
+          if (!child) return;
+          await launchChild(child);
+        }
+      })
+    );
     const launched = launchCandidates.filter((child) => child.status === "running").length;
 
     // Pre-failed and launch-failed children have no callback coming — apply
