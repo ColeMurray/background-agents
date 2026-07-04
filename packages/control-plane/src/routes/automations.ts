@@ -128,17 +128,19 @@ async function resolveRepositorySelection(
   env: Env,
   repositories: NormalizedRepositoryInput[],
   ctx: RequestContext
-): Promise<AutomationRepositoryInsert[] | Response> {
-  const resolved = await Promise.all(
+): Promise<AutomationRepositoryInsert[]> {
+  const settled = await Promise.allSettled(
     repositories.map((repository) =>
       resolveRepoOrError(env, repository.repoOwner, repository.repoName, ctx, logger)
     )
   );
-  for (const result of resolved) {
-    if (result instanceof Response) return result;
+  const firstRejected = settled.find((result) => result.status === "rejected");
+  if (firstRejected?.status === "rejected") {
+    throw firstRejected.reason;
   }
+
   return repositories.map((repository, index) => {
-    const access = resolved[index] as RepositoryAccessResult;
+    const access = (settled[index] as PromiseFulfilledResult<RepositoryAccessResult>).value;
     return {
       repo_owner: repository.repoOwner,
       repo_name: repository.repoName,
@@ -332,7 +334,6 @@ async function handleCreateAutomation(
   }
 
   const newRepositories = await resolveRepositorySelection(env, requestedRepositories, ctx);
-  if (newRepositories instanceof Response) return newRepositories;
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -582,7 +583,6 @@ async function handleUpdateAutomation(
       throw e;
     }
     const resolved = await resolveRepositorySelection(env, selection.repositories, ctx);
-    if (resolved instanceof Response) return resolved;
     replacementRepositories = resolved;
   }
 

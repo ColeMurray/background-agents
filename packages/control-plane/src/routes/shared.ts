@@ -62,6 +62,21 @@ export function error(message: string, status = 400): Response {
 }
 
 /**
+ * Raise from a route handler or helper to return an error response with a
+ * specific status. Mapped centrally in router.ts's dispatch catch to
+ * error(message, status), avoiding `| Response` plumbing in callers.
+ */
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+/**
  * Create a SourceControlProvider for use in Worker-level route handlers.
  * Cheap to construct (no I/O), so creating per-request is fine.
  */
@@ -112,7 +127,7 @@ export function extractRepoParams(
 
 /**
  * Resolve a repository via the SCM provider, returning the full
- * {@link RepositoryAccessResult} or an error Response.
+ * {@link RepositoryAccessResult} or raising an HttpError.
  *
  * Handles:
  * - Provider construction
@@ -126,14 +141,11 @@ export async function resolveRepoOrError(
   name: string,
   ctx: RequestContext,
   logger: Logger
-): Promise<RepositoryAccessResult | Response> {
+): Promise<RepositoryAccessResult> {
+  let resolved: RepositoryAccessResult | null = null;
   try {
     const provider = createRouteSourceControlProvider(env);
-    const resolved = await resolveInstalledRepo(provider, owner, name);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-    return resolved;
+    resolved = await resolveInstalledRepo(provider, owner, name);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     logger.error("Failed to resolve repository", {
@@ -145,6 +157,10 @@ export async function resolveRepoOrError(
     });
     const isConfigError =
       e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-    return error(isConfigError ? message : "Failed to resolve repository", 500);
+    throw new HttpError(isConfigError ? message : "Failed to resolve repository", 500);
   }
+  if (!resolved) {
+    throw new HttpError("Repository is not installed for the GitHub App", 404);
+  }
+  return resolved;
 }

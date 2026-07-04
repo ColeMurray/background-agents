@@ -65,7 +65,6 @@ async function handleCreateSession(
     repoOwner = repositoryContext.repoOwner;
     repoName = repositoryContext.repoName;
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-    if (resolved instanceof Response) return resolved;
 
     repoId = resolved.repoId;
     defaultBranch = resolved.defaultBranch;

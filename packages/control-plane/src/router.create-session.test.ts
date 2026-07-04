@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateInternalToken } from "./auth/internal";
 import { SessionIndexStore } from "./db/session-index";
 import { handleRequest } from "./router";
-import { resolveRepoOrError } from "./routes/shared";
+import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 
 vi.mock("./db/session-index", () => ({
@@ -192,6 +192,24 @@ describe("handleCreateSession D1 ordering", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid session request body" });
     expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("maps route HttpError failures through the central dispatch catch", async () => {
+    vi.mocked(resolveRepoOrError).mockRejectedValue(
+      new HttpError("Repository is not installed for the GitHub App", 404)
+    );
+
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+    const response = await createSessionRequest(createEnv(initFetch));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "Repository is not installed for the GitHub App",
+    });
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(response.headers.get("x-request-id")).toBeTruthy();
+    expect(response.headers.get("x-trace-id")).toBeTruthy();
+    expect(initFetch).not.toHaveBeenCalled();
   });
 
   it("creates the D1 session index before initializing the SessionDO", async () => {

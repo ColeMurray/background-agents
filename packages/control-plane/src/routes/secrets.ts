@@ -41,7 +41,6 @@ async function handleSetRepoSecrets(
   const { owner, name } = params;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
-  if (resolved instanceof Response) return resolved;
 
   const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
   if (body instanceof Response) return body;
@@ -116,7 +115,6 @@ async function handleListRepoSecrets(
   const { owner, name } = params;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
-  if (resolved instanceof Response) return resolved;
 
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
   const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
@@ -187,7 +185,6 @@ async function handleDeleteRepoSecret(
   }
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
-  if (resolved instanceof Response) return resolved;
 
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
 
