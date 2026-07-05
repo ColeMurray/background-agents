@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { Islo, IsloApiError } from "@islo-labs/sdk";
 import {
   DEFAULT_BASE_IMAGE,
+  PYTHON_VERSION,
   SANDBOX_RUNTIME_DIR,
   buildBaseSandboxCreate,
   buildSetupScript,
@@ -213,10 +214,14 @@ async function verifyRuntime(client, sandboxName) {
         "-lc",
         [
           "python3 - <<'PY'",
+          "import sys",
+          `expected = tuple(map(int, "${PYTHON_VERSION}".split(".")))`,
+          "actual = sys.version_info[:2]",
+          "assert actual >= expected, f'expected Python >= {expected}, got {actual}'",
           "import sandbox_runtime.entrypoint",
           "print('sandbox_runtime ok')",
           "PY",
-          "python --version",
+          "python3 --version",
           "bun --version",
           "opencode --version",
           "ttyd --version",

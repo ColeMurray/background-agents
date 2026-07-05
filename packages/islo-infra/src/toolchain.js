@@ -12,6 +12,7 @@ export const CODE_SERVER_AMD64_SHA256 =
 export const AGENT_BROWSER_VERSION = "0.21.2";
 export const TTYD_VERSION = "1.7.7";
 export const TTYD_AMD64_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55";
+export const PYTHON_VERSION = "3.12";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, "../../..");
@@ -90,13 +91,27 @@ bun --version
 ln -sf "$(command -v python3)" /usr/local/bin/python
 python --version
 
-python3 -m pip install --no-cache-dir --break-system-packages \\
-  uv \\
+python3 -m pip install --no-cache-dir --break-system-packages uv
+uv python install "${PYTHON_VERSION}"
+PYTHON_BASE_BIN="$(uv python find "${PYTHON_VERSION}")"
+PYTHON_VENV="/opt/open-inspect-python"
+uv venv --python "$PYTHON_BASE_BIN" "$PYTHON_VENV"
+PYTHON_BIN="$PYTHON_VENV/bin/python"
+cat > /usr/local/bin/python <<EOF
+#!/bin/sh
+exec "$PYTHON_BIN" "\\$@"
+EOF
+cp /usr/local/bin/python /usr/local/bin/python3
+chmod 0755 /usr/local/bin/python /usr/local/bin/python3
+hash -r
+python --version
+python3 --version
+
+uv pip install --python "$PYTHON_BIN" \\
   "httpx>=0.27.0" \\
   "websockets>=13.0" \\
   "pydantic>=2.0" \\
-  "PyJWT[crypto]>=2.9.0" \\
-  "typing_extensions>=4.12.0"
+  "PyJWT[crypto]>=2.9.0"
 
 npm install -g "opencode-ai@${OPENCODE_VERSION}"
 opencode --version || true
