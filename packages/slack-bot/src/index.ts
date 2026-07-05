@@ -44,17 +44,12 @@ import {
 import { getResolvedUserPreferences } from "./user-preferences";
 import { getAvailableModels, getSlackDefaultModel } from "./app-home/models";
 import { slackInteractionPayloadSchema } from "./interaction-payload";
+import { createSessionResponseSchema, sendPromptResponseSchema } from "./control-plane-responses";
 
 const log = createLogger("handler");
 const THREAD_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 type BackgroundTaskScheduler = (promise: Promise<void>) => void;
-
-function readStringField(value: unknown, field: string): string | null {
-  if (!value || typeof value !== "object") return null;
-  const fieldValue = (value as Record<string, unknown>)[field];
-  return typeof fieldValue === "string" && fieldValue.length > 0 ? fieldValue : null;
-}
 
 /**
  * Create a session via the control plane.
@@ -108,10 +103,8 @@ async function createSession(
       return null;
     }
 
-    const body = await response.json();
-    const sessionId = readStringField(body, "sessionId");
-    const status = readStringField(body, "status");
-    if (!sessionId || !status) {
+    const result = createSessionResponseSchema.safeParse(await response.json());
+    if (!result.success) {
       log.error("control_plane.create_session", {
         ...base,
         outcome: "error",
@@ -120,15 +113,14 @@ async function createSession(
       });
       return null;
     }
-    const result = { sessionId, status };
     log.info("control_plane.create_session", {
       ...base,
       outcome: "success",
-      session_id: result.sessionId,
+      session_id: result.data.sessionId,
       http_status: 200,
       duration_ms: Date.now() - startTime,
     });
-    return result;
+    return result.data;
   } catch (e) {
     log.error("control_plane.create_session", {
       ...base,
@@ -179,9 +171,8 @@ async function sendPrompt(
       return null;
     }
 
-    const body = await response.json();
-    const messageId = readStringField(body, "messageId");
-    if (!messageId) {
+    const result = sendPromptResponseSchema.safeParse(await response.json());
+    if (!result.success) {
       log.error("control_plane.send_prompt", {
         ...base,
         outcome: "error",
@@ -190,15 +181,14 @@ async function sendPrompt(
       });
       return null;
     }
-    const result = { messageId };
     log.info("control_plane.send_prompt", {
       ...base,
       outcome: "success",
-      message_id: result.messageId,
+      message_id: result.data.messageId,
       http_status: 200,
       duration_ms: Date.now() - startTime,
     });
-    return result;
+    return result.data;
   } catch (e) {
     log.error("control_plane.send_prompt", {
       ...base,
