@@ -86,7 +86,9 @@ async function createSnapshotWithRetry(client, params) {
   const deadline = Date.now() + SNAPSHOT_CREATE_TIMEOUT_MS;
   for (;;) {
     try {
-      return await client.snapshots.createSnapshot(params);
+      return await client.snapshots.createSnapshot(params, {
+        timeoutInSeconds: Math.max(1, Math.ceil((deadline - Date.now()) / 1000)),
+      });
     } catch (error) {
       if (!isResourceUnavailable(error) || Date.now() >= deadline) {
         throw error;
@@ -108,7 +110,7 @@ async function waitForSandboxRunning(client, sandboxName) {
     if (sandbox.status === "running") {
       return sandbox;
     }
-    if (["failed", "error", "deleted"].includes(sandbox.status || "")) {
+    if (["failed", "error", "stopped", "deleted"].includes(sandbox.status || "")) {
       throw new Error(`Build sandbox entered terminal state: ${sandbox.status}`);
     }
     await sleep(SANDBOX_READY_POLL_MS);

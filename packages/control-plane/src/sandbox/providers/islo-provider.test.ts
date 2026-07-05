@@ -5,7 +5,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { IsloApiError, type IsloApi } from "@islo-labs/sdk";
 import { computeHmacHex } from "@open-inspect/shared";
-import { IsloSandboxProvider, type IsloClientLike, type IsloProviderConfig } from "./islo-provider";
+import {
+  createIsloProvider,
+  IsloSandboxProvider,
+  type IsloClientLike,
+  type IsloProviderConfig,
+} from "./islo-provider";
 import { type CreateSandboxConfig, type ResumeConfig } from "../provider";
 
 const SHARE_DELAY_TIMEOUT_MS = 50;
@@ -227,11 +232,14 @@ describe("IsloSandboxProvider", () => {
     expect(createRequest.env.CODE_SERVER_PASSWORD).toBe(expectedPassword);
 
     expect(client.shares.createShare).toHaveBeenCalledTimes(4);
-    expect(client.shares.createShare).toHaveBeenCalledWith({
-      sandbox_name: "sandbox-owner-repo-123",
-      port: 8080,
-      ttl_seconds: 86400,
-    });
+    expect(client.shares.createShare).toHaveBeenCalledWith(
+      {
+        sandbox_name: "sandbox-owner-repo-123",
+        port: 8080,
+        ttl_seconds: 86400,
+      },
+      expect.objectContaining({ timeoutInSeconds: expect.any(Number) })
+    );
 
     expect(client.shares.listShares).not.toHaveBeenCalled();
 
@@ -347,6 +355,9 @@ describe("IsloSandboxProvider", () => {
     });
 
     expect(result.codeServerUrl).toBe("https://share.test/8080");
+    expect(vi.mocked(client.shares.createShare).mock.calls[0][1]).toMatchObject({
+      timeoutInSeconds: expect.any(Number),
+    });
     expect(createShare).toHaveBeenCalledTimes(2);
   });
 
@@ -404,6 +415,7 @@ describe("IsloSandboxProvider", () => {
       sandbox_name: "sandbox-owner-repo-123",
     });
     expect(result.codeServerUrl).toBe("https://share.test/8080");
+    expect(result.ttydUrl).toBe("https://share.test/7680");
   });
 
   it("waits for resumed sandboxes to be running before writing tunnel env", async () => {
@@ -425,6 +437,9 @@ describe("IsloSandboxProvider", () => {
 
     expect(result.success).toBe(true);
     expect(getSandbox).toHaveBeenCalledTimes(2);
+    expect(getSandbox.mock.calls[1][1]).toMatchObject({
+      timeoutInSeconds: expect.any(Number),
+    });
     expect(client.sandboxes.execInSandbox).toHaveBeenCalled();
   });
 
@@ -470,5 +485,14 @@ describe("IsloSandboxProvider", () => {
     await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
       errorType: "transient",
     });
+  });
+
+  it("rejects missing code-server password secret before constructing provider", () => {
+    expect(() =>
+      createIsloProvider({
+        ...defaultProviderConfig,
+        codeServerPasswordSecret: "",
+      })
+    ).toThrow("createIsloProvider requires codeServerPasswordSecret");
   });
 });

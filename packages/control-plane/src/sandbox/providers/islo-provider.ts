@@ -34,8 +34,10 @@ const DEFAULT_ISLO_VCPUS = 2;
 const DEFAULT_ISLO_MEMORY_MB = 4096;
 const DEFAULT_ISLO_DISK_GB = 10;
 const DEFAULT_ISLO_START_COMMAND = ["python3", "-m", "sandbox_runtime.entrypoint"];
-const DEFAULT_SHARE_TTL_SECONDS = 24 * 60 * 60;
-const MAX_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_SHARE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_SHARE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MIN_SHARE_TTL_MS = 60 * 1000;
+const SHARE_TTL_BUFFER_MS = 300 * 1000;
 const SANDBOX_READY_POLL_INTERVAL_MS = 200;
 const SANDBOX_READY_TIMEOUT_MS = 60_000;
 const SHARE_CREATE_RETRY_INTERVAL_MS = 100;
@@ -43,9 +45,9 @@ const SHARE_CREATE_RETRY_TIMEOUT_MS = 15_000;
 const EXEC_POLL_INTERVAL_MS = 100;
 const EXEC_POLL_TIMEOUT_MS = 30_000;
 const RUNTIME_START_TIMEOUT_MS = 5_000;
-const RUNTIME_EXEC_TIMEOUT_SECONDS = 10;
-const EXEC_CREATE_REQUEST_TIMEOUT_SECONDS = 30;
-const EXEC_RESULT_REQUEST_TIMEOUT_SECONDS = 15;
+const RUNTIME_EXEC_TIMEOUT_MS = 10_000;
+const EXEC_CREATE_REQUEST_TIMEOUT_MS = 30_000;
+const EXEC_RESULT_REQUEST_TIMEOUT_MS = 15_000;
 
 type IsloSandboxCreate = {
   name: string;
@@ -214,7 +216,7 @@ export class IsloSandboxProvider implements SandboxProvider {
       };
     } catch (error) {
       if (sandboxCreated) {
-        await this.cleanupSandboxAfterFailedCreate(config.sandboxId, config.sessionId);
+        await this.cleanupSandboxAfterFailedCreate(config.sandboxId);
       }
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to create Islo sandbox", error);
@@ -262,6 +264,7 @@ export class IsloSandboxProvider implements SandboxProvider {
         providerObjectId: config.sandboxId,
         codeServerUrl: shares.codeServerUrl,
         codeServerPassword: shares.codeServerPassword,
+        ttydUrl: shares.ttydUrl,
         tunnelUrls: shares.tunnelUrls,
       };
     } catch (error) {
@@ -360,7 +363,10 @@ export class IsloSandboxProvider implements SandboxProvider {
 
     while (Date.now() < deadline) {
       try {
-        const sandbox = await this.client.sandboxes.getSandbox({ sandbox_name: sandboxName });
+        const sandbox = await this.client.sandboxes.getSandbox(
+          { sandbox_name: sandboxName },
+          { timeoutInSeconds: boundedRequestTimeoutSeconds(deadline - Date.now()) }
+        );
         lastStatus = sandbox.status || "unknown";
         if (sandbox.status === "running") {
           return sandbox;
@@ -456,17 +462,22 @@ export class IsloSandboxProvider implements SandboxProvider {
   ): Promise<Awaited<ReturnType<IsloClientLike["shares"]["createShare"]>>> {
     const deadline = Date.now() + SHARE_CREATE_RETRY_TIMEOUT_MS;
 
-    while (Date.now() < deadline) {
+    for (;;) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+
       try {
-        return await this.client.shares.createShare(request);
+        return await this.client.shares.createShare(request, {
+          timeoutInSeconds: boundedRequestTimeoutSeconds(remainingMs),
+        });
       } catch (error) {
         if (!isIsloSandboxNotRunning(error)) throw error;
       }
 
-      await sleep(SHARE_CREATE_RETRY_INTERVAL_MS);
+      await sleep(Math.min(SHARE_CREATE_RETRY_INTERVAL_MS, Math.max(0, deadline - Date.now())));
     }
 
-    return this.client.shares.createShare(request);
+    throw new Error(`Timed out creating Islo share for port ${request.port}`);
   }
 
   private async writeTunnelEnvFile(
@@ -508,7 +519,7 @@ export class IsloSandboxProvider implements SandboxProvider {
         ],
         workdir,
         env,
-        timeout_secs: RUNTIME_EXEC_TIMEOUT_SECONDS,
+        timeout_secs: millisecondsToSeconds(RUNTIME_EXEC_TIMEOUT_MS),
         ...(this.providerConfig.startUser ? { user: this.providerConfig.startUser } : {}),
       },
       RUNTIME_START_TIMEOUT_MS
@@ -522,7 +533,7 @@ export class IsloSandboxProvider implements SandboxProvider {
   ): Promise<IsloApi.ExecResultResponse> {
     const execCreateTimeoutSeconds = boundedRequestTimeoutSeconds(
       timeoutMs,
-      EXEC_CREATE_REQUEST_TIMEOUT_SECONDS
+      EXEC_CREATE_REQUEST_TIMEOUT_MS
     );
     const exec = await this.client.sandboxes.execInSandbox(
       { sandbox_name: sandboxName, body },
@@ -533,7 +544,7 @@ export class IsloSandboxProvider implements SandboxProvider {
     while (Date.now() < deadline) {
       const pollTimeoutSeconds = boundedRequestTimeoutSeconds(
         deadline - Date.now(),
-        EXEC_RESULT_REQUEST_TIMEOUT_SECONDS
+        EXEC_RESULT_REQUEST_TIMEOUT_MS
       );
       const result = await this.client.sandboxes.getExecResult(
         { sandbox_name: sandboxName, exec_id: exec.exec_id },
@@ -574,17 +585,12 @@ export class IsloSandboxProvider implements SandboxProvider {
     }
   }
 
-  private async cleanupSandboxAfterFailedCreate(
-    sandboxName: string,
-    sessionId: string
-  ): Promise<void> {
+  private async cleanupSandboxAfterFailedCreate(sandboxName: string): Promise<void> {
     try {
       await this.client.sandboxes.pauseSandbox({ sandbox_name: sandboxName });
     } catch (cleanupError) {
       if (isIsloNotFound(cleanupError)) return;
       log.warn("islo.sandbox_cleanup_failed", {
-        session_id: sessionId,
-        sandbox_name: sandboxName,
         error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
       });
     }
@@ -601,10 +607,14 @@ export class IsloSandboxProvider implements SandboxProvider {
   private resolveShareTtlSeconds(timeoutSeconds: number | undefined): number {
     const configured = this.providerConfig.shareTtlSeconds;
     if (configured && Number.isFinite(configured)) {
-      return Math.min(MAX_SHARE_TTL_SECONDS, Math.max(60, Math.floor(configured)));
+      const configuredMs = Math.floor(configured) * 1000;
+      return millisecondsToSeconds(
+        Math.min(MAX_SHARE_TTL_MS, Math.max(MIN_SHARE_TTL_MS, configuredMs))
+      );
     }
-    if (!timeoutSeconds) return DEFAULT_SHARE_TTL_SECONDS;
-    return Math.min(MAX_SHARE_TTL_SECONDS, Math.max(60, timeoutSeconds + 300));
+    if (!timeoutSeconds) return millisecondsToSeconds(DEFAULT_SHARE_TTL_MS);
+    const timeoutMs = timeoutSeconds * 1000 + SHARE_TTL_BUFFER_MS;
+    return millisecondsToSeconds(Math.min(MAX_SHARE_TTL_MS, Math.max(MIN_SHARE_TTL_MS, timeoutMs)));
   }
 
   private classifyError(message: string, error: unknown): SandboxProviderError {
@@ -653,8 +663,12 @@ function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function boundedRequestTimeoutSeconds(remainingMs: number, maxTimeoutSeconds: number): number {
-  return Math.max(1, Math.ceil(Math.min(remainingMs, maxTimeoutSeconds * 1000) / 1000));
+function boundedRequestTimeoutSeconds(remainingMs: number, maxTimeoutMs = remainingMs): number {
+  return Math.max(1, millisecondsToSeconds(Math.min(remainingMs, maxTimeoutMs)));
+}
+
+function millisecondsToSeconds(valueMs: number): number {
+  return Math.ceil(valueMs / 1000);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -677,6 +691,9 @@ export function createIsloProvider(config: IsloProviderConfig): IsloSandboxProvi
   }
   if (!config.baseSnapshot) {
     throw new Error("createIsloProvider requires baseSnapshot");
+  }
+  if (!config.codeServerPasswordSecret) {
+    throw new Error("createIsloProvider requires codeServerPasswordSecret");
   }
 
   const client = new Islo({

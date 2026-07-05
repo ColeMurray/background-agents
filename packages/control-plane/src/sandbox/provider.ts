@@ -249,6 +249,8 @@ export interface ResumeResult {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** ttyd proxy tunnel URL (if available) */
+  ttydUrl?: string;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
