@@ -14,7 +14,14 @@ import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { createLogger } from "./logger";
-import { type Route, type RequestContext, parsePattern, json, error } from "./routes/shared";
+import {
+  type Route,
+  type RequestContext,
+  parsePattern,
+  json,
+  error,
+  HttpError,
+} from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
@@ -413,20 +420,25 @@ export async function handleRequest(
         response = await route.handler(request, instrumentedEnv, match, ctx);
         outcome = response.status >= 500 ? "error" : "success";
       } catch (e) {
-        const durationMs = Date.now() - startTime;
-        logger.error("http.request", {
-          event: "http.request",
-          request_id: ctx.request_id,
-          trace_id: ctx.trace_id,
-          http_method: method,
-          http_path: path,
-          http_status: 500,
-          duration_ms: durationMs,
-          outcome: "error",
-          error: e instanceof Error ? e : String(e),
-          ...ctx.metrics.summarize(),
-        });
-        return error("Internal server error", 500);
+        if (e instanceof HttpError) {
+          response = error(e.message, e.status);
+          outcome = e.status >= 500 ? "error" : "success";
+        } else {
+          const durationMs = Date.now() - startTime;
+          logger.error("http.request", {
+            event: "http.request",
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+            http_method: method,
+            http_path: path,
+            http_status: 500,
+            duration_ms: durationMs,
+            outcome: "error",
+            error: e instanceof Error ? e : String(e),
+            ...ctx.metrics.summarize(),
+          });
+          return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
+        }
       }
 
       const durationMs = Date.now() - startTime;

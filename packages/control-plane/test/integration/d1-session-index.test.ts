@@ -68,7 +68,7 @@ describe("D1 SessionIndexStore", () => {
     expect(activeResult.sessions[0].id).toBe("session-active-1");
 
     const allResult = await store.list({});
-    expect(allResult.total).toBe(2);
+    expect(allResult.sessions.length).toBe(2);
   });
 
   it("stores and returns reasoning effort", async () => {

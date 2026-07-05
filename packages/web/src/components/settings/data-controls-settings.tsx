@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
+  buildSessionsPageKey,
   isUnarchivedSessionListKey,
   removeSessionFromList,
   type SessionListResponse,
@@ -15,7 +16,11 @@ import {
 import { formatRelativeTime } from "@/lib/time";
 
 const PAGE_SIZE = 20;
-const ARCHIVED_SESSIONS_KEY = `/api/sessions?status=archived&limit=${PAGE_SIZE}&offset=0`;
+const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
+  status: "archived",
+  limit: PAGE_SIZE,
+  offset: 0,
+});
 
 export function DataControlsSettings() {
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
@@ -26,7 +31,7 @@ export function DataControlsSettings() {
   const { data, isLoading: loading } = useSWR<SessionListResponse>(ARCHIVED_SESSIONS_KEY, {
     onSuccess: (data) => {
       const fetched = data.sessions || [];
-      setHasMore(fetched.length === PAGE_SIZE);
+      setHasMore(data.hasMore);
       setOffset(fetched.length);
       setExtraSessions([]);
     },
@@ -38,12 +43,18 @@ export function DataControlsSettings() {
   const handleLoadMore = useCallback(async () => {
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/sessions?status=archived&limit=${PAGE_SIZE}&offset=${offset}`);
+      const res = await fetch(
+        buildSessionsPageKey({
+          status: "archived",
+          limit: PAGE_SIZE,
+          offset,
+        })
+      );
       if (res.ok) {
-        const resData = await res.json();
+        const resData: SessionListResponse = await res.json();
         const fetched: SessionItem[] = resData.sessions || [];
         setExtraSessions((prev) => [...prev, ...fetched]);
-        setHasMore(fetched.length === PAGE_SIZE);
+        setHasMore(resData.hasMore);
         setOffset((prev) => prev + fetched.length);
       }
     } catch (error) {

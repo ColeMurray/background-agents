@@ -713,7 +713,7 @@ describe("Repo image HTTP routes", () => {
     expect(first.status).toBe(200);
 
     const replay = await handleRequest(makeRequest(), vercelEnv());
-    expect(replay.status).toBe(401);
+    expect(replay.status).toBe(409);
   });
 
   it("GET /repo-images/status returns images for a repo", async () => {

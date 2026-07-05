@@ -266,10 +266,13 @@ The App Home provides a settings interface where users can configure their prefe
 
 4. Interactivity → Enable → Request URL:
    `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions`
+5. Select Menus → Options Load URL:
+   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions` Required
+   for searchable Slack repository pickers that use external data sources.
 
 ### Invite Bot to Channels
 
-5. Invite bot to channels: `/invite @BotName`
+6. Invite bot to channels: `/invite @BotName`
 
 ## Phase 10: Complete GitHub Bot Setup (If Enabled)
 

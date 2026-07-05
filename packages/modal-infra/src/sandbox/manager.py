@@ -418,13 +418,15 @@ class SandboxManager:
             }
         )
 
-        if has_repository:
-            fallback_clone_token = config.fallback_clone_token
-            self._inject_vcs_env_vars(
-                env_vars,
-                clone_token=fallback_clone_token,
-                include_github_cli_aliases=bool(fallback_clone_token),
-            )
+        # Host scoping (VCS_HOST / VCS_CLONE_USERNAME) is injected even without a
+        # repository so GitLab/Bitbucket deployments don't fall back to github.com
+        # credential-helper behavior; clone tokens stay repository-gated.
+        fallback_clone_token = config.fallback_clone_token if has_repository else None
+        self._inject_vcs_env_vars(
+            env_vars,
+            clone_token=fallback_clone_token,
+            include_github_cli_aliases=bool(fallback_clone_token),
+        )
 
         code_server_password: str | None = None
         if config.code_server_enabled:
@@ -776,16 +778,18 @@ class SandboxManager:
             }
         )
 
-        if has_repository:
-            # Snapshot restore still passes the clone token through for
-            # repo-backed sandboxes. Snapshots taken before the credential-helper
-            # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env
-            # and embeds it in the origin URL; without it, those legacy snapshots
-            # can't fetch. GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too
-            # so the gh CLI keeps working on snapshots predating the gh wrapper.
-            self._inject_vcs_env_vars(
-                env_vars, clone_token=clone_token, include_github_cli_aliases=True
-            )
+        # Snapshot restore still passes the clone token through for
+        # repo-backed sandboxes. Snapshots taken before the credential-helper
+        # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env
+        # and embeds it in the origin URL; without it, those legacy snapshots
+        # can't fetch. GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too
+        # so the gh CLI keeps working on snapshots predating the gh wrapper.
+        # Host scoping is injected even without a repository (matches
+        # create_sandbox); clone tokens stay repository-gated.
+        restore_clone_token = clone_token if has_repository else None
+        self._inject_vcs_env_vars(
+            env_vars, clone_token=restore_clone_token, include_github_cli_aliases=True
+        )
 
         code_server_password: str | None = None
         if code_server_enabled:

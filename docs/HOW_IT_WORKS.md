@@ -144,15 +144,18 @@ development environment.
 - agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode (the coding agent)
 
-Open-Inspect supports two backend patterns:
+Open-Inspect supports these sandbox backends:
 
 - **Modal**: near-instant startup plus filesystem snapshot restore
 - **Daytona**: persistent stop/start sandboxes via direct REST API calls
 - **Vercel Sandboxes**: filesystem snapshot restore and repo-image builds via the Vercel Sandbox API
+- **OpenComputer**: template-based sandboxes with checkpoint-backed repo-image builds via the
+  OpenComputer REST API
 
-Modal and Vercel support repo-image builds and live filesystem snapshot restore. Daytona uses
-persistent sandboxes instead: the control plane stops the sandbox on inactivity or stale heartbeat,
-then resumes that same sandbox later with the same logical sandbox ID and auth token.
+Repo-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can be
+restored on those same providers for session resumes; Daytona uses persistent sandboxes instead. For
+Daytona, the control plane stops the sandbox on inactivity or stale heartbeat, then resumes that
+same sandbox later with the same logical sandbox ID and auth token.
 
 ### Clients
 
@@ -209,7 +212,8 @@ When restoring from a previous snapshot:
 └─────────────┘    └────────────┘    └─────────────┘    └───────┘
 ```
 
-1. **Restore snapshot**: Modal or Vercel restores the filesystem from a saved snapshot
+1. **Restore snapshot**: The selected snapshot-capable provider restores the filesystem from a saved
+   snapshot or checkpoint
 2. **Quick sync**: Pulls latest changes (usually just a few commits)
 3. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
 4. **Ready**: Sandbox is ready almost instantly
@@ -413,7 +417,7 @@ That's potentially minutes before the agent can start working.
 
 ### How Snapshots Solve This
 
-Modal and Vercel filesystem snapshots let us capture a sandbox's state after setup:
+Provider snapshots and checkpoints let us capture a sandbox's state after setup:
 
 ```
 First session:  Clone ─▶ Install/Build ─▶ Start Runtime ─▶ [Snapshot] ─▶ Work
@@ -423,20 +427,23 @@ Later sessions: [Restore Snapshot] ─▶ Quick sync ─▶ Start Runtime ─▶
                      (fast)
 ```
 
-The first session for a repo pays the setup cost. Subsequent sessions restore in seconds.
+The first session for a repo pays the setup cost. Subsequent sessions restore in seconds when the
+active provider supports saved filesystem state.
 
 For Vercel, Terraform builds a base-runtime snapshot from the local checkout and wires a
 deterministic snapshot name into `VERCEL_BASE_SNAPSHOT_NAME`. Fresh Vercel sandboxes resolve that
 name to the newest created snapshot instead of cloning and installing the sandbox runtime on every
-session. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) for the full provider flow.
+session. OpenComputer uses a managed template plus checkpoints for the same repo-image lifecycle.
+See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
+[OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md) for provider-specific details.
 
 ### Image Prebuilding
 
 For frequently-used repositories, images can be prebuilt on a schedule:
 
 - Clone repo, install dependencies, run initial build
-- Save as a snapshot
-- Sessions start from this snapshot, only syncing recent changes
+- Save as a provider image artifact
+- Sessions start from this artifact, only syncing recent changes
 
 This means even "cold" sessions (no previous snapshot) start from a recent baseline.
 
@@ -480,7 +487,8 @@ restores still mint a fresh fallback token on restore.
 
 You can configure environment variables (API keys, credentials) at global or per-repository scope:
 
-- **Global secrets** apply to all repositories (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`)
+- **Global secrets** apply to all repositories (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
+  `ZHIPU_API_KEY`)
 - **Repository secrets** apply to a single repo and override global secrets with the same key
 - Stored encrypted (AES-256-GCM) in D1 database
 - Injected into sandboxes at startup
@@ -489,8 +497,8 @@ You can configure environment variables (API keys, credentials) at global or per
 > **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
 > added as global secrets. Modal injects these automatically via its own secrets mechanism.
 >
-> **DeepSeek (all providers)**: DeepSeek models require `DEEPSEEK_API_KEY` as a global secret with
-> any sandbox provider — unlike `ANTHROPIC_API_KEY`, Modal does not inject it automatically.
+> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
+> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

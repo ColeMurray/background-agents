@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import {
-  AutomationStore,
-  type AutomationRow,
-  type AutomationRunRow,
-} from "../../src/db/automation-store";
+import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { cleanD1Tables } from "./cleanup";
+import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 
 function getSchedulerStub() {
   const id = env.SCHEDULER.idFromName("global-scheduler");
@@ -17,10 +14,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Test Automation",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
@@ -38,25 +31,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     event_type: null,
     trigger_config: null,
     trigger_auth_data: null,
-    ...overrides,
-  };
-}
-
-function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): AutomationRunRow {
-  const now = Date.now();
-  return {
-    id: `run-${Math.random().toString(36).slice(2, 8)}`,
-    automation_id: automationId,
-    session_id: null,
-    status: "starting",
-    skip_reason: null,
-    failure_reason: null,
-    scheduled_at: now,
-    started_at: null,
-    completed_at: null,
-    created_at: now,
-    trigger_key: null,
-    concurrency_key: null,
     ...overrides,
   };
 }
@@ -100,8 +74,8 @@ describe("SchedulerDO (integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rc1", consecutive_failures: 2 }));
 
-      await store.insertRun(
-        makeRun("auto-rc1", {
+      await seedRun(
+        makeRunRow("auto-rc1", {
           id: "run-rc1",
           session_id: "sess-1",
           status: "running",
@@ -140,8 +114,8 @@ describe("SchedulerDO (integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rc2", consecutive_failures: 0 }));
 
-      await store.insertRun(
-        makeRun("auto-rc2", {
+      await seedRun(
+        makeRunRow("auto-rc2", {
           id: "run-rc2",
           session_id: "sess-2",
           status: "running",
@@ -184,8 +158,8 @@ describe("SchedulerDO (integration)", () => {
         })
       );
 
-      await store.insertRun(
-        makeRun("auto-rc3", {
+      await seedRun(
+        makeRunRow("auto-rc3", {
           id: "run-rc3",
           session_id: "sess-3",
           status: "running",
@@ -217,8 +191,8 @@ describe("SchedulerDO (integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rc4", consecutive_failures: 1, enabled: 1 }));
 
-      await store.insertRun(
-        makeRun("auto-rc4", {
+      await seedRun(
+        makeRunRow("auto-rc4", {
           id: "run-rc4",
           session_id: "sess-4",
           status: "running",
@@ -268,8 +242,8 @@ describe("SchedulerDO (integration)", () => {
       );
 
       const tenMinutesAgo = now - 10 * 60 * 1000;
-      await store.insertRun(
-        makeRun("auto-t1", {
+      await seedRun(
+        makeRunRow("auto-t1", {
           id: "run-orphan-t1",
           status: "starting",
           scheduled_at: tenMinutesAgo,
@@ -300,8 +274,8 @@ describe("SchedulerDO (integration)", () => {
 
       // Default EXECUTION_TIMEOUT_MS is 90 minutes
       const twoHoursAgo = now - 2 * 60 * 60 * 1000;
-      await store.insertRun(
-        makeRun("auto-t2", {
+      await seedRun(
+        makeRunRow("auto-t2", {
           id: "run-timeout-t2",
           status: "running",
           session_id: "sess-timeout",
@@ -327,8 +301,8 @@ describe("SchedulerDO (integration)", () => {
       await store.create(makeAutomation({ id: "auto-t3", next_run_at: now - 60000, enabled: 1 }));
 
       // Existing active run
-      await store.insertRun(
-        makeRun("auto-t3", {
+      await seedRun(
+        makeRunRow("auto-t3", {
           id: "run-active-t3",
           status: "running",
           session_id: "sess-existing",
@@ -346,13 +320,17 @@ describe("SchedulerDO (integration)", () => {
       expect(body.skipped).toBeGreaterThanOrEqual(1);
 
       // Assert on the automation this test owns rather than only the tick's
-      // global counters: auto-t3 must get exactly one skipped run with the
-      // concurrency reason, and its schedule must advance into the future so it
-      // isn't re-skipped on every later tick.
-      const runs = await store.listRunsForAutomation("auto-t3", { limit: 10, offset: 0 });
-      const skippedRuns = runs.runs.filter((r) => r.status === "skipped");
-      expect(skippedRuns).toHaveLength(1);
-      expect(skippedRuns[0]!.skip_reason).toBe("concurrent_run_active");
+      // global counters: auto-t3 must get exactly one skipped firing — a
+      // childless invocation — and its schedule must advance into the future so
+      // it isn't re-skipped on every later tick.
+      const { invocations } = await store.listInvocations("auto-t3", {
+        limit: 10,
+        offset: 0,
+      });
+      const skipped = invocations.filter((inv) => inv.status === "skipped");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]!.skipReason).toBe("concurrent_run_active");
+      expect(skipped[0]!.runs).toHaveLength(0);
 
       const advanced = await store.getById("auto-t3");
       expect(advanced!.next_run_at).not.toBeNull();
@@ -380,10 +358,12 @@ describe("SchedulerDO (integration)", () => {
 
       // Assert on auto-t4 specifically rather than the tick's global counters.
       // Session creation may succeed or fail in the test env; either way the
-      // automation must get exactly one run and its schedule must advance into
-      // the future so it isn't reprocessed on the next tick.
-      const runs = await store.listRunsForAutomation("auto-t4", { limit: 10, offset: 0 });
-      expect(runs.runs).toHaveLength(1);
+      // automation must get exactly one run (linked to its invocation) and its
+      // schedule must advance into the future so it isn't reprocessed on the
+      // next tick.
+      const runs = await fetchRuns("auto-t4");
+      expect(runs).toHaveLength(1);
+      expect(runs[0]!.invocation_id).not.toBeNull();
 
       const automation = await store.getById("auto-t4");
       expect(automation!.next_run_at).not.toBeNull();
@@ -403,8 +383,8 @@ describe("SchedulerDO (integration)", () => {
       );
 
       const tenMinutesAgo = now - 10 * 60 * 1000;
-      await store.insertRun(
-        makeRun("auto-t5", {
+      await seedRun(
+        makeRunRow("auto-t5", {
           id: "run-orphan-t5",
           status: "starting",
           scheduled_at: tenMinutesAgo,
@@ -431,8 +411,8 @@ describe("SchedulerDO (integration)", () => {
       const tenMinutesAgo = now - 10 * 60 * 1000;
       const runIds = ["run-bulk-1", "run-bulk-2", "run-bulk-3"];
       for (let i = 0; i < runIds.length; i++) {
-        await store.insertRun(
-          makeRun("auto-t6", {
+        await seedRun(
+          makeRunRow("auto-t6", {
             id: runIds[i],
             status: "starting",
             scheduled_at: tenMinutesAgo - i,
@@ -484,8 +464,8 @@ describe("SchedulerDO (integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-trig1" }));
 
-      await store.insertRun(
-        makeRun("auto-trig1", {
+      await seedRun(
+        makeRunRow("auto-trig1", {
           id: "run-trig-active",
           status: "running",
           session_id: "sess-1",
@@ -517,8 +497,159 @@ describe("SchedulerDO (integration)", () => {
       // or fail at prompt sending (500). Either way, a run record is created.
       expect([201, 500]).toContain(res.status);
 
-      const runs = await store.listRunsForAutomation("auto-trig2", { limit: 10, offset: 0 });
-      expect(runs.total).toBeGreaterThanOrEqual(1);
+      const runs = await fetchRuns("auto-trig2");
+      expect(runs.length).toBeGreaterThanOrEqual(1);
+      expect(runs[0]!.invocation_id).not.toBeNull();
+    });
+  });
+
+  // ─── Invocation finalization (D2) ─────────────────────────────────────────
+
+  describe("invocation finalization", () => {
+    /** Seed an invocation with N children in the given statuses via the real guarded insert. */
+    async function seedInvocation(
+      store: AutomationStore,
+      automationId: string,
+      invocationId: string,
+      children: Array<{ id: string; status: string; failed?: boolean }>
+    ): Promise<void> {
+      const now = Date.now();
+      const { inserted } = await store.insertInvocationGuarded({
+        invocation: {
+          id: invocationId,
+          automation_id: automationId,
+          source: "manual",
+          scheduled_at: null,
+          trigger_key: null,
+          concurrency_key: null,
+          trigger_metadata: null,
+          skip_reason: null,
+          failure_counted_at: null,
+          created_at: now,
+          updated_at: now,
+        },
+        children: children.map((child, index) => ({
+          id: child.id,
+          automation_id: automationId,
+          invocation_id: invocationId,
+          session_id: child.status === "starting" ? null : `sess-${child.id}`,
+          status: child.status,
+          skip_reason: null,
+          failure_reason: child.status === "failed" ? "seeded failure" : null,
+          scheduled_at: now,
+          started_at: child.status === "starting" ? null : now,
+          completed_at: child.status === "failed" || child.status === "completed" ? now : null,
+          created_at: now + index,
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        })),
+        overlapScope: { kind: "automation" },
+      });
+      expect(inserted).toBe(true);
+    }
+
+    async function completeRun(
+      automationId: string,
+      runId: string,
+      success: boolean
+    ): Promise<Response> {
+      const stub = getSchedulerStub();
+      return stub.fetch("http://internal/internal/run-complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          automationId,
+          runId,
+          sessionId: `sess-${runId}`,
+          success,
+          ...(success ? {} : { error: "boom" }),
+        }),
+      });
+    }
+
+    it("resets the streak only after the LAST sibling completes; automation stays schedulable (F1)", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-f1", consecutive_failures: 2 }));
+      await seedInvocation(store, "auto-f1", "inv-f1", [
+        { id: "run-f1-a", status: "running" },
+        { id: "run-f1-b", status: "running" },
+      ]);
+
+      await completeRun("auto-f1", "run-f1-a", true);
+      // One sibling still active — no reset yet.
+      let automation = await store.getById("auto-f1");
+      expect(automation!.consecutive_failures).toBe(2);
+
+      await completeRun("auto-f1", "run-f1-b", true);
+      automation = await store.getById("auto-f1");
+      expect(automation!.consecutive_failures).toBe(0);
+
+      // No active runs remain — the automation is schedulable next tick.
+      expect(await store.getActiveRunForAutomation("auto-f1")).toBeNull();
+    });
+
+    it("a partial failure strikes exactly once and never resets (F1/F3)", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-f3", consecutive_failures: 0 }));
+      await seedInvocation(store, "auto-f3", "inv-f3", [
+        { id: "run-f3-a", status: "running" },
+        { id: "run-f3-b", status: "running" },
+      ]);
+
+      await completeRun("auto-f3", "run-f3-a", false);
+      let automation = await store.getById("auto-f3");
+      expect(automation!.consecutive_failures).toBe(1);
+
+      // The sibling's success finishes the invocation as partial_failed —
+      // no reset, and no second strike.
+      await completeRun("auto-f3", "run-f3-b", true);
+      automation = await store.getById("auto-f3");
+      expect(automation!.consecutive_failures).toBe(1);
+
+      const invocation = await store.getInvocationById("inv-f3");
+      expect(invocation!.failure_counted_at).not.toBeNull();
+    });
+
+    it("the sweep applies a strike missed in the crash window, exactly once (F2)", async () => {
+      const store = new AutomationStore(env.DB);
+      const future = Date.now() + 86400000;
+      await store.create(
+        makeAutomation({ id: "auto-f2", consecutive_failures: 0, next_run_at: future })
+      );
+      // All-terminal failed invocation whose accounting never ran (the process
+      // died after the child update, before the callback's accounting).
+      await seedInvocation(store, "auto-f2", "inv-f2", [{ id: "run-f2-a", status: "failed" }]);
+
+      const stub = getSchedulerStub();
+      await stub.fetch("http://internal/internal/tick", { method: "POST" });
+
+      let automation = await store.getById("auto-f2");
+      expect(automation!.consecutive_failures).toBe(1);
+
+      // A second sweep must not double-strike (failure_counted_at CAS).
+      await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      automation = await store.getById("auto-f2");
+      expect(automation!.consecutive_failures).toBe(1);
+    });
+
+    it("the sweep applies a reset missed in the crash window (F2)", async () => {
+      const store = new AutomationStore(env.DB);
+      const future = Date.now() + 86400000;
+      await store.create(
+        makeAutomation({ id: "auto-f2r", consecutive_failures: 2, next_run_at: future })
+      );
+      await seedInvocation(store, "auto-f2r", "inv-f2r", [
+        { id: "run-f2r-a", status: "completed" },
+        { id: "run-f2r-b", status: "completed" },
+      ]);
+
+      const stub = getSchedulerStub();
+      await stub.fetch("http://internal/internal/tick", { method: "POST" });
+
+      const automation = await store.getById("auto-f2r");
+      expect(automation!.consecutive_failures).toBe(0);
     });
   });
 

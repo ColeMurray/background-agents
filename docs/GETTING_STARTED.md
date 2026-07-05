@@ -254,6 +254,7 @@ access.
    Your web app URL depends on `web_platform`:
    - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app`
    - **Cloudflare**: `https://open-inspect-web-{deployment_name}.{your-subdomain}.workers.dev`
+   - **Cloudflare with `cloudflare_custom_domain` set**: `https://{your-custom-domain}`
 
    > **Important**: The callback URL must match your deployed web app URL exactly. The
    > `{deployment_name}` is the unique value you set in `terraform.tfvars` (e.g., your GitHub
@@ -406,6 +407,10 @@ cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (wi
 
 # Web platform: "vercel" (default) or "cloudflare" (OpenNext)
 web_platform                = "vercel"
+
+# Optional custom domain for the web app (only when web_platform = "cloudflare")
+# cloudflare_zone_id       = "your-zone-id"
+# cloudflare_custom_domain = "app.example.com"
 
 # Vercel (only required when web_platform = "vercel")
 # If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
@@ -628,7 +633,12 @@ The App Home provides a settings interface where users can configure their prefe
    ```
    https://open-inspect-slack-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/interactions
    ```
-4. Click **Save Changes**
+4. Under **Select Menus**, enter **Options Load URL** using the same endpoint:
+   ```
+   https://open-inspect-slack-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/interactions
+   ```
+   This is required for searchable Slack repository pickers that use external data sources.
+5. Click **Save Changes**
 
 ### Invite the Bot to Channels
 
@@ -691,6 +701,27 @@ For day-to-day workflows, see [GitHub Integration](./integrations/GITHUB.md).
 
 Terraform handles the full build and deploy automatically — the web app is built with OpenNext and
 deployed as a Cloudflare Worker during `terraform apply`. No manual step needed.
+
+#### Optional: serve the web app on a custom domain
+
+By default the web app is served from
+`https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev`. To use your own hostname,
+set both of these in `terraform.tfvars`:
+
+```hcl
+cloudflare_zone_id       = "your-zone-id"    # zone that owns the hostname
+cloudflare_custom_domain = "app.example.com" # bare hostname, no scheme
+```
+
+Cloudflare provisions the DNS record and edge certificate automatically. Notes:
+
+- The web app URL — including `NEXTAUTH_URL` and the links the bots send — becomes
+  `https://{your-custom-domain}`, and the workers.dev route for the web Worker is disabled so the
+  app has a single canonical origin.
+- Update the GitHub App callback URL (and the Google redirect URI, if Google login is enabled) to
+  the new hostname, or sign-in will fail with a redirect URI mismatch.
+- The Cloudflare API token needs zone-level **Workers Routes: Edit** permission to attach the
+  domain.
 
 ### If using Vercel (`web_platform = "vercel"`)
 
@@ -907,6 +938,7 @@ URL to match your web app URL:
 - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`
 - **Cloudflare**:
   `https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/api/auth/callback/github`
+- **Cloudflare with a custom domain**: `https://{your-custom-domain}/api/auth/callback/github`
 
 ### Modal deployment fails
 
@@ -988,7 +1020,7 @@ injects keys automatically), these providers require you to add them as global s
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
 3. Add the key for your chosen provider (e.g., `ANTHROPIC_API_KEY` for Claude models or
-   `DEEPSEEK_API_KEY` for DeepSeek models)
+   `DEEPSEEK_API_KEY` for DeepSeek models, or `ZHIPU_API_KEY` for Z.AI Coding Plan models)
 4. Click **Save**
 
 See [Secrets Management](SECRETS.md) for more on global and repository secrets.

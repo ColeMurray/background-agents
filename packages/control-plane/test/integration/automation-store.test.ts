@@ -9,16 +9,13 @@ import {
 } from "../../src/db/automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
+import { seedRun, fetchRuns } from "./run-helpers";
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Test Automation",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
@@ -53,10 +50,35 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     started_at: null,
     completed_at: null,
     created_at: now,
-    trigger_key: null,
-    concurrency_key: null,
+    invocation_id: null,
+    repo_owner: null,
+    repo_name: null,
+    repo_id: null,
+    base_branch: null,
     ...overrides,
   };
+}
+
+/**
+ * Seed a run linked to an event invocation that carries the concurrency key —
+ * the shape the overlap/steer queries read (firing keys live on the invocation).
+ */
+async function seedRunForKey(
+  automationId: string,
+  concurrencyKey: string | null,
+  run: Partial<AutomationRunRow> & { id: string }
+): Promise<void> {
+  const now = Date.now();
+  const invocationId = `inv-${run.id}`;
+  await env.DB.prepare(
+    `INSERT INTO automation_invocations
+       (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+        trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+     VALUES (?, ?, 'event', NULL, NULL, ?, NULL, NULL, NULL, ?, ?)`
+  )
+    .bind(invocationId, automationId, concurrencyKey, run.created_at ?? now, now)
+    .run();
+  await seedRun(makeRun(automationId, { ...run, invocation_id: invocationId }));
 }
 
 describe("AutomationStore (D1 integration)", () => {
@@ -74,9 +96,6 @@ describe("AutomationStore (D1 integration)", () => {
       expect(result).not.toBeNull();
       expect(result!.id).toBe("auto-1");
       expect(result!.name).toBe("Daily sync");
-      expect(result!.repo_owner).toBe("acme");
-      expect(result!.repo_name).toBe("web-app");
-      expect(result!.base_branch).toBe("main");
       expect(result!.trigger_type).toBe("schedule");
       expect(result!.schedule_cron).toBe("0 9 * * *");
       expect(result!.enabled).toBe(1);
@@ -125,6 +144,23 @@ describe("AutomationStore (D1 integration)", () => {
       expect(updated!.model).toBe("anthropic/claude-haiku-4-5");
     });
 
+    it("advanceNextRunAt only moves the schedule forward", async () => {
+      const store = new AutomationStore(env.DB);
+      const base = 1_000_000_000_000;
+      await store.create(makeAutomation({ id: "auto-adv", next_run_at: base }));
+
+      // An earlier time is rejected — a stale duplicate must not rewind the
+      // schedule (which would leave the automation spuriously overdue).
+      const rewound = await store.advanceNextRunAt("auto-adv", base - 60_000);
+      expect(rewound).toBe(false);
+      expect((await store.getById("auto-adv"))!.next_run_at).toBe(base);
+
+      // A strictly later time advances it.
+      const advanced = await store.advanceNextRunAt("auto-adv", base + 60_000);
+      expect(advanced).toBe(true);
+      expect((await store.getById("auto-adv"))!.next_run_at).toBe(base + 60_000);
+    });
+
     it("soft-deletes an automation", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-3" }));
@@ -153,10 +189,8 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(row);
 
       const dbRow = (await store.getById("auto-map"))!;
-      const automation = toAutomation(dbRow);
-      expect(automation.repoOwner).toBe("acme");
-      expect(automation.repoName).toBe("web-app");
-      expect(automation.baseBranch).toBe("main");
+      const automation = toAutomation(dbRow, []);
+      expect(automation.repositories).toEqual([]);
       expect(automation.scheduleCron).toBe("0 9 * * *");
       expect(automation.reasoningEffort).toBe("high");
       expect(automation.enabled).toBe(true);
@@ -178,14 +212,44 @@ describe("AutomationStore (D1 integration)", () => {
       expect(result.automations).toHaveLength(2);
     });
 
-    it("filters by repo owner and name", async () => {
+    it("filters by repo owner and name via repository rows", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-c", repo_owner: "acme", repo_name: "api" }));
+      await store.replaceRepositories("auto-c", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+      ]);
       await store.create(makeAutomation({ id: "auto-d", repo_owner: "acme", repo_name: "web" }));
+      await store.replaceRepositories("auto-d", [
+        { repo_owner: "acme", repo_name: "web", repo_id: 2, base_branch: null },
+      ]);
 
       const result = await store.list({ repoOwner: "acme", repoName: "api" });
       expect(result.total).toBe(1);
       expect(result.automations[0].id).toBe("auto-c");
+    });
+
+    it("matches multi-repository automations on any selected repository", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(
+        makeAutomation({
+          id: "auto-multi",
+          repo_owner: null,
+          repo_name: null,
+          base_branch: null,
+          repo_id: null,
+        })
+      );
+      await store.replaceRepositories("auto-multi", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+        { repo_owner: "acme", repo_name: "web", repo_id: 2, base_branch: "develop" },
+      ]);
+
+      const byApi = await store.list({ repoOwner: "acme", repoName: "api" });
+      expect(byApi.automations.map((a) => a.id)).toEqual(["auto-multi"]);
+      const byWeb = await store.list({ repoOwner: "acme", repoName: "web" });
+      expect(byWeb.automations.map((a) => a.id)).toEqual(["auto-multi"]);
+      const byOther = await store.list({ repoOwner: "acme", repoName: "other" });
+      expect(byOther.total).toBe(0);
     });
 
     it("excludes soft-deleted automations", async () => {
@@ -302,37 +366,12 @@ describe("AutomationStore (D1 integration)", () => {
   // ─── Run management ────────────────────────────────────────────────────────
 
   describe("run management", () => {
-    it("creates a run and advances schedule atomically", async () => {
-      const store = new AutomationStore(env.DB);
-      const now = Date.now();
-      await store.create(makeAutomation({ id: "auto-r1", next_run_at: now - 60000 }));
-
-      const nextRunAt = now + 86400000;
-      const run = makeRun("auto-r1", {
-        id: "run-1",
-        scheduled_at: now - 60000,
-        created_at: now,
-      });
-
-      await store.createRunAndAdvanceSchedule(run, "auto-r1", nextRunAt);
-
-      // Verify run was created
-      const runs = await store.listRunsForAutomation("auto-r1", { limit: 10, offset: 0 });
-      expect(runs.total).toBe(1);
-      expect(runs.runs[0].id).toBe("run-1");
-      expect(runs.runs[0].status).toBe("starting");
-
-      // Verify schedule was advanced
-      const automation = await store.getById("auto-r1");
-      expect(automation!.next_run_at).toBe(nextRunAt);
-    });
-
-    it("inserts a run (e.g. skipped)", async () => {
+    it("round-trips a legacy-shaped skipped row (rollback-window shape)", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-r2" }));
 
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-r2", {
           id: "run-skip-1",
           status: "skipped",
@@ -341,10 +380,10 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const runs = await store.listRunsForAutomation("auto-r2", { limit: 10, offset: 0 });
-      expect(runs.total).toBe(1);
-      expect(runs.runs[0].status).toBe("skipped");
-      expect(runs.runs[0].skip_reason).toBe("concurrent_run_active");
+      const runs = await fetchRuns("auto-r2");
+      expect(runs).toHaveLength(1);
+      expect(runs[0].status).toBe("skipped");
+      expect(runs[0].skip_reason).toBe("concurrent_run_active");
     });
 
     it("updates a run's status and fields", async () => {
@@ -352,7 +391,7 @@ describe("AutomationStore (D1 integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-r3" }));
 
-      await store.insertRun(makeRun("auto-r3", { id: "run-u1", status: "starting" }));
+      await seedRun(makeRun("auto-r3", { id: "run-u1", status: "starting" }));
 
       await store.updateRun("run-u1", {
         status: "running",
@@ -377,7 +416,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(active).toBeNull();
 
       // Create a running run
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-r4", {
           id: "run-active-1",
           status: "running",
@@ -396,38 +435,12 @@ describe("AutomationStore (D1 integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-r5" }));
 
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-r5", { id: "run-done-1", status: "completed", completed_at: now })
       );
 
       const active = await store.getActiveRunForAutomation("auto-r5");
       expect(active).toBeNull();
-    });
-
-    it("lists runs with pagination", async () => {
-      const store = new AutomationStore(env.DB);
-      const now = Date.now();
-      await store.create(makeAutomation({ id: "auto-r6" }));
-
-      for (let i = 0; i < 3; i++) {
-        await store.insertRun(
-          makeRun("auto-r6", {
-            id: `run-page-${i}`,
-            status: "completed",
-            scheduled_at: now + i * 1000, // unique per idempotency index
-            completed_at: now,
-            created_at: now + i,
-          })
-        );
-      }
-
-      const page1 = await store.listRunsForAutomation("auto-r6", { limit: 2, offset: 0 });
-      expect(page1.total).toBe(3);
-      expect(page1.runs).toHaveLength(2);
-
-      const page2 = await store.listRunsForAutomation("auto-r6", { limit: 2, offset: 2 });
-      expect(page2.total).toBe(3);
-      expect(page2.runs).toHaveLength(1);
     });
 
     it("getRunById returns enriched run with session title", async () => {
@@ -451,7 +464,7 @@ describe("AutomationStore (D1 integration)", () => {
         updatedAt: now,
       });
 
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-r7", {
           id: "run-enriched",
           session_id: "sess-enriched",
@@ -480,7 +493,7 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-rec1" }));
 
       const tenMinutesAgo = now - 10 * 60 * 1000;
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-rec1", {
           id: "run-orphan-1",
           status: "starting",
@@ -499,7 +512,7 @@ describe("AutomationStore (D1 integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rec2" }));
 
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-rec2", { id: "run-recent-1", status: "starting", created_at: now })
       );
 
@@ -513,7 +526,7 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-rec3" }));
 
       const twoHoursAgo = now - 2 * 60 * 60 * 1000;
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-rec3", {
           id: "run-timeout-1",
           status: "running",
@@ -534,7 +547,7 @@ describe("AutomationStore (D1 integration)", () => {
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rec4" }));
 
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-rec4", {
           id: "run-recent-running",
           status: "running",
@@ -554,7 +567,7 @@ describe("AutomationStore (D1 integration)", () => {
 
       const base = now - 60 * 60 * 1000;
       for (let i = 0; i < 5; i++) {
-        await store.insertRun(
+        await seedRun(
           makeRun("auto-order1", {
             id: `run-order-${i}`,
             status: "starting",
@@ -576,7 +589,7 @@ describe("AutomationStore (D1 integration)", () => {
 
       const base = now - 3 * 60 * 60 * 1000;
       for (let i = 0; i < 5; i++) {
-        await store.insertRun(
+        await seedRun(
           makeRun("auto-order2", {
             id: `run-to-${i}`,
             status: "running",
@@ -672,6 +685,9 @@ describe("AutomationStore (D1 integration)", () => {
           event_type: "pull_request.opened",
         })
       );
+      await store.replaceRepositories("auto-ev1", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+      ]);
       await store.create(
         makeAutomation({
           id: "auto-ev2",
@@ -681,6 +697,9 @@ describe("AutomationStore (D1 integration)", () => {
           event_type: "issues.opened",
         })
       );
+      await store.replaceRepositories("auto-ev2", [
+        { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
+      ]);
 
       const results = await store.getAutomationsForEvent(
         "acme",
@@ -718,14 +737,11 @@ describe("AutomationStore (D1 integration)", () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-ck1" }));
 
-      await store.insertRun(
-        makeRun("auto-ck1", {
-          id: "run-ck1",
-          status: "running",
-          concurrency_key: "pr:42",
-          started_at: Date.now(),
-        })
-      );
+      await seedRunForKey("auto-ck1", "pr:42", {
+        id: "run-ck1",
+        status: "running",
+        started_at: Date.now(),
+      });
 
       const active = await store.getActiveRunForKey("auto-ck1", "pr:42");
       expect(active).not.toBeNull();
@@ -736,14 +752,11 @@ describe("AutomationStore (D1 integration)", () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-ck2" }));
 
-      await store.insertRun(
-        makeRun("auto-ck2", {
-          id: "run-ck2",
-          status: "running",
-          concurrency_key: "pr:42",
-          started_at: Date.now(),
-        })
-      );
+      await seedRunForKey("auto-ck2", "pr:42", {
+        id: "run-ck2",
+        status: "running",
+        started_at: Date.now(),
+      });
 
       const active = await store.getActiveRunForKey("auto-ck2", "pr:99");
       expect(active).toBeNull();
@@ -753,7 +766,7 @@ describe("AutomationStore (D1 integration)", () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-ck3" }));
 
-      await store.insertRun(
+      await seedRun(
         makeRun("auto-ck3", {
           id: "run-ck3",
           status: "running",
@@ -771,15 +784,12 @@ describe("AutomationStore (D1 integration)", () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer1" }));
 
-      await store.insertRun(
-        makeRun("auto-steer1", {
-          id: "run-steer1",
-          status: "completed",
-          session_id: "sess-1",
-          concurrency_key: "slack:C1:t1",
-          completed_at: Date.now(),
-        })
-      );
+      await seedRunForKey("auto-steer1", "slack:C1:t1", {
+        id: "run-steer1",
+        status: "completed",
+        session_id: "sess-1",
+        completed_at: Date.now(),
+      });
 
       const run = await store.getLatestSteerableRunForThread("auto-steer1", "slack:C1:t1", 0);
       expect(run).not.toBeNull();
@@ -791,14 +801,11 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-steer2" }));
 
       // A skip/starting row (session_id null) must not shadow the thread session.
-      await store.insertRun(
-        makeRun("auto-steer2", {
-          id: "run-steer2-skip",
-          status: "skipped",
-          session_id: null,
-          concurrency_key: "slack:C1:t2",
-        })
-      );
+      await seedRunForKey("auto-steer2", "slack:C1:t2", {
+        id: "run-steer2-skip",
+        status: "skipped",
+        session_id: null,
+      });
 
       const run = await store.getLatestSteerableRunForThread("auto-steer2", "slack:C1:t2", 0);
       expect(run).toBeNull();
@@ -808,15 +815,12 @@ describe("AutomationStore (D1 integration)", () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer3" }));
 
-      await store.insertRun(
-        makeRun("auto-steer3", {
-          id: "run-steer3-old",
-          status: "completed",
-          session_id: "sess-old",
-          concurrency_key: "slack:C1:t3",
-          created_at: Date.now() - 48 * 60 * 60 * 1000,
-        })
-      );
+      await seedRunForKey("auto-steer3", "slack:C1:t3", {
+        id: "run-steer3-old",
+        status: "completed",
+        session_id: "sess-old",
+        created_at: Date.now() - 48 * 60 * 60 * 1000,
+      });
 
       const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
       const run = await store.getLatestSteerableRunForThread("auto-steer3", "slack:C1:t3", sinceMs);
@@ -827,28 +831,20 @@ describe("AutomationStore (D1 integration)", () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer4" }));
 
-      // Distinct scheduled_at: automation_runs has a UNIQUE(automation_id,
-      // scheduled_at), and these two share an automation.
-      await store.insertRun(
-        makeRun("auto-steer4", {
-          id: "run-steer4-older",
-          status: "completed",
-          session_id: "sess-older",
-          concurrency_key: "slack:C1:t4",
-          scheduled_at: Date.now() - 60000,
-          created_at: Date.now() - 60000,
-        })
-      );
-      await store.insertRun(
-        makeRun("auto-steer4", {
-          id: "run-steer4-newer",
-          status: "running",
-          session_id: "sess-newer",
-          concurrency_key: "slack:C1:t4",
-          scheduled_at: Date.now(),
-          created_at: Date.now(),
-        })
-      );
+      await seedRunForKey("auto-steer4", "slack:C1:t4", {
+        id: "run-steer4-older",
+        status: "completed",
+        session_id: "sess-older",
+        scheduled_at: Date.now() - 60000,
+        created_at: Date.now() - 60000,
+      });
+      await seedRunForKey("auto-steer4", "slack:C1:t4", {
+        id: "run-steer4-newer",
+        status: "running",
+        session_id: "sess-newer",
+        scheduled_at: Date.now(),
+        created_at: Date.now(),
+      });
 
       const run = await store.getLatestSteerableRunForThread("auto-steer4", "slack:C1:t4", 0);
       expect(run!.id).toBe("run-steer4-newer");
@@ -859,105 +855,6 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-steer5" }));
       const run = await store.getLatestSteerableRunForThread("auto-steer5", null, 0);
       expect(run).toBeNull();
-    });
-
-    it("trigger_key unique index prevents duplicate runs", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-dedup1" }));
-
-      await store.insertRun(
-        makeRun("auto-dedup1", {
-          id: "run-dedup1",
-          trigger_key: "sentry_issue:123",
-        })
-      );
-
-      await expect(
-        store.insertRun(
-          makeRun("auto-dedup1", {
-            id: "run-dedup2",
-            trigger_key: "sentry_issue:123",
-          })
-        )
-      ).rejects.toThrow("UNIQUE constraint failed");
-    });
-
-    it("trigger_key unique index allows null trigger keys", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-dedup2" }));
-
-      await store.insertRun(
-        makeRun("auto-dedup2", { id: "run-null1", trigger_key: null, scheduled_at: 1 })
-      );
-      await store.insertRun(
-        makeRun("auto-dedup2", { id: "run-null2", trigger_key: null, scheduled_at: 2 })
-      );
-
-      const runs = await store.listRunsForAutomation("auto-dedup2", { limit: 10, offset: 0 });
-      expect(runs.total).toBe(2);
-    });
-  });
-
-  // ─── Slack triggers ──────────────────────────────────────────────────
-
-  describe("slack triggers", () => {
-    const makeSlackAutomation = (overrides?: Partial<AutomationRow>) =>
-      makeAutomation({
-        trigger_type: "slack_event",
-        event_type: "message.posted",
-        ...overrides,
-      });
-
-    it("recordSkippedRun persists a skip with run metadata and no trigger_key", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeSlackAutomation({ id: "auto-s9" }));
-
-      await store.recordSkippedRun({
-        id: "r-skip",
-        automationId: "auto-s9",
-        skipReason: "concurrent_run_active",
-        concurrencyKey: "slack:C1:111",
-        runMetadata: {
-          trigger_run_metadata: JSON.stringify({
-            channel: "C1",
-            messageTs: "222",
-          }),
-        },
-      });
-
-      const run = await store.getRunById("auto-s9", "r-skip");
-      expect(run).not.toBeNull();
-      expect(run!.status).toBe("skipped");
-      expect(run!.skip_reason).toBe("concurrent_run_active");
-      expect(JSON.parse(run!.trigger_run_metadata!)).toMatchObject({
-        channel: "C1",
-        messageTs: "222",
-      });
-      expect(run!.trigger_key).toBeNull();
-    });
-
-    it("insertRun persists trigger_run_metadata on a materialized run", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeSlackAutomation({ id: "auto-s10" }));
-
-      await store.insertRun(
-        makeRun("auto-s10", {
-          id: "r-mat",
-          status: "starting",
-          trigger_key: "slack:msg:C1:222",
-          concurrency_key: "slack:C1:111",
-          trigger_run_metadata: JSON.stringify({
-            channel: "C1",
-            messageTs: "222",
-          }),
-        })
-      );
-
-      const run = await store.getRunById("auto-s10", "r-mat");
-      expect(JSON.parse(run!.trigger_run_metadata!)).toEqual({
-        channel: "C1",
-        messageTs: "222",
-      });
     });
   });
 });

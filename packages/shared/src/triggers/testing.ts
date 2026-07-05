@@ -112,10 +112,9 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
   return {
     id: "auto-test",
     name: "Test Automation",
-    repoOwner: "test-owner",
-    repoName: "test-repo",
-    baseBranch: "main",
-    repoId: 1,
+    repositories: [
+      { repoOwner: "test-owner", repoName: "test-repo", repoId: 1, baseBranch: "main" },
+    ],
     instructions: "Test instructions",
     triggerType: "sentry",
     scheduleCron: null,

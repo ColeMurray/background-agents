@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  collectMessages,
   initNamedSession,
+  openClientWs,
   openSandboxWs,
   seedSandboxAuth,
   queryDO,
@@ -141,5 +143,57 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(matching.length).toBeGreaterThanOrEqual(1);
 
     ws!.close();
+  });
+
+  it("accepts step_finish messages with structured token usage", async () => {
+    const name = `ws-sandbox-step-finish-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws: clientWs } = await openClientWs(name, { subscribe: true });
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const tokenUsage = {
+      total: 223,
+      input: 219,
+      output: 4,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    };
+    const collector = collectMessages(clientWs, {
+      until: (msg) =>
+        msg.type === "sandbox_event" &&
+        (msg.event as Record<string, unknown> | undefined)?.type === "step_finish",
+    });
+
+    sandboxWs!.send(
+      JSON.stringify({
+        type: "step_finish",
+        messageId: "msg-step-finish-1",
+        cost: 0.001,
+        tokens: tokenUsage,
+        reason: "end_turn",
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now(),
+      })
+    );
+
+    const messages = await collector;
+    const stepFinish = messages.find(
+      (msg) =>
+        msg.type === "sandbox_event" &&
+        (msg.event as Record<string, unknown> | undefined)?.type === "step_finish"
+    );
+
+    expect(stepFinish).toBeDefined();
+    expect((stepFinish!.event as { tokens: unknown }).tokens).toEqual(tokenUsage);
+
+    sandboxWs!.close();
+    clientWs.close();
   });
 });

@@ -233,7 +233,7 @@ describe("handlePullRequestOpened", () => {
 
     await expect(
       handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0")
-    ).rejects.toThrow("Session creation returned invalid response");
+    ).rejects.toThrow("Session creation failed: invalid response");
 
     expect(cpFetch).toHaveBeenCalledTimes(1);
   });

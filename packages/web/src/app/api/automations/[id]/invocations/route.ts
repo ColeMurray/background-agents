@@ -12,14 +12,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
 
   const { id } = await params;
-  const path = buildControlPlanePath(`/automations/${id}/runs`, request.nextUrl.searchParams);
+  const path = buildControlPlanePath(
+    `/automations/${id}/invocations`,
+    request.nextUrl.searchParams
+  );
 
   try {
     const response = await controlPlaneFetch(path);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to fetch automation runs:", error);
-    return NextResponse.json({ error: "Failed to fetch automation runs" }, { status: 500 });
+    console.error("Failed to fetch automation invocations:", error);
+    return NextResponse.json({ error: "Failed to fetch automation invocations" }, { status: 500 });
   }
 }

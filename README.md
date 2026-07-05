@@ -175,11 +175,12 @@ await configureGitIdentity({
 
 Choose the AI model that fits your task, with per-session reasoning effort controls:
 
-| Provider     | Models                                                               |
-| ------------ | -------------------------------------------------------------------- |
-| Anthropic    | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8, Fable 5      |
-| OpenAI       | GPT 5.2, GPT 5.4, GPT 5.5, GPT 5.2 Codex, 5.3 Codex, 5.3 Codex Spark |
-| OpenCode Zen | Kimi K2.5/K2.6, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)        |
+| Provider         | Models                                                               |
+| ---------------- | -------------------------------------------------------------------- |
+| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8, Fable 5      |
+| OpenAI           | GPT 5.2, GPT 5.4, GPT 5.5, GPT 5.2 Codex, 5.3 Codex, 5.3 Codex Spark |
+| OpenCode Zen     | Kimi K2.5/K2.6, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)        |
+| Z.AI Coding Plan | GLM 5.2 (opt-in)                                                     |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
 See **[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
@@ -206,6 +207,8 @@ Schedule recurring tasks or react to external events — no human in the loop:
 - **Cron schedules** — Hourly, daily, weekly, monthly, or custom 5-field cron with timezone support
 - **Sentry alerts** — Auto-triage on new errors, regressions, or critical metric alerts
 - **Inbound webhooks** — JSONPath condition filters to gate which payloads spawn sessions
+- **Multi-repo fan-out** — One scheduled automation can run across up to 10 repositories, opening a
+  separate session and pull request for each
 - Auto-pause after 3 consecutive failures, manual trigger button, full run history
 
 See **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)** for setup instructions.

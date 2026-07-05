@@ -16,13 +16,15 @@ import {
 } from "../session/integration-settings-resolution";
 import type { CreateSessionResponse, Env } from "../types";
 import {
+  normalizeOptionalRepositoryPair,
+  RepositoryPairValidationError,
+  type RepositoryPair,
+} from "@open-inspect/shared";
+import {
   error,
   json,
-  normalizeOptionalRepositoryContext,
   parsePattern,
-  RepositoryContextValidationError,
   resolveRepoOrError,
-  type OptionalRepositoryContext,
   type RequestContext,
   type Route,
 } from "./shared";
@@ -40,14 +42,11 @@ async function handleCreateSession(
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
 
-  let repositoryContext: OptionalRepositoryContext;
+  let repositoryContext: RepositoryPair | null;
   try {
-    repositoryContext = normalizeOptionalRepositoryContext(
-      body,
-      INVALID_SESSION_REQUEST_BODY_ERROR
-    );
+    repositoryContext = normalizeOptionalRepositoryPair(body, INVALID_SESSION_REQUEST_BODY_ERROR);
   } catch (e) {
-    if (e instanceof RepositoryContextValidationError) {
+    if (e instanceof RepositoryPairValidationError) {
       return error(e.message, 400);
     }
     throw e;
@@ -66,7 +65,6 @@ async function handleCreateSession(
     repoOwner = repositoryContext.repoOwner;
     repoName = repositoryContext.repoName;
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-    if (resolved instanceof Response) return resolved;
 
     repoId = resolved.repoId;
     defaultBranch = resolved.defaultBranch;

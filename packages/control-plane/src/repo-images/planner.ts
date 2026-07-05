@@ -4,16 +4,21 @@ import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { createLogger, type CorrelationContext } from "../logger";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
-import { createSourceControlProviderFromEnv, SourceControlProviderError } from "../source-control";
+import {
+  createSourceControlProviderFromEnv,
+  type RepositoryAccessResult,
+  SourceControlProviderError,
+} from "../source-control";
 import type { Env } from "../types";
 import {
   generateRepoImageCallbackToken,
   hashRepoImageCallbackToken,
   REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
 } from "./auth";
+import { RepoImagePlanningError, RepoImageRepositoryNotInstalledError } from "./errors";
 import type { RepoImageProvider } from "./model";
-import { getRepoImageCallbackMode } from "./provider-policy";
-import type { PlannedRepoImageBuild, VercelCloneAuth } from "./types";
+import { getRepoImageCallbackMode, getRepoImageCloneAuthMode } from "./provider-policy";
+import type { PlannedRepoImageBuild, RepoImageCloneAuth } from "./types";
 
 const logger = createLogger("repo-images:planner");
 const MS_PER_SECOND = 1000;
@@ -33,14 +38,18 @@ interface BaseRepoImageBuildPlanInput {
   correlation: CorrelationContext;
 }
 
-export type RepoImageBuildPlanningResult =
-  | {
-      type: "ok";
-      build: PlannedRepoImageBuild;
-    }
-  | { type: "repo_not_installed"; message: string }
-  | { type: "failed"; message: string };
+interface ResolvedRepoImageRepository {
+  repoId: number;
+  defaultBranch: string;
+}
 
+/**
+ * Resolves a trigger request into a concrete provider build plan.
+ *
+ * The planner is the only repo-image layer that talks to source-control and
+ * settings/secrets stores. It produces a typed plan that the workflow can run
+ * without passing request objects or environment lookup concerns into adapters.
+ */
 export class RepoImageBuildPlanner {
   constructor(
     private readonly env: Env,
@@ -54,9 +63,8 @@ export class RepoImageBuildPlanner {
     now: number;
     callbackUrl: string;
     correlation: CorrelationContext;
-  }): Promise<RepoImageBuildPlanningResult> {
+  }): Promise<PlannedRepoImageBuild> {
     const resolved = await this.resolveRepo(params.repoOwner, params.repoName, params.correlation);
-    if (resolved.type !== "ok") return resolved;
 
     const [callbackAuth, sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
       this.createCallbackAuth(params.now),
@@ -66,7 +74,7 @@ export class RepoImageBuildPlanner {
         repoName: params.repoName,
         repoId: resolved.repoId,
       }),
-      this.resolveVercelCloneAuth({
+      this.resolveCloneAuth({
         repoOwner: params.repoOwner,
         repoName: params.repoName,
       }),
@@ -86,31 +94,18 @@ export class RepoImageBuildPlanner {
       },
     };
 
-    return {
-      type: "ok",
-      build: this.createPlannedBuildForProvider(basePlan, callbackAuth, cloneAuth),
-    };
+    return this.createPlannedBuildForProvider(basePlan, callbackAuth, cloneAuth);
   }
 
   private async resolveRepo(
     owner: string,
     name: string,
     correlation: CorrelationContext
-  ): Promise<
-    | { type: "ok"; repoId: number; defaultBranch: string }
-    | { type: "repo_not_installed"; message: string }
-    | { type: "failed"; message: string }
-  > {
+  ): Promise<ResolvedRepoImageRepository> {
+    let resolved: RepositoryAccessResult | null;
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
-      const resolved = await provider.checkRepositoryAccess({ owner, name });
-      if (!resolved) {
-        return {
-          type: "repo_not_installed",
-          message: "Repository is not installed for the GitHub App",
-        };
-      }
-      return { type: "ok", repoId: resolved.repoId, defaultBranch: resolved.defaultBranch };
+      resolved = await provider.checkRepositoryAccess({ owner, name });
     } catch (e) {
       const message = errorMessage(e);
       logger.error("Failed to resolve repository", {
@@ -122,11 +117,14 @@ export class RepoImageBuildPlanner {
       });
       const isConfigError =
         e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-      return {
-        type: "failed",
-        message: isConfigError ? message : "Failed to resolve repository",
-      };
+      throw new RepoImagePlanningError(isConfigError ? message : "Failed to resolve repository", e);
     }
+
+    if (!resolved) {
+      throw new RepoImageRepositoryNotInstalledError();
+    }
+
+    return { repoId: resolved.repoId, defaultBranch: resolved.defaultBranch };
   }
 
   private async createCallbackAuth(now: number): Promise<PlannedCallbackAuth> {
@@ -146,53 +144,57 @@ export class RepoImageBuildPlanner {
   private createPlannedBuildForProvider(
     basePlan: BaseRepoImageBuildPlanInput,
     callbackAuth: PlannedCallbackAuth,
-    cloneAuth: VercelCloneAuth
+    cloneAuth: RepoImageCloneAuth
   ): PlannedRepoImageBuild {
-    if (this.provider === "modal") {
-      return {
-        plan: {
-          ...basePlan,
-          provider: "modal",
-          callbackMode: "provider_image",
-        },
-        callbackAuth: { type: "none" },
-      };
+    switch (this.provider) {
+      case "modal":
+        return {
+          plan: {
+            ...basePlan,
+            provider: "modal",
+            callbackMode: "provider_image",
+          },
+          callbackAuth: { type: "none" },
+        };
+      case "vercel": {
+        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+        return {
+          plan: {
+            ...basePlan,
+            provider: "vercel",
+            callbackMode: "provider_session",
+            callbackToken: bearerAuth.token,
+            cloneAuth,
+          },
+          callbackAuth: {
+            type: "bearer_token",
+            tokenHash: bearerAuth.tokenHash,
+            expiresAt: bearerAuth.expiresAt,
+          },
+        };
+      }
+      case "opencomputer": {
+        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+        return {
+          plan: {
+            ...basePlan,
+            provider: "opencomputer",
+            callbackMode: "provider_session",
+            callbackToken: bearerAuth.token,
+            cloneAuth,
+          },
+          callbackAuth: {
+            type: "bearer_token",
+            tokenHash: bearerAuth.tokenHash,
+            expiresAt: bearerAuth.expiresAt,
+          },
+        };
+      }
+      default: {
+        const exhaustive: never = this.provider;
+        throw new Error(`Unsupported repo image provider: ${String(exhaustive)}`);
+      }
     }
-
-    if (callbackAuth.kind !== "bearer_token") {
-      throw new Error(`${this.provider} repo image builds require callback token auth`);
-    }
-
-    if (this.provider === "vercel") {
-      return {
-        plan: {
-          ...basePlan,
-          provider: "vercel",
-          callbackMode: "provider_session",
-          callbackToken: callbackAuth.token,
-          cloneAuth,
-        },
-        callbackAuth: {
-          type: "bearer_token",
-          tokenHash: callbackAuth.tokenHash,
-          expiresAt: callbackAuth.expiresAt,
-        },
-      };
-    }
-
-    return {
-      plan: {
-        ...basePlan,
-        provider: "opencomputer",
-        callbackMode: "provider_session",
-        callbackToken: callbackAuth.token,
-      },
-      callbackAuth: {
-        type: "bearer_token",
-        tokenHash: callbackAuth.tokenHash,
-        expiresAt: callbackAuth.expiresAt,
-      },
-    };
   }
 
   private async loadUserEnvVars(params: {
@@ -243,11 +245,13 @@ export class RepoImageBuildPlanner {
     return merged;
   }
 
-  private async resolveVercelCloneAuth(params: {
+  private async resolveCloneAuth(params: {
     repoOwner: string;
     repoName: string;
-  }): Promise<VercelCloneAuth> {
-    if (this.provider !== "vercel") return { type: "unavailable" };
+  }): Promise<RepoImageCloneAuth> {
+    if (getRepoImageCloneAuthMode(this.provider) !== "credential_helper") {
+      return { type: "unavailable" };
+    }
 
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
@@ -266,4 +270,14 @@ export class RepoImageBuildPlanner {
 
 function errorMessage(errorValue: unknown): string {
   return errorValue instanceof Error ? errorValue.message : String(errorValue);
+}
+
+function requireBearerCallbackAuth(
+  provider: RepoImageProvider,
+  callbackAuth: PlannedCallbackAuth
+): Extract<PlannedCallbackAuth, { kind: "bearer_token" }> {
+  if (callbackAuth.kind !== "bearer_token") {
+    throw new Error(`${provider} repo image builds require callback token auth`);
+  }
+  return callbackAuth;
 }

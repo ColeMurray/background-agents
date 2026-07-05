@@ -12,6 +12,13 @@ import type {
   VercelRepoImageBuildPlan,
 } from "./types";
 
+/**
+ * Composition boundary for repo image provider adapters.
+ *
+ * Callers choose by provider name; overloads preserve the relationship between
+ * provider and plan type so the workflow does not need unsafe casts or
+ * provider-specific construction details.
+ */
 export interface RepoImageBuildAdapterFactory {
   create(provider: "modal"): RepoImageBuildAdapter<ModalRepoImageBuildPlan>;
   create(provider: "vercel"): RepoImageBuildAdapter<VercelRepoImageBuildPlan>;
