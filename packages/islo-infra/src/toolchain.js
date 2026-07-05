@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,13 +21,8 @@ export const SANDBOX_RUNTIME_DIR = resolve(
 );
 
 export async function buildSetupScript() {
-  const helperScript = await readFile(
-    resolve(SANDBOX_RUNTIME_DIR, "credentials/git_credential_helper.py"),
-    "utf8"
-  );
-
-  return `#!/bin/sh
-set -eu
+  return `#!/bin/bash
+set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export HOME="/root"
@@ -139,10 +133,6 @@ EOF
 chmod 0755 /usr/local/bin/oi-git-credentials
 git config --system credential.helper /usr/local/bin/oi-git-credentials
 git config --system credential.useHttpPath true
-
-cat > /tmp/oi-git-credential-helper.py <<'EOF'
-${helperScript}
-EOF
 
 rm -rf /var/lib/apt/lists/*
 `;

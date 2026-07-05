@@ -192,7 +192,14 @@ function parseCommandEnv(value: string | undefined): string[] | undefined {
   if (!trimmed) return undefined;
 
   if (trimmed.startsWith("[")) {
-    const parsed: unknown = JSON.parse(trimmed);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (error) {
+      throw new Error(
+        `ISLO_START_COMMAND must be valid JSON when it starts with "[": ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     if (
       Array.isArray(parsed) &&
       parsed.length > 0 &&

@@ -8,7 +8,9 @@ data "external" "islo_source_hash" {
   count = local.use_islo_backend ? 1 : 0
 
   program = ["bash", "-c", <<-EOF
-    cd ${var.project_root}
+    set -euo pipefail
+    project_root=${jsonencode(var.project_root)}
+    cd "$project_root"
     files=$( {
       find packages/islo-infra/src packages/sandbox-runtime/src \
         -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \)

@@ -142,6 +142,7 @@ export class IsloSandboxProvider implements SandboxProvider {
   ) {}
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    let sandboxCreated = false;
     try {
       const envVars = await this.buildEnvVars(config);
       const sandbox = await this.runStep("create_sandbox", config.sandboxId, () =>
@@ -162,6 +163,7 @@ export class IsloSandboxProvider implements SandboxProvider {
           { timeoutInSeconds: config.timeoutSeconds }
         )
       );
+      sandboxCreated = true;
       const readySandbox =
         sandbox.status === "running"
           ? sandbox
@@ -169,7 +171,12 @@ export class IsloSandboxProvider implements SandboxProvider {
               this.waitForSandboxRunning(config.sandboxId)
             );
 
-      const needsTunnelEnvFile = resolveTunnelPorts(config.sandboxSettings?.tunnelPorts).length > 0;
+      const needsTunnelEnvFile =
+        resolveRuntimeTunnelPorts(
+          config.sandboxSettings?.tunnelPorts,
+          config.codeServerEnabled,
+          Boolean(config.sandboxSettings?.terminalEnabled)
+        ).length > 0;
       let shares: Awaited<ReturnType<IsloSandboxProvider["createShares"]>>;
 
       if (needsTunnelEnvFile) {
@@ -206,6 +213,9 @@ export class IsloSandboxProvider implements SandboxProvider {
         tunnelUrls: shares.tunnelUrls,
       };
     } catch (error) {
+      if (sandboxCreated) {
+        await this.cleanupSandboxAfterFailedCreate(config.sandboxId, config.sessionId);
+      }
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to create Islo sandbox", error);
     }
@@ -237,6 +247,9 @@ export class IsloSandboxProvider implements SandboxProvider {
 
       if (sandbox.status !== "running") {
         sandbox = await this.client.sandboxes.resumeSandbox({ sandbox_name: config.sandboxId });
+      }
+      if (sandbox.status !== "running") {
+        sandbox = await this.waitForSandboxRunning(config.sandboxId);
       }
 
       const shares = await this.createShares(config.sandboxId, config);
@@ -293,7 +306,11 @@ export class IsloSandboxProvider implements SandboxProvider {
     }
 
     const terminalEnabled = Boolean(config.sandboxSettings?.terminalEnabled);
-    const tunnelPorts = resolveTunnelPorts(config.sandboxSettings?.tunnelPorts);
+    const tunnelPorts = resolveRuntimeTunnelPorts(
+      config.sandboxSettings?.tunnelPorts,
+      config.codeServerEnabled,
+      terminalEnabled
+    );
 
     Object.assign(envVars, {
       HOME: envVars.HOME || "/workspace",
@@ -377,19 +394,21 @@ export class IsloSandboxProvider implements SandboxProvider {
   }> {
     const ttlSeconds = this.resolveShareTtlSeconds(config.timeoutSeconds);
     const terminalEnabled = Boolean(config.sandboxSettings?.terminalEnabled);
-    let tunnelPorts = resolveTunnelPorts(config.sandboxSettings?.tunnelPorts);
+    const tunnelPorts = resolveRuntimeTunnelPorts(
+      config.sandboxSettings?.tunnelPorts,
+      config.codeServerEnabled,
+      terminalEnabled
+    );
 
     type ShareKind = "code_server" | "ttyd" | "tunnel";
     const shareJobs: Array<{ kind: ShareKind; port: number }> = [];
 
     if (config.codeServerEnabled) {
       shareJobs.push({ kind: "code_server", port: CODE_SERVER_PORT });
-      tunnelPorts = tunnelPorts.filter((port) => port !== CODE_SERVER_PORT);
     }
 
     if (terminalEnabled) {
       shareJobs.push({ kind: "ttyd", port: TTYD_PROXY_PORT });
-      tunnelPorts = tunnelPorts.filter((port) => port !== TTYD_PROXY_PORT);
     }
 
     for (const port of tunnelPorts) {
@@ -555,6 +574,22 @@ export class IsloSandboxProvider implements SandboxProvider {
     }
   }
 
+  private async cleanupSandboxAfterFailedCreate(
+    sandboxName: string,
+    sessionId: string
+  ): Promise<void> {
+    try {
+      await this.client.sandboxes.pauseSandbox({ sandbox_name: sandboxName });
+    } catch (cleanupError) {
+      if (isIsloNotFound(cleanupError)) return;
+      log.warn("islo.sandbox_cleanup_failed", {
+        session_id: sessionId,
+        sandbox_name: sandboxName,
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+    }
+  }
+
   private async deriveCodeServerPassword(sandboxId: string): Promise<string> {
     const digest = await computeHmacHex(
       `code-server:${sandboxId}`,
@@ -594,6 +629,18 @@ function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
     if (ports.length >= MAX_TUNNEL_PORTS) break;
   }
   return ports;
+}
+
+function resolveRuntimeTunnelPorts(
+  rawPorts: number[] | undefined,
+  codeServerEnabled: boolean | undefined,
+  terminalEnabled: boolean
+): number[] {
+  return resolveTunnelPorts(rawPorts).filter((port) => {
+    if (codeServerEnabled && port === CODE_SERVER_PORT) return false;
+    if (terminalEnabled && port === TTYD_PROXY_PORT) return false;
+    return true;
+  });
 }
 
 function parseTimestamp(value: string | null | undefined): number {

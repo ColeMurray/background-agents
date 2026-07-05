@@ -253,6 +253,35 @@ describe("IsloSandboxProvider", () => {
     expect(startRuntimeCommand).not.toContain("sleep 2");
   });
 
+  it("does not ask runtime to wait for code-server and ttyd share ports", async () => {
+    const client = createMockClient();
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      codeServerEnabled: true,
+      sandboxSettings: {
+        terminalEnabled: true,
+        tunnelPorts: [8080, 7680, 3000],
+      },
+    });
+
+    const createRequest = vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0];
+    expect(createRequest.env.EXPECTED_TUNNEL_PORTS).toBe("3000");
+
+    const sharePorts = vi
+      .mocked(client.shares.createShare)
+      .mock.calls.map(([request]) => request.port);
+    expect(sharePorts).toEqual([8080, 7680, 3000]);
+
+    const tunnelWriteCommand = vi
+      .mocked(client.sandboxes.execInSandbox)
+      .mock.calls[0][0].body.command.join(" ");
+    expect(tunnelWriteCommand).toContain("TUNNEL_3000");
+    expect(tunnelWriteCommand).not.toContain("TUNNEL_8080");
+    expect(tunnelWriteCommand).not.toContain("TUNNEL_7680");
+  });
+
   it("starts runtime in parallel with share creation when tunnel env is not required", async () => {
     const order: string[] = [];
     const client = createMockClient({
@@ -321,6 +350,28 @@ describe("IsloSandboxProvider", () => {
     expect(createShare).toHaveBeenCalledTimes(2);
   });
 
+  it("pauses an Islo sandbox when create fails after sandbox creation", async () => {
+    const client = createMockClient({
+      createShare: vi.fn(async () => {
+        throw new Error("share unavailable");
+      }),
+    });
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+
+    await expect(
+      provider.createSandbox({
+        ...baseCreateConfig,
+        codeServerEnabled: true,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("Failed Islo step"),
+    });
+
+    expect(client.sandboxes.pauseSandbox).toHaveBeenCalledWith({
+      sandbox_name: "sandbox-owner-repo-123",
+    });
+  });
+
   it("uses GitLab clone metadata when configured", async () => {
     const client = createMockClient();
     const provider = new IsloSandboxProvider(client, {
@@ -353,6 +404,28 @@ describe("IsloSandboxProvider", () => {
       sandbox_name: "sandbox-owner-repo-123",
     });
     expect(result.codeServerUrl).toBe("https://share.test/8080");
+  });
+
+  it("waits for resumed sandboxes to be running before writing tunnel env", async () => {
+    const getSandbox = vi
+      .fn()
+      .mockResolvedValueOnce(sandboxResponse({ status: "paused" }))
+      .mockResolvedValueOnce(sandboxResponse({ status: "running" }));
+    const client = createMockClient({
+      getSandbox,
+      resumeSandbox: vi.fn(async () => sandboxResponse({ status: "paused" })),
+    });
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+
+    const result = await provider.resumeSandbox({
+      ...baseResumeConfig,
+      codeServerEnabled: true,
+      sandboxSettings: { tunnelPorts: [3000] },
+    });
+
+    expect(result.success).toBe(true);
+    expect(getSandbox).toHaveBeenCalledTimes(2);
+    expect(client.sandboxes.execInSandbox).toHaveBeenCalled();
   });
 
   it("returns shouldSpawnFresh when resume target is missing", async () => {

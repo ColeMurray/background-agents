@@ -52,4 +52,16 @@ describe("createSandboxProviderFromEnv", () => {
       "DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES must be a valid number"
     );
   });
+
+  it("rejects malformed Islo start command JSON with a named env error", () => {
+    const env = createEnv({
+      ISLO_API_KEY: "islo-key",
+      ISLO_BASE_SNAPSHOT: "base",
+      ISLO_START_COMMAND: "[not-json",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "islo")).toThrow(
+      "ISLO_START_COMMAND must be valid JSON"
+    );
+  });
 });

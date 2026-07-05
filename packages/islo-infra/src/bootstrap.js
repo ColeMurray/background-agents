@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -35,7 +35,7 @@ function loadConfig() {
 
   return {
     apiKey,
-    baseUrl: process.env.ISLO_BASE_URL || undefined,
+    baseUrl: process.env.ISLO_BASE_URL || DEFAULT_ISLO_BASE_URL,
     baseSnapshot,
     baseImage: process.env.ISLO_BASE_IMAGE || DEFAULT_BASE_IMAGE,
   };
@@ -175,7 +175,7 @@ async function createRuntimeArchive(setupScript) {
 async function uploadRuntimeArchive(client, sandboxName, baseUrl, setupScript) {
   const { tmp, archivePath } = await createRuntimeArchive(setupScript);
   try {
-    const archive = await import("node:fs/promises").then((fs) => fs.readFile(archivePath));
+    const archive = await readFile(archivePath);
     const uploadUrl = new URL(
       `/sandboxes/${encodeURIComponent(sandboxName)}/files-archive`,
       baseUrl
@@ -254,7 +254,7 @@ async function main() {
   const config = loadConfig();
   const client = new Islo({
     apiKey: config.apiKey,
-    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    baseUrl: config.baseUrl,
   });
 
   if (args.force) {
@@ -284,12 +284,7 @@ async function main() {
 
     sandbox = await waitForSandboxRunning(client, sandboxName);
     console.log(`Uploading sandbox_runtime into ${sandboxName}`);
-    await uploadRuntimeArchive(
-      client,
-      sandboxName,
-      config.baseUrl || DEFAULT_ISLO_BASE_URL,
-      setupScript
-    );
+    await uploadRuntimeArchive(client, sandboxName, config.baseUrl, setupScript);
     console.log("Installing runtime dependencies");
     await installRuntimeToolchain(client, sandboxName);
     console.log("Verifying runtime dependencies");
