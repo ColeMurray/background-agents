@@ -437,7 +437,7 @@ export async function handleRequest(
             error: e instanceof Error ? e : String(e),
             ...ctx.metrics.summarize(),
           });
-          return error("Internal server error", 500);
+          return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
         }
       }
 

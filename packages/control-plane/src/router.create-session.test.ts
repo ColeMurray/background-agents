@@ -106,6 +106,9 @@ describe("handleCreateSession D1 ordering", () => {
     const response = await createSessionRequest(createEnv(initFetch));
 
     expect(response.status).toBe(500);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(response.headers.get("x-request-id")).toBeTruthy();
+    expect(response.headers.get("x-trace-id")).toBeTruthy();
     expect(create).toHaveBeenCalledOnce();
     expect(initFetch).not.toHaveBeenCalled();
   });
