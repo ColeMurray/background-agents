@@ -21,8 +21,15 @@ import { getWatchedChannels } from "./classifier/repos";
 import { getBotUserId } from "./bot-identity";
 import { getAuthHeaders } from "./internal-auth";
 import { createLogger } from "./logger";
+import { z } from "zod";
 
 const log = createLogger("channel-trigger");
+
+const slackTriggerForwardResponseSchema = z.object({
+  triggered: z.number().optional(),
+  skipped: z.number().optional(),
+  steered: z.number().optional(),
+});
 
 /**
  * Ingest an ambient channel message and, if it is a trigger candidate in a
@@ -138,11 +145,19 @@ async function forwardSlackEvent(
       return;
     }
 
-    const result = (await response.json()) as {
-      triggered?: number;
-      skipped?: number;
-      steered?: number;
-    };
+    const parsed = slackTriggerForwardResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.error("slack_trigger.forward", {
+        trace_id: traceId,
+        outcome: "error",
+        error_message: "invalid_response",
+        channel_id: event.channelId,
+        duration_ms: Date.now() - startTime,
+      });
+      return;
+    }
+
+    const result = parsed.data;
     log.info("slack_trigger.forward", {
       trace_id: traceId,
       outcome: "success",
