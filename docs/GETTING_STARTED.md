@@ -841,7 +841,7 @@ curl https://open-inspect-control-plane-{deployment_name}.YOUR-SUBDOMAIN.workers
 # Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
 MODAL_WORKSPACE_SLUG="YOUR-WORKSPACE" # or "YOUR-WORKSPACE-YOUR-MODAL-WEB-SUFFIX"
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
-# Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
+# Daytona, Vercel, OpenComputer, and Islo use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Web app (should return 200)
 # Vercel:
@@ -883,7 +883,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `MODAL_WORKSPACE`                | Modal workspace name                                                                        |
 | `MODAL_ENVIRONMENT`              | Modal environment name (defaults to `main`)                                                 |
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`   | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
-| `SANDBOX_PROVIDER`               | `modal`, `daytona`, or `vercel`                                                             |
+| `SANDBOX_PROVIDER`               | `modal`, `daytona`, `vercel`, `opencomputer`, or `islo`                                     |
 | `DAYTONA_API_URL`                | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_API_KEY`                | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_BASE_SNAPSHOT`          | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
@@ -895,6 +895,9 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_SANDBOX_RUNTIME`         | Optional Vercel Sandbox runtime (defaults to `node24`)                                      |
 | `VERCEL_SNAPSHOT_EXPIRATION_MS`  | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)       |
 | `VERCEL_SANDBOX_API_BASE_URL`    | Optional advanced Vercel Sandbox API base URL override                                      |
+| `ISLO_API_KEY`                   | Islo API key _(only if `sandbox_provider = "islo"`)_                                        |
+| `ISLO_BASE_SNAPSHOT`             | Islo base snapshot name _(only if `sandbox_provider = "islo"`)_                             |
+| `ISLO_BASE_URL`                  | Optional Islo API base URL                                                                  |
 | `GH_OAUTH_CLIENT_ID`             | GitHub App OAuth client ID                                                                  |
 | `GH_OAUTH_CLIENT_SECRET`         | GitHub App OAuth client secret                                                              |
 | `GOOGLE_CLIENT_ID`               | Google OAuth client ID (only if Google login enabled; pair with `GOOGLE_CLIENT_SECRET`)     |
@@ -1083,11 +1086,12 @@ If the bot doesn't see the original message when tagged in a thread reply:
 5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
-### "Model not found" errors (Daytona or Vercel provider)
+### "Model not found" errors (Daytona, Vercel, or Islo provider)
 
-If sessions fail with "Model not found" when using `sandbox_provider = "daytona"` or
-`sandbox_provider = "vercel"`, the required LLM API key is likely missing. Unlike Modal (which
-injects keys automatically), these providers require you to add them as global secrets:
+If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`,
+`sandbox_provider = "vercel"`, or `sandbox_provider = "islo"`, the required LLM API key is likely
+missing. Unlike Modal (which injects keys automatically), these providers require you to add them as
+global secrets:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
