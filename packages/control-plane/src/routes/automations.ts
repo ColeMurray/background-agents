@@ -32,7 +32,6 @@ import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
 import { automationRepositoriesInputSchema } from "@open-inspect/shared";
-import type { RepositoryAccessResult } from "../source-control";
 import {
   type Route,
   type RequestContext,
@@ -134,13 +133,13 @@ async function resolveRepositorySelection(
       resolveRepoOrError(env, repository.repoOwner, repository.repoName, ctx, logger)
     )
   );
-  const firstRejected = settled.find((result) => result.status === "rejected");
-  if (firstRejected?.status === "rejected") {
-    throw firstRejected.reason;
-  }
+  const resolved = settled.map((result) => {
+    if (result.status === "rejected") throw result.reason;
+    return result.value;
+  });
 
   return repositories.map((repository, index) => {
-    const access = (settled[index] as PromiseFulfilledResult<RepositoryAccessResult>).value;
+    const access = resolved[index];
     return {
       repo_owner: repository.repoOwner,
       repo_name: repository.repoName,
