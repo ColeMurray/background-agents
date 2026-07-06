@@ -65,8 +65,8 @@ const MAX_PER_TICK = 25;
 const TICK_CHILD_LAUNCH_BUDGET = 50;
 
 /**
- * Smooths Modal cold-start / warm-pool pressure for multi-repo fan-out. The
- * maximum fan-out is 10 repositories, so this only caps the per-invocation spike.
+ * Smooths Modal cold-start pressure for multi-repo fan-out. The maximum fan-out
+ * is 10 repositories, so this only caps the per-invocation spike.
  */
 const AUTOMATION_LAUNCH_CONCURRENCY = 4;
 

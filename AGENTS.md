@@ -14,7 +14,7 @@ Three tiers connected by WebSockets:
    GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for
    session index, repo metadata, and encrypted repo secrets.
 3. **Data Plane** (Modal, Python) — sandboxed environments running coding agents. Manages sandbox
-   creation, warm pools, snapshots.
+   creation, snapshots, and repo image builds.
 
 **Bot integrations** — all Cloudflare Workers using Hono:
 

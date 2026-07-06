@@ -21,8 +21,6 @@ export interface SandboxProviderCapabilities {
   supportsSnapshots: boolean;
   /** Whether the provider supports restoring from snapshots */
   supportsRestore: boolean;
-  /** Whether the provider supports pre-warming sandboxes */
-  supportsWarm: boolean;
   /** Whether the provider can resume a previously stopped sandbox in place */
   supportsPersistentResume?: boolean;
   /** Whether the provider can stop a sandbox explicitly via API */

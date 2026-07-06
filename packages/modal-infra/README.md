@@ -127,7 +127,6 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 |----------|--------|------|-------------|
 | `api-health` | GET | No | Health check |
 | `api-create-sandbox` | POST | Yes | Create a new sandbox |
-| `api-warm-sandbox` | POST | Yes | Pre-warm a sandbox |
 | `api-snapshot-sandbox` | POST | Yes | Take filesystem snapshot |
 | `api-restore-sandbox` | POST | Yes | Restore sandbox from snapshot |
 

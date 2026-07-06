@@ -105,7 +105,6 @@ export class VercelSandboxProvider implements SandboxProvider {
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSnapshots: true,
     supportsRestore: true,
-    supportsWarm: true,
     supportsPersistentResume: false,
     supportsExplicitStop: true,
   };

@@ -94,7 +94,6 @@ describe("OpenComputerSandboxProvider", () => {
     expect(provider.capabilities).toEqual({
       supportsSnapshots: true,
       supportsRestore: true,
-      supportsWarm: false,
       supportsPersistentResume: true,
       supportsExplicitStop: true,
     });

@@ -123,17 +123,6 @@ export interface SnapshotSandboxResponse {
   error?: string;
 }
 
-export interface WarmSandboxRequest {
-  repoOwner: string;
-  repoName: string;
-  controlPlaneUrl?: string;
-}
-
-export interface WarmSandboxResponse {
-  sandboxId: string;
-  status: string;
-}
-
 export interface BuildRepoImageRequest {
   repoOwner: string;
   repoName: string;
@@ -190,7 +179,6 @@ export class ModalApiError extends Error {
  */
 export class ModalClient {
   private createSandboxUrl: string;
-  private warmSandboxUrl: string;
   private healthUrl: string;
   private snapshotSandboxUrl: string;
   private restoreSandboxUrl: string;
@@ -208,7 +196,6 @@ export class ModalClient {
     this.secret = secret;
     const baseUrl = getModalBaseUrl(workspace, environmentWebSuffix);
     this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
-    this.warmSandboxUrl = `${baseUrl}-api-warm-sandbox.modal.run`;
     this.healthUrl = `${baseUrl}-api-health.modal.run`;
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
@@ -444,66 +431,6 @@ export class ModalClient {
         endpoint,
         session_id: request.sessionId,
         sandbox_id: request.providerObjectId,
-        trace_id: correlation?.trace_id,
-        request_id: correlation?.request_id,
-        http_status: httpStatus,
-        duration_ms: Date.now() - startTime,
-        outcome,
-      });
-    }
-  }
-
-  /**
-   * Pre-warm a sandbox for faster startup.
-   */
-  async warmSandbox(
-    request: WarmSandboxRequest,
-    correlation?: CorrelationContext
-  ): Promise<WarmSandboxResponse> {
-    const startTime = Date.now();
-    const endpoint = "warmSandbox";
-    let httpStatus: number | undefined;
-    let outcome: "success" | "error" = "error";
-
-    try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.warmSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          repo_owner: request.repoOwner,
-          repo_name: request.repoName,
-          control_plane_url: request.controlPlaneUrl || "",
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = (await response.json()) as ModalApiResponse<{
-        sandbox_id: string;
-        status: string;
-      }>;
-
-      if (!result.success || !result.data) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
-
-      outcome = "success";
-      return {
-        sandboxId: result.data.sandbox_id,
-        status: result.data.status,
-      };
-    } finally {
-      log.info("modal.request", {
-        event: "modal.request",
-        endpoint,
-        repo_owner: request.repoOwner,
-        repo_name: request.repoName,
         trace_id: correlation?.trace_id,
         request_id: correlation?.request_id,
         http_status: httpStatus,

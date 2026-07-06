@@ -76,7 +76,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSnapshots: true,
     supportsRestore: true,
-    supportsWarm: true,
     supportsPersistentResume: false,
     supportsExplicitStop: false,
   };

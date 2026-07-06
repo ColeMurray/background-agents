@@ -276,7 +276,6 @@ function createMockProvider(
     capabilities: {
       supportsSnapshots: true,
       supportsRestore: true,
-      supportsWarm: true,
       ...overrides.capabilities,
     },
     createSandbox:
@@ -1029,7 +1028,7 @@ describe("SandboxLifecycleManager", () => {
       const broadcaster = createMockBroadcaster();
       const provider: SandboxProvider = {
         name: "no-snapshot",
-        capabilities: { supportsSnapshots: false, supportsRestore: false, supportsWarm: false },
+        capabilities: { supportsSnapshots: false, supportsRestore: false },
         createSandbox: vi.fn(),
         // No takeSnapshot method
       };
