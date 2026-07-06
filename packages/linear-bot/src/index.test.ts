@@ -327,7 +327,7 @@ describe("POST /webhook", () => {
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
   });
 
-  it("marks permission-change events with removed team access as reauthorization-required", async () => {
+  it("records removed team access as a diagnostic without blocking the workspace", async () => {
     const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv);
     const payload = {
@@ -347,8 +347,8 @@ describe("POST /webhook", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
-      status: "reauthorization_required",
-      reason: "permission_team_access_removed",
+      status: "connected",
+      reason: "permission_change",
       details: {
         eventType: "PermissionChange",
         eventAction: "teamAccessChanged",

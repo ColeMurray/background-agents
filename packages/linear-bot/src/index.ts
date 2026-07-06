@@ -131,15 +131,12 @@ function readPermissionChangeDetails(payload: Record<string, unknown>): {
   canAccessAllPublicTeams?: boolean;
   addedTeamIds?: string[];
   removedTeamIds?: string[];
-  removedAccess: boolean;
 } {
   const data = isObjectRecord(payload.data) ? payload.data : payload;
-  const removedTeamIds = readStringArrayField(data, "removedTeamIds") ?? [];
   return {
     canAccessAllPublicTeams: readBooleanField(data, "canAccessAllPublicTeams"),
     addedTeamIds: readStringArrayField(data, "addedTeamIds") ?? [],
-    removedTeamIds,
-    removedAccess: removedTeamIds.length > 0,
+    removedTeamIds: readStringArrayField(data, "removedTeamIds") ?? [],
   };
 }
 
@@ -168,6 +165,9 @@ async function handleAuthHealthWebhook(params: {
     return { ok: true as const, skipped: true as const, reason: "duplicate" };
   }
 
+  const permissionDetails =
+    eventType === "OAuthApp" ? undefined : readPermissionChangeDetails(payload);
+
   if (eventType === "OAuthApp") {
     await deleteOAuthToken(env, orgId);
     await setLinearAuthState(env, {
@@ -178,27 +178,22 @@ async function handleAuthHealthWebhook(params: {
       details: { eventType, eventAction: action },
     });
   } else {
+    // Team-access changes are diagnostic only: the OAuth token stays valid, so the
+    // workspace stays green. A sticky reauthorization_required state is cleared only
+    // by a successful OAuth callback, never by a permission event.
     const existing = await getLinearAuthState(env, orgId);
-    const permissionDetails = readPermissionChangeDetails(payload);
-    const removedAccess = permissionDetails.removedAccess;
-    const preserveExistingReauth =
-      existing?.status === "reauthorization_required" &&
-      existing.reason !== "permission_team_access_removed";
+    const preserveExistingReauth = existing?.status === "reauthorization_required";
     await setLinearAuthState(env, {
       orgId,
-      status: preserveExistingReauth || removedAccess ? "reauthorization_required" : "connected",
-      reason: preserveExistingReauth
-        ? existing.reason
-        : removedAccess
-          ? "permission_team_access_removed"
-          : "permission_change",
+      status: preserveExistingReauth ? "reauthorization_required" : "connected",
+      reason: preserveExistingReauth ? existing.reason : "permission_change",
       traceId,
       details: {
         eventType,
         eventAction: action,
-        canAccessAllPublicTeams: permissionDetails.canAccessAllPublicTeams,
-        addedTeamIds: permissionDetails.addedTeamIds,
-        removedTeamIds: permissionDetails.removedTeamIds,
+        canAccessAllPublicTeams: permissionDetails?.canAccessAllPublicTeams,
+        addedTeamIds: permissionDetails?.addedTeamIds,
+        removedTeamIds: permissionDetails?.removedTeamIds,
       },
     });
   }
@@ -208,6 +203,13 @@ async function handleAuthHealthWebhook(params: {
     org_id: orgId,
     type: eventType,
     action,
+    ...(permissionDetails
+      ? {
+          can_access_all_public_teams: permissionDetails.canAccessAllPublicTeams,
+          added_team_ids: permissionDetails.addedTeamIds,
+          removed_team_ids: permissionDetails.removedTeamIds,
+        }
+      : {}),
   });
   return { ok: true as const };
 }

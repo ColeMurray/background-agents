@@ -99,8 +99,7 @@ export type LinearAuthFailureReason =
   | "refresh_failed"
   | "refresh_error"
   | "token_read_error"
-  | "oauth_app_revoked"
-  | "permission_team_access_removed";
+  | "oauth_app_revoked";
 
 export interface LinearAuthFailure {
   reason: LinearAuthFailureReason;
@@ -279,8 +278,7 @@ function reauthorizationRequiredForReason(reason: LinearAuthFailureReason): bool
     reason === "malformed_token" ||
     reason === "missing_refresh_token" ||
     reason === "refresh_invalid_grant" ||
-    reason === "oauth_app_revoked" ||
-    reason === "permission_team_access_removed"
+    reason === "oauth_app_revoked"
   );
 }
 
@@ -360,8 +358,7 @@ function isLinearAuthFailureReason(value: unknown): value is LinearAuthFailureRe
     value === "refresh_failed" ||
     value === "refresh_error" ||
     value === "token_read_error" ||
-    value === "oauth_app_revoked" ||
-    value === "permission_team_access_removed"
+    value === "oauth_app_revoked"
   );
 }
 
