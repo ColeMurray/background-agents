@@ -520,6 +520,7 @@ class SandboxManager:
         clone_token: str = "",
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
+        repositories: list[dict] | None = None,
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.
@@ -550,7 +551,13 @@ class SandboxManager:
                 "REPO_OWNER": repo_owner,
                 "REPO_NAME": repo_name,
                 "IMAGE_BUILD_MODE": "true",
-                "SESSION_CONFIG": json.dumps({"branch": default_branch}),
+                # Multi-repo builds (environment images) pass the member list;
+                # the list-native runtime clones and sets up every member.
+                "SESSION_CONFIG": json.dumps(
+                    {"branch": default_branch, "repositories": repositories}
+                    if repositories
+                    else {"branch": default_branch}
+                ),
             }
         )
 

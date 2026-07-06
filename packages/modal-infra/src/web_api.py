@@ -144,6 +144,10 @@ async def api_create_sandbox(
             resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
 
+        # Create is a lossy reconstruction: this typed model is what the
+        # manager re-serializes into SESSION_CONFIG, so every new wire field
+        # must be threaded here (restore forwards its session_config dict
+        # verbatim and needs no equivalent).
         session_config = SessionConfig(
             session_id=request.get("session_id"),
             repo_owner=repo_owner,
@@ -153,6 +157,8 @@ async def api_create_sandbox(
             provider=request.get("provider", "anthropic"),
             model=request.get("model", "claude-sonnet-4-6"),
             mcp_servers=request.get("mcp_servers"),
+            repositories=request.get("repositories"),
+            working_branch_name=request.get("working_branch_name"),
         )
 
         config = SandboxConfig(

@@ -292,3 +292,87 @@ async def test_restore_sandbox_rejects_partial_repo_context(monkeypatch, session
 
     assert getattr(exc_info.value, "status_code", None) == 400
     assert "repo_owner and repo_name must be provided together" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_threads_repositories_into_session_config(monkeypatch):
+    """Create reconstructs a typed SessionConfig — new wire fields must be
+    threaded explicitly or pydantic silently drops them."""
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    members = [
+        {"repo_owner": "acme", "repo_name": "frontend", "branch": "main"},
+        {"repo_owner": "acme", "repo_name": "backend", "branch": "develop"},
+    ]
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "repo_owner": "acme",
+            "repo_name": "frontend",
+            "repositories": members,
+            "working_branch_name": "open-inspect/sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    session_config = captured["config"].session_config
+    assert [dict(r) for r in session_config.repositories] == members
+    assert session_config.working_branch_name == "open-inspect/sess-1"
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_repositories_default_to_none(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["config"].session_config.repositories is None
+    assert captured["config"].session_config.working_branch_name is None
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_forwards_session_config_verbatim(monkeypatch):
+    """Restore is a pass-through: the session_config dict reaches the manager
+    unmodified, so extra keys (repositories, working_branch_name) survive
+    without any Python change."""
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, captured)
+
+    session_config = {
+        "session_id": "sess-1",
+        "repo_owner": "acme",
+        "repo_name": "frontend",
+        "repositories": [
+            {"repo_owner": "acme", "repo_name": "frontend", "branch": "main"},
+            {"repo_owner": "acme", "repo_name": "backend", "branch": "develop"},
+        ],
+        "working_branch_name": "open-inspect/sess-1",
+        "some_future_field": {"nested": True},
+    }
+    result = await _call_restore_sandbox(
+        {
+            "snapshot_image_id": "im-snap-1",
+            "session_config": session_config,
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["restore"]["session_config"] == session_config
