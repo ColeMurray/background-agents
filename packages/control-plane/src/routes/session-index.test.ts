@@ -57,7 +57,6 @@ describe("session index routes", () => {
     vi.clearAllMocks();
     mockSessionIndexStore.list.mockResolvedValue({
       sessions: [],
-      total: 0,
       hasMore: false,
     });
   });

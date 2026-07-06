@@ -182,6 +182,14 @@ describe("checkSenderPermission", () => {
     expect(result).toEqual({ hasPermission: false });
   });
 
+  it("returns error flag on malformed permission response", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ user: { login: "alice" } }), { status: 200 })
+    );
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false, error: true });
+  });
+
   it("returns error flag on API error (404)", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response("Not Found", { status: 404 }));
     const result = await checkSenderPermission("tok", "acme", "widgets", "alice");

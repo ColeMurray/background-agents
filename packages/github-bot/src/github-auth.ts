@@ -1,4 +1,9 @@
 import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import { z } from "zod";
+
+const collaboratorPermissionResponseSchema = z.object({
+  permission: z.string(),
+});
 
 export interface GitHubAppConfig {
   appId: string;
@@ -124,7 +129,9 @@ export async function checkSenderPermission(
       }
     );
     if (!response.ok) return { hasPermission: false, error: true };
-    const data = (await response.json()) as { permission: string };
+    const parsed = collaboratorPermissionResponseSchema.safeParse(await response.json());
+    if (!parsed.success) return { hasPermission: false, error: true };
+    const data = parsed.data;
     return { hasPermission: WRITE_PERMISSIONS.has(data.permission) };
   } catch {
     return { hasPermission: false, error: true };

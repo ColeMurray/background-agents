@@ -12,6 +12,19 @@ check "vercel_url_matches" {
   }
 }
 
+# Fail the plan when a custom domain is set but cannot take effect — wrong web
+# platform or missing zone ID. Hostname shape is validated on the variable
+# itself; this gate owns the cross-input policy, expressed via the normalized
+# locals so enablement (web_custom_domain_enabled) and enforcement stay in sync.
+resource "terraform_data" "cloudflare_custom_domain_gate" {
+  lifecycle {
+    precondition {
+      condition     = local.web_custom_domain == "" || local.web_custom_domain_enabled
+      error_message = "cloudflare_custom_domain is set but would be silently ignored: it requires web_platform = \"cloudflare\" and a non-empty cloudflare_zone_id."
+    }
+  }
+}
+
 # Fail the plan when no access control is configured. Uses terraform_data with a
 # precondition so this is a hard error, not an advisory check-block warning.
 resource "terraform_data" "access_control_gate" {

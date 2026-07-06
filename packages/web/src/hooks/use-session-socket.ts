@@ -4,6 +4,7 @@ import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 
 import { mutate } from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
+import { serverMessageSchema } from "@open-inspect/shared";
 import type {
   ParticipantPresence,
   SandboxEvent as SharedSandboxEvent,
@@ -136,9 +137,8 @@ function takePendingTokenEvent(
 }
 
 function parseWsMessage(raw: unknown): WsMessage | null {
-  if (!raw || typeof raw !== "object") return null;
-  if (!("type" in raw)) return null;
-  return raw as WsMessage;
+  const result = serverMessageSchema.safeParse(raw);
+  return result.success ? result.data : null;
 }
 
 function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {

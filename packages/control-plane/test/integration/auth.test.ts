@@ -49,9 +49,8 @@ describe("HMAC authentication", () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(response.status).toBe(200);
-    const body = await response.json<{ sessions: unknown[]; total: number; hasMore: boolean }>();
+    const body = await response.json<{ sessions: unknown[]; hasMore: boolean }>();
     expect(body.sessions).toEqual([]);
-    expect(body.total).toBe(0);
     expect(body.hasMore).toBe(false);
   });
 
@@ -107,9 +106,9 @@ describe("HMAC authentication", () => {
     });
 
     expect(response.status).toBe(200);
-    const body = await response.json<{ sessions: Array<{ id: string }>; total: number }>();
+    const body = await response.json<{ sessions: Array<{ id: string }>; hasMore: boolean }>();
     expect(body.sessions.map((session) => session.id)).toEqual(["alice-session"]);
-    expect(body.total).toBe(1);
+    expect(body.hasMore).toBe(false);
   });
 
   it("rejects invalid creator user id filters", async () => {

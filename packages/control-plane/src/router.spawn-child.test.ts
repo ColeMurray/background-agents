@@ -27,6 +27,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     reasoningEffort: string | null;
     owner: {
       userId: string;
+      scmUserId: string | null;
       scmLogin: string | null;
       scmName: string | null;
       scmEmail: string | null;
@@ -42,8 +43,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoId: 12345,
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
+    baseBranch: "main",
     owner: {
       userId: "user-1",
+      scmUserId: "12345",
       scmLogin: "acmedev",
       scmName: "Acme Dev",
       scmEmail: "dev@acme.test",
@@ -224,6 +227,69 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const payload = await response.json<{ error: string }>();
     expect(payload.error).toContain('Invalid model "not-a-real-model"');
     expect(payload.error).toContain("Valid models:");
+  });
+
+  it("returns 400 for a malformed child spawn request", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+
+    const env = {
+      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: vi.fn(),
+      },
+    };
+
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
+
+    const response = await handleRequest(
+      new Request(`https://test.local/sessions/${parentId}/children`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title: "Child task" }),
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "title and prompt are required" });
+    expect(SessionIndexStore).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 for a malformed parent spawn context", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json({ repoOwner: "acme", repoName: "web-app" })),
+    } as never;
+
+    const env = {
+      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Failed to get parent session context",
+    });
   });
 
   it("uses configured concurrent child session limit", async () => {

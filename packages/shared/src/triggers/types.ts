@@ -4,6 +4,7 @@
 
 import type { AutomationTriggerType } from "../types";
 import type { ConditionType } from "./conditions";
+import { z } from "zod";
 
 // ─── Event Sources ────────────────────────────────────────────────────────────
 
@@ -101,6 +102,64 @@ export type AutomationEvent =
   | SentryAutomationEvent
   | WebhookAutomationEvent
   | SlackAutomationEvent;
+
+const baseAutomationEventSchema = {
+  eventType: z.string(),
+  triggerKey: z.string(),
+  concurrencyKey: z.string(),
+  contextBlock: z.string(),
+  meta: z.record(z.string(), z.unknown()),
+};
+
+export const automationEventSchema = z.discriminatedUnion("source", [
+  z.object({
+    ...baseAutomationEventSchema,
+    source: z.literal("github"),
+    repoOwner: z.string(),
+    repoName: z.string(),
+    branch: z.string().optional(),
+    targetBranch: z.string().optional(),
+    labels: z.array(z.string()).optional(),
+    actor: z.string().optional(),
+    changedFiles: z.array(z.string()).optional(),
+    checkConclusion: z.string().optional(),
+  }),
+  z.object({
+    ...baseAutomationEventSchema,
+    source: z.literal("linear"),
+    repoOwner: z.string(),
+    repoName: z.string(),
+    actor: z.string().optional(),
+    labels: z.array(z.string()).optional(),
+    linearStatus: z.string().optional(),
+  }),
+  z.object({
+    ...baseAutomationEventSchema,
+    source: z.literal("sentry"),
+    automationId: z.string(),
+    sentryProject: z.string(),
+    sentryLevel: z.string(),
+    culpritFile: z.string().optional(),
+  }),
+  z.object({
+    ...baseAutomationEventSchema,
+    source: z.literal("webhook"),
+    automationId: z.string(),
+    body: z.unknown(),
+  }),
+  z.object({
+    ...baseAutomationEventSchema,
+    source: z.literal("slack"),
+    channelId: z.string(),
+    channelName: z.string().optional(),
+    threadTs: z.string().optional(),
+    ts: z.string(),
+    actorUserId: z.string(),
+    text: z.string(),
+  }),
+]);
+
+export type ParsedAutomationEvent = z.infer<typeof automationEventSchema>;
 
 // ─── Trigger Source Definition ────────────────────────────────────────────────
 
