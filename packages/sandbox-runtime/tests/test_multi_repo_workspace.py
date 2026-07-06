@@ -400,6 +400,8 @@ class TestOpencodeAssembly:
         stale = tmp_path / ".opencode" / "command" / "removed.md"
         stale.parent.mkdir(parents=True)
         stale.write_text("from a member no longer in the session")
+        stale_manifest = tmp_path / ".opencode" / "package.json"
+        stale_manifest.write_text("{}")
         src = tmp_path / "frontend" / ".opencode" / "command"
         src.mkdir(parents=True)
         (src / "deploy.md").write_text("current")
@@ -407,7 +409,25 @@ class TestOpencodeAssembly:
         sup._assemble_workspace_opencode()
 
         assert not stale.exists()
+        assert not stale_manifest.exists()
         assert (tmp_path / ".opencode" / "command" / "deploy.md").read_text() == "current"
+
+    def test_rebuild_preserves_staged_node_modules(self, tmp_path):
+        """The image-managed module tree survives the clean rebuild so
+        snapshot restores keep _stage_opencode_deps' skip-if-present fast
+        path instead of re-copying it every boot."""
+        sup = _make_supervisor(tmp_path)
+        staged = tmp_path / ".opencode" / "node_modules" / "@opencode-ai" / "plugin"
+        staged.mkdir(parents=True)
+        (staged / "index.js").write_text("plugin")
+        stale = tmp_path / ".opencode" / "tool" / "removed.js"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("stale")
+
+        sup._assemble_workspace_opencode()
+
+        assert (staged / "index.js").read_text() == "plugin"
+        assert not stale.exists()
 
     def test_skips_node_modules(self, tmp_path):
         sup = _make_supervisor(tmp_path)

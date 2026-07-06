@@ -559,9 +559,19 @@ class SandboxSupervisor:
         # The merged tree is generated state: rebuild it from scratch so
         # entries removed from a member (or a removed member) don't survive
         # snapshot/repo-image boots. System tools and staged deps are
-        # re-installed after assembly on every boot.
-        if dest_root.exists():
-            shutil.rmtree(dest_root, ignore_errors=True)
+        # re-installed after assembly on every boot. node_modules is spared:
+        # assembly never writes into it (member node_modules are skipped), so
+        # it's purely image-managed — deleting it would force
+        # _stage_opencode_deps to re-copy the whole module tree on every
+        # snapshot restore instead of taking its skip-if-present fast path.
+        if dest_root.is_dir():
+            for child in dest_root.iterdir():
+                if child.name == "node_modules":
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
         provenance: dict[str, RepoEntry] = {}
         for repo in self.repositories:
             src_root = repo.path / ".opencode"
