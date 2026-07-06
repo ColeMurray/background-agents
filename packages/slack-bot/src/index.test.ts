@@ -156,7 +156,10 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
   await ctx.waitUntil.mock.calls[callIndex]?.[0];
 }
 
-function makeSessionEnv(order: string[] = []): Env {
+function makeSessionEnv(
+  order: string[] = [],
+  responses: { session?: unknown; prompt?: unknown } = {}
+): Env {
   const env = makeEnv();
   (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
     async (input: RequestInfo | URL) => {
@@ -185,15 +188,18 @@ function makeSessionEnv(order: string[] = []): Env {
 
       if (url.endsWith("/sessions")) {
         order.push("session");
-        return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify(responses.session ?? { sessionId: "session-1", status: "created" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
       }
 
       if (url.includes("/prompt")) {
         order.push("prompt");
-        return new Response(JSON.stringify({ messageId: "msg-1" }), {
+        return new Response(JSON.stringify(responses.prompt ?? { messageId: "msg-1" }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -556,48 +562,7 @@ describe("POST /events", () => {
   it("treats a malformed session creation response as a creation failure", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
-    const env = makeSessionEnv(order);
-    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/repos")) {
-          order.push("repos");
-          return new Response(
-            JSON.stringify({
-              repos: [
-                {
-                  id: "acme/app",
-                  owner: "acme",
-                  name: "app",
-                  fullName: "acme/app",
-                  defaultBranch: "main",
-                  private: true,
-                },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          );
-        }
-        if (url.endsWith("/sessions")) {
-          order.push("session");
-          return new Response(JSON.stringify({ status: "running" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        if (url.includes("/prompt")) {
-          order.push("prompt");
-          return new Response(JSON.stringify({ messageId: "msg-1" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    );
+    const env = makeSessionEnv(order, { session: { status: "created" } });
     const ctx = makeCtx();
 
     const response = await app.fetch(
@@ -629,48 +594,7 @@ describe("POST /events", () => {
   it("treats a malformed prompt response as a prompt delivery failure", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
-    const env = makeSessionEnv(order);
-    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/repos")) {
-          order.push("repos");
-          return new Response(
-            JSON.stringify({
-              repos: [
-                {
-                  id: "acme/app",
-                  owner: "acme",
-                  name: "app",
-                  fullName: "acme/app",
-                  defaultBranch: "main",
-                  private: true,
-                },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          );
-        }
-        if (url.endsWith("/sessions")) {
-          order.push("session");
-          return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        if (url.includes("/prompt")) {
-          order.push("prompt");
-          return new Response(JSON.stringify({}), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    );
+    const env = makeSessionEnv(order, { prompt: {} });
     const ctx = makeCtx();
 
     const response = await app.fetch(
@@ -1407,7 +1331,7 @@ describe("POST /interactions", () => {
         }
 
         if (url.endsWith("/sessions")) {
-          return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
+          return new Response(JSON.stringify({ sessionId: "session-1", status: "created" }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });
@@ -1526,7 +1450,7 @@ describe("POST /interactions", () => {
           );
         }
         if (url.endsWith("/sessions")) {
-          return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
+          return new Response(JSON.stringify({ sessionId: "session-1", status: "created" }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });
@@ -1630,7 +1554,7 @@ describe("POST /interactions", () => {
           );
         }
         if (url.endsWith("/sessions")) {
-          return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
+          return new Response(JSON.stringify({ sessionId: "session-1", status: "created" }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });

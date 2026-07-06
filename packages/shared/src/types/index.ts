@@ -8,13 +8,15 @@ export { attachmentSchema, clientMessageSchema } from "./websocket";
 export type { Attachment, ClientMessage } from "./websocket";
 
 // Session states
-export type SessionStatus =
-  | "created"
-  | "active"
-  | "completed"
-  | "failed"
-  | "archived"
-  | "cancelled";
+export const sessionStatusSchema = z.enum([
+  "created",
+  "active",
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+]);
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 export type SandboxStatus =
   | "pending"
   | "spawning"
@@ -56,14 +58,6 @@ export type SpawnSource =
   | "slack-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
-const sessionStatusSchema = z.enum([
-  "created",
-  "active",
-  "completed",
-  "failed",
-  "archived",
-  "cancelled",
-]);
 const sandboxStatusSchema = z.enum([
   "pending",
   "spawning",
@@ -770,10 +764,19 @@ export const createMediaArtifactRequestSchema = z.object({
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
 
-export interface CreateSessionResponse {
-  sessionId: string;
-  status: SessionStatus;
-}
+export const createSessionResponseSchema = z.object({
+  sessionId: z.string().min(1),
+  status: sessionStatusSchema,
+});
+
+export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
+
+export const sendPromptResponseSchema = z.object({
+  messageId: z.string().min(1),
+  status: z.literal("queued").optional(),
+});
+
+export type SendPromptResponse = z.infer<typeof sendPromptResponseSchema>;
 
 export interface ListSessionsResponse {
   sessions: Session[];

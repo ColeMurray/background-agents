@@ -22,6 +22,10 @@ import {
   getChannelInfo,
   getThreadMessages,
   getUserInfo,
+  createSessionResponseSchema,
+  sendPromptResponseSchema,
+  type CreateSessionResponse,
+  type SendPromptResponse,
 } from "@open-inspect/shared";
 import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
@@ -44,7 +48,6 @@ import {
 import { getResolvedUserPreferences } from "./user-preferences";
 import { getAvailableModels, getSlackDefaultModel } from "./app-home/models";
 import { slackInteractionPayloadSchema } from "./interaction-payload";
-import { createSessionResponseSchema, sendPromptResponseSchema } from "./control-plane-responses";
 
 const log = createLogger("handler");
 const THREAD_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -64,7 +67,7 @@ async function createSession(
   slackUserId?: string,
   actorDisplayName?: string,
   actorEmail?: string
-): Promise<{ sessionId: string; status: string } | null> {
+): Promise<CreateSessionResponse | null> {
   const startTime = Date.now();
   const base = {
     trace_id: traceId,
@@ -142,7 +145,7 @@ async function sendPrompt(
   authorId: string,
   callbackContext?: CallbackContext,
   traceId?: string
-): Promise<{ messageId: string } | null> {
+): Promise<SendPromptResponse | null> {
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {

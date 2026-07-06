@@ -67,7 +67,9 @@ function createMockEnv(): Env {
   const controlPlaneFetch = vi.fn().mockImplementation((url: string) => {
     if (url === "https://internal/sessions") {
       return Promise.resolve(
-        new Response(JSON.stringify({ sessionId: "session-123" }), { status: 200 })
+        new Response(JSON.stringify({ sessionId: "session-123", status: "created" }), {
+          status: 200,
+        })
       );
     }
     if (/\/sessions\/.+\/prompt$/.test(url)) {

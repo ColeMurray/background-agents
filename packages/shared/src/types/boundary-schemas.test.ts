@@ -3,12 +3,14 @@ import {
   automationRepositoriesInputSchema,
   automationRepositoryInputSchema,
   clientMessageSchema,
+  createSessionResponseSchema,
   createSessionRequestSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
   sandboxEventSchema,
   serverMessageSchema,
+  sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
   spawnContextSchema,
   userPreferencesRequestSchema,
@@ -80,6 +82,48 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe("control-plane response schemas", () => {
+    it("parses valid session and prompt responses", () => {
+      expect(
+        createSessionResponseSchema.safeParse({
+          sessionId: "session-123",
+          status: "created",
+        }).success
+      ).toBe(true);
+      expect(
+        sendPromptResponseSchema.safeParse({ messageId: "msg-456", status: "queued" }).success
+      ).toBe(true);
+      expect(sendPromptResponseSchema.safeParse({ messageId: "msg-456" }).success).toBe(true);
+    });
+
+    it("rejects malformed or partial responses", () => {
+      expect(
+        createSessionResponseSchema.safeParse({ sessionId: 123, status: "created" }).success
+      ).toBe(false);
+      expect(createSessionResponseSchema.safeParse({ sessionId: "session-123" }).success).toBe(
+        false
+      );
+      expect(
+        createSessionResponseSchema.safeParse({
+          sessionId: "session-123",
+          status: "running",
+        }).success
+      ).toBe(false);
+      expect(sendPromptResponseSchema.safeParse({ messageId: null }).success).toBe(false);
+      expect(sendPromptResponseSchema.safeParse({}).success).toBe(false);
+      expect(
+        sendPromptResponseSchema.safeParse({ messageId: "msg-456", status: "running" }).success
+      ).toBe(false);
+    });
+
+    it("rejects empty identifiers", () => {
+      expect(
+        createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
+      ).toBe(false);
+      expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
     });
   });
 
