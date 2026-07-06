@@ -96,6 +96,16 @@ class TestRepoImageRestoreFallback:
         assert "REPO_IMAGE_SHA" not in captured[0]["env"]
 
     @pytest.mark.asyncio
+    async def test_generic_hydrate_failure_propagates(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.sandbox.manager.modal.Image.from_id",
+            lambda *_a, **_k: _fake_image(RuntimeError("modal unavailable")),
+        )
+
+        with pytest.raises(RuntimeError, match="modal unavailable"):
+            await SandboxManager().create_sandbox(_repo_image_config())
+
+    @pytest.mark.asyncio
     async def test_create_failure_on_repo_image_retries_with_base_image(self, monkeypatch):
         """Expiry can also surface at Sandbox.create — retry once on base."""
         captured: list = []
@@ -113,6 +123,20 @@ class TestRepoImageRestoreFallback:
         assert captured[1]["image"] is manager_module.base_image
         assert "FROM_REPO_IMAGE" not in captured[1]["env"]
         assert "REPO_IMAGE_SHA" not in captured[1]["env"]
+
+    @pytest.mark.asyncio
+    async def test_generic_create_failure_on_repo_image_propagates(self, monkeypatch):
+        captured: list = []
+        _patch_create(monkeypatch, captured, side_effects=[RuntimeError("quota exceeded")])
+        monkeypatch.setattr(
+            "src.sandbox.manager.modal.Image.from_id", lambda *_a, **_k: _fake_image()
+        )
+
+        with pytest.raises(RuntimeError, match="quota exceeded"):
+            await SandboxManager().create_sandbox(_repo_image_config())
+
+        assert len(captured) == 1
+        assert captured[0]["env"]["FROM_REPO_IMAGE"] == "true"
 
     @pytest.mark.asyncio
     async def test_create_failure_without_repo_image_propagates(self, monkeypatch):
@@ -147,6 +171,19 @@ class TestSnapshotRestoreFailure:
             )
 
         assert exc_info.value.snapshot_id == "im-snap-1"
+
+    @pytest.mark.asyncio
+    async def test_generic_hydrate_failure_propagates(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.sandbox.manager.modal.Image.from_id",
+            lambda *_a, **_k: _fake_image(RuntimeError("modal unavailable")),
+        )
+
+        with pytest.raises(RuntimeError, match="modal unavailable"):
+            await SandboxManager().restore_from_snapshot(
+                snapshot_image_id="im-snap-1",
+                session_config={"session_id": "s1", "repo_owner": "acme", "repo_name": "repo"},
+            )
 
     @pytest.mark.asyncio
     async def test_not_found_at_create_raises_structured_error(self, monkeypatch):

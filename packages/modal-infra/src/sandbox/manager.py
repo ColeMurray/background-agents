@@ -193,7 +193,7 @@ class SandboxManager:
             image = modal.Image.from_id(repo_image_id)
             await image.hydrate.aio()
             return image, False
-        except Exception as e:
+        except modal.exception.NotFoundError as e:
             log.warn(
                 "sandbox.repo_image_restore_failed",
                 repo_image_id=repo_image_id,
@@ -531,7 +531,7 @@ class SandboxManager:
                 "sandbox_runtime.entrypoint",  # Run the supervisor entrypoint
                 **create_kwargs,
             )
-        except Exception as e:
+        except modal.exception.NotFoundError as e:
             if env_vars.get("FROM_REPO_IMAGE") != "true":
                 raise
             # Image expiry can surface at creation even when the hydrate probe
@@ -828,7 +828,7 @@ class SandboxManager:
         try:
             image = modal.Image.from_id(snapshot_image_id)
             await image.hydrate.aio()
-        except Exception as e:
+        except modal.exception.NotFoundError as e:
             raise SnapshotRestoreError(snapshot_image_id, str(e)) from e
 
         # Prepare environment variables (user vars first, system vars override)
