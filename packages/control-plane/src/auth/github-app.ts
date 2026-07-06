@@ -14,6 +14,7 @@ import {
   type CacheStore,
   type InstallationRepository,
 } from "@open-inspect/shared";
+import { z } from "zod";
 
 /** Timeout for individual GitHub API requests (ms). */
 export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
@@ -95,13 +96,13 @@ export interface GitHubAppConfig {
   installationId: string;
 }
 
-/**
- * GitHub installation token response.
- */
-interface InstallationTokenResponse {
-  token: string;
-  expires_at: string;
-}
+const installationTokenResponseSchema = z.object({
+  token: z.string(),
+  expires_at: z.string(),
+});
+
+/** GitHub installation token response. */
+type InstallationTokenResponse = z.infer<typeof installationTokenResponseSchema>;
 
 /**
  * Base64URL encode a Uint8Array or string.
@@ -251,7 +252,11 @@ async function getInstallationTokenWithMetadata(
     );
   }
 
-  return (await response.json()) as InstallationTokenResponse;
+  const parsed = installationTokenResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error("Failed to get installation token: invalid response");
+  }
+  return parsed.data;
 }
 
 function getInstallationTokenCacheKey(config: GitHubAppConfig): string {

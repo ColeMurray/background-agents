@@ -34,6 +34,25 @@ class FakeCacheStore implements CacheStore {
   }
 }
 
+/** Generate a PKCS#8 PEM RSA key pair for testing. */
+async function generateTestKeyPair(): Promise<{ privateKeyPem: string }> {
+  const keyPair = (await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"]
+  )) as CryptoKeyPair;
+
+  const exported = (await crypto.subtle.exportKey("pkcs8", keyPair.privateKey)) as ArrayBuffer;
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
+  const lines = base64.match(/.{1,64}/g)!.join("\n");
+  return { privateKeyPem: `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----` };
+}
+
 describe("github-app utilities", () => {
   describe("isGitHubAppConfigured", () => {
     it("returns true when all credentials are present", () => {
@@ -210,6 +229,49 @@ describe("github-app utilities", () => {
       const withExpiry = await getCachedInstallationTokenWithExpiry(config, { cacheStore });
 
       expect(withExpiry.token).toBe(plain);
+    });
+
+    it("parses a valid GitHub installation token response", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const { privateKeyPem } = await generateTestKeyPair();
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ token: "fresh-token", expires_at: expiresAt }), {
+          status: 201,
+        })
+      );
+
+      const result = await getCachedInstallationTokenWithExpiry(
+        {
+          appId: `app-refresh-valid-${Date.now()}`,
+          privateKey: privateKeyPem,
+          installationId: "installation-refresh-valid",
+        },
+        undefined,
+        { forceRefresh: true }
+      );
+
+      expect(result).toEqual({ token: "fresh-token", expiresAtEpochMs: Date.parse(expiresAt) });
+    });
+
+    it("rejects a malformed GitHub installation token response", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const { privateKeyPem } = await generateTestKeyPair();
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ token: "missing-expiry" }), { status: 201 })
+      );
+
+      await expect(
+        getCachedInstallationTokenWithExpiry(
+          {
+            appId: `app-refresh-invalid-${Date.now()}`,
+            privateKey: privateKeyPem,
+            installationId: "installation-refresh-invalid",
+          },
+          undefined,
+          { forceRefresh: true }
+        )
+      ).rejects.toThrow("Failed to get installation token: invalid response");
     });
   });
 });

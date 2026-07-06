@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { generateAppJwt, postReaction, checkSenderPermission } from "../src/github-auth";
+import {
+  generateAppJwt,
+  generateInstallationToken,
+  postReaction,
+  checkSenderPermission,
+} from "../src/github-auth";
 
 /** Generate a PKCS#8 PEM RSA key pair for testing. */
 async function generateTestKeyPair(): Promise<{ privateKeyPem: string }> {
@@ -128,6 +133,48 @@ describe("postReaction", () => {
         headers: expect.objectContaining({ "User-Agent": "Open-Inspect" }),
       })
     );
+  });
+});
+
+describe("generateInstallationToken", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("returns the token from a valid GitHub response", async () => {
+    const { privateKeyPem } = await generateTestKeyPair();
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ token: "installation-token" }), { status: 201 })
+    );
+
+    await expect(
+      generateInstallationToken({
+        appId: "12345",
+        privateKey: privateKeyPem,
+        installationId: "67890",
+      })
+    ).resolves.toBe("installation-token");
+  });
+
+  it("rejects a malformed GitHub token response", async () => {
+    const { privateKeyPem } = await generateTestKeyPair();
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ id: "not-a-token" }), { status: 201 })
+    );
+
+    await expect(
+      generateInstallationToken({
+        appId: "12345",
+        privateKey: privateKeyPem,
+        installationId: "67890",
+      })
+    ).rejects.toThrow("Failed to get installation token: invalid response");
   });
 });
 

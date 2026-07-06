@@ -70,6 +70,62 @@ describe("getGitHubConfig", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("accepts nullable config fields from successful response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: null,
+              reasoningEffort: null,
+              autoReviewOnOpen: false,
+              enabledRepos: ["acme/widgets"],
+              allowedTriggerUsers: ["octocat"],
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await getGitHubConfig(env, "acme/widgets");
+
+    expect(result).toEqual({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      autoReviewOnOpen: false,
+      enabledRepos: ["acme/widgets"],
+      allowedTriggerUsers: ["octocat"],
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
+    });
+  });
+
+  it("returns fail-closed config and logs warn on malformed response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(new Response(JSON.stringify({ config: { model: 123 } }), { status: 200 }))
+    );
+    const log = createMockLogger();
+
+    const result = await getGitHubConfig(env, "acme/widgets", log);
+
+    expect(result).toEqual({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      autoReviewOnOpen: false,
+      enabledRepos: [],
+      allowedTriggerUsers: [],
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.invalid_response",
+      expect.objectContaining({ repo: "acme/widgets", fallback: "fail_closed" })
+    );
+  });
+
   it("returns fail-closed config and logs warn on network error", async () => {
     const env = createMockEnv(() => Promise.reject(new Error("connection refused")));
     const log = createMockLogger();

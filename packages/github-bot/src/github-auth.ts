@@ -93,8 +93,13 @@ async function getInstallationToken(
     throw new Error(`Failed to get installation token: ${response.status} ${error}`);
   }
 
-  const data = (await response.json()) as { token: string };
-  return data.token;
+  const data: unknown = await response.json();
+  const token =
+    typeof data === "object" && data !== null ? (data as { token?: unknown }).token : null;
+  if (typeof token !== "string") {
+    throw new Error("Failed to get installation token: invalid response");
+  }
+  return token;
 }
 
 export async function generateInstallationToken(config: GitHubAppConfig): Promise<string> {
