@@ -20,6 +20,7 @@ def _make_supervisor(tmp_path) -> SandboxSupervisor:
     ):
         sup = SandboxSupervisor()
     sup.repo_path = tmp_path / "app"
+    sup.repositories = sup._parse_repositories()
     return sup
 
 
@@ -51,7 +52,7 @@ class TestStartScriptSkip:
         sup.repo_path.mkdir(parents=True, exist_ok=True)
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            result = await sup.run_start_script()
+            result = await sup.run_start_script(sup.repositories[0])
 
         assert result is True
         mock_exec.assert_not_called()
@@ -60,7 +61,7 @@ class TestStartScriptSkip:
         sup = _make_supervisor(tmp_path)
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            result = await sup.run_start_script()
+            result = await sup.run_start_script(sup.repositories[0])
 
         assert result is True
         mock_exec.assert_not_called()
@@ -77,7 +78,7 @@ class TestStartScriptSuccess:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_start_script()
+            result = await sup.run_start_script(sup.repositories[0])
 
         assert result is True
 
@@ -89,7 +90,7 @@ class TestStartScriptSuccess:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ) as mock_exec:
-            await sup.run_start_script()
+            await sup.run_start_script(sup.repositories[0])
 
         mock_exec.assert_called_once()
         call_args = mock_exec.call_args
@@ -106,7 +107,7 @@ class TestStartScriptSuccess:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ) as mock_exec:
-            await sup.run_start_script()
+            await sup.run_start_script(sup.repositories[0])
 
         env_arg = mock_exec.call_args[1]["env"]
         assert env_arg["OPENINSPECT_BOOT_MODE"] == "repo_image"
@@ -123,7 +124,7 @@ class TestStartScriptFailure:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_start_script()
+            result = await sup.run_start_script(sup.repositories[0])
 
         assert result is False
 
@@ -136,7 +137,7 @@ class TestStartScriptFailure:
             new_callable=AsyncMock,
             side_effect=OSError("exec failed"),
         ):
-            result = await sup.run_start_script()
+            result = await sup.run_start_script(sup.repositories[0])
 
         assert result is False
 
@@ -155,7 +156,7 @@ class TestStartScriptTimeout:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_start_script()
+            result = await sup.run_start_script(sup.repositories[0])
 
         assert result is False
         fake_proc.kill.assert_called_once()
@@ -181,7 +182,7 @@ class TestStartScriptTimeout:
             import os
 
             os.environ.pop("START_TIMEOUT_SECONDS", None)
-            await sup.run_start_script()
+            await sup.run_start_script(sup.repositories[0])
 
         assert captured_timeout["value"] == 120
 
@@ -202,7 +203,7 @@ class TestStartScriptTimeout:
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
             patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
-            await sup.run_start_script()
+            await sup.run_start_script(sup.repositories[0])
 
         assert captured_timeout["value"] == 45
 
@@ -213,7 +214,7 @@ class TestStartInRunStrict:
     async def test_run_fails_fast_when_start_script_fails(self, tmp_path):
         sup = _make_supervisor(tmp_path)
 
-        sup.perform_git_sync = AsyncMock(return_value=True)
+        sup.sync_repositories = AsyncMock(return_value=[])
         sup.run_setup_script = AsyncMock(return_value=True)
         sup.run_start_script = AsyncMock(return_value=False)
         sup.start_opencode = AsyncMock()

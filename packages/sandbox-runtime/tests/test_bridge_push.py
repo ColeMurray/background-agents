@@ -159,3 +159,95 @@ async def test_handle_push_timeout_terminates_process_and_sends_error(tmp_path: 
     assert event["error"] == "Push failed - git push timed out after 42s"
     assert event["branchName"] == "feature/test"
     assert isinstance(event["timestamp"], float)
+
+
+def _multi_repo_push_command() -> dict:
+    cmd = _push_command()
+    cmd["pushSpec"]["repoOwner"] = "open-inspect"
+    cmd["pushSpec"]["repoName"] = "backend"
+    return cmd
+
+
+@pytest.mark.asyncio
+async def test_handle_push_targets_member_from_spec(tmp_path: Path):
+    """A spec carrying repo identity pushes from that member's checkout."""
+    bridge = _create_bridge(tmp_path)  # creates tmp_path/repo/.git
+    (tmp_path / "backend" / ".git").mkdir(parents=True)
+    bridge._send_event = AsyncMock()
+    process = _fake_process(returncode=0)
+    captured: dict = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return process
+
+    with patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        await bridge._handle_push(_multi_repo_push_command())
+
+    assert captured["cwd"] == tmp_path / "backend"
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_complete"
+    assert event["branchName"] == "feature/test"
+    assert event["repoOwner"] == "open-inspect"
+    assert event["repoName"] == "backend"
+
+
+@pytest.mark.asyncio
+async def test_handle_push_unknown_member_errors_without_pushing(tmp_path: Path):
+    bridge = _create_bridge(tmp_path)
+    bridge._send_event = AsyncMock()
+    cmd = _multi_repo_push_command()
+    cmd["pushSpec"]["repoName"] = "missing"
+
+    with patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec") as mock_exec:
+        await bridge._handle_push(cmd)
+
+    mock_exec.assert_not_called()
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_error"
+    assert "not found in workspace" in event["error"]
+    assert event["branchName"] == "feature/test"
+    assert event["repoName"] == "missing"
+
+
+@pytest.mark.asyncio
+async def test_handle_push_without_identity_keeps_legacy_behavior(tmp_path: Path):
+    """Specs without repo identity push from the sole clone, no repo fields."""
+    bridge = _create_bridge(tmp_path)
+    bridge._send_event = AsyncMock()
+    process = _fake_process(returncode=0)
+    captured: dict = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return process
+
+    with patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        await bridge._handle_push(_push_command())
+
+    assert captured["cwd"] == tmp_path / "repo"
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_complete"
+    assert "repoOwner" not in event
+    assert "repoName" not in event
+
+
+@pytest.mark.asyncio
+async def test_handle_push_no_repo_error_includes_branch(tmp_path: Path):
+    """The no-repository error must carry branchName so the control plane can
+    resolve its pending push instead of leaking it for 360s."""
+    bridge = AgentBridge(
+        sandbox_id="test-sandbox",
+        session_id="test-session",
+        control_plane_url="http://localhost:8787",
+        auth_token="test-token",
+    )
+    bridge.repo_path = tmp_path  # no clones at all
+    bridge._send_event = AsyncMock()
+
+    await bridge._handle_push(_push_command())
+
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_error"
+    assert event["error"] == "No repository found"
+    assert event["branchName"] == "feature/test"

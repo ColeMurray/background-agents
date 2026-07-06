@@ -120,8 +120,25 @@ class McpServerConfig(TypedDict, total=False):
     enabled: bool
 
 
+class SessionRepositoryConfig(TypedDict, total=False):
+    """One member of a multi-repo session, in position order (first = primary).
+
+    Mirrors the control plane's per-repo spawn shape (snake_case wire form).
+    """
+
+    repo_owner: str
+    repo_name: str
+    branch: str | None
+
+
 class SessionConfig(BaseModel):
-    """Configuration passed to sandbox for a session."""
+    """Configuration passed to sandbox for a session.
+
+    This model is round-tripped by modal-infra (web_api builds it from the
+    create request, the manager serializes it into the SESSION_CONFIG env
+    var), and pydantic silently drops unknown keys — new wire fields MUST be
+    added here or they never reach the sandbox.
+    """
 
     session_id: str
     repo_owner: str | None = None
@@ -132,3 +149,9 @@ class SessionConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     mcp_servers: list[McpServerConfig] | None = None
+    # Ordered member list for multi-repo sessions; absent for scalar sessions
+    # (the runtime synthesizes a one-entry list from repo_owner/repo_name).
+    repositories: list[SessionRepositoryConfig] | None = None
+    # Shared working-branch name, computed control-plane-side
+    # (generateBranchName) — the runtime never derives branch names itself.
+    working_branch_name: str | None = None

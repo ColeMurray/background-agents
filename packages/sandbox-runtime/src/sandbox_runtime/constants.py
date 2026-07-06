@@ -20,3 +20,8 @@ TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env"
 # Comma-separated tunnel ports the manager will resolve. Read by the entrypoint
 # to gate stale-file cleanup and the wait-for-fresh-URLs before start.sh.
 EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"
+
+# Boot warnings queued by the supervisor (which has no control-plane event
+# channel) and drained by the bridge as `warning` sandbox events after its
+# WebSocket handshake. JSONL: one {scope, message, repoOwner?, repoName?} per line.
+BOOT_WARNINGS_FILE_PATH = "/tmp/oi-boot-warnings.jsonl"

@@ -45,9 +45,29 @@ function getSessionId() {
   }
 }
 
-async function getCurrentBranch() {
+// Ordered repository list from SESSION_CONFIG (empty for scalar sessions).
+function getRepositories() {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    const config = JSON.parse(process.env.SESSION_CONFIG || "{}");
+    const repositories = Array.isArray(config.repositories) ? config.repositories : [];
+    return repositories
+      .map((entry) => ({
+        owner: String(entry?.repo_owner || "").trim(),
+        name: String(entry?.repo_name || "").trim(),
+      }))
+      .filter((entry) => entry.owner && entry.name);
+  } catch (e) {
+    console.log("[create-pull-request] Failed to parse SESSION_CONFIG repositories:", e.message);
+    return [];
+  }
+}
+
+async function getCurrentBranch(repoName) {
+  try {
+    const gitArgs = repoName
+      ? ["-C", `/workspace/${repoName}`, "rev-parse", "--abbrev-ref", "HEAD"]
+      : ["rev-parse", "--abbrev-ref", "HEAD"];
+    const { stdout } = await execFileAsync("git", gitArgs, {
       timeout: 5000,
     });
     const branch = stdout.trim();
@@ -81,8 +101,13 @@ export default tool({
     baseBranch: z
       .string()
       .optional()
+      .describe("Target branch to merge into. Defaults to the session's base branch."),
+    repo: z
+      .string()
+      .optional()
       .describe(
-        "Target branch to merge into. Defaults to the repository's default branch (usually 'main')."
+        'Target repository as "owner/name". Required when the session spans multiple ' +
+          "repositories; may be omitted for single-repository sessions."
       ),
   },
   async execute(args, context) {
@@ -90,7 +115,35 @@ export default tool({
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";
     const baseBranch = args.baseBranch; // undefined if not provided, server will use default
-    const headBranch = await getCurrentBranch();
+
+    // Resolve the target repository for multi-repo sessions.
+    const repositories = getRepositories();
+    const validValues = repositories.map((r) => `${r.owner}/${r.name}`).join(", ");
+    let repoOwner;
+    let repoName;
+    if (args.repo) {
+      const parts = String(args.repo).trim().split("/");
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        return `Failed to create pull request: repo must be "owner/name"${
+          validValues ? ` (one of: ${validValues})` : ""
+        }.`;
+      }
+      [repoOwner, repoName] = parts;
+      if (
+        repositories.length > 0 &&
+        !repositories.some(
+          (r) =>
+            r.owner.toLowerCase() === repoOwner.toLowerCase() &&
+            r.name.toLowerCase() === repoName.toLowerCase()
+        )
+      ) {
+        return `Failed to create pull request: ${args.repo} is not part of this session. Valid values: ${validValues}.`;
+      }
+    } else if (repositories.length > 1) {
+      return `Failed to create pull request: this session spans multiple repositories — pass repo with one of: ${validValues}.`;
+    }
+
+    const headBranch = await getCurrentBranch(repoName);
 
     try {
       const sessionId = getSessionId();
@@ -118,6 +171,8 @@ export default tool({
           body: body,
           baseBranch: baseBranch,
           headBranch: headBranch,
+          repoOwner: repoOwner,
+          repoName: repoName,
           timestamp: Date.now(),
         }),
       });

@@ -18,11 +18,13 @@ import re
 import shutil
 import signal
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
 from .constants import (
+    BOOT_WARNINGS_FILE_PATH,
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
@@ -37,6 +39,21 @@ from .repo_image_callback import RepoImageBuildCallback
 configure_logging()
 
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
+
+
+@dataclass(frozen=True)
+class RepoEntry:
+    """One repository of the session workspace, in position order.
+
+    The first entry is the primary (mirrors REPO_OWNER/REPO_NAME); every
+    downstream code path iterates the list so single- and multi-repo sessions
+    share one shape.
+    """
+
+    owner: str
+    name: str
+    branch: str
+    path: Path
 
 
 def _port_from_env(env_var: str, default: int) -> int:
@@ -140,6 +157,13 @@ class SandboxSupervisor:
         )
         self.session_id_file = Path("/tmp/opencode-session-id")
 
+        # Ordered repository list. SESSION_CONFIG.repositories is the source
+        # of truth; absent, a one-entry list is synthesized from the scalar
+        # env so every downstream path iterates the same shape. repo_path
+        # stays the primary's path (repositories[0] mirrors REPO_OWNER/NAME).
+        self.repositories = self._parse_repositories()
+        self.is_multi_repo = len(self.repositories) > 1
+
         # Logger
         session_id = self.session_config.get("session_id", "")
         self.log = get_logger(
@@ -154,13 +178,47 @@ class SandboxSupervisor:
         """The branch to clone/fetch — defaults to 'main'."""
         return self.session_config.get("branch") or "main"
 
-    def _build_repo_url(self) -> str:
-        """Build the plain HTTPS URL for the repository.
+    def _parse_repositories(self) -> list[RepoEntry]:
+        """Build the ordered repository list from SESSION_CONFIG or the scalar env."""
+        raw = self.session_config.get("repositories")
+        entries: list[RepoEntry] = []
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                owner = str(item.get("repo_owner") or "").strip()
+                name = str(item.get("repo_name") or "").strip()
+                if not owner or not name:
+                    continue
+                branch = str(item.get("branch") or "").strip() or "main"
+                entries.append(
+                    RepoEntry(
+                        owner=owner,
+                        name=name,
+                        branch=branch,
+                        path=self.workspace_path / name,
+                    )
+                )
+        if entries:
+            return entries
+        if self.has_repository:
+            return [
+                RepoEntry(
+                    owner=self.repo_owner,
+                    name=self.repo_name,
+                    branch=self.base_branch,
+                    path=self.repo_path,
+                )
+            ]
+        return []
+
+    def _build_repo_url(self, repo: RepoEntry) -> str:
+        """Build the plain HTTPS URL for a repository.
 
         Authentication is supplied per-request by the system git credential
         helper, so the remote URL itself never carries a secret.
         """
-        return f"https://{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
+        return f"https://{self.vcs_host}/{repo.owner}/{repo.name}.git"
 
     def _redact_git_stderr(self, stderr_text: str) -> str:
         """Redact credential-bearing URLs from git stderr.
@@ -175,16 +233,16 @@ class SandboxSupervisor:
     # Git primitives
     # ------------------------------------------------------------------
 
-    async def _clone_repo(self) -> bool:
-        """Shallow-clone the repository.
+    async def _clone_repo(self, repo: RepoEntry) -> bool:
+        """Shallow-clone a repository.
 
         The remote URL is unauthenticated — the system-wide git credential
         helper supplies short-lived credentials per request.
         """
         self.log.info(
             "git.clone_start",
-            repo_owner=self.repo_owner,
-            repo_name=self.repo_name,
+            repo_owner=repo.owner,
+            repo_name=repo.name,
         )
 
         result = await asyncio.create_subprocess_exec(
@@ -193,9 +251,9 @@ class SandboxSupervisor:
             "--depth",
             str(self.CLONE_DEPTH_COMMITS),
             "--branch",
-            self.base_branch,
-            self._build_repo_url(),
-            str(self.repo_path),
+            repo.branch,
+            self._build_repo_url(repo),
+            str(repo.path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -204,12 +262,14 @@ class SandboxSupervisor:
         if result.returncode != 0:
             self.log.error(
                 "git.clone_error",
+                repo_owner=repo.owner,
+                repo_name=repo.name,
                 stderr=self._redact_git_stderr(stderr.decode()),
                 exit_code=result.returncode,
             )
             return False
 
-        self.log.info("git.clone_complete", repo_path=str(self.repo_path))
+        self.log.info("git.clone_complete", repo_path=str(repo.path))
         return True
 
     async def _ensure_credential_helper_configured(self) -> None:
@@ -296,7 +356,7 @@ class SandboxSupervisor:
         except OSError as e:
             self.log.debug("gh_wrapper.install_failed", error=str(e))
 
-    async def _ensure_plain_origin(self) -> bool:
+    async def _ensure_plain_origin(self, repo: RepoEntry) -> bool:
         """Rewrite the `origin` remote to a credential-free HTTPS URL.
 
         Older workspaces/images (from before the credential-helper migration)
@@ -311,14 +371,14 @@ class SandboxSupervisor:
 
         Idempotent — safe to call on every boot.
         """
-        expected_url = self._build_repo_url()
+        expected_url = self._build_repo_url(repo)
         proc = await asyncio.create_subprocess_exec(
             "git",
             "remote",
             "set-url",
             "origin",
             expected_url,
-            cwd=self.repo_path,
+            cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -332,7 +392,7 @@ class SandboxSupervisor:
             return False
         return True
 
-    async def _fetch_branch(self, branch: str) -> bool:
+    async def _fetch_branch(self, repo: RepoEntry, branch: str) -> bool:
         """Fetch a branch with an explicit refspec.
 
         Uses an explicit refspec so that ``refs/remotes/origin/<branch>`` is
@@ -343,7 +403,7 @@ class SandboxSupervisor:
             "fetch",
             "origin",
             f"{branch}:refs/remotes/origin/{branch}",
-            cwd=self.repo_path,
+            cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -357,7 +417,7 @@ class SandboxSupervisor:
             return False
         return True
 
-    async def _checkout_branch(self, branch: str) -> bool:
+    async def _checkout_branch(self, repo: RepoEntry, branch: str) -> bool:
         """Create/reset a local branch to match the remote tip."""
         result = await asyncio.create_subprocess_exec(
             "git",
@@ -365,7 +425,7 @@ class SandboxSupervisor:
             "-B",
             branch,
             f"origin/{branch}",
-            cwd=self.repo_path,
+            cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -384,40 +444,41 @@ class SandboxSupervisor:
     # Git sync methods (compose the primitives above)
     # ------------------------------------------------------------------
 
-    async def _update_existing_repo(self) -> bool:
+    async def _update_existing_repo(self, repo: RepoEntry) -> bool:
         """Fetch the target branch and check it out in an existing repo.
 
         Used by both snapshot-restore and repo-image boot paths where the
         repository already exists on disk.
         """
-        if not self.has_repository:
-            self.log.info("git.update_skip", reason="no_repo_configured")
-            return True
-        if not self.repo_path.exists():
-            self.log.info("git.update_skip", reason="no_repo_path")
+        if not repo.path.exists():
+            self.log.info(
+                "git.update_skip",
+                reason="no_repo_path",
+                repo_owner=repo.owner,
+                repo_name=repo.name,
+            )
             return False
 
         try:
-            if not await self._ensure_plain_origin():
+            if not await self._ensure_plain_origin(repo):
                 return False
-            branch = self.base_branch
-            if not await self._fetch_branch(branch):
+            if not await self._fetch_branch(repo, repo.branch):
                 return False
-            return await self._checkout_branch(branch)
+            return await self._checkout_branch(repo, repo.branch)
         except Exception as e:
-            self.log.error("git.update_error", exc=e)
+            self.log.error("git.update_error", exc=e, repo_owner=repo.owner, repo_name=repo.name)
             return False
 
-    async def _get_head_sha(self) -> str:
-        """Return the HEAD SHA of the repo, or empty string on failure."""
-        if not self.repo_path.exists():
+    async def _get_head_sha(self, repo: RepoEntry) -> str:
+        """Return the HEAD SHA of a repo, or empty string on failure."""
+        if not repo.path.exists():
             return ""
         try:
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "rev-parse",
                 "HEAD",
-                cwd=self.repo_path,
+                cwd=repo.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -428,31 +489,176 @@ class SandboxSupervisor:
             self.log.warn("git.rev_parse_error", error=str(e))
         return ""
 
-    async def perform_git_sync(self) -> bool:
-        """Clone repository if needed, then sync to the target branch.
+    async def _sync_repo(self, repo: RepoEntry) -> bool:
+        """Sync one repository: update in place when present, clone when missing.
 
-        Returns:
-            True if sync completed successfully, False otherwise.
+        The same rule serves every boot mode — a fresh boot clones, an
+        image/snapshot boot finds the path and fetches — so member count and
+        boot mode never multiply into special cases here. Failure policy is
+        the caller's (run()) job.
         """
         self.log.debug(
             "git.sync_start",
-            repo_owner=self.repo_owner,
-            repo_name=self.repo_name,
-            repo_path=str(self.repo_path),
+            repo_owner=repo.owner,
+            repo_name=repo.name,
+            repo_path=str(repo.path),
         )
-
-        if not self.has_repository:
-            self.log.info("git.skip_clone", reason="no_repo_configured")
-            return True
-
-        if not self.repo_path.exists():
-            if not self.repo_owner or not self.repo_name:
-                self.log.info("git.skip_clone", reason="no_repo_configured")
-                return True
-            if not await self._clone_repo():
+        if not repo.path.exists():
+            if not await self._clone_repo(repo):
                 return False
+        return await self._update_existing_repo(repo)
 
-        return await self._update_existing_repo()
+    async def sync_repositories(self) -> list[RepoEntry]:
+        """Sync all repositories concurrently; returns the members that failed."""
+        if not self.repositories:
+            self.log.info("git.skip_clone", reason="no_repo_configured")
+            return []
+
+        results = await asyncio.gather(*(self._sync_repo(repo) for repo in self.repositories))
+        return [repo for repo, ok in zip(self.repositories, results, strict=True) if not ok]
+
+    # ------------------------------------------------------------------
+    # Multi-repo workspace assembly
+    # ------------------------------------------------------------------
+
+    def _record_boot_warning(
+        self, *, scope: str, message: str, repo: RepoEntry | None = None
+    ) -> None:
+        """Queue a `warning` sandbox event for the bridge to forward on connect.
+
+        The supervisor has no control-plane event channel of its own (only the
+        fatal-error endpoint), and every boot warning happens before the
+        bridge exists — so warnings are appended to a file the bridge drains
+        after its WebSocket handshake.
+        """
+        entry: dict = {"scope": scope, "message": message}
+        if repo is not None:
+            entry["repoOwner"] = repo.owner
+            entry["repoName"] = repo.name
+        # `message` is a reserved LogRecord field — don't pass it as a log kwarg.
+        self.log.warn(
+            "supervisor.boot_warning",
+            scope=scope,
+            warning_message=message,
+            repo_owner=repo.owner if repo is not None else None,
+            repo_name=repo.name if repo is not None else None,
+        )
+        try:
+            with open(BOOT_WARNINGS_FILE_PATH, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            self.log.warn("supervisor.boot_warning_write_failed", exc=e)
+
+    def _opencode_workdir(self) -> Path:
+        """Root directory for OpenCode and code-server.
+
+        Single-repo sessions keep today's behavior (the repo itself when
+        cloned); multi-repo and repo-less sessions root at /workspace.
+        """
+        if (
+            len(self.repositories) == 1
+            and self.repo_path.exists()
+            and (self.repo_path / ".git").exists()
+        ):
+            return self.repo_path
+        return self.workspace_path
+
+    def _assemble_workspace_opencode(self) -> None:
+        """Merge member repos' .opencode/ into the workspace root (multi-repo only).
+
+        OpenCode discovers config relative to its cwd — /workspace for
+        multi-repo sessions — so per-repo custom tools/skills/commands would
+        never load. Files are copied in position order, last write wins with a
+        warning naming both members; the system tools installed afterwards
+        still override on filename collision (same as single-repo today).
+        """
+        if not self.is_multi_repo:
+            return
+
+        dest_root = self.workspace_path / ".opencode"
+        provenance: dict[str, RepoEntry] = {}
+        for repo in self.repositories:
+            src_root = repo.path / ".opencode"
+            if not src_root.is_dir():
+                continue
+            for src in sorted(src_root.rglob("*")):
+                if not src.is_file():
+                    continue
+                rel = src.relative_to(src_root)
+                if any(part in ("node_modules", "__pycache__") for part in rel.parts):
+                    continue
+                prior = provenance.get(str(rel))
+                if prior is not None:
+                    self._record_boot_warning(
+                        scope="assembly",
+                        repo=repo,
+                        message=(
+                            f".opencode/{rel} from {prior.owner}/{prior.name} is overridden "
+                            f"by {repo.owner}/{repo.name} (later repositories win)"
+                        ),
+                    )
+                dest = dest_root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                provenance[str(rel)] = repo
+
+        if provenance:
+            self.log.info(
+                "opencode.workspace_assembled",
+                file_count=len(provenance),
+                repo_count=len(self.repositories),
+            )
+
+    def _write_workspace_manifest(self) -> None:
+        """Write the generated /workspace/AGENTS.md for multi-repo sessions.
+
+        Regenerated on every boot (restores included) so it always reflects
+        the session's member set; single-repo sessions are untouched.
+        """
+        if not self.is_multi_repo:
+            return
+
+        primary = self.repositories[0]
+        lines = [
+            "<!-- Generated by Open-Inspect on every boot. Do not edit. -->",
+            "",
+            "# Workspace",
+            "",
+            "This session spans multiple repositories, checked out side by side:",
+            "",
+            "| Path | Repository | Base branch |",
+            "| --- | --- | --- |",
+        ]
+        for repo in self.repositories:
+            lines.append(f"| `./{repo.name}/` | {repo.owner}/{repo.name} | `{repo.branch}` |")
+        lines.append("")
+
+        working_branch = str(self.session_config.get("working_branch_name") or "").strip()
+        if working_branch:
+            lines.append(f"All work happens on the branch `{working_branch}` in every repository.")
+            lines.append("")
+
+        member_docs = [repo for repo in self.repositories if (repo.path / "AGENTS.md").exists()]
+        if member_docs:
+            lines.append(
+                "Repository-specific instructions are NOT loaded automatically. "
+                "Read them before working in a repository:"
+            )
+            lines.append("")
+            lines.extend(f"- `./{repo.name}/AGENTS.md`" for repo in member_docs)
+            lines.append("")
+
+        lines.append(
+            "To open a pull request, call the `create-pull-request` tool once per repository "
+            f'with changes, passing its `repo` argument (e.g. `repo: "{primary.owner}/{primary.name}"`).'
+        )
+        lines.append("")
+
+        try:
+            (self.workspace_path / "AGENTS.md").write_text("\n".join(lines))
+            self.log.info("workspace.manifest_written", repo_count=len(self.repositories))
+        except Exception as e:
+            self.log.warn("workspace.manifest_write_failed", exc=e)
 
     def _install_tools(self, workdir: Path) -> None:
         """Copy custom tools into the .opencode/tool directory for OpenCode to discover."""
@@ -572,6 +778,7 @@ class SandboxSupervisor:
 
         The global seed is best-effort (degrades to a slower reify); the rest fail fast.
         """
+        self._assemble_workspace_opencode()
         self._install_tools(workdir)
         try:
             self._seed_global_opencode_deps()
@@ -672,10 +879,7 @@ class SandboxSupervisor:
             self.log.info("code_server.skip", reason="no_password")
             return
 
-        # Use repo path if cloned, otherwise /workspace
-        workdir = self.workspace_path
-        if self.repo_path.exists() and (self.repo_path / ".git").exists():
-            workdir = self.repo_path
+        workdir = self._opencode_workdir()
 
         code_server_port = _port_from_env(CODE_SERVER_PORT_ENV_VAR, CODE_SERVER_PORT)
         self.code_server_process = await asyncio.create_subprocess_exec(
@@ -925,10 +1129,9 @@ class SandboxSupervisor:
                 opencode_config["mcp"] = mcp_config
                 self.log.info("mcp.configured", count=len(mcp_config))
 
-        # Determine working directory - use repo path if cloned, otherwise /workspace
-        workdir = self.workspace_path
-        if self.repo_path.exists() and (self.repo_path / ".git").exists():
-            workdir = self.repo_path
+        # Working directory: the repo for single-repo sessions, /workspace
+        # for multi-repo (every member visible) and repo-less sessions.
+        workdir = self._opencode_workdir()
 
         self._prepare_opencode_filesystem(workdir)
 
@@ -1256,18 +1459,19 @@ class SandboxSupervisor:
     async def _run_hook(
         self,
         *,
+        repo: RepoEntry,
         hook_name: str,
         relative_script_path: str,
         timeout_env_var: str,
         default_timeout_seconds: int,
     ) -> bool:
         """
-        Run a repo hook script if present.
+        Run one repository's hook script if present.
 
         Returns:
             True if script succeeded or was not present, False on failure/timeout.
         """
-        script_path = self.repo_path / relative_script_path
+        script_path = repo.path / relative_script_path
         start_time = time.time()
 
         if not script_path.exists():
@@ -1287,6 +1491,8 @@ class SandboxSupervisor:
         self.log.info(
             f"{hook_name}.start",
             script=str(script_path),
+            repo_owner=repo.owner,
+            repo_name=repo.name,
             timeout_seconds=timeout_seconds,
             boot_mode=self.boot_mode,
         )
@@ -1295,7 +1501,7 @@ class SandboxSupervisor:
             process = await asyncio.create_subprocess_exec(
                 "bash",
                 str(script_path),
-                cwd=self.repo_path,
+                cwd=repo.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._hook_env(),
@@ -1356,31 +1562,36 @@ class SandboxSupervisor:
             )
             return False
 
-    async def run_setup_script(self) -> bool:
+    async def run_setup_script(self, repo: RepoEntry) -> bool:
         """
-        Run .openinspect/setup.sh if it exists in the cloned repo.
+        Run one repository's .openinspect/setup.sh if it exists.
 
-        Fresh-session failures are non-fatal. Build mode callers may treat
-        failures as fatal.
+        Fatality is the caller's (run()) decision: build boots fail on any
+        member, fresh boots warn and continue.
 
         Returns:
             True if script succeeded or was not present, False on failure/timeout.
         """
         return await self._run_hook(
+            repo=repo,
             hook_name="setup",
             relative_script_path=self.SETUP_SCRIPT_PATH,
             timeout_env_var="SETUP_TIMEOUT_SECONDS",
             default_timeout_seconds=self.DEFAULT_SETUP_TIMEOUT_SECONDS,
         )
 
-    async def run_start_script(self) -> bool:
+    async def run_start_script(self, repo: RepoEntry) -> bool:
         """
-        Run .openinspect/start.sh if it exists in the repository.
+        Run one repository's .openinspect/start.sh if it exists.
+
+        Fatality is the caller's (run()) decision: the primary stays fatal,
+        secondaries warn and continue.
 
         Returns:
             True if script succeeded or was not present, False on failure/timeout.
         """
         return await self._run_hook(
+            repo=repo,
             hook_name="start",
             relative_script_path=self.START_SCRIPT_PATH,
             timeout_env_var="START_TIMEOUT_SECONDS",
@@ -1507,6 +1718,10 @@ class SandboxSupervisor:
         if restored_from_snapshot or expected_tunnel_ports:
             self._clear_stale_tunnel_env_file()
 
+        # Boot warnings are per-boot; a snapshot can carry the previous
+        # boot's file, so always start clean.
+        Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
+
         # Set up signal handlers
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1519,44 +1734,88 @@ class SandboxSupervisor:
             # Phase 0: Make sure the git credential helper is configured
             # before any git operation. New images do this in /etc/gitconfig,
             # but snapshots/repo-images built before this migration won't.
-            if self.has_repository:
+            if self.repositories:
                 await self._ensure_credential_helper_configured()
 
-            # Phase 1: Git sync
-            if restored_from_snapshot:
-                git_sync_success = await self._update_existing_repo()
-                if not git_sync_success:
-                    self.log.warn(
-                        "git.snapshot_resync_failed",
-                        reason="origin rewrite or fetch failed; repo may be stale",
+            # Phase 1: Git sync — one per-repo rule for every boot mode
+            # (existing checkout → fetch/checkout, missing → clone). Only the
+            # failure policy differs: fresh and build boots cannot do useful
+            # work without every repository, so any failure is fatal
+            # (deliberate change — previously a fresh boot limped on
+            # repo-less); image/snapshot boots keep their leniency (a deleted
+            # upstream branch must not brick a resume).
+            failed_repos = await self.sync_repositories()
+            git_sync_success = not failed_repos
+            if failed_repos:
+                if self.boot_mode in ("fresh", "build"):
+                    failed_names = ", ".join(f"{r.owner}/{r.name}" for r in failed_repos)
+                    raise RuntimeError(f"git sync failed for {failed_names}")
+                for repo in failed_repos:
+                    self._record_boot_warning(
+                        scope="sync",
+                        repo=repo,
+                        message=(
+                            f"Could not update {repo.owner}/{repo.name} from origin; "
+                            "the checkout may be stale."
+                        ),
                     )
-            elif from_repo_image:
-                git_sync_success = await self._update_existing_repo()
-            else:
-                git_sync_success = await self.perform_git_sync()
-            if image_build_mode and git_sync_success:
-                head_sha = await self._get_head_sha()
+            if image_build_mode and git_sync_success and self.repositories:
+                head_sha = await self._get_head_sha(self.repositories[0])
                 if head_sha:
                     self.log.info("git.sync_complete", head_sha=head_sha)
             self.git_sync_complete.set()
 
-            # Phase 2: Run setup script only for fresh or build boots.
+            # Phase 2: Setup hooks, members in position order, only for fresh
+            # or build boots (prebuilt/snapshot boots ran them at build time).
+            # Build boots fail on the first failing member; fresh boots warn
+            # and continue.
             setup_success: bool | None = None
-            if self.has_repository and self.boot_mode in ("fresh", "build"):
-                setup_success = await self.run_setup_script()
-                if image_build_mode and not setup_success:
-                    raise RuntimeError("setup hook failed in build mode")
+            if self.repositories and self.boot_mode in ("fresh", "build"):
+                setup_success = True
+                for repo in self.repositories:
+                    if await self.run_setup_script(repo):
+                        continue
+                    setup_success = False
+                    if image_build_mode:
+                        raise RuntimeError(
+                            f"setup hook failed for {repo.owner}/{repo.name} in build mode"
+                        )
+                    self._record_boot_warning(
+                        scope="setup",
+                        repo=repo,
+                        message=(
+                            f"setup.sh failed for {repo.owner}/{repo.name}; "
+                            "the session continues without it."
+                        ),
+                    )
 
-            # Phase 3: Run runtime start hook for all non-build boots. Wait for
-            # tunnel URLs first so dev servers booted by start.sh see fresh data.
+            # Phase 3: Start hooks for all non-build boots, members in
+            # position order. The primary stays fatal (a broken primary dev
+            # server is a broken session); secondary failures warn and
+            # continue. Wait for tunnel URLs first so dev servers booted by
+            # start.sh see fresh data.
             start_success: bool | None = None
-            if self.has_repository and self.boot_mode != "build":
+            if self.repositories and self.boot_mode != "build":
                 await self._wait_for_tunnel_env_file(expected_tunnel_ports)
-                start_success = await self.run_start_script()
-                if not start_success:
-                    raise RuntimeError("start hook failed")
-            else:
-                start_success = None
+                start_success = True
+                for index, repo in enumerate(self.repositories):
+                    if await self.run_start_script(repo):
+                        continue
+                    start_success = False
+                    if index == 0:
+                        raise RuntimeError(f"start hook failed for {repo.owner}/{repo.name}")
+                    self._record_boot_warning(
+                        scope="start",
+                        repo=repo,
+                        message=(
+                            f"start.sh failed for {repo.owner}/{repo.name}; "
+                            "the session continues without it."
+                        ),
+                    )
+
+            # Multi-repo workspaces get a generated manifest at /workspace/
+            # AGENTS.md (regenerated every boot; no-op for single-repo).
+            self._write_workspace_manifest()
 
             # Image build mode: signal completion then keep sandbox alive for
             # snapshot_filesystem(). MCP packages are not pre-installed during

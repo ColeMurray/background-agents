@@ -28,6 +28,7 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
+from .constants import BOOT_WARNINGS_FILE_PATH
 from .log_config import configure_logging, get_logger
 from .types import GitUser
 
@@ -352,6 +353,8 @@ class AgentBridge:
                     }
                 )
 
+                await self._drain_boot_warnings()
+
                 just_flushed = await self._flush_event_buffer()
                 await self._flush_pending_acks(skip_ack_ids=just_flushed)
 
@@ -402,6 +405,35 @@ class AgentBridge:
                         "timestamp": time.time(),
                     }
                 )
+
+    async def _drain_boot_warnings(self) -> None:
+        """Forward supervisor boot warnings queued before the bridge existed.
+
+        The supervisor appends {scope, message, repoOwner?, repoName?} lines
+        (see BOOT_WARNINGS_FILE_PATH); each becomes a `warning` sandbox event.
+        The file is consumed exactly once — reconnects must not replay it.
+        """
+        path = Path(BOOT_WARNINGS_FILE_PATH)
+        if not path.exists():
+            return
+        try:
+            lines = path.read_text().splitlines()
+            path.unlink(missing_ok=True)
+        except Exception as e:
+            self.log.warn("bridge.boot_warnings_read_failed", exc=e)
+            return
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict) or not entry.get("message"):
+                continue
+            await self._send_event({"type": "warning", **entry})
 
     async def _send_event(self, event: dict[str, Any]) -> None:
         """Send event to control plane, buffering if WS is unavailable."""
@@ -1481,26 +1513,64 @@ class AgentBridge:
         """Handle push command using provider-generated push spec."""
         push_spec = cmd.get("pushSpec") if isinstance(cmd.get("pushSpec"), dict) else None
         branch_name = str(push_spec.get("targetBranch", "")).strip() if push_spec else ""
+        repo_owner = str(push_spec.get("repoOwner", "")).strip() if push_spec else ""
+        repo_name = str(push_spec.get("repoName", "")).strip() if push_spec else ""
 
         self.log.info(
             "git.push_start",
             branch_name=branch_name,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             mode="push_spec",
         )
 
-        repo_dirs = list(self.repo_path.glob("*/.git"))
-        if not repo_dirs:
-            self.log.warn("git.push_error", reason="no_repo_configured")
-            await self._send_event(
-                {
-                    "type": "push_error",
-                    "error": "No repository found",
-                    "timestamp": time.time(),
-                }
-            )
-            return
+        def _repo_fields() -> dict[str, Any]:
+            """Repo identity echoed on push events when the spec carried it."""
+            fields: dict[str, Any] = {}
+            if repo_owner:
+                fields["repoOwner"] = repo_owner
+            if repo_name:
+                fields["repoName"] = repo_name
+            return fields
 
-        repo_dir = repo_dirs[0].parent
+        # Resolve the target checkout. A spec carrying repo identity targets
+        # that member directly (multi-repo sessions); a spec without one keeps
+        # the legacy behavior — the sole cloned repository under /workspace.
+        if repo_name:
+            repo_dir = self.repo_path / repo_name
+            if not (repo_dir / ".git").exists():
+                self.log.warn(
+                    "git.push_error",
+                    reason="repo_not_in_workspace",
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                )
+                await self._send_event(
+                    {
+                        "type": "push_error",
+                        "error": f"Repository {repo_owner}/{repo_name} not found in workspace",
+                        "branchName": branch_name,
+                        **_repo_fields(),
+                        "timestamp": time.time(),
+                    }
+                )
+                return
+        else:
+            repo_dirs = list(self.repo_path.glob("*/.git"))
+            if not repo_dirs:
+                self.log.warn("git.push_error", reason="no_repo_configured")
+                await self._send_event(
+                    {
+                        "type": "push_error",
+                        "error": "No repository found",
+                        # Included (possibly empty) so the control plane can
+                        # resolve its pending push instead of leaking it.
+                        "branchName": branch_name,
+                        "timestamp": time.time(),
+                    }
+                )
+                return
+            repo_dir = repo_dirs[0].parent
 
         try:
             if not push_spec:
@@ -1522,6 +1592,7 @@ class AgentBridge:
                         "type": "push_error",
                         "error": "Push failed - missing target branch",
                         "branchName": "",
+                        **_repo_fields(),
                         "timestamp": time.time(),
                     }
                 )
@@ -1539,6 +1610,7 @@ class AgentBridge:
                         "type": "push_error",
                         "error": "Push failed - invalid push specification",
                         "branchName": branch_name,
+                        **_repo_fields(),
                         "timestamp": time.time(),
                     }
                 )
@@ -1601,6 +1673,7 @@ class AgentBridge:
                             f"after {int(self.GIT_PUSH_TIMEOUT_SECONDS)}s"
                         ),
                         "branchName": branch_name,
+                        **_repo_fields(),
                         "timestamp": time.time(),
                     }
                 )
@@ -1625,15 +1698,22 @@ class AgentBridge:
                         if redacted_stderr_text
                         else "Push failed - unknown error",
                         "branchName": branch_name,
+                        **_repo_fields(),
                         "timestamp": time.time(),
                     }
                 )
             else:
-                self.log.info("git.push_complete", branch_name=branch_name)
+                self.log.info(
+                    "git.push_complete",
+                    branch_name=branch_name,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                )
                 await self._send_event(
                     {
                         "type": "push_complete",
                         "branchName": branch_name,
+                        **_repo_fields(),
                         "timestamp": time.time(),
                     }
                 )
@@ -1645,12 +1725,13 @@ class AgentBridge:
                     "type": "push_error",
                     "error": str(e),
                     "branchName": branch_name,
+                    **_repo_fields(),
                     "timestamp": time.time(),
                 }
             )
 
     async def _configure_git_identity(self, user: GitUser) -> None:
-        """Configure git identity for commit attribution."""
+        """Configure git identity for commit attribution in every member checkout."""
         self.log.debug("git.identity_configure", git_name=user.name, git_email=user.email)
 
         repo_dirs = list(self.repo_path.glob("*/.git"))
@@ -1658,9 +1739,7 @@ class AgentBridge:
             self.log.debug("git.identity_skip", reason="no_repo_configured")
             return
 
-        repo_dir = repo_dirs[0].parent
-
-        async def _run_git_config(*args: str) -> None:
+        async def _run_git_config(repo_dir: Path, *args: str) -> None:
             cmd = ["git", "config", "--local", *args]
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -1693,8 +1772,10 @@ class AgentBridge:
                 )
 
         try:
-            await _run_git_config("user.name", user.name)
-            await _run_git_config("user.email", user.email)
+            for git_dir in repo_dirs:
+                repo_dir = git_dir.parent
+                await _run_git_config(repo_dir, "user.name", user.name)
+                await _run_git_config(repo_dir, "user.email", user.email)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             self.log.error("git.identity_error", exc=e)
 
