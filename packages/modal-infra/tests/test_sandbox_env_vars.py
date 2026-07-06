@@ -109,11 +109,6 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     class FakeImage:
         object_id = "img-123"
 
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
-
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
@@ -165,11 +160,6 @@ async def test_restore_uses_default_timeout(monkeypatch):
     class FakeImage:
         object_id = "img-123"
 
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
-
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
@@ -208,11 +198,6 @@ async def test_restore_uses_custom_timeout(monkeypatch):
 
     class FakeImage:
         object_id = "img-123"
-
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
 
     def fake_from_id(*args, **kwargs):
         return FakeImage()
@@ -254,11 +239,6 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
 
     class FakeImage:
         object_id = "img-123"
-
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
 
     def fake_from_id(*args, **kwargs):
         return FakeImage()
@@ -318,11 +298,6 @@ def _fake_restore_setup(monkeypatch):
 
     class FakeImage:
         object_id = "img-123"
-
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -489,11 +464,6 @@ async def test_repo_image_boot_omits_fallback_tokens(monkeypatch):
     class FakeImage:
         object_id = "repo-img-1"
 
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
-
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
@@ -522,11 +492,6 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
 
     class FakeImage:
         object_id = "repo-img-1"
-
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -631,11 +596,6 @@ async def test_restore_no_repo_gets_host_scoping_without_tokens(monkeypatch):
     class FakeImage:
         object_id = "img-123"
 
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
-
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
@@ -674,11 +634,6 @@ async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatc
     class FakeImage:
         object_id = "img-123"
 
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
-
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
@@ -715,11 +670,6 @@ async def test_restore_github_includes_gh_cli_aliases(monkeypatch):
     class FakeImage:
         object_id = "img-123"
 
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
-
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
@@ -754,11 +704,6 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
 
     class FakeImage:
         object_id = "img-123"
-
-        class hydrate:
-            @staticmethod
-            async def aio() -> None:
-                return None
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))

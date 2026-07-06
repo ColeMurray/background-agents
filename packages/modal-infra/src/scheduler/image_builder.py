@@ -300,10 +300,8 @@ async def build_repo_image(
             raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
 
         # 4. Snapshot the running sandbox's filesystem
-        # ttl=None opts out of Modal 1.5's 30-day default TTL: a ready repo
-        # image for an idle repo must not expire out from under D1.
         image = await handle.modal_sandbox.snapshot_filesystem.aio(
-            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None
+            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
         )
         provider_image_id = image.object_id
 

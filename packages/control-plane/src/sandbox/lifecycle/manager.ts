@@ -18,7 +18,6 @@ import {
 import type { SandboxStatus } from "../../types";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
 import { SandboxProviderError, type SandboxProvider, type CreateSandboxConfig } from "../provider";
-import { SNAPSHOT_RESTORE_FAILED_ERROR_CODE } from "../client";
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
@@ -219,12 +218,7 @@ export interface RepoImageLookup {
     repoOwner: string,
     repoName: string,
     baseBranch?: string
-  ): Promise<{ id: string; provider_image_id: string; base_sha: string } | null>;
-  /**
-   * Mark a ready image failed after the provider could not restore it at
-   * spawn time, so the rebuild cron picks it up. Keyed by the D1 row id.
-   */
-  markRestoreFailed(imageId: string, error: string): Promise<boolean>;
+  ): Promise<{ provider_image_id: string; base_sha: string } | null>;
 }
 
 // ==================== Slack Agent-Notify Lookup ====================
@@ -417,7 +411,6 @@ export class SandboxLifecycleManager {
       // Look up pre-built repo image (graceful fallback on failure)
       let repoImageId: string | null = null;
       let repoImageSha: string | null = null;
-      let repoImageRowId: string | null = null;
       if (hasRepository && this.repoImageLookup) {
         try {
           const repoImage = await this.repoImageLookup.getLatestReady(
@@ -428,7 +421,6 @@ export class SandboxLifecycleManager {
           if (repoImage) {
             repoImageId = repoImage.provider_image_id;
             repoImageSha = repoImage.base_sha;
-            repoImageRowId = repoImage.id;
             this.log.info("Using pre-built repo image", {
               provider_image_id: repoImageId,
               base_sha: repoImageSha,
@@ -477,28 +469,6 @@ export class SandboxLifecycleManager {
         sandbox_id: result.sandboxId,
         provider_object_id: result.providerObjectId,
       });
-
-      // The provider fell back to the base image because the repo image could
-      // not be restored (e.g. expired snapshot). The session boots fine, just
-      // slower; fail the D1 row so the rebuild cron replaces it.
-      if (result.imageRestoreFailed && repoImageRowId && this.repoImageLookup) {
-        this.log.warn("Repo image failed to restore at spawn; booted from base image", {
-          event: "sandbox.repo_image_restore_failed",
-          repo_image_row_id: repoImageRowId,
-          provider_image_id: repoImageId,
-        });
-        try {
-          await this.repoImageLookup.markRestoreFailed(
-            repoImageRowId,
-            "Provider could not restore the image at spawn (expired or deleted)"
-          );
-        } catch (e) {
-          this.log.warn("Failed to mark repo image restore failure", {
-            repo_image_row_id: repoImageRowId,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
 
       if (result.providerObjectId) {
         this.storeAndBroadcastProviderObjectId(result.providerObjectId);
@@ -711,20 +681,16 @@ export class SandboxLifecycleManager {
       } else {
         this.log.error("Snapshot restore failed", {
           error: result.error,
-          error_code: result.errorCode,
           snapshot_image_id: snapshotImageId,
         });
-        // An expired snapshot is unrecoverable (the filesystem state is gone) —
-        // tell the user that, not a generic spawn failure.
-        const restoreError =
-          result.errorCode === SNAPSHOT_RESTORE_FAILED_ERROR_CODE
-            ? "The saved session snapshot has expired and can no longer be restored. Start a new session to continue this work."
-            : result.error || "Failed to restore from snapshot";
-        this.storage.setLastSpawnError(restoreError, Date.now());
+        this.storage.setLastSpawnError(
+          result.error || "Failed to restore from snapshot",
+          Date.now()
+        );
         this.storage.updateSandboxStatus("failed");
         this.broadcaster.broadcast({
           type: "sandbox_error",
-          error: restoreError,
+          error: result.error || "Failed to restore from snapshot",
         });
       }
     } catch (error) {
