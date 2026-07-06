@@ -711,7 +711,6 @@ export class SessionDO extends DurableObject<Env> {
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>
           repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
-        markRestoreFailed: (imageId, error) => repoImageStore.markRestoreFailed(imageId, error),
       };
     }
 

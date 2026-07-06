@@ -120,7 +120,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
         codeServerPassword: result.codeServerPassword,
         ttydUrl: result.ttydUrl,
         tunnelUrls: result.tunnelUrls,
-        imageRestoreFailed: result.imageRestoreFailed,
       };
     } catch (error) {
       throw this.classifyError("Failed to create sandbox", error);
@@ -169,7 +168,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
       return {
         success: false,
         error: result.error || "Unknown restore error",
-        errorCode: result.errorCode,
       };
     } catch (error) {
       if (error instanceof ModalApiError) {

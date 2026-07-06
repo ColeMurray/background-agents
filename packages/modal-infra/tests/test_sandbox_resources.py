@@ -94,11 +94,6 @@ class TestCreateSandboxResources:
         class FakeImage:
             object_id = "img-1"
 
-            class hydrate:
-                @staticmethod
-                async def aio() -> None:
-                    return None
-
         monkeypatch.setattr(
             "src.sandbox.manager.modal.Image.from_id", lambda *_a, **_kw: FakeImage()
         )

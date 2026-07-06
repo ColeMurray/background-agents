@@ -96,11 +96,6 @@ class TestRestoreFromSnapshotAgentSlackNotify:
         class FakeImage:
             object_id = "img-123"
 
-            class hydrate:
-                @staticmethod
-                async def aio() -> None:
-                    return None
-
         monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **k: FakeImage())
         _patch_create(monkeypatch, captured)
 
@@ -122,11 +117,6 @@ class TestRestoreFromSnapshotAgentSlackNotify:
 
         class FakeImage:
             object_id = "img-123"
-
-            class hydrate:
-                @staticmethod
-                async def aio() -> None:
-                    return None
 
         monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **k: FakeImage())
         _patch_create(monkeypatch, captured)

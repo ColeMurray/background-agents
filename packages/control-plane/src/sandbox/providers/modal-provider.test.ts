@@ -96,48 +96,6 @@ describe("ModalSandboxProvider", () => {
     });
   });
 
-  describe("restore-failure signal mapping", () => {
-    it("maps imageRestoreFailed through the createSandbox result", async () => {
-      const client = createMockModalClient({
-        createSandbox: vi.fn(
-          async (): Promise<CreateSandboxResponse> => ({
-            sandboxId: "sandbox-123",
-            modalObjectId: "modal-obj-123",
-            status: "created",
-            createdAt: Date.now(),
-            imageRestoreFailed: true,
-          })
-        ),
-      });
-      const provider = new ModalSandboxProvider(client);
-
-      const result = await provider.createSandbox(testConfig);
-
-      expect(result.imageRestoreFailed).toBe(true);
-    });
-
-    it("maps errorCode through the restoreFromSnapshot failure result", async () => {
-      const client = createMockModalClient({
-        restoreSandbox: vi.fn(
-          async (): Promise<RestoreSandboxResponse> => ({
-            success: false,
-            error: "Snapshot image im-1 is no longer available",
-            errorCode: "SNAPSHOT_RESTORE_FAILED",
-          })
-        ),
-      });
-      const provider = new ModalSandboxProvider(client);
-
-      const result = await provider.restoreFromSnapshot({
-        ...testConfig,
-        snapshotImageId: "im-1",
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.errorCode).toBe("SNAPSHOT_RESTORE_FAILED");
-    });
-  });
-
   describe("error classification", () => {
     describe("transient errors", () => {
       it("classifies 'fetch failed' as transient", async () => {
