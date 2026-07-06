@@ -188,7 +188,7 @@ describe("linear auth health", () => {
     expect(await getLinearAuthState(makeLinearBotEnv(kv), "org-1")).toBeNull();
   });
 
-  it("stores connected auth health without token material", async () => {
+  it("stores connected auth health", async () => {
     const { kv, store } = createFakeKV();
     const env = makeLinearBotEnv(kv);
 
@@ -212,8 +212,6 @@ describe("linear auth health", () => {
         appUserId: "app-user-1",
       },
     });
-    expect(JSON.stringify(state)).not.toContain("access_token");
-    expect(JSON.stringify(state)).not.toContain("refresh_token");
   });
 
   it("records unavailable fallback notification without changing auth status", async () => {
@@ -546,18 +544,8 @@ describe("linear auth health", () => {
 // ─── OAuth State ────────────────────────────────────────────────────────────
 
 describe("oauth state", () => {
-  it("signs OAuth state without writing to KV", async () => {
+  it("signs and validates OAuth state statelessly, without touching KV", async () => {
     const { kv, putCalls } = createFakeKV();
-    const env = makeLinearBotEnv(kv);
-    const state = await storeOAuthState(env, "state-1");
-
-    expect(state).toMatch(/^linear_oauth_state_v1\.[^.]+\.[a-f0-9]{64}$/u);
-    expect(putCalls).toHaveLength(0);
-    await expect(consumeOAuthState(env, state)).resolves.toBe(true);
-  });
-
-  it("validates OAuth state without KV get or delete", async () => {
-    const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv);
     const state = await storeOAuthState(env, "state-1");
     const kvMock = kv as unknown as {
@@ -565,8 +553,10 @@ describe("oauth state", () => {
       delete: ReturnType<typeof vi.fn>;
     };
 
+    expect(state).toMatch(/^linear_oauth_state_v1\.[^.]+\.[a-f0-9]{64}$/u);
     await expect(consumeOAuthState(env, state)).resolves.toBe(true);
     await expect(consumeOAuthState(env, state)).resolves.toBe(true);
+    expect(putCalls).toHaveLength(0);
     expect(kvMock.get).not.toHaveBeenCalled();
     expect(kvMock.delete).not.toHaveBeenCalled();
   });

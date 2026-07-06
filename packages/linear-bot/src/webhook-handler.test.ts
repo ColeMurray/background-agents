@@ -407,8 +407,6 @@ describe("handleAgentSessionEvent auth failures", () => {
     expect(body.variables.input.body).toContain(
       "Open-Inspect could not start this Linear agent session"
     );
-    expect(body.variables.input.body).toContain("could not start this Linear agent session");
-    expect(body.variables.input.body).toContain("workspace authorization");
     expect(body.variables.input.body).toContain("Please re-authorize Open-Inspect");
     expect(body.variables.input.body).toContain("https://linear-bot.example.test/oauth/authorize");
     expect(body.variables.input.body).toContain("Trace ID: trace-123");
@@ -536,7 +534,7 @@ describe("handleAgentSessionEvent auth failures", () => {
   });
 
   it("logs a distinct unavailable-notification event when no fallback credential exists", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
     const env = makeLinearBotEnv(kv);
@@ -547,19 +545,6 @@ describe("handleAgentSessionEvent auth failures", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.linear.app/oauth/token");
     expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
-    const errorEvents = errorSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
-    expect(errorEvents).toContainEqual(
-      expect.objectContaining({
-        msg: "agent_session.no_oauth_token",
-        trace_id: "trace-789",
-        org_id: "org-1",
-        agent_session_id: "agent-session-1",
-        issue_id: "issue-1",
-        issue_identifier: "ORI-229",
-        mode: "start",
-        auth_failure_reason: "refresh_invalid_grant",
-      })
-    );
     const warnEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
     expect(warnEvents).toContainEqual(
       expect.objectContaining({

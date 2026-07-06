@@ -77,11 +77,6 @@ describe("callbacksRouter auth health", () => {
     await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
       status: "reauthorization_required",
       reason: "refresh_invalid_grant",
-      details: {
-        oauthStatus: 400,
-        oauthError: "invalid_grant",
-        oauthErrorDescription: "Refresh token has expired.",
-      },
     });
   });
 

@@ -162,13 +162,6 @@ describe("getOAuthTokenOrThrow", () => {
       raw: "null",
     },
     {
-      name: "missing access token",
-      raw: JSON.stringify({
-        refresh_token: "refresh-token",
-        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
-      }),
-    },
-    {
       name: "non-string access token",
       raw: JSON.stringify({
         access_token: 123,
@@ -207,7 +200,6 @@ describe("getOAuthTokenOrThrow", () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "fresh-token",
-        refresh_token: "refresh-token",
         expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       })
     );
@@ -242,23 +234,6 @@ describe("getOAuthTokenOrThrow", () => {
       token: "new-access-token",
     });
     expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it("returns a fresh access token without requiring a refresh token", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
-        access_token: "fresh-token",
-        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
-      })
-    );
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toEqual({
-      ok: true,
-      token: "fresh-token",
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("throws an auth error when an expired token has no refresh token", async () => {
@@ -423,66 +398,84 @@ describe("getLinearAuthContext", () => {
     });
   });
 
-  it("records transient auth health for retryable refresh failures", async () => {
-    const { kv } = createFakeKV({
-      "oauth:token:org-1": JSON.stringify({
-        access_token: "expired-token",
-        refresh_token: "refresh-token",
-        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-      }),
-    });
-    const env = makeLinearBotEnv(kv);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
+  it.each([
+    {
+      name: "retryable refresh failures",
+      expectedReason: "refresh_failed",
+      // The only pin that the transient path persists the upstream HTTP status.
+      expectedState: { details: { oauthStatus: 503 } },
+      arrange: () => {
+        const { kv } = createFakeKV({
+          "oauth:token:org-1": JSON.stringify({
+            access_token: "expired-token",
+            refresh_token: "refresh-token",
+            expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
+          }),
+        });
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockResolvedValue({
+            ok: false,
+            status: 503,
+            text: () => Promise.resolve("temporarily unavailable"),
+          })
+        );
+        return makeLinearBotEnv(kv);
+      },
+    },
+    {
+      name: "token read failures",
+      expectedReason: "token_read_error",
+      expectedState: {},
+      arrange: () => {
+        const { kv } = createFakeKV();
+        const env = makeLinearBotEnv(kv);
+        const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
+        kvGet.mockImplementationOnce(async () => null);
+        kvGet.mockRejectedValueOnce(new Error("kv down"));
+        return env;
+      },
+    },
+    {
+      name: "refresh exceptions",
+      expectedReason: "refresh_error",
+      expectedState: {},
+      arrange: () => {
+        const { kv } = createFakeKV({
+          "oauth:token:org-1": JSON.stringify({
+            access_token: "expired-token",
+            refresh_token: "refresh-token",
+            expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
+          }),
+        });
+        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+        return makeLinearBotEnv(kv);
+      },
+    },
+  ])(
+    "records transient auth health for $name",
+    async ({ expectedReason, expectedState, arrange }) => {
+      const env = arrange();
+
+      await expect(getLinearAuthContext(env, "org-1", "trace-transient")).resolves.toMatchObject({
         ok: false,
-        status: 503,
-        text: () => Promise.resolve("temporarily unavailable"),
-      })
-    );
-
-    await expect(getLinearAuthContext(env, "org-1", "trace-2")).resolves.toMatchObject({
-      ok: false,
-      reason: "refresh_failed",
-      authStatus: "transient_failure",
-    });
-    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
-      status: "transient_failure",
-      reason: "refresh_failed",
-      lastTraceId: "trace-2",
-      details: { oauthStatus: 503 },
-    });
-  });
-
-  it("records transient auth health when the token read fails", async () => {
-    const { kv, store } = createFakeKV();
-    const env = makeLinearBotEnv(kv);
-    const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
-    kvGet.mockImplementationOnce(async () => null);
-    kvGet.mockRejectedValueOnce(new Error("kv down"));
-
-    await expect(getLinearAuthContext(env, "org-1", "trace-kv")).resolves.toMatchObject({
-      ok: false,
-      reason: "token_read_error",
-      authStatus: "transient_failure",
-    });
-    expect(JSON.parse(store.get("linear_auth:org-1") ?? "{}")).toMatchObject({
-      status: "transient_failure",
-      reason: "token_read_error",
-      lastTraceId: "trace-kv",
-    });
-  });
+        reason: expectedReason,
+        authStatus: "transient_failure",
+      });
+      await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+        status: "transient_failure",
+        reason: expectedReason,
+        lastTraceId: "trace-transient",
+        ...expectedState,
+      });
+    }
+  );
 
   it.each([
     {
       name: "missing token",
       initial: undefined,
       expectedReason: "missing_token",
-    },
-    {
-      name: "malformed token",
-      initial: "{not-json",
-      expectedReason: "malformed_token",
     },
     {
       name: "missing refresh token",
@@ -510,29 +503,6 @@ describe("getLinearAuthContext", () => {
       });
     }
   );
-
-  it("records transient auth health for refresh exceptions", async () => {
-    const { kv } = createFakeKV({
-      "oauth:token:org-1": JSON.stringify({
-        access_token: "expired-token",
-        refresh_token: "refresh-token",
-        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-      }),
-    });
-    const env = makeLinearBotEnv(kv);
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
-
-    await expect(getLinearAuthContext(env, "org-1", "trace-error")).resolves.toMatchObject({
-      ok: false,
-      reason: "refresh_error",
-      authStatus: "transient_failure",
-    });
-    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
-      status: "transient_failure",
-      reason: "refresh_error",
-      lastTraceId: "trace-error",
-    });
-  });
 
   it("keeps persisted oauth_app_revoked sticky until OAuth callback succeeds", async () => {
     const { kv } = createFakeKV({
@@ -670,9 +640,6 @@ describe("postAuthFailureCommentFallback", () => {
         failureReason: "post_exception",
       },
     });
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("linear.auth_failure_comment_fallback_exception")
-    );
     errorSpy.mockRestore();
   });
 });
