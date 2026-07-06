@@ -45,6 +45,7 @@ export type EventType =
   | "artifact"
   | "push_complete"
   | "push_error"
+  | "warning"
   | "user_message";
 export type ParticipantRole = "owner" | "member";
 export type SpawnSource =
@@ -335,17 +336,39 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     metadata: recordSchema.optional(),
     messageId: z.string().optional(),
   }),
+  // Push events: repoOwner/repoName identify the member of a multi-repo
+  // session (absent → the session's sole repo). branchName is optional
+  // because legacy runtimes emit a key-less push_error on the
+  // "no repository found" path — requiring it would drop that event at the
+  // parse layer and leak the pending push resolver.
   z.object({
     type: z.literal("push_complete"),
-    branchName: z.string(),
+    branchName: z.string().optional(),
+    repoOwner: z.string().optional(),
+    repoName: z.string().optional(),
     sandboxId: z.string().optional(),
     timestamp: z.number(),
     ackId: z.string().optional(),
   }),
   z.object({
     type: z.literal("push_error"),
-    branchName: z.string(),
+    branchName: z.string().optional(),
+    repoOwner: z.string().optional(),
+    repoName: z.string().optional(),
     error: z.string(),
+    sandboxId: z.string().optional(),
+    timestamp: z.number(),
+    ackId: z.string().optional(),
+  }),
+  // Non-fatal boot/runtime warnings (secondary setup/start failures,
+  // .opencode assembly collisions, secrets collisions). Live ingest drops
+  // unknown union members, so this member must exist before runtimes emit it.
+  z.object({
+    type: z.literal("warning"),
+    scope: z.enum(["sync", "setup", "start", "assembly", "secrets"]),
+    message: z.string(),
+    repoOwner: z.string().optional(),
+    repoName: z.string().optional(),
     sandboxId: z.string().optional(),
     timestamp: z.number(),
     ackId: z.string().optional(),
@@ -412,6 +435,11 @@ export interface SessionState {
   ttydUrl?: string | null;
   ttydToken?: string | null;
   sandboxDashboardUrl?: string | null;
+  /**
+   * Ordered member list; [0] = primary. Absent on scalar-era producers —
+   * consumers default to [] / synthesize from repoOwner/repoName.
+   */
+  repositories?: SessionRepositoryState[];
 }
 
 // Participant presence info
@@ -423,6 +451,106 @@ export interface ParticipantPresence {
   status: "active" | "idle" | "away";
   lastSeen: number;
 }
+
+// ==================== Repository lists (multi-repo sessions) ====================
+
+/** Maximum repositories a session or automation can target. */
+export const MAX_TARGET_REPOSITORIES = 10;
+
+/**
+ * Fully-resolved repository reference (all fields non-null). NOT an alias of
+ * AutomationRepository, whose repoId/baseBranch are nullable — the relation is
+ * "RepositoryRef = the resolved flavor of it": share the input schema, keep
+ * both types, convert at resolution time (toRepositoryRef).
+ */
+export interface RepositoryRef {
+  repoOwner: string;
+  repoName: string;
+  repoId: number;
+  baseBranch: string;
+}
+
+/**
+ * Per-repo session git state; position 0 = primary. Standalone rather than
+ * extending RepositoryRef: repoId is nullable because legacy synthesized
+ * entries (pre-feature sessions) may lack it.
+ */
+export const sessionRepositoryStateSchema = z.object({
+  position: z.number(),
+  repoOwner: z.string(),
+  repoName: z.string(),
+  repoId: z.number().nullable(),
+  baseBranch: z.string(),
+  /** Set after the first successful push to this repo. */
+  branchName: z.string().nullable(),
+  baseSha: z.string().nullable(),
+  currentSha: z.string().nullable(),
+  /** Latest PR artifact for this repo (convenience mirror). */
+  prUrl: z.string().nullable(),
+});
+
+export type SessionRepositoryState = z.infer<typeof sessionRepositoryStateSchema>;
+
+/**
+ * One repository entry on a create/update request. Identifiers are normalized
+ * (trim + lowercase) by the schema, matching normalizeOptionalRepositoryPair —
+ * the list-entry twin of that scalar helper.
+ */
+export const repositoryInputSchema = z
+  .object({
+    repoOwner: z.string().trim().min(1),
+    repoName: z.string().trim().min(1),
+    baseBranch: z.string().trim().min(1).nullish(),
+  })
+  .transform((entry) => ({
+    repoOwner: entry.repoOwner.toLowerCase(),
+    repoName: entry.repoName.toLowerCase(),
+    baseBranch: entry.baseBranch ?? null,
+  }));
+
+export type RepositoryInput = z.input<typeof repositoryInputSchema>;
+
+/** Repository list for create/update requests: bounded and duplicate-free. */
+export const repositoriesInputSchema = z
+  .array(repositoryInputSchema)
+  .max(MAX_TARGET_REPOSITORIES, {
+    message: `repositories must contain at most ${MAX_TARGET_REPOSITORIES} entries`,
+  })
+  .superRefine((repositories, ctx) => {
+    const seen = new Set<string>();
+    repositories.forEach((repository, index) => {
+      const key = `${repository.repoOwner}/${repository.repoName}`;
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate repository: ${key}`,
+          path: [index],
+        });
+      }
+      seen.add(key);
+    });
+  });
+
+/**
+ * Session flavor of the list: additionally rejects duplicate repoName across
+ * different owners — clone paths are /workspace/{repoName}, and a clear 400
+ * beats path disambiguation.
+ */
+export const sessionRepositoriesInputSchema = repositoriesInputSchema.superRefine(
+  (repositories, ctx) => {
+    const seenNames = new Set<string>();
+    repositories.forEach((repository, index) => {
+      if (seenNames.has(repository.repoName)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate repository name: ${repository.repoName} (checkout paths are /workspace/{repoName})`,
+          path: [index],
+        });
+      }
+      seenNames.add(repository.repoName);
+    });
+  }
+);
 
 const sessionStateSchema = z.object({
   id: z.string(),
@@ -446,6 +574,12 @@ const sessionStateSchema = z.object({
   ttydUrl: z.string().nullable().optional(),
   ttydToken: z.string().nullable().optional(),
   sandboxDashboardUrl: z.string().nullable().optional(),
+  /**
+   * Ordered member list; [0] = primary. Optional so pre-feature servers and
+   * producers stay valid — consumers default to [] (absent ≙ scalar-era
+   * session; synthesize from repoOwner/repoName when rendering).
+   */
+  repositories: z.array(sessionRepositoryStateSchema).optional(),
 });
 
 const participantPresenceSchema = z.object({
@@ -497,7 +631,14 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_ready") }),
   z.object({ type: z.literal("sandbox_error"), error: z.string() }),
   z.object({ type: z.literal("artifact_created"), artifact: sessionArtifactSchema }),
-  z.object({ type: z.literal("session_branch"), branchName: z.string() }),
+  // repoOwner/repoName identify the member of a multi-repo session whose
+  // branch updated (absent → the session's sole repo).
+  z.object({
+    type: z.literal("session_branch"),
+    branchName: z.string(),
+    repoOwner: z.string().optional(),
+    repoName: z.string().optional(),
+  }),
   z.object({ type: z.literal("snapshot_saved"), imageId: z.string(), reason: z.string() }),
   z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
   z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
@@ -706,6 +847,19 @@ function hasRepositoryForBranch(data: CreateSessionRepositoryFields): boolean {
   return hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim();
 }
 
+function hasExclusiveRepositoryTarget(
+  data: CreateSessionRepositoryFields & { repositories?: unknown[] | null }
+): boolean {
+  if (!data.repositories || data.repositories.length === 0) {
+    return true;
+  }
+  return (
+    !hasRepositoryIdentifier(data.repoOwner) &&
+    !hasRepositoryIdentifier(data.repoName) &&
+    !data.branch?.trim()
+  );
+}
+
 // API response types
 const createSessionRequestBaseSchema = z.object({
   repoOwner: z.string().trim().min(1).nullish(),
@@ -714,6 +868,11 @@ const createSessionRequestBaseSchema = z.object({
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   branch: z.string().optional(),
+  /**
+   * Ordered member list for multi-repo sessions ([0] = primary). Mutually
+   * exclusive with the scalar repoOwner/repoName/branch fields.
+   */
+  repositories: sessionRepositoriesInputSchema.optional(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema
@@ -724,6 +883,10 @@ export const createSessionRequestSchema = createSessionRequestBaseSchema
   .refine(hasRepositoryForBranch, {
     message: "branch requires repoOwner and repoName",
     path: ["branch"],
+  })
+  .refine(hasExclusiveRepositoryTarget, {
+    message: "repositories is mutually exclusive with repoOwner/repoName/branch",
+    path: ["repositories"],
   });
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
@@ -757,6 +920,10 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
   .refine(hasRepositoryForBranch, {
     message: "branch requires repoOwner and repoName",
     path: ["branch"],
+  })
+  .refine(hasExclusiveRepositoryTarget, {
+    message: "repositories is mutually exclusive with repoOwner/repoName/branch",
+    path: ["repositories"],
   });
 
 export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
@@ -795,7 +962,15 @@ export const spawnChildSessionRequestSchema = z.object({
 
 export type SpawnChildSessionRequest = z.infer<typeof spawnChildSessionRequestSchema>;
 
-/** Returned by parent DO's GET /internal/spawn-context */
+/**
+ * Returned by parent DO's GET /internal/spawn-context.
+ *
+ * Deliberately scalar in v1: child sessions inherit — and are restricted
+ * to — the parent's PRIMARY repository, even for multi-repo parents (the
+ * spawn route validates against the scalar mirror). Letting children target
+ * other members requires spawnContext.repositories, a named fast-follow
+ * (design §13.13), not a v1 promise.
+ */
 export const spawnContextSchema = z.object({
   repoOwner: z.string().nullable(),
   repoName: z.string().nullable(),
@@ -920,7 +1095,9 @@ export type AutomationRunStatus = "starting" | "running" | "completed" | "failed
 import type { TriggerConfig } from "../triggers/conditions";
 
 /** Maximum repositories an automation can fan out across per invocation. */
-export const MAX_AUTOMATION_REPOSITORIES = 10;
+export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
+/** Maximum repositories a session can target (alias of MAX_TARGET_REPOSITORIES). */
+export const MAX_SESSION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 
 export interface RepositoryPair {
   repoOwner: string;
@@ -964,44 +1141,29 @@ export interface AutomationRepository {
 }
 
 /**
- * One repository entry on a create/update request. Identifiers are normalized
- * (trim + lowercase) by the schema, matching normalizeOptionalRepositoryPair —
- * the list-entry twin of that scalar helper.
+ * Convert a resolved automation-shaped repository into a RepositoryRef.
+ * Throws when repoId is missing — refs are the fully-resolved flavor.
  */
-export const automationRepositoryInputSchema = z
-  .object({
-    repoOwner: z.string().trim().min(1),
-    repoName: z.string().trim().min(1),
-    baseBranch: z.string().trim().min(1).nullish(),
-  })
-  .transform((entry) => ({
-    repoOwner: entry.repoOwner.toLowerCase(),
-    repoName: entry.repoName.toLowerCase(),
-    baseBranch: entry.baseBranch ?? null,
-  }));
+export function toRepositoryRef(
+  repo: AutomationRepository,
+  fallbackBaseBranch = "main"
+): RepositoryRef {
+  if (repo.repoId == null) {
+    throw new Error(`repository ${repo.repoOwner}/${repo.repoName} is not resolved (no repoId)`);
+  }
+  return {
+    repoOwner: repo.repoOwner,
+    repoName: repo.repoName,
+    repoId: repo.repoId,
+    baseBranch: repo.baseBranch ?? fallbackBaseBranch,
+  };
+}
 
-export type AutomationRepositoryInput = z.input<typeof automationRepositoryInputSchema>;
-
-/** Repository list for create/update requests: bounded and duplicate-free. */
-export const automationRepositoriesInputSchema = z
-  .array(automationRepositoryInputSchema)
-  .max(MAX_AUTOMATION_REPOSITORIES, {
-    message: `repositories must contain at most ${MAX_AUTOMATION_REPOSITORIES} entries`,
-  })
-  .superRefine((repositories, ctx) => {
-    const seen = new Set<string>();
-    repositories.forEach((repository, index) => {
-      const key = `${repository.repoOwner}/${repository.repoName}`;
-      if (seen.has(key)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `duplicate repository: ${key}`,
-          path: [index],
-        });
-      }
-      seen.add(key);
-    });
-  });
+// Aliases: the input schemas are target-agnostic (defined with the repository
+// list contracts above); existing automation imports keep working.
+export const automationRepositoryInputSchema = repositoryInputSchema;
+export type AutomationRepositoryInput = RepositoryInput;
+export const automationRepositoriesInputSchema = repositoriesInputSchema;
 
 export interface Automation {
   id: string;
