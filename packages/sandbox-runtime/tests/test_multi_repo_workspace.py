@@ -50,6 +50,7 @@ def _make_supervisor(tmp_path, session_config: str = MULTI_SESSION_CONFIG) -> Sa
 
 def _mock_run_phases(sup: SandboxSupervisor) -> None:
     """Mock everything run() touches beyond the phase under test."""
+    sup._write_repo_manifest = MagicMock()
     sup._ensure_credential_helper_configured = AsyncMock()
     sup.sync_repositories = AsyncMock(return_value=[])
     sup.run_setup_script = AsyncMock(return_value=True)
@@ -95,6 +96,54 @@ class TestParseRepositories:
         ]
         assert sup.is_multi_repo is False
 
+    def test_unsafe_repo_name_defers_config_error(self, tmp_path):
+        config = json.dumps(
+            {
+                "session_id": "s",
+                "repositories": [{"repo_owner": "acme", "repo_name": "../../etc"}],
+            }
+        )
+        sup = _make_supervisor(tmp_path, session_config=config)
+
+        assert sup.repositories == []
+        assert "repo_name" in sup.repo_config_error
+
+    def test_duplicate_repo_names_defer_config_error(self, tmp_path):
+        config = json.dumps(
+            {
+                "session_id": "s",
+                "repositories": [
+                    {"repo_owner": "acme", "repo_name": "app"},
+                    {"repo_owner": "globex", "repo_name": "App"},
+                ],
+            }
+        )
+        sup = _make_supervisor(tmp_path, session_config=config)
+
+        assert sup.repositories == []
+        assert "duplicate" in sup.repo_config_error
+
+    @pytest.mark.asyncio
+    async def test_run_fails_fatally_on_config_error(self, tmp_path):
+        config = json.dumps(
+            {
+                "session_id": "s",
+                "repositories": [{"repo_owner": "acme", "repo_name": "a/b"}],
+            }
+        )
+        sup = _make_supervisor(tmp_path, session_config=config)
+        _mock_run_phases(sup)
+
+        with patch(
+            "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+            str(tmp_path / "warnings.jsonl"),
+        ):
+            await sup.run()
+
+        sup._report_fatal_error.assert_called_once()
+        assert "invalid repository config" in sup._report_fatal_error.call_args.args[0]
+        sup.start_opencode.assert_not_called()
+
 
 class TestSyncRepositories:
     @pytest.mark.asyncio
@@ -106,6 +155,20 @@ class TestSyncRepositories:
 
         assert failed == [sup.repositories[1]]
         assert sup._sync_repo.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_clone_subprocess_exception_is_a_member_failure(self, tmp_path):
+        """An OSError from the clone subprocess must surface as a failed
+        member, not abort the whole sync gather."""
+        sup = _make_supervisor(tmp_path)
+
+        with patch(
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            AsyncMock(side_effect=OSError("no more processes")),
+        ):
+            failed = await sup.sync_repositories()
+
+        assert failed == sup.repositories
 
     @pytest.mark.asyncio
     async def test_fresh_boot_member_failure_is_fatal(self, tmp_path):
@@ -330,6 +393,22 @@ class TestOpencodeAssembly:
         assert warning["repoName"] == "backend"
         assert "acme/frontend" in warning["message"]
 
+    def test_rebuilds_from_clean_tree(self, tmp_path):
+        """Stale generated files (e.g. from a previous boot's member set)
+        must not survive reassembly on snapshot/repo-image boots."""
+        sup = _make_supervisor(tmp_path)
+        stale = tmp_path / ".opencode" / "command" / "removed.md"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("from a member no longer in the session")
+        src = tmp_path / "frontend" / ".opencode" / "command"
+        src.mkdir(parents=True)
+        (src / "deploy.md").write_text("current")
+
+        sup._assemble_workspace_opencode()
+
+        assert not stale.exists()
+        assert (tmp_path / ".opencode" / "command" / "deploy.md").read_text() == "current"
+
     def test_skips_node_modules(self, tmp_path):
         sup = _make_supervisor(tmp_path)
         nm = tmp_path / "frontend" / ".opencode" / "node_modules" / "pkg"
@@ -350,6 +429,34 @@ class TestOpencodeAssembly:
         sup._assemble_workspace_opencode()
 
         assert not (tmp_path / ".opencode").exists()
+
+
+class TestRepoManifestFile:
+    def test_writes_canonical_entries_with_paths(self, tmp_path):
+        sup = _make_supervisor(tmp_path)
+        manifest_path = tmp_path / "repo-manifest.json"
+
+        with patch(
+            "sandbox_runtime.entrypoint.REPO_MANIFEST_FILE_PATH",
+            str(manifest_path),
+        ):
+            sup._write_repo_manifest()
+
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["repositories"] == [
+            {
+                "owner": "acme",
+                "name": "frontend",
+                "branch": "main",
+                "path": str(tmp_path / "frontend"),
+            },
+            {
+                "owner": "acme",
+                "name": "backend",
+                "branch": "develop",
+                "path": str(tmp_path / "backend"),
+            },
+        ]
 
 
 class TestBootWarningRecorder:

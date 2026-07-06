@@ -1,6 +1,7 @@
 """Tests for bridge git push handling."""
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,9 +18,31 @@ def _create_bridge(tmp_path: Path) -> AgentBridge:
         auth_token="test-token",
     )
     bridge.repo_path = tmp_path
+    # Point at a per-test manifest (absent until a test writes one) so the
+    # real /tmp manifest never leaks in.
+    bridge.repo_manifest_path = tmp_path / "manifest.json"
     repo_dir = tmp_path / "repo"
     (repo_dir / ".git").mkdir(parents=True)
     return bridge
+
+
+def _write_manifest(bridge: AgentBridge, tmp_path: Path, members: list[tuple[str, str]]) -> None:
+    """Write the supervisor-style repo manifest for the given (owner, name) members."""
+    bridge.repo_manifest_path.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "owner": owner,
+                        "name": name,
+                        "branch": "main",
+                        "path": str(tmp_path / name),
+                    }
+                    for owner, name in members
+                ]
+            }
+        )
+    )
 
 
 def _push_command() -> dict:
@@ -172,6 +195,7 @@ def _multi_repo_push_command() -> dict:
 async def test_handle_push_targets_member_from_spec(tmp_path: Path):
     """A spec carrying repo identity pushes from that member's checkout."""
     bridge = _create_bridge(tmp_path)  # creates tmp_path/repo/.git
+    _write_manifest(bridge, tmp_path, [("open-inspect", "frontend"), ("open-inspect", "backend")])
     (tmp_path / "backend" / ".git").mkdir(parents=True)
     bridge._send_event = AsyncMock()
     process = _fake_process(returncode=0)
@@ -193,8 +217,36 @@ async def test_handle_push_targets_member_from_spec(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_handle_push_unknown_member_errors_without_pushing(tmp_path: Path):
+async def test_handle_push_matches_member_case_insensitively(tmp_path: Path):
+    """Identity matching is case-insensitive but the canonical path is used."""
     bridge = _create_bridge(tmp_path)
+    _write_manifest(bridge, tmp_path, [("open-inspect", "backend")])
+    (tmp_path / "backend" / ".git").mkdir(parents=True)
+    bridge._send_event = AsyncMock()
+    process = _fake_process(returncode=0)
+    captured: dict = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return process
+
+    cmd = _multi_repo_push_command()
+    cmd["pushSpec"]["repoOwner"] = "Open-Inspect"
+    cmd["pushSpec"]["repoName"] = "Backend"
+
+    with patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        await bridge._handle_push(cmd)
+
+    assert captured["cwd"] == tmp_path / "backend"
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_complete"
+
+
+@pytest.mark.asyncio
+async def test_handle_push_non_member_errors_without_pushing(tmp_path: Path):
+    """Identity not in the manifest never touches the filesystem."""
+    bridge = _create_bridge(tmp_path)
+    _write_manifest(bridge, tmp_path, [("open-inspect", "backend")])
     bridge._send_event = AsyncMock()
     cmd = _multi_repo_push_command()
     cmd["pushSpec"]["repoName"] = "missing"
@@ -205,9 +257,66 @@ async def test_handle_push_unknown_member_errors_without_pushing(tmp_path: Path)
     mock_exec.assert_not_called()
     event = bridge._send_event.await_args.args[0]
     assert event["type"] == "push_error"
-    assert "not found in workspace" in event["error"]
+    assert "not part of this session" in event["error"]
     assert event["branchName"] == "feature/test"
     assert event["repoName"] == "missing"
+
+
+@pytest.mark.asyncio
+async def test_handle_push_traversal_repo_name_errors_without_pushing(tmp_path: Path):
+    """A crafted path-segment identity cannot select a checkout outside the manifest."""
+    bridge = _create_bridge(tmp_path)
+    _write_manifest(bridge, tmp_path, [("open-inspect", "backend")])
+    outside = tmp_path / "outside"
+    (outside / ".git").mkdir(parents=True)
+    bridge._send_event = AsyncMock()
+    cmd = _multi_repo_push_command()
+    cmd["pushSpec"]["repoName"] = "../outside"
+
+    with patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec") as mock_exec:
+        await bridge._handle_push(cmd)
+
+    mock_exec.assert_not_called()
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_error"
+    assert "not part of this session" in event["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dropped_field", ["repoOwner", "repoName"])
+async def test_handle_push_partial_identity_errors(tmp_path: Path, dropped_field: str):
+    """Owner and name must travel together — no silent fallback for half a spec."""
+    bridge = _create_bridge(tmp_path)
+    _write_manifest(bridge, tmp_path, [("open-inspect", "backend")])
+    bridge._send_event = AsyncMock()
+    cmd = _multi_repo_push_command()
+    del cmd["pushSpec"][dropped_field]
+
+    with patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec") as mock_exec:
+        await bridge._handle_push(cmd)
+
+    mock_exec.assert_not_called()
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_error"
+    assert "both repoOwner and repoName" in event["error"]
+    assert event["branchName"] == "feature/test"
+
+
+@pytest.mark.asyncio
+async def test_handle_push_member_without_checkout_errors(tmp_path: Path):
+    """A manifest member whose checkout is missing on disk fails cleanly."""
+    bridge = _create_bridge(tmp_path)
+    _write_manifest(bridge, tmp_path, [("open-inspect", "backend")])
+    bridge._send_event = AsyncMock()
+
+    with patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec") as mock_exec:
+        await bridge._handle_push(_multi_repo_push_command())
+
+    mock_exec.assert_not_called()
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_error"
+    assert "not found in workspace" in event["error"]
+    assert event["repoName"] == "backend"
 
 
 @pytest.mark.asyncio

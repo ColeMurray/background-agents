@@ -18,7 +18,6 @@ import re
 import shutil
 import signal
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -28,32 +27,19 @@ from .constants import (
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
 )
 from .log_config import configure_logging, get_logger
+from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
 
 configure_logging()
 
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
-
-
-@dataclass(frozen=True)
-class RepoEntry:
-    """One repository of the session workspace, in position order.
-
-    The first entry is the primary (mirrors REPO_OWNER/REPO_NAME); every
-    downstream code path iterates the list so single- and multi-repo sessions
-    share one shape.
-    """
-
-    owner: str
-    name: str
-    branch: str
-    path: Path
 
 
 def _port_from_env(env_var: str, default: int) -> int:
@@ -161,6 +147,7 @@ class SandboxSupervisor:
         # of truth; absent, a one-entry list is synthesized from the scalar
         # env so every downstream path iterates the same shape. repo_path
         # stays the primary's path (repositories[0] mirrors REPO_OWNER/NAME).
+        self.repo_config_error: str | None = None
         self.repositories = self._parse_repositories()
         self.is_multi_repo = len(self.repositories) > 1
 
@@ -179,38 +166,25 @@ class SandboxSupervisor:
         return self.session_config.get("branch") or "main"
 
     def _parse_repositories(self) -> list[RepoEntry]:
-        """Build the ordered repository list from SESSION_CONFIG or the scalar env."""
-        raw = self.session_config.get("repositories")
-        entries: list[RepoEntry] = []
-        if isinstance(raw, list):
-            for item in raw:
-                if not isinstance(item, dict):
-                    continue
-                owner = str(item.get("repo_owner") or "").strip()
-                name = str(item.get("repo_name") or "").strip()
-                if not owner or not name:
-                    continue
-                branch = str(item.get("branch") or "").strip() or "main"
-                entries.append(
-                    RepoEntry(
-                        owner=owner,
-                        name=name,
-                        branch=branch,
-                        path=self.workspace_path / name,
-                    )
-                )
-        if entries:
-            return entries
-        if self.has_repository:
-            return [
-                RepoEntry(
-                    owner=self.repo_owner,
-                    name=self.repo_name,
-                    branch=self.base_branch,
-                    path=self.repo_path,
-                )
-            ]
-        return []
+        """Build the ordered repository list, deferring config errors to run().
+
+        A RepoConfigError (unsafe or duplicate names — the checkout path
+        would escape /workspace or collide) cannot be reported from
+        __init__, so it is stashed and run() raises it through the normal
+        fatal-error path.
+        """
+        self.repo_config_error = None
+        try:
+            return parse_repositories(
+                self.session_config,
+                workspace_path=self.workspace_path,
+                scalar_owner=self.repo_owner if self.has_repository else "",
+                scalar_name=self.repo_name if self.has_repository else "",
+                scalar_branch=self.base_branch,
+            )
+        except RepoConfigError as e:
+            self.repo_config_error = str(e)
+            return []
 
     def _build_repo_url(self, repo: RepoEntry) -> str:
         """Build the plain HTTPS URL for a repository.
@@ -245,19 +219,25 @@ class SandboxSupervisor:
             repo_name=repo.name,
         )
 
-        result = await asyncio.create_subprocess_exec(
-            "git",
-            "clone",
-            "--depth",
-            str(self.CLONE_DEPTH_COMMITS),
-            "--branch",
-            repo.branch,
-            self._build_repo_url(repo),
-            str(repo.path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _stdout, stderr = await result.communicate()
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "clone",
+                "--depth",
+                str(self.CLONE_DEPTH_COMMITS),
+                "--branch",
+                repo.branch,
+                self._build_repo_url(repo),
+                str(repo.path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, stderr = await result.communicate()
+        except Exception as e:
+            # Keep sync_repositories' partial-failure contract: an OSError
+            # here must surface as a failed member, not abort the gather.
+            self.log.error("git.clone_error", exc=e, repo_owner=repo.owner, repo_name=repo.name)
+            return False
 
         if result.returncode != 0:
             self.log.error(
@@ -576,6 +556,12 @@ class SandboxSupervisor:
             return
 
         dest_root = self.workspace_path / ".opencode"
+        # The merged tree is generated state: rebuild it from scratch so
+        # entries removed from a member (or a removed member) don't survive
+        # snapshot/repo-image boots. System tools and staged deps are
+        # re-installed after assembly on every boot.
+        if dest_root.exists():
+            shutil.rmtree(dest_root, ignore_errors=True)
         provenance: dict[str, RepoEntry] = {}
         for repo in self.repositories:
             src_root = repo.path / ".opencode"
@@ -608,6 +594,19 @@ class SandboxSupervisor:
                 file_count=len(provenance),
                 repo_count=len(self.repositories),
             )
+
+    def _write_repo_manifest(self) -> None:
+        """Write the machine-readable repository manifest.
+
+        The bridge (push targeting) and the JS create-pull-request tool
+        resolve checkout paths through this file instead of re-deriving the
+        /workspace layout. Written before any child process starts and
+        rewritten on every boot so a snapshot never carries a stale member set.
+        """
+        try:
+            Path(REPO_MANIFEST_FILE_PATH).write_text(dump_repo_manifest(self.repositories))
+        except Exception as e:
+            self.log.warn("supervisor.repo_manifest_write_failed", exc=e)
 
     def _write_workspace_manifest(self) -> None:
         """Write the generated /workspace/AGENTS.md for multi-repo sessions.
@@ -1731,6 +1730,15 @@ class SandboxSupervisor:
         head_sha = ""
         opencode_ready = False
         try:
+            # Refuse to boot on an untrusted repository config — unsafe or
+            # duplicate names would let checkout paths escape /workspace or
+            # collide. Raised here (not __init__) so the failure reaches the
+            # control plane through the normal fatal-error path.
+            if self.repo_config_error:
+                raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
+
+            self._write_repo_manifest()
+
             # Phase 0: Make sure the git credential helper is configured
             # before any git operation. New images do this in /etc/gitconfig,
             # but snapshots/repo-images built before this migration won't.

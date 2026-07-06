@@ -1,9 +1,15 @@
 """Tests for entrypoint boot modes and git sync."""
 
 import os
+from dataclasses import replace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+
+
+def _repoint_primary(supervisor):
+    """Repoint the parsed primary entry at the test's reassigned repo_path."""
+    supervisor.repositories = [replace(supervisor.repositories[0], path=supervisor.repo_path)]
 
 
 @pytest.fixture
@@ -89,7 +95,7 @@ class TestImageBuildMode:
         supervisor = _make_supervisor(build_env)
         # Point repo_path to a non-existent dir so clone branch is taken
         supervisor.repo_path = tmp_path / "nonexistent"
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
         # Pre-set so entrypoint doesn't hang waiting for builder to terminate
         supervisor.shutdown_event.set()
 
@@ -168,7 +174,7 @@ class TestImageBuildMode:
         """Build mode should log git.sync_complete with head_sha for the image builder."""
         supervisor = _make_supervisor(build_env)
         supervisor.repo_path = tmp_path  # Exists, so _get_head_sha proceeds
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         supervisor.sync_repositories = AsyncMock(return_value=[])
         supervisor.run_setup_script = AsyncMock(return_value=True)
@@ -205,7 +211,7 @@ class TestImageBuildMode:
         """Build mode should report completion itself when callback metadata is configured."""
         supervisor = _make_supervisor(build_env)
         supervisor.repo_path = tmp_path
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         supervisor.sync_repositories = AsyncMock(return_value=[])
         supervisor.run_setup_script = AsyncMock(return_value=True)
@@ -279,7 +285,7 @@ class TestFromRepoImage:
         supervisor = _make_supervisor(repo_image_env)
         supervisor.repo_path = tmp_path / "my-repo"
         supervisor.repo_path.mkdir(parents=True)
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         supervisor._clone_repo = AsyncMock(return_value=True)
         supervisor._update_existing_repo = AsyncMock(return_value=True)
@@ -366,7 +372,7 @@ class TestNormalMode:
         """A fresh boot clones (repo missing) then updates — the unified rule."""
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path / "nonexistent"
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         async def fake_clone(repo):
             repo.path.mkdir(parents=True, exist_ok=True)
@@ -413,7 +419,7 @@ class TestNormalMode:
         """Normal mode should clone with --depth 100."""
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path / "nonexistent"
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         all_calls = []
 
@@ -588,7 +594,7 @@ class TestUpdateExistingRepo:
         """
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         call_log = []
 
@@ -621,7 +627,7 @@ class TestUpdateExistingRepo:
         """Should return False when repo directory doesn't exist."""
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path / "nonexistent"
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         with patch("sandbox_runtime.entrypoint.asyncio.create_subprocess_exec") as mock_exec:
             result = await supervisor._update_existing_repo(supervisor.repositories[0])
@@ -635,7 +641,7 @@ class TestUpdateExistingRepo:
         env = {**base_env, "SESSION_CONFIG": '{"branch": "feature/xyz"}'}
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         call_log = []
 
@@ -661,7 +667,7 @@ class TestUpdateExistingRepo:
         env = {**base_env, "SESSION_CONFIG": '{"branch": "develop"}'}
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         call_log = []
 
@@ -687,7 +693,7 @@ class TestUpdateExistingRepo:
         """Should return False when fetch fails."""
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -712,7 +718,7 @@ class TestUpdateExistingRepo:
         """Should return False when checkout fails."""
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -745,7 +751,7 @@ class TestPerformGitSync:
         }
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path / "nonexistent"
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         call_log = []
 
@@ -779,7 +785,7 @@ class TestPerformGitSync:
         }
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path  # Exists, so clone is skipped
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         call_log = []
 
@@ -811,7 +817,7 @@ class TestPerformGitSync:
         }
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path  # Exists
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
 
         call_log = []
 
@@ -854,7 +860,7 @@ class TestPerformGitSync:
         env = {**base_env, "VCS_HOST": "github.com"}
         supervisor = _make_supervisor(env)
         supervisor.repo_path = tmp_path
-        supervisor.repositories = supervisor._parse_repositories()
+        _repoint_primary(supervisor)
         supervisor.log = MagicMock()
 
         # Simulate a redirect chain that leaks credentials from an upstream proxy.

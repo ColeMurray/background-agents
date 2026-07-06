@@ -28,8 +28,9 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
-from .constants import BOOT_WARNINGS_FILE_PATH
+from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .log_config import configure_logging, get_logger
+from .repo_config import load_repo_manifest
 from .types import GitUser
 
 configure_logging()
@@ -192,6 +193,10 @@ class AgentBridge:
         self.opencode_session_id: str | None = None
         self.session_id_file = Path(tempfile.gettempdir()) / "opencode-session-id"
         self.repo_path = Path("/workspace")
+        # Supervisor-written canonical repo manifest; push targeting resolves
+        # member checkout paths through it rather than joining spec-supplied
+        # names into the filesystem.
+        self.repo_manifest_path = Path(REPO_MANIFEST_FILE_PATH)
 
         # HTTP client for OpenCode API
         self.http_client: httpx.AsyncClient | None = None
@@ -1534,10 +1539,57 @@ class AgentBridge:
             return fields
 
         # Resolve the target checkout. A spec carrying repo identity targets
-        # that member directly (multi-repo sessions); a spec without one keeps
-        # the legacy behavior — the sole cloned repository under /workspace.
-        if repo_name:
-            repo_dir = self.repo_path / repo_name
+        # that member through the supervisor-written manifest — never by
+        # joining spec-supplied names into the filesystem; a spec without one
+        # keeps the legacy behavior — the sole cloned repository under
+        # /workspace.
+        if repo_owner or repo_name:
+            if not (repo_owner and repo_name):
+                self.log.warn(
+                    "git.push_error",
+                    reason="partial_repo_identity",
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                )
+                await self._send_event(
+                    {
+                        "type": "push_error",
+                        "error": "Push failed - pushSpec must carry both repoOwner and repoName",
+                        "branchName": branch_name,
+                        **_repo_fields(),
+                        "timestamp": time.time(),
+                    }
+                )
+                return
+            member = next(
+                (
+                    entry
+                    for entry in load_repo_manifest(self.repo_manifest_path)
+                    if entry.owner.lower() == repo_owner.lower()
+                    and entry.name.lower() == repo_name.lower()
+                ),
+                None,
+            )
+            if member is None:
+                self.log.warn(
+                    "git.push_error",
+                    reason="repo_not_session_member",
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                )
+                await self._send_event(
+                    {
+                        "type": "push_error",
+                        "error": (
+                            f"Repository {repo_owner}/{repo_name} is not part of this session"
+                        ),
+                        "branchName": branch_name,
+                        **_repo_fields(),
+                        "timestamp": time.time(),
+                    }
+                )
+                return
+            repo_dir = member.path
             if not (repo_dir / ".git").exists():
                 self.log.warn(
                     "git.push_error",

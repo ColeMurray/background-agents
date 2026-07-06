@@ -25,3 +25,10 @@ EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"
 # channel) and drained by the bridge as `warning` sandbox events after its
 # WebSocket handshake. JSONL: one {scope, message, repoOwner?, repoName?} per line.
 BOOT_WARNINGS_FILE_PATH = "/tmp/oi-boot-warnings.jsonl"
+
+# Canonical repository manifest written by the supervisor before any child
+# process starts, rewritten on every boot. Consumed by the bridge (push
+# targeting) and the JS create-pull-request tool so the /workspace checkout
+# layout has a single owner. JSON: {"repositories": [{owner, name, branch,
+# path}]}. Mirrored as a string literal in plugins/inspect-plugin.js.
+REPO_MANIFEST_FILE_PATH = "/tmp/oi-repo-manifest.json"

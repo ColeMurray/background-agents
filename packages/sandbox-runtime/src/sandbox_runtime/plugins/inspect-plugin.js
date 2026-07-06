@@ -7,6 +7,7 @@
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -45,27 +46,34 @@ function getSessionId() {
   }
 }
 
-// Ordered repository list from SESSION_CONFIG (empty for scalar sessions).
+// Canonical repository manifest written by the supervisor — the single owner
+// of the /workspace checkout layout. Mirrors REPO_MANIFEST_FILE_PATH in
+// sandbox_runtime/constants.py.
+const REPO_MANIFEST_PATH = "/tmp/oi-repo-manifest.json";
+
+// Ordered repository list {owner, name, path} from the supervisor's manifest
+// (empty when the manifest is absent, e.g. tool run outside a sandbox boot).
 function getRepositories() {
   try {
-    const config = JSON.parse(process.env.SESSION_CONFIG || "{}");
-    const repositories = Array.isArray(config.repositories) ? config.repositories : [];
+    const manifest = JSON.parse(readFileSync(REPO_MANIFEST_PATH, "utf8"));
+    const repositories = Array.isArray(manifest?.repositories) ? manifest.repositories : [];
     return repositories
       .map((entry) => ({
-        owner: String(entry?.repo_owner || "").trim(),
-        name: String(entry?.repo_name || "").trim(),
+        owner: String(entry?.owner || "").trim(),
+        name: String(entry?.name || "").trim(),
+        path: String(entry?.path || "").trim(),
       }))
-      .filter((entry) => entry.owner && entry.name);
+      .filter((entry) => entry.owner && entry.name && entry.path);
   } catch (e) {
-    console.log("[create-pull-request] Failed to parse SESSION_CONFIG repositories:", e.message);
+    console.log("[create-pull-request] Failed to read repo manifest:", e.message);
     return [];
   }
 }
 
-async function getCurrentBranch(repoName) {
+async function getCurrentBranch(repoPath) {
   try {
-    const gitArgs = repoName
-      ? ["-C", `/workspace/${repoName}`, "rev-parse", "--abbrev-ref", "HEAD"]
+    const gitArgs = repoPath
+      ? ["-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD"]
       : ["rev-parse", "--abbrev-ref", "HEAD"];
     const { stdout } = await execFileAsync("git", gitArgs, {
       timeout: 5000,
@@ -121,6 +129,7 @@ export default tool({
     const validValues = repositories.map((r) => `${r.owner}/${r.name}`).join(", ");
     let repoOwner;
     let repoName;
+    let repoPath;
     if (args.repo) {
       const parts = String(args.repo).trim().split("/");
       if (parts.length !== 2 || !parts[0] || !parts[1]) {
@@ -128,22 +137,26 @@ export default tool({
           validValues ? ` (one of: ${validValues})` : ""
         }.`;
       }
-      [repoOwner, repoName] = parts;
-      if (
-        repositories.length > 0 &&
-        !repositories.some(
-          (r) =>
-            r.owner.toLowerCase() === repoOwner.toLowerCase() &&
-            r.name.toLowerCase() === repoName.toLowerCase()
-        )
-      ) {
+      const [ownerArg, nameArg] = parts;
+      const match = repositories.find(
+        (r) =>
+          r.owner.toLowerCase() === ownerArg.toLowerCase() &&
+          r.name.toLowerCase() === nameArg.toLowerCase()
+      );
+      if (repositories.length > 0 && !match) {
         return `Failed to create pull request: ${args.repo} is not part of this session. Valid values: ${validValues}.`;
       }
+      // Use the manifest's canonical casing and path — checkout directories
+      // and the control plane's member records are case-sensitive even
+      // though the match above is not.
+      repoOwner = match ? match.owner : ownerArg;
+      repoName = match ? match.name : nameArg;
+      repoPath = match ? match.path : undefined;
     } else if (repositories.length > 1) {
       return `Failed to create pull request: this session spans multiple repositories — pass repo with one of: ${validValues}.`;
     }
 
-    const headBranch = await getCurrentBranch(repoName);
+    const headBranch = await getCurrentBranch(repoPath);
 
     try {
       const sessionId = getSessionId();

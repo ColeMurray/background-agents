@@ -19,6 +19,7 @@ def _make_supervisor(tmp_path) -> SandboxSupervisor:
         },
     ):
         sup = SandboxSupervisor()
+    sup.workspace_path = tmp_path
     sup.repo_path = tmp_path / "app"
     sup.repositories = sup._parse_repositories()
     return sup
