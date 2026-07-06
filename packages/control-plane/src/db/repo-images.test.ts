@@ -44,6 +44,8 @@ const QUERY_PATTERNS = {
   DELETE_SUPERSEDED: /^DELETE FROM repo_images WHERE id = \? AND status = 'superseded'$/,
   UPDATE_FAILED:
     /^UPDATE repo_images SET status = 'failed', error_message = \? WHERE id = \? AND provider = \? AND status = 'building'$/,
+  UPDATE_RESTORE_FAILED:
+    /^UPDATE repo_images SET status = 'failed', error_message = \? WHERE id = \? AND status = 'ready'$/,
   SELECT_LATEST_READY:
     /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \?.*ORDER BY ri\.created_at DESC LIMIT 1$/,
   SELECT_STATUS:
@@ -446,6 +448,17 @@ class FakeD1Database {
       const [error, id, provider] = args as [string, string, string];
       const row = this.rows.get(id);
       if (row && row.provider === provider && row.status === "building") {
+        row.status = "failed";
+        row.error_message = error;
+        return { meta: { changes: 1 } };
+      }
+      return { meta: { changes: 0 } };
+    }
+
+    if (QUERY_PATTERNS.UPDATE_RESTORE_FAILED.test(normalized)) {
+      const [error, id] = args as [string, string];
+      const row = this.rows.get(id);
+      if (row && row.status === "ready") {
         row.status = "failed";
         row.error_message = error;
         return { meta: { changes: 1 } };
@@ -1076,6 +1089,58 @@ describe("RepoImageStore", () => {
       const status = await store.getStatus("acme", "repo");
       expect(status[0].status).toBe("failed");
       expect(status[0].error_message).toBe("setup failed");
+    });
+  });
+
+  describe("markRestoreFailed", () => {
+    const readyRow = (overrides: Partial<RepoImageRow> = {}): RepoImageRow => ({
+      id: "img-1",
+      repo_owner: "acme",
+      repo_name: "repo",
+      provider: "modal",
+      provider_session_id: null,
+      base_branch: "main",
+      provider_image_id: "im-modal-1",
+      status: "ready",
+      base_sha: "abc123",
+      build_duration_seconds: 10,
+      error_message: null,
+      callback_token_hash: null,
+      callback_token_expires_at: null,
+      callback_token_used_at: null,
+      created_at: 1000,
+      ...overrides,
+    });
+
+    it("flips a ready image to failed by id, removing it from selection", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      db.seedRow(readyRow());
+
+      await expect(store.getLatestReady("acme", "repo", "modal")).resolves.toMatchObject({
+        id: "img-1",
+      });
+
+      await expect(store.markRestoreFailed("img-1", "restore failed at spawn")).resolves.toBe(true);
+
+      await expect(store.getLatestReady("acme", "repo", "modal")).resolves.toBeNull();
+      const status = await store.getStatus("acme", "repo");
+      expect(status[0].status).toBe("failed");
+      expect(status[0].error_message).toBe("restore failed at spawn");
+    });
+
+    it("is a no-op for non-ready rows — building stays markBuildFailed's job", async () => {
+      db.seedRow(readyRow({ status: "building" }));
+
+      await expect(store.markRestoreFailed("img-1", "boom")).resolves.toBe(false);
+      const status = await store.getStatus("acme", "repo");
+      expect(status[0].status).toBe("building");
+    });
+
+    it("is idempotent under concurrent spawn failures", async () => {
+      db.seedRow(readyRow());
+
+      await expect(store.markRestoreFailed("img-1", "boom")).resolves.toBe(true);
+      await expect(store.markRestoreFailed("img-1", "boom")).resolves.toBe(false);
     });
   });
 

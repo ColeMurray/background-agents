@@ -5,7 +5,7 @@ description = "Modal sandbox infrastructure for Open-Inspect coding agent"
 requires-python = ">=3.12"
 dependencies = [
     "open-inspect-sandbox-runtime",  # sibling package, resolved via [tool.uv.sources]
-    "modal>=1.4.3",  # Function.with_options() (per-call timeout override) requires >=1.4.3
+    "modal>=1.5.1",  # snapshot_filesystem(ttl=...) requires >=1.5; Function.with_options() >=1.4.3
     "httpx>=0.27.0",
     "websockets>=13.0",
     "pydantic>=2.0",

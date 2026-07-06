@@ -485,6 +485,24 @@ export class RepoImageStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Mark a ready image failed after the provider could not restore it at
+   * spawn time (e.g. the underlying snapshot expired provider-side). Guarded
+   * on status = 'ready': in-flight builds stay markBuildFailed's job, and
+   * concurrent spawn failures against the same image are idempotent. With the
+   * row failed, the cron's no-ready-image trigger rebuilds it.
+   */
+  async markRestoreFailed(imageId: string, error: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE repo_images SET status = 'failed', error_message = ? WHERE id = ? AND status = 'ready'"
+      )
+      .bind(error, imageId)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   async getLatestReady(
     repoOwner: string,
     repoName: string,

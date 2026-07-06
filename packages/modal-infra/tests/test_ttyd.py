@@ -223,6 +223,11 @@ class TestRestoreSandboxTerminal:
         class FakeImage:
             object_id = "img-123"
 
+            class hydrate:
+                @staticmethod
+                async def aio() -> None:
+                    return None
+
         def fake_from_id(*args, **kwargs):
             return FakeImage()
 
@@ -272,6 +277,11 @@ class TestRestoreSandboxTerminal:
 
         class FakeImage:
             object_id = "img-123"
+
+            class hydrate:
+                @staticmethod
+                async def aio() -> None:
+                    return None
 
         def fake_from_id(*args, **kwargs):
             return FakeImage()

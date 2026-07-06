@@ -446,6 +446,11 @@ class TestExpectedTunnelPortsEnvVar:
         class FakeImage:
             object_id = "img-1"
 
+            class hydrate:
+                @staticmethod
+                async def aio() -> None:
+                    return None
+
         async def fake_create_aio(*args, **kwargs):
             captured["env"] = kwargs.get("env") or {}
 

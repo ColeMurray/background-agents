@@ -185,6 +185,9 @@ async def api_create_sandbox(
                 "code_server_password": handle.code_server_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
+                # True when a requested repo image failed to restore and the
+                # sandbox booted from base — the control plane marks the row.
+                "image_restore_failed": bool(getattr(handle, "image_restore_failed", False)),
             },
         }
     except HTTPException as e:
@@ -447,9 +450,14 @@ async def api_restore_sandbox(
     if not snapshot_image_id:
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
-    try:
-        from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
+    # Imported before the try block so the except clause can name the error type.
+    from .sandbox.manager import (
+        DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        SandboxManager,
+        SnapshotRestoreError,
+    )
 
+    try:
         session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
@@ -498,6 +506,19 @@ async def api_restore_sandbox(
         outcome = "error"
         http_status = e.status_code
         raise
+    except SnapshotRestoreError as e:
+        # Snapshot expired or was deleted provider-side. Unlike repo images
+        # there is no fallback — surface a structured code so the control
+        # plane can fail the resume with a user-legible error.
+        outcome = "error"
+        http_status = 500
+        log.error("api.snapshot_restore_failed", exc=e, endpoint_name="api_restore_sandbox")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_code": "SNAPSHOT_RESTORE_FAILED",
+            "snapshot_id": e.snapshot_id,
+        }
     except Exception as e:
         outcome = "error"
         http_status = 500

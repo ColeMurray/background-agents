@@ -11,8 +11,10 @@ from src.sandbox.manager import (
 )
 
 
-def test_take_snapshot_passes_explicit_timeout():
-    """Session snapshots should not rely on Modal's short default timeout."""
+def test_take_snapshot_passes_explicit_timeout_and_no_ttl():
+    """Session snapshots must not rely on Modal's short default timeout, and
+    must pin ttl=None: Modal 1.5 gave snapshots a 30-day default TTL with GC,
+    which would silently expire snapshots of long-idle sessions."""
     image = SimpleNamespace(object_id="im-session")
     snapshot_filesystem = MagicMock(return_value=image)
     handle = SandboxHandle(
@@ -25,4 +27,6 @@ def test_take_snapshot_passes_explicit_timeout():
     image_id = SandboxManager().take_snapshot(handle)
 
     assert image_id == "im-session"
-    snapshot_filesystem.assert_called_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+    snapshot_filesystem.assert_called_once_with(
+        timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None
+    )

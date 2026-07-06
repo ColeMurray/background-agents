@@ -399,7 +399,7 @@ class TestBuildRepoImage:
                 build_id="img-1",
             )
 
-        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None)
         terminate_aio.assert_awaited_once()
         callback.assert_awaited_once()
         callback_payload = callback.await_args.args[1]
@@ -490,7 +490,7 @@ class TestBuildRepoImage:
                 build_id="img-1",
             )
 
-        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None)
         terminate_aio.assert_awaited_once()
         callback.assert_awaited_once()
         failure_url, failure_payload = callback.await_args.args

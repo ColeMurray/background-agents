@@ -79,7 +79,19 @@ export interface CreateSandboxResponse {
   codeServerPassword?: string;
   ttydUrl?: string;
   tunnelUrls?: Record<string, string>;
+  /**
+   * True when the requested repo image failed to restore (e.g. expired
+   * provider-side) and the sandbox booted from the base image instead.
+   */
+  imageRestoreFailed?: boolean;
 }
+
+/**
+ * Structured error code returned by the Modal restore endpoint when the
+ * snapshot image expired or was deleted provider-side. Mirrors the mapping of
+ * SnapshotRestoreError in modal-infra's web_api.py — keep the strings in sync.
+ */
+export const SNAPSHOT_RESTORE_FAILED_ERROR_CODE = "SNAPSHOT_RESTORE_FAILED";
 
 export interface RestoreSandboxRequest {
   snapshotImageId: string;
@@ -105,6 +117,8 @@ export interface RestoreSandboxResponse {
   sandboxId?: string;
   modalObjectId?: string;
   error?: string;
+  /** Structured failure code, e.g. SNAPSHOT_RESTORE_FAILED_ERROR_CODE. */
+  errorCode?: string;
   codeServerUrl?: string;
   codeServerPassword?: string;
   ttydUrl?: string;
@@ -167,6 +181,8 @@ interface ModalApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+  /** Structured failure code on error responses (e.g. SNAPSHOT_RESTORE_FAILED). */
+  error_code?: string;
 }
 
 /**
@@ -288,6 +304,7 @@ export class ModalClient {
         code_server_password?: string;
         ttyd_url?: string;
         tunnel_urls?: Record<string, string>;
+        image_restore_failed?: boolean;
       }>;
 
       if (!result.success || !result.data) {
@@ -304,6 +321,7 @@ export class ModalClient {
         codeServerPassword: result.data.code_server_password,
         ttydUrl: result.data.ttyd_url,
         tunnelUrls: result.data.tunnel_urls,
+        imageRestoreFailed: result.data.image_restore_failed ?? false,
       };
     } finally {
       log.info("modal.request", {
@@ -368,7 +386,11 @@ export class ModalClient {
       }>;
 
       if (!result.success) {
-        return { success: false, error: result.error || "Unknown restore error" };
+        return {
+          success: false,
+          error: result.error || "Unknown restore error",
+          errorCode: result.error_code,
+        };
       }
 
       outcome = "success";

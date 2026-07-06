@@ -477,9 +477,11 @@ describe("SandboxLifecycleManager", () => {
       };
       const repoImageLookup: RepoImageLookup = {
         getLatestReady: vi.fn(async () => ({
+          id: "row-1",
           provider_image_id: "repo-image-1",
           base_sha: "abc123",
         })),
+        markRestoreFailed: vi.fn(async () => true),
       };
 
       const manager = new SandboxLifecycleManager(
@@ -599,6 +601,76 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.restoreFromSnapshot).toHaveBeenCalled();
       expect(provider.createSandbox).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a user-legible error when the snapshot has expired", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        restoreFromSnapshot: vi.fn(async () => ({
+          success: false,
+          error: "Snapshot image img-abc123 is no longer available",
+          errorCode: "SNAPSHOT_RESTORE_FAILED",
+        })),
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      const errorMessage = broadcaster.messages.find(
+        (m) => (m as { type: string }).type === "sandbox_error"
+      ) as { error: string } | undefined;
+      expect(errorMessage?.error).toContain("expired");
+      expect(
+        storage.calls.some(
+          (c) => c.startsWith("setLastSpawnError:") && c.includes("expired") && !c.includes("null")
+        )
+      ).toBe(true);
+    });
+
+    it("keeps the provider error message for non-expiry restore failures", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        restoreFromSnapshot: vi.fn(async () => ({
+          success: false,
+          error: "Modal API error: 500",
+        })),
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      const errorMessage = broadcaster.messages.find(
+        (m) => (m as { type: string }).type === "sandbox_error"
+      ) as { error: string } | undefined;
+      expect(errorMessage?.error).toBe("Modal API error: 500");
     });
 
     it("schedules connecting timeout alarm after restore", async () => {
@@ -1693,9 +1765,11 @@ describe("SandboxLifecycleManager", () => {
 
       const repoImageLookup: RepoImageLookup = {
         getLatestReady: vi.fn(async () => ({
+          id: "row-abc123",
           provider_image_id: "img-abc123",
           base_sha: "sha-def456",
         })),
+        markRestoreFailed: vi.fn(async () => true),
       };
 
       const manager = new SandboxLifecycleManager(
@@ -1718,6 +1792,124 @@ describe("SandboxLifecycleManager", () => {
           repoImageSha: "sha-def456",
         })
       );
+      expect(repoImageLookup.markRestoreFailed).not.toHaveBeenCalled();
+    });
+
+    it("marks the ready row failed when the provider reports a restore failure", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider({
+        createSandbox: vi.fn(async (config: CreateSandboxConfig) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-123",
+          status: "connecting",
+          createdAt: Date.now(),
+          imageRestoreFailed: true,
+        })),
+      });
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => ({
+          id: "row-abc123",
+          provider_image_id: "img-abc123",
+          base_sha: "sha-def456",
+        })),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(repoImageLookup.markRestoreFailed).toHaveBeenCalledWith(
+        "row-abc123",
+        expect.any(String)
+      );
+      // The spawn itself succeeded — the sandbox booted from base.
+      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+    });
+
+    it("does not mark anything when the flag is set but no image was requested", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider({
+        createSandbox: vi.fn(async (config: CreateSandboxConfig) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-123",
+          status: "connecting",
+          createdAt: Date.now(),
+          imageRestoreFailed: true,
+        })),
+      });
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(repoImageLookup.markRestoreFailed).not.toHaveBeenCalled();
+    });
+
+    it("continues the spawn when marking the restore failure throws", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider({
+        createSandbox: vi.fn(async (config: CreateSandboxConfig) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-123",
+          status: "connecting",
+          createdAt: Date.now(),
+          imageRestoreFailed: true,
+        })),
+      });
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => ({
+          id: "row-abc123",
+          provider_image_id: "img-abc123",
+          base_sha: "sha-def456",
+        })),
+        markRestoreFailed: vi.fn(async () => {
+          throw new Error("D1 unavailable");
+        }),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(storage.calls).toContain("updateSandboxStatus:connecting");
     });
 
     it("passes null repoImageId when no ready image exists", async () => {
@@ -1728,6 +1920,7 @@ describe("SandboxLifecycleManager", () => {
 
       const repoImageLookup: RepoImageLookup = {
         getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
       };
 
       const manager = new SandboxLifecycleManager(
@@ -1762,6 +1955,7 @@ describe("SandboxLifecycleManager", () => {
         getLatestReady: vi.fn(async () => {
           throw new Error("D1 unavailable");
         }),
+        markRestoreFailed: vi.fn(async () => true),
       };
 
       const manager = new SandboxLifecycleManager(
@@ -1795,6 +1989,7 @@ describe("SandboxLifecycleManager", () => {
 
       const repoImageLookup: RepoImageLookup = {
         getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
       };
 
       const manager = new SandboxLifecycleManager(

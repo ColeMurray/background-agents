@@ -46,6 +46,22 @@ BUILD_FUNCTION_TIMEOUT_MARGIN_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 
 
+class SnapshotRestoreError(Exception):
+    """A session-snapshot image could not be restored (expired or deleted).
+
+    Unlike repo images, a session snapshot cannot fall back to the base image —
+    the workspace state it holds is unrecoverable — so this is surfaced as a
+    structured error (web_api maps it to error_code SNAPSHOT_RESTORE_FAILED).
+    """
+
+    def __init__(self, snapshot_id: str, cause: str = ""):
+        self.snapshot_id = snapshot_id
+        message = f"Snapshot image {snapshot_id} is no longer available"
+        if cause:
+            message = f"{message}: {cause}"
+        super().__init__(message)
+
+
 def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
     """Modal function timeout for the build worker (build_repo_image).
 
@@ -130,6 +146,9 @@ class SandboxHandle:
     code_server_password: str | None = None
     ttyd_url: str | None = None  # proxy tunnel URL (not ttyd directly)
     tunnel_urls: dict[int, str] | None = None  # port -> tunnel URL mapping for extra ports
+    # True when a requested repo image could not be restored and the sandbox
+    # booted from the base image instead (control plane marks the row failed).
+    image_restore_failed: bool = False
 
     def get_logs(self) -> str:
         """Get sandbox logs."""
@@ -162,6 +181,25 @@ class SandboxManager:
     def _generate_code_server_password() -> str:
         """Generate a random code-server password."""
         return secrets.token_urlsafe(16)
+
+    @staticmethod
+    async def _hydrate_repo_image(repo_image_id: str) -> tuple[modal.Image, bool]:
+        """Resolve a repo image, falling back to the base image on failure.
+
+        Returns (image, restore_failed). Hydration is forced eagerly so an
+        expired/deleted image is detected here instead of failing the spawn.
+        """
+        try:
+            image = modal.Image.from_id(repo_image_id)
+            await image.hydrate.aio()
+            return image, False
+        except Exception as e:
+            log.warn(
+                "sandbox.repo_image_restore_failed",
+                repo_image_id=repo_image_id,
+                exc=e,
+            )
+            return base_image, True
 
     @staticmethod
     async def _resolve_tunnels(
@@ -444,12 +482,17 @@ class SandboxManager:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
         # Determine image to use (priority: session snapshot > repo image > base image)
+        # Repo images are probed eagerly (hydrate): Modal snapshots can expire
+        # provider-side while D1 still lists the image as ready, and an expired
+        # image must degrade to a slow base-image boot, not a spawn failure.
+        image_restore_failed = False
         if config.snapshot_id:
             image = modal.Image.from_registry(f"open-inspect-snapshot:{config.snapshot_id}")
         elif config.repo_image_id:
-            image = modal.Image.from_id(config.repo_image_id)
-            env_vars["FROM_REPO_IMAGE"] = "true"
-            env_vars["REPO_IMAGE_SHA"] = config.repo_image_sha or ""
+            image, image_restore_failed = await self._hydrate_repo_image(config.repo_image_id)
+            if not image_restore_failed:
+                env_vars["FROM_REPO_IMAGE"] = "true"
+                env_vars["REPO_IMAGE_SHA"] = config.repo_image_sha or ""
         else:
             image = base_image
 
@@ -481,12 +524,33 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
-        sandbox = await modal.Sandbox.create.aio(
-            "python",
-            "-m",
-            "sandbox_runtime.entrypoint",  # Run the supervisor entrypoint
-            **create_kwargs,
-        )
+        try:
+            sandbox = await modal.Sandbox.create.aio(
+                "python",
+                "-m",
+                "sandbox_runtime.entrypoint",  # Run the supervisor entrypoint
+                **create_kwargs,
+            )
+        except Exception as e:
+            if env_vars.get("FROM_REPO_IMAGE") != "true":
+                raise
+            # Image expiry can surface at creation even when the hydrate probe
+            # passed; retry once on the base image rather than failing the spawn.
+            log.warn(
+                "sandbox.repo_image_create_failed",
+                repo_image_id=config.repo_image_id,
+                exc=e,
+            )
+            image_restore_failed = True
+            env_vars.pop("FROM_REPO_IMAGE", None)
+            env_vars.pop("REPO_IMAGE_SHA", None)
+            create_kwargs["image"] = base_image
+            sandbox = await modal.Sandbox.create.aio(
+                "python",
+                "-m",
+                "sandbox_runtime.entrypoint",
+                **create_kwargs,
+            )
 
         modal_object_id = sandbox.object_id
         code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
@@ -521,6 +585,7 @@ class SandboxManager:
             code_server_password=code_server_password,
             ttyd_url=ttyd_url,
             tunnel_urls=extra_tunnel_urls,
+            image_restore_failed=image_restore_failed,
         )
 
     async def create_build_sandbox(
@@ -663,12 +728,13 @@ class SandboxManager:
 
         # Use Modal's native snapshot_filesystem() API
         # This returns an Image directly (not async)
+        # ttl=None opts out of Modal 1.5's 30-day default TTL: a session
+        # snapshot must not expire while the session row still references it.
         image = handle.modal_sandbox.snapshot_filesystem(
-            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None
         )
 
         # The image object_id is the unique identifier for this snapshot
-        # Modal automatically stores the image and it persists indefinitely
         image_id = image.object_id
 
         duration_ms = int((time.time() - start_time) * 1000)
@@ -756,8 +822,14 @@ class SandboxManager:
             sandbox_name = f"{repo_owner}-{repo_name}" if has_repository else "no-repository"
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
-        # Lookup the image by ID
-        image = modal.Image.from_id(snapshot_image_id)
+        # Lookup the image by ID, probing eagerly: snapshots taken before we
+        # pinned ttl=None can be expired provider-side, and that must surface
+        # as a structured error, not a generic sandbox-creation failure.
+        try:
+            image = modal.Image.from_id(snapshot_image_id)
+            await image.hydrate.aio()
+        except Exception as e:
+            raise SnapshotRestoreError(snapshot_image_id, str(e)) from e
 
         # Prepare environment variables (user vars first, system vars override)
         env_vars: dict[str, str] = {}
@@ -831,12 +903,16 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
-        sandbox = await modal.Sandbox.create.aio(
-            "python",
-            "-m",
-            "sandbox_runtime.entrypoint",
-            **create_kwargs,
-        )
+        try:
+            sandbox = await modal.Sandbox.create.aio(
+                "python",
+                "-m",
+                "sandbox_runtime.entrypoint",
+                **create_kwargs,
+            )
+        except modal.exception.NotFoundError as e:
+            # Expiry the hydrate probe missed; classify it the same way.
+            raise SnapshotRestoreError(snapshot_image_id, str(e)) from e
 
         modal_object_id = sandbox.object_id
         code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
