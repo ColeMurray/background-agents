@@ -101,6 +101,21 @@ def parse_repositories(
     return []
 
 
+def find_repo_entry(entries: list[RepoEntry], owner: str, name: str) -> RepoEntry | None:
+    """Find a repository by identity, case-insensitively.
+
+    GitHub owner/name identifiers are case-insensitive, but the returned
+    entry carries the canonical casing (and checkout path) — callers must
+    use the entry's fields, never the lookup arguments.
+    """
+    owner_key = owner.lower()
+    name_key = name.lower()
+    for entry in entries:
+        if entry.owner.lower() == owner_key and entry.name.lower() == name_key:
+            return entry
+    return None
+
+
 def dump_repo_manifest(repositories: list[RepoEntry]) -> str:
     """Serialize entries for REPO_MANIFEST_FILE_PATH."""
     return json.dumps(

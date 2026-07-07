@@ -22,7 +22,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NoReturn
 
 import httpx
 import websockets
@@ -31,7 +31,7 @@ from websockets.exceptions import InvalidStatus
 
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .log_config import configure_logging, get_logger
-from .repo_config import load_repo_manifest
+from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
 
 configure_logging()
@@ -56,6 +56,19 @@ class PushRequest:
     push_url: str
     redacted_push_url: str
     force: bool
+
+    @property
+    def has_repo_identity(self) -> bool:
+        """True when the spec names its target repository.
+
+        Owner and name always travel together — _validate_push_request
+        rejects partial identity before anything consults this.
+        """
+        return bool(self.repo_owner and self.repo_name)
+
+    @property
+    def repo_full_name(self) -> str:
+        return f"{self.repo_owner}/{self.repo_name}"
 
     def repo_fields(self) -> dict[str, Any]:
         """Repo identity echoed on push events when the spec carried it."""
@@ -1611,76 +1624,82 @@ class AgentBridge:
             force=bool(push_spec.get("force", False)) if push_spec else False,
         )
 
+    def _reject_push(self, *, reason: str, message: str, **log_fields: Any) -> NoReturn:
+        """Log a push rejection and raise it toward _handle_push's emitter."""
+        self.log.warn("git.push_error", reason=reason, **log_fields)
+        raise PushRejected(message)
+
     def _validate_push_request(
         self, push_spec: dict[str, Any] | None, request: PushRequest
     ) -> None:
         """Reject structurally unusable specs before touching the workspace."""
         if push_spec is None:
-            self.log.warn("git.push_error", reason="missing_push_spec")
-            raise PushRejected("Push failed - missing push specification")
-
+            self._reject_push(
+                reason="missing_push_spec",
+                message="Push failed - missing push specification",
+            )
         if bool(request.repo_owner) != bool(request.repo_name):
-            self.log.warn(
-                "git.push_error",
+            self._reject_push(
                 reason="partial_repo_identity",
+                message="Push failed - pushSpec must carry both repoOwner and repoName",
                 repo_owner=request.repo_owner,
                 repo_name=request.repo_name,
             )
-            raise PushRejected("Push failed - pushSpec must carry both repoOwner and repoName")
-
         if not request.branch_name:
-            self.log.warn("git.push_error", reason="missing_target_branch")
-            raise PushRejected("Push failed - missing target branch")
-
+            self._reject_push(
+                reason="missing_target_branch",
+                message="Push failed - missing target branch",
+            )
         if not request.refspec or not request.push_url:
-            self.log.warn("git.push_error", reason="invalid_push_spec")
-            raise PushRejected("Push failed - invalid push specification")
+            self._reject_push(
+                reason="invalid_push_spec",
+                message="Push failed - invalid push specification",
+            )
 
     def _resolve_push_checkout(self, request: PushRequest) -> Path:
-        """Resolve the checkout to push from.
+        """Pick the git checkout the push runs in."""
+        if request.has_repo_identity:
+            return self._member_checkout(request)
+        return self._sole_workspace_checkout()
 
-        A spec carrying repo identity targets that member through the
-        supervisor-written manifest — never by joining spec-supplied names
-        into the filesystem; a spec without one keeps the legacy behavior —
-        the sole cloned repository under /workspace.
+    def _member_checkout(self, request: PushRequest) -> Path:
+        """Checkout of the session member the spec names.
+
+        The identity is matched against the supervisor-written manifest and
+        the matched entry's path is used verbatim — spec-supplied strings
+        never become filesystem paths, so a crafted name cannot select a
+        checkout outside the session.
         """
-        if not request.repo_owner:
-            repo_dirs = list(self.repo_path.glob("*/.git"))
-            if not repo_dirs:
-                self.log.warn("git.push_error", reason="no_repo_configured")
-                raise PushRejected("No repository found")
-            return repo_dirs[0].parent
-
-        member = next(
-            (
-                entry
-                for entry in load_repo_manifest(self.repo_manifest_path)
-                if entry.owner.lower() == request.repo_owner.lower()
-                and entry.name.lower() == request.repo_name.lower()
-            ),
-            None,
+        member = find_repo_entry(
+            load_repo_manifest(self.repo_manifest_path),
+            request.repo_owner,
+            request.repo_name,
         )
         if member is None:
-            self.log.warn(
-                "git.push_error",
+            self._reject_push(
                 reason="repo_not_session_member",
+                message=f"Repository {request.repo_full_name} is not part of this session",
                 repo_owner=request.repo_owner,
                 repo_name=request.repo_name,
-            )
-            raise PushRejected(
-                f"Repository {request.repo_owner}/{request.repo_name} is not part of this session"
             )
         if not (member.path / ".git").exists():
-            self.log.warn(
-                "git.push_error",
+            self._reject_push(
                 reason="repo_not_in_workspace",
+                message=f"Repository {request.repo_full_name} not found in workspace",
                 repo_owner=request.repo_owner,
                 repo_name=request.repo_name,
             )
-            raise PushRejected(
-                f"Repository {request.repo_owner}/{request.repo_name} not found in workspace"
-            )
         return member.path
+
+    def _sole_workspace_checkout(self) -> Path:
+        """Checkout for a spec that names no repository (legacy control
+        planes, single-repo sessions): the one clone directly under
+        /workspace. Sorted only to be deterministic if that invariant is
+        ever violated."""
+        repo_dirs = sorted(self.repo_path.glob("*/.git"))
+        if not repo_dirs:
+            self._reject_push(reason="no_repo_configured", message="No repository found")
+        return repo_dirs[0].parent
 
     async def _run_git_push(self, request: PushRequest, repo_dir: Path) -> None:
         """Run git push in repo_dir; raises PushRejected on failure or timeout."""

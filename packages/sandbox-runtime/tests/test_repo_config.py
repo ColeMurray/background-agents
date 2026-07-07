@@ -9,6 +9,7 @@ from sandbox_runtime.repo_config import (
     RepoConfigError,
     RepoEntry,
     dump_repo_manifest,
+    find_repo_entry,
     is_safe_repo_segment,
     load_repo_manifest,
     parse_repositories,
@@ -91,6 +92,22 @@ class TestParseRepositories:
         assert entries == [
             RepoEntry(owner="acme", name="app", branch="dev", path=WORKSPACE / "app")
         ]
+
+
+FIND_ENTRIES = [
+    RepoEntry(owner="Acme", name="Frontend", branch="main", path=WORKSPACE / "Frontend"),
+    RepoEntry(owner="acme", name="backend", branch="dev", path=WORKSPACE / "backend"),
+]
+
+
+class TestFindRepoEntry:
+    def test_matches_case_insensitively_returning_canonical_entry(self):
+        entry = find_repo_entry(FIND_ENTRIES, "ACME", "frontend")
+
+        assert entry is FIND_ENTRIES[0]
+
+    def test_returns_none_for_non_member(self):
+        assert find_repo_entry(FIND_ENTRIES, "acme", "missing") is None
 
 
 class TestRepoManifest:
