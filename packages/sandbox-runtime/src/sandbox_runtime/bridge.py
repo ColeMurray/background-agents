@@ -60,9 +60,10 @@ class PushRequest:
     @classmethod
     def from_push_spec(cls, push_spec: dict[str, Any] | None) -> "PushRequest":
         """Normalize the raw spec; missing fields become ""/False, never errors."""
+        spec = push_spec or {}
 
         def field(key: str) -> str:
-            return str(push_spec.get(key, "")).strip() if push_spec else ""
+            return str(spec.get(key, "")).strip()
 
         return cls(
             branch_name=field("targetBranch"),
@@ -71,7 +72,7 @@ class PushRequest:
             refspec=field("refspec"),
             push_url=field("remoteUrl"),
             redacted_push_url=field("redactedRemoteUrl"),
-            force=bool(push_spec.get("force", False)) if push_spec else False,
+            force=bool(spec.get("force", False)),
         )
 
     @property
@@ -1598,7 +1599,7 @@ class AgentBridge:
         )
 
         try:
-            self._validate_push_request(push_spec, request)
+            self._validate_push_request(request, spec_present=push_spec is not None)
             repo_dir = self._resolve_push_checkout(request)
             await self._run_git_push(request, repo_dir)
         except PushRejected as rejection:
@@ -1629,11 +1630,9 @@ class AgentBridge:
         self.log.warn("git.push_error", reason=reason, **log_fields)
         raise PushRejected(message)
 
-    def _validate_push_request(
-        self, push_spec: dict[str, Any] | None, request: PushRequest
-    ) -> None:
+    def _validate_push_request(self, request: PushRequest, *, spec_present: bool) -> None:
         """Reject structurally unusable specs before touching the workspace."""
-        if push_spec is None:
+        if not spec_present:
             self._reject_push(
                 reason="missing_push_spec",
                 message="Push failed - missing push specification",

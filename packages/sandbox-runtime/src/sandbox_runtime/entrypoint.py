@@ -178,8 +178,8 @@ class SandboxSupervisor:
             return parse_repositories(
                 self.session_config,
                 workspace_path=self.workspace_path,
-                scalar_owner=self.repo_owner if self.has_repository else "",
-                scalar_name=self.repo_name if self.has_repository else "",
+                scalar_owner=self.repo_owner,
+                scalar_name=self.repo_name,
                 scalar_branch=self.base_branch,
             )
         except RepoConfigError as e:

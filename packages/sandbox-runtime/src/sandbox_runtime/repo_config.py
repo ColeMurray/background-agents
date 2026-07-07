@@ -10,8 +10,10 @@ checkout layout has exactly one owner.
 
 import json
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .constants import REPO_MANIFEST_FILE_PATH
 
@@ -51,8 +53,13 @@ def _require_safe(*, owner: str, name: str) -> None:
             raise RepoConfigError(f"unsafe {label} {value!r}: not a single path segment")
 
 
+def _str_field(item: Mapping[str, Any], key: str) -> str:
+    """A JSON field coerced to a stripped string ("" for null/missing)."""
+    return str(item.get(key) or "").strip()
+
+
 def parse_repositories(
-    session_config: dict,
+    session_config: Mapping[str, Any],
     *,
     workspace_path: Path,
     scalar_owner: str = "",
@@ -74,15 +81,16 @@ def parse_repositories(
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            owner = str(item.get("repo_owner") or "").strip()
-            name = str(item.get("repo_name") or "").strip()
+            owner = _str_field(item, "repo_owner")
+            name = _str_field(item, "repo_name")
             if not owner or not name:
                 continue
             _require_safe(owner=owner, name=name)
-            if name.lower() in seen_names:
+            name_key = name.lower()
+            if name_key in seen_names:
                 raise RepoConfigError(f"duplicate repo_name {name!r}: checkout paths would collide")
-            seen_names.add(name.lower())
-            branch = str(item.get("branch") or "").strip() or "main"
+            seen_names.add(name_key)
+            branch = _str_field(item, "branch") or "main"
             entries.append(
                 RepoEntry(owner=owner, name=name, branch=branch, path=workspace_path / name)
             )
@@ -101,7 +109,7 @@ def parse_repositories(
     return []
 
 
-def find_repo_entry(entries: list[RepoEntry], owner: str, name: str) -> RepoEntry | None:
+def find_repo_entry(entries: Iterable[RepoEntry], owner: str, name: str) -> RepoEntry | None:
     """Find a repository by identity, case-insensitively.
 
     GitHub owner/name identifiers are case-insensitive, but the returned
@@ -140,11 +148,11 @@ def load_repo_manifest(path: str | Path = REPO_MANIFEST_FILE_PATH) -> list[RepoE
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            owner = str(item.get("owner") or "").strip()
-            name = str(item.get("name") or "").strip()
-            path_value = str(item.get("path") or "").strip()
+            owner = _str_field(item, "owner")
+            name = _str_field(item, "name")
+            path_value = _str_field(item, "path")
             if not owner or not name or not path_value:
                 continue
-            branch = str(item.get("branch") or "").strip() or "main"
+            branch = _str_field(item, "branch") or "main"
             entries.append(RepoEntry(owner=owner, name=name, branch=branch, path=Path(path_value)))
     return entries
