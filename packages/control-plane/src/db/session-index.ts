@@ -258,8 +258,7 @@ export class SessionIndexStore {
       .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = rows.slice(0, limit).map(toEntry);
-    await this.hydrateRepositories(sessions);
+    const sessions = await this.withRepositories(rows.slice(0, limit).map(toEntry));
 
     return {
       sessions,
@@ -268,12 +267,13 @@ export class SessionIndexStore {
   }
 
   /**
-   * Attach member repository lists to the given entries in one query.
-   * Sessions without rows (pre-feature) are left without the field so
+   * Return copies of the given entries with member repository lists attached,
+   * resolved in one query. The input entries are not mutated. Sessions
+   * without rows (pre-feature) are returned as-is, without the field, so
    * consumers fall back to the scalar columns.
    */
-  private async hydrateRepositories(sessions: SessionEntry[]): Promise<void> {
-    if (sessions.length === 0) return;
+  private async withRepositories(sessions: SessionEntry[]): Promise<SessionEntry[]> {
+    if (sessions.length === 0) return sessions;
 
     const placeholders = sessions.map(() => "?").join(", ");
     const result = await this.db
@@ -297,12 +297,10 @@ export class SessionIndexStore {
       bySession.set(row.session_id, list);
     }
 
-    for (const session of sessions) {
+    return sessions.map((session) => {
       const repositories = bySession.get(session.id);
-      if (repositories) {
-        session.repositories = repositories;
-      }
-    }
+      return repositories ? { ...session, repositories } : session;
+    });
   }
 
   async updateTitle(id: string, title: string): Promise<boolean> {
