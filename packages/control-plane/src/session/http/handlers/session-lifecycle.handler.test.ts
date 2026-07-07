@@ -151,6 +151,31 @@ function createHandler() {
 }
 
 describe("createSessionLifecycleHandler", () => {
+  it("returns 400 when init body is malformed", async () => {
+    const { handler, repository, scheduleWarmSandbox } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "repo",
+          repoId: "not-a-number",
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
     ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
@@ -267,6 +292,66 @@ describe("createSessionLifecycleHandler", () => {
     });
     expect(scheduleWarmSandbox).toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
+  });
+
+  it("accepts nullable init fields from the internal session boundary", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          title: null,
+          userId: "user-1",
+          scmLogin: null,
+          scmName: null,
+          scmEmail: null,
+          scmToken: null,
+          scmTokenEncrypted: null,
+          scmRefreshTokenEncrypted: null,
+          scmTokenExpiresAt: null,
+          scmUserId: null,
+          parentSessionId: null,
+          spawnSource: "slack-bot",
+          spawnDepth: 2,
+          codeServerEnabled: true,
+          sandboxSettings: { buildTimeoutSeconds: 1200 },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: null,
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        parentSessionId: null,
+        spawnSource: "slack-bot",
+        spawnDepth: 2,
+        codeServerEnabled: true,
+        sandboxSettings: JSON.stringify({ buildTimeoutSeconds: 1200 }),
+      })
+    );
+    expect(repository.createParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scmUserId: null,
+        scmLogin: null,
+        scmName: null,
+        scmEmail: null,
+        scmAccessTokenEncrypted: null,
+        scmRefreshTokenEncrypted: null,
+        scmTokenExpiresAt: null,
+      })
+    );
   });
 
   it("falls back to pre-encrypted token when plain-token encryption fails", async () => {
