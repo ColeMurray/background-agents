@@ -376,3 +376,28 @@ async def test_restore_sandbox_forwards_session_config_verbatim(monkeypatch):
 
     assert result["success"] is True
     assert captured["restore"]["session_config"] == session_config
+
+
+def test_session_config_helper_prefers_normalized_identity():
+    """The helper must take identity from the normalized pair, not the raw request."""
+    config = web_api._session_config_from_create_request(
+        {"session_id": "s1", "repo_owner": " Acme ", "repo_name": " App "},
+        repo_owner="acme",
+        repo_name="app",
+    )
+
+    assert config.repo_owner == "acme"
+    assert config.repo_name == "app"
+
+
+def test_session_config_helper_ignores_null_wire_values():
+    """Explicit nulls on the wire must not clobber SessionConfig defaults."""
+    config = web_api._session_config_from_create_request(
+        {"session_id": "s1", "provider": None, "model": None, "branch": None},
+        repo_owner=None,
+        repo_name=None,
+    )
+
+    assert config.provider == "anthropic"
+    assert config.model == "claude-sonnet-4-6"
+    assert config.branch is None

@@ -27,7 +27,7 @@ from sandbox_runtime.constants import (
     TUNNEL_ENV_FILE_PATH,
 )
 from sandbox_runtime.log_config import get_logger
-from sandbox_runtime.types import SandboxStatus, SessionConfig
+from sandbox_runtime.types import SandboxStatus, SessionConfig, SessionRepositoryConfig
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
@@ -520,7 +520,7 @@ class SandboxManager:
         clone_token: str = "",
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
-        repositories: list[dict] | None = None,
+        repositories: list[SessionRepositoryConfig] | None = None,
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.

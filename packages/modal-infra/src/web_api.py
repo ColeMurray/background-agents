@@ -87,6 +87,30 @@ def _normalize_optional_repository_context(
     return normalized_owner, normalized_name
 
 
+def _session_config_from_create_request(
+    request: dict, *, repo_owner: str | None, repo_name: str | None
+):
+    """Build the create-path SessionConfig from the flat wire request.
+
+    Create is a lossy reconstruction — the manager re-serializes this typed
+    model into SESSION_CONFIG — while restore forwards its session_config
+    dict verbatim. Wire fields share their names with SessionConfig fields,
+    so the model's own field list drives the pickup: a new field only needs
+    the SessionConfig change, not another line here. repo_owner/repo_name
+    are set from the normalized pair, never the raw request.
+    """
+    from .sandbox import SessionConfig
+
+    fields = {
+        name: request[name]
+        for name in SessionConfig.model_fields
+        if name in request and request[name] is not None
+    }
+    fields["repo_owner"] = repo_owner
+    fields["repo_name"] = repo_name
+    return SessionConfig(**fields)
+
+
 @app.function(
     image=function_image,
     secrets=[github_app_secrets, internal_api_secret],
@@ -128,8 +152,6 @@ async def api_create_sandbox(
     require_valid_control_plane_url(control_plane_url)
 
     try:
-        # Import types and manager directly
-        from .sandbox import SessionConfig
         from .sandbox.manager import SandboxConfig, SandboxManager
 
         manager = SandboxManager()
@@ -144,21 +166,8 @@ async def api_create_sandbox(
             resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
 
-        # Create is a lossy reconstruction: this typed model is what the
-        # manager re-serializes into SESSION_CONFIG, so every new wire field
-        # must be threaded here (restore forwards its session_config dict
-        # verbatim and needs no equivalent).
-        session_config = SessionConfig(
-            session_id=request.get("session_id"),
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            branch=request.get("branch"),
-            opencode_session_id=request.get("opencode_session_id"),
-            provider=request.get("provider", "anthropic"),
-            model=request.get("model", "claude-sonnet-4-6"),
-            mcp_servers=request.get("mcp_servers"),
-            repositories=request.get("repositories"),
-            working_branch_name=request.get("working_branch_name"),
+        session_config = _session_config_from_create_request(
+            request, repo_owner=repo_owner, repo_name=repo_name
         )
 
         config = SandboxConfig(
