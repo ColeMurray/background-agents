@@ -473,6 +473,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._pullRequestHandler) {
       this._pullRequestHandler = createPullRequestHandler({
         getSession: () => this.getSession(),
+        getSessionRepositories: () => this.repository.getSessionRepositories(),
         getPromptingParticipantForPR: () => this.participantService.getPromptingParticipantForPR(),
         resolveAuthForPR: (participant) => this.participantService.resolveAuthForPR(participant),
         getSessionUrl: (session) => {
@@ -486,12 +487,13 @@ export class SessionDO extends DurableObject<Env> {
             sourceControlProvider: this.sourceControlProvider,
             log: this.log,
             generateId: () => generateId(),
-            pushBranchToRemote: (headBranch, pushSpec) =>
-              this.pushBranchToRemote(headBranch, pushSpec),
-            broadcastSessionBranch: (branchName) => {
+            pushBranchToRemote: (pushSpec) => this.pushBranchToRemote(pushSpec),
+            broadcastSessionBranch: (branchName, repo) => {
               this.broadcast({
                 type: "session_branch",
                 branchName,
+                repoOwner: repo.repoOwner,
+                repoName: repo.repoName,
               });
             },
             broadcastArtifactCreated: (artifact) => {
@@ -1386,10 +1388,9 @@ export class SessionDO extends DurableObject<Env> {
    * @returns Success result or error message
    */
   private async pushBranchToRemote(
-    branchName: string,
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    return await this.sandboxEventProcessor.pushBranchToRemote(branchName, pushSpec);
+    return await this.sandboxEventProcessor.pushBranchToRemote(pushSpec);
   }
 
   /**
@@ -1704,12 +1705,12 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Member repositories for SessionState, in position order. Sessions that
    * predate the session_repositories table get a one-entry list synthesized
-   * from the scalar columns. Per-repo git state columns are written from
-   * PR-5 onward, so the primary entry is overlaid with the session scalars
-   * (which describe the primary until then); prUrl arrives with per-repo PR
-   * artifacts.
+   * from the scalar columns. Rows written before per-repo git state existed
+   * have null git columns while the scalars are set, so the primary entry is
+   * overlaid with the session scalars.
    */
   private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
+    const prUrlForRepo = this.getPrUrlLookup();
     const rows = this.repository.getSessionRepositories();
     if (rows.length > 0) {
       return rows.map((row, index) => ({
@@ -1721,7 +1722,7 @@ export class SessionDO extends DurableObject<Env> {
         branchName: row.branch_name ?? (index === 0 ? (session?.branch_name ?? null) : null),
         baseSha: row.base_sha ?? (index === 0 ? (session?.base_sha ?? null) : null),
         currentSha: row.current_sha ?? (index === 0 ? (session?.current_sha ?? null) : null),
-        prUrl: null,
+        prUrl: prUrlForRepo(row.repo_owner, row.repo_name, index === 0),
       }));
     }
     if (session?.repo_owner && session.repo_name) {
@@ -1735,11 +1736,58 @@ export class SessionDO extends DurableObject<Env> {
           branchName: session.branch_name ?? null,
           baseSha: session.base_sha ?? null,
           currentSha: session.current_sha ?? null,
-          prUrl: null,
+          prUrl: prUrlForRepo(session.repo_owner, session.repo_name, true),
         },
       ];
     }
     return [];
+  }
+
+  /**
+   * Per-repo PR URL lookup over the session's PR artifacts. Artifact
+   * metadata without repo identity predates multi-repo sessions and belongs
+   * to the primary.
+   */
+  private getPrUrlLookup(): (
+    repoOwner: string,
+    repoName: string,
+    isPrimary: boolean
+  ) => string | null {
+    const prArtifacts = this.repository
+      .listArtifacts()
+      .filter((artifact) => artifact.type === "pr" && artifact.url);
+    if (prArtifacts.length === 0) {
+      return () => null;
+    }
+
+    const entries = prArtifacts.map((artifact) => {
+      let repo: { repoOwner: string; repoName: string } | null = null;
+      try {
+        const metadata: unknown = artifact.metadata ? JSON.parse(artifact.metadata) : null;
+        if (typeof metadata === "object" && metadata !== null) {
+          const { repoOwner, repoName } = metadata as { repoOwner?: unknown; repoName?: unknown };
+          if (typeof repoOwner === "string" && typeof repoName === "string") {
+            repo = { repoOwner, repoName };
+          }
+        }
+      } catch {
+        // Unparseable metadata — treat as identity-less (primary).
+      }
+      return { url: artifact.url, repo };
+    });
+
+    return (repoOwner, repoName, isPrimary) => {
+      for (const entry of entries) {
+        const matches = entry.repo
+          ? entry.repo.repoOwner.toLowerCase() === repoOwner.toLowerCase() &&
+            entry.repo.repoName.toLowerCase() === repoName.toLowerCase()
+          : isPrimary;
+        if (matches) {
+          return entry.url;
+        }
+      }
+      return null;
+    };
   }
 
   private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {

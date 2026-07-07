@@ -8,6 +8,7 @@ import {
   type GitPushAuthContext,
   type GitPushSpec,
 } from "../source-control";
+import type { SessionRepositoryRow } from "./repository";
 import type { ArtifactRow, SessionRow } from "./types";
 
 /**
@@ -18,6 +19,12 @@ export interface CreatePullRequestInput {
   body: string;
   baseBranch?: string;
   headBranch?: string;
+  /**
+   * Target member repository, already validated against the session's
+   * repository list by the HTTP handler (canonical casing).
+   */
+  repoOwner: string;
+  repoName: string;
   promptingUserId: string;
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
@@ -34,12 +41,44 @@ export type CreatePullRequestResult =
 
 export type PushBranchResult = { success: true } | { success: false; error: string };
 
+function repoIdentityEquals(
+  a: { repoOwner: string; repoName: string },
+  b: { repoOwner: string; repoName: string }
+): boolean {
+  return (
+    a.repoOwner.toLowerCase() === b.repoOwner.toLowerCase() &&
+    a.repoName.toLowerCase() === b.repoName.toLowerCase()
+  );
+}
+
+/**
+ * Repo identity from a PR artifact's metadata. Null when the metadata carries
+ * no identity — artifacts written before multi-repo support, which by
+ * construction belong to the session's primary repository.
+ */
+function parseArtifactRepo(
+  metadata: string | null
+): { repoOwner: string; repoName: string } | null {
+  if (!metadata) return null;
+  try {
+    const parsed: unknown = JSON.parse(metadata);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { repoOwner, repoName } = parsed as { repoOwner?: unknown; repoName?: unknown };
+    if (typeof repoOwner !== "string" || typeof repoName !== "string") return null;
+    return { repoOwner, repoName };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Session persistence operations required by pull request orchestration.
  */
 export interface PullRequestRepository {
   getSession(): SessionRow | null;
+  getSessionRepositories(): SessionRepositoryRow[];
   updateSessionBranch(sessionId: string, branchName: string): void;
+  updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void;
   listArtifacts(): ArtifactRow[];
   createArtifact(data: {
     id: string;
@@ -58,8 +97,11 @@ export interface PullRequestServiceDeps {
   sourceControlProvider: SourceControlProvider;
   log: Logger;
   generateId: () => string;
-  pushBranchToRemote: (headBranch: string, pushSpec: GitPushSpec) => Promise<PushBranchResult>;
-  broadcastSessionBranch: (branchName: string) => void;
+  pushBranchToRemote: (pushSpec: GitPushSpec) => Promise<PushBranchResult>;
+  broadcastSessionBranch: (
+    branchName: string,
+    repo: { repoOwner: string; repoName: string }
+  ) => void;
   broadcastArtifactCreated: (artifact: SessionArtifact) => void;
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
@@ -85,20 +127,44 @@ export class SessionPullRequestService {
       return { kind: "error", status: 400, error: "Pull requests require a repository context" };
     }
 
-    this.deps.log.info("Creating PR", { user_id: input.promptingUserId });
+    const memberRow =
+      this.deps.repository
+        .getSessionRepositories()
+        .find((row) =>
+          repoIdentityEquals({ repoOwner: row.repo_owner, repoName: row.repo_name }, input)
+        ) ?? null;
+    const isPrimary = repoIdentityEquals(
+      { repoOwner: session.repo_owner, repoName: session.repo_name },
+      input
+    );
+    // Sessions predating the member table have no rows; the target must then
+    // be the scalar repository. Re-checked here (the handler already 403s)
+    // because this is a sandbox-auth security boundary.
+    if (!memberRow && !isPrimary) {
+      return {
+        kind: "error",
+        status: 403,
+        error: `Repository ${input.repoOwner}/${input.repoName} is not part of this session`,
+      };
+    }
+    const targetRepo = {
+      repoOwner: memberRow?.repo_owner ?? session.repo_owner,
+      repoName: memberRow?.repo_name ?? session.repo_name,
+    };
+
+    this.deps.log.info("Creating PR", {
+      user_id: input.promptingUserId,
+      repo_owner: targetRepo.repoOwner,
+      repo_name: targetRepo.repoName,
+    });
 
     try {
       const sessionId = session.session_name || session.id;
       const generatedHeadBranch = generateBranchName(sessionId);
 
       const initialArtifacts = this.deps.repository.listArtifacts();
-      const existingPrArtifact = initialArtifacts.find((artifact) => artifact.type === "pr");
-      if (existingPrArtifact) {
-        return {
-          kind: "error",
-          status: 409,
-          error: "A pull request has already been created for this session.",
-        };
+      if (this.findPrArtifactForRepo(initialArtifacts, targetRepo, isPrimary)) {
+        return this.duplicatePrError(targetRepo);
       }
 
       let pushAuth: GitPushAuthContext;
@@ -125,20 +191,28 @@ export class SessionPullRequestService {
       };
 
       const repoInfo = await this.deps.sourceControlProvider.getRepository(appAuth, {
-        owner: session.repo_owner,
-        name: session.repo_name,
+        owner: targetRepo.repoOwner,
+        name: targetRepo.repoName,
       });
-      const baseBranch = input.baseBranch || repoInfo.defaultBranch;
+      // Base: requested > target repo's base branch (scalar mirror for
+      // sessions without member rows) > repo default. Behavioral parity with
+      // the session-base injection the HTTP handler used to do.
+      const baseBranch =
+        input.baseBranch || memberRow?.base_branch || session.base_branch || repoInfo.defaultBranch;
+      // The target repo's working branch; member rows written before PR flow
+      // existed have a null branch_name while the scalar mirror is set, so
+      // the primary falls back to the scalar.
+      const targetBranchName = memberRow?.branch_name ?? (isPrimary ? session.branch_name : null);
       const branchResolution = resolveHeadBranchForPr({
         requestedHeadBranch: input.headBranch,
-        sessionBranchName: session.branch_name,
+        sessionBranchName: targetBranchName,
         generatedBranchName: generatedHeadBranch,
         baseBranch,
       });
       const headBranch = branchResolution.headBranch;
       this.deps.log.info("Resolved PR head branch", {
         requested_head_branch: input.headBranch ?? null,
-        session_branch_name: session.branch_name,
+        session_branch_name: targetBranchName,
         generated_head_branch: generatedHeadBranch,
         resolved_head_branch: headBranch,
         resolution_source: branchResolution.source,
@@ -154,34 +228,36 @@ export class SessionPullRequestService {
       }
 
       const pushSpec = this.deps.sourceControlProvider.buildGitPushSpec({
-        owner: session.repo_owner,
-        name: session.repo_name,
+        owner: targetRepo.repoOwner,
+        name: targetRepo.repoName,
         sourceRef: "HEAD",
         targetBranch: sanitizedHeadBranch,
         auth: pushAuth,
         force: true,
       });
 
-      const pushResult = await this.deps.pushBranchToRemote(sanitizedHeadBranch, pushSpec);
+      const pushResult = await this.deps.pushBranchToRemote(pushSpec);
       if (!pushResult.success) {
         return { kind: "error", status: 500, error: pushResult.error };
       }
 
-      if (session.branch_name !== sanitizedHeadBranch) {
+      if (memberRow && memberRow.branch_name !== sanitizedHeadBranch) {
+        this.deps.repository.updateSessionRepositoryBranch(
+          memberRow.repo_owner,
+          memberRow.repo_name,
+          sanitizedHeadBranch
+        );
+      }
+      if (isPrimary && session.branch_name !== sanitizedHeadBranch) {
         this.deps.repository.updateSessionBranch(session.id, sanitizedHeadBranch);
       }
       // Broadcast even when the stored branch is already current so connected clients converge
       // after missed or out-of-order updates.
-      this.deps.broadcastSessionBranch(sanitizedHeadBranch);
+      this.deps.broadcastSessionBranch(sanitizedHeadBranch, targetRepo);
 
       const latestArtifacts = this.deps.repository.listArtifacts();
-      const latestPrArtifact = latestArtifacts.find((artifact) => artifact.type === "pr");
-      if (latestPrArtifact) {
-        return {
-          kind: "error",
-          status: 409,
-          error: "A pull request has already been created for this session.",
-        };
+      if (this.findPrArtifactForRepo(latestArtifacts, targetRepo, isPrimary)) {
+        return this.duplicatePrError(targetRepo);
       }
 
       // Use user OAuth if available, otherwise fall back to GitHub App token
@@ -206,6 +282,8 @@ export class SessionPullRequestService {
         state: prResult.state,
         head: sanitizedHeadBranch,
         base: baseBranch,
+        repoOwner: targetRepo.repoOwner,
+        repoName: targetRepo.repoName,
       };
       this.deps.repository.createArtifact({
         id: artifactId,
@@ -248,5 +326,34 @@ export class SessionPullRequestService {
         error: error instanceof Error ? error.message : "Failed to create PR",
       };
     }
+  }
+
+  /**
+   * One PR per repo per session: find an existing PR artifact for the target
+   * repo. Artifact metadata without repo identity predates multi-repo
+   * sessions and belongs to the primary.
+   */
+  private findPrArtifactForRepo(
+    artifacts: ArtifactRow[],
+    targetRepo: { repoOwner: string; repoName: string },
+    isPrimary: boolean
+  ): ArtifactRow | undefined {
+    return artifacts.find((artifact) => {
+      if (artifact.type !== "pr") return false;
+      const artifactRepo = parseArtifactRepo(artifact.metadata);
+      if (!artifactRepo) return isPrimary;
+      return repoIdentityEquals(artifactRepo, targetRepo);
+    });
+  }
+
+  private duplicatePrError(targetRepo: {
+    repoOwner: string;
+    repoName: string;
+  }): CreatePullRequestResult {
+    return {
+      kind: "error",
+      status: 409,
+      error: `A pull request has already been created for ${targetRepo.repoOwner}/${targetRepo.repoName} in this session.`,
+    };
   }
 }

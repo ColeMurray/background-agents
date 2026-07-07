@@ -12,6 +12,7 @@ import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./titl
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
+type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
 
 interface SessionSandboxEventProcessorDeps {
   ctx: DurableObjectState;
@@ -259,7 +260,6 @@ export class SessionSandboxEventProcessor {
   }
 
   async pushBranchToRemote(
-    branchName: string,
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
     const sandboxWs = this.deps.wsManager.getSandboxSocket();
@@ -269,21 +269,29 @@ export class SessionSandboxEventProcessor {
       return { success: true };
     }
 
-    const normalizedBranch = this.normalizeBranchName(branchName);
+    const resolverKey = this.pushResolverKey(
+      pushSpec.repoOwner,
+      pushSpec.repoName,
+      pushSpec.targetBranch
+    );
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const pushPromise = new Promise<void>((resolve, reject) => {
-      this.pendingPushResolvers.set(normalizedBranch, { resolve, reject });
+      this.pendingPushResolvers.set(resolverKey, { resolve, reject });
 
       timeoutId = setTimeout(() => {
-        if (this.pendingPushResolvers.has(normalizedBranch)) {
-          this.pendingPushResolvers.delete(normalizedBranch);
+        if (this.pendingPushResolvers.has(resolverKey)) {
+          this.pendingPushResolvers.delete(resolverKey);
           reject(new Error("Push operation timed out after 360 seconds"));
         }
       }, 360000);
     });
 
-    this.deps.log.info("Sending push command", { branch_name: branchName });
+    this.deps.log.info("Sending push command", {
+      branch_name: pushSpec.targetBranch,
+      repo_owner: pushSpec.repoOwner,
+      repo_name: pushSpec.repoName,
+    });
     this.deps.wsManager.send(sandboxWs, {
       type: "push",
       pushSpec,
@@ -291,11 +299,11 @@ export class SessionSandboxEventProcessor {
 
     try {
       await pushPromise;
-      this.deps.log.info("Push completed successfully", { branch_name: branchName });
+      this.deps.log.info("Push completed successfully", { branch_name: pushSpec.targetBranch });
       return { success: true };
     } catch (pushError) {
       this.deps.log.error("Push failed", {
-        branch_name: branchName,
+        branch_name: pushSpec.targetBranch,
         error: pushError instanceof Error ? pushError : String(pushError),
       });
       return { success: false, error: `Failed to push branch: ${pushError}` };
@@ -306,33 +314,58 @@ export class SessionSandboxEventProcessor {
     }
   }
 
-  private handlePushEvent(event: SandboxEvent): void {
-    const branchName = (event as { branchName?: string }).branchName;
-
-    if (!branchName) {
+  private handlePushEvent(event: PushTerminalEvent): void {
+    const entry = this.findPushResolver(event);
+    if (!entry) {
+      this.deps.log.warn("Push event matched no pending resolver", {
+        event_type: event.type,
+        branch_name: event.branchName ?? null,
+        repo_owner: event.repoOwner ?? null,
+        repo_name: event.repoName ?? null,
+        pending_resolvers: Array.from(this.pendingPushResolvers.keys()),
+      });
       return;
     }
 
-    const normalizedBranch = this.normalizeBranchName(branchName);
-    const resolver = this.pendingPushResolvers.get(normalizedBranch);
-
-    if (!resolver) {
-      return;
-    }
-
+    const [resolverKey, resolver] = entry;
     if (event.type === "push_complete") {
       this.deps.log.info("Push completed, resolving promise", {
-        branch_name: branchName,
+        branch_name: event.branchName ?? null,
         pending_resolvers: Array.from(this.pendingPushResolvers.keys()),
       });
       resolver.resolve();
-    } else if (event.type === "push_error") {
-      const error = (event as { error?: string }).error || "Push failed";
-      this.deps.log.warn("Push failed for branch", { branch_name: branchName, error });
+    } else {
+      const error = event.error || "Push failed";
+      this.deps.log.warn("Push failed for branch", {
+        branch_name: event.branchName ?? null,
+        error,
+      });
       resolver.reject(new Error(error));
     }
 
-    this.pendingPushResolvers.delete(normalizedBranch);
+    this.pendingPushResolvers.delete(resolverKey);
+  }
+
+  /**
+   * Match a terminal push event to its pending resolver. Events carrying the
+   * full identity match by key; anything else (legacy single-repo runtimes
+   * echo no repo identity, and their "no repository found" push_error carries
+   * no branchName either) settles the sole pending push — by construction
+   * only one can be in flight when identity is missing.
+   */
+  private findPushResolver(event: PushTerminalEvent): [string, PushResolver] | null {
+    if (event.repoOwner && event.repoName && event.branchName) {
+      const resolverKey = this.pushResolverKey(event.repoOwner, event.repoName, event.branchName);
+      const resolver = this.pendingPushResolvers.get(resolverKey);
+      if (resolver) {
+        return [resolverKey, resolver];
+      }
+    }
+    if (this.pendingPushResolvers.size === 1) {
+      const [sole] = this.pendingPushResolvers.entries();
+      return sole;
+    }
+    return null;
   }
 
   private sendAck(ackId: string | undefined): void {
@@ -345,7 +378,7 @@ export class SessionSandboxEventProcessor {
     }
   }
 
-  private normalizeBranchName(name: string): string {
-    return name.trim().toLowerCase();
+  private pushResolverKey(repoOwner: string, repoName: string, branchName: string): string {
+    return `${repoOwner.toLowerCase()}/${repoName.toLowerCase()}::${branchName.trim().toLowerCase()}`;
   }
 }

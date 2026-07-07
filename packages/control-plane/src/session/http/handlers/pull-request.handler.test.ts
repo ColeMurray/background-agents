@@ -1,6 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SessionRepositoryRow } from "../../repository";
 import type { ParticipantRow, SessionRow } from "../../types";
 import { createPullRequestHandler } from "./pull-request.handler";
+
+function createRepositoryRow(
+  position: number,
+  repoOwner: string,
+  repoName: string
+): SessionRepositoryRow {
+  return {
+    position,
+    repo_owner: repoOwner,
+    repo_name: repoName,
+    repo_id: position + 1,
+    base_branch: "main",
+    branch_name: null,
+    base_sha: null,
+    current_sha: null,
+  };
+}
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -51,6 +69,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
+  const getSessionRepositories = vi.fn<() => SessionRepositoryRow[]>(() => []);
   const getPromptingParticipantForPR = vi.fn();
   const resolveAuthForPR = vi.fn();
   const getSessionUrl = vi.fn();
@@ -58,6 +77,7 @@ function createHandler() {
 
   const handler = createPullRequestHandler({
     getSession,
+    getSessionRepositories,
     getPromptingParticipantForPR,
     resolveAuthForPR,
     getSessionUrl,
@@ -67,6 +87,7 @@ function createHandler() {
   return {
     handler,
     getSession,
+    getSessionRepositories,
     getPromptingParticipantForPR,
     resolveAuthForPR,
     getSessionUrl,
@@ -177,7 +198,7 @@ describe("createPullRequestHandler", () => {
     expect(await response.json()).toEqual({ error: "Token expired" });
   });
 
-  it("forwards service error and uses session base branch fallback", async () => {
+  it("forwards service error and passes the raw base branch through", async () => {
     const {
       handler,
       getSession,
@@ -208,11 +229,15 @@ describe("createPullRequestHandler", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "PR already exists" });
+    // Base-branch defaulting is the service's job (per target repo) — the
+    // handler forwards the request value untouched.
     expect(createPullRequest).toHaveBeenCalledWith({
       title: "PR",
       body: "desc",
       headBranch: "feature/pr",
-      baseBranch: "develop",
+      baseBranch: undefined,
+      repoOwner: "acme",
+      repoName: "repo",
       promptingUserId: "user-123",
       promptingAuth: { authType: "oauth", token: "token" },
       sessionUrl: "https://app.example.com/session/public-session-1",
@@ -253,6 +278,8 @@ describe("createPullRequestHandler", () => {
       title: "PR",
       body: "desc",
       baseBranch: undefined,
+      repoOwner: "acme",
+      repoName: "repo",
       promptingUserId: "user-123",
       promptingAuth: null,
       sessionUrl: "https://app.example.com/session/public-session-1",
@@ -305,9 +332,114 @@ describe("createPullRequestHandler", () => {
       body: "desc",
       baseBranch: "release",
       headBranch: "feature/pr",
+      repoOwner: "acme",
+      repoName: "repo",
       promptingUserId: "user-1",
       promptingAuth: null,
       sessionUrl: "https://app.example.com/session/public-session-1",
+    });
+  });
+
+  describe("repository targeting", () => {
+    function createMultiRepoHandler() {
+      const harness = createHandler();
+      harness.getSession.mockReturnValue(createSession());
+      harness.getSessionRepositories.mockReturnValue([
+        createRepositoryRow(0, "acme", "repo"),
+        createRepositoryRow(1, "acme", "backend"),
+      ]);
+      harness.getPromptingParticipantForPR.mockResolvedValue({
+        participant: createParticipant(),
+      });
+      harness.resolveAuthForPR.mockResolvedValue({ auth: null });
+      harness.getSessionUrl.mockReturnValue("https://app.example.com/session/public-session-1");
+      harness.createPullRequest.mockResolvedValue({
+        kind: "created",
+        prNumber: 7,
+        prUrl: "https://github.com/acme/backend/pull/7",
+        state: "open",
+      });
+      return harness;
+    }
+
+    function postPr(handler: ReturnType<typeof createHandler>["handler"], body: unknown) {
+      return handler.createPr(
+        new Request("http://internal/internal/create-pr", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        })
+      );
+    }
+
+    it("returns 400 listing member repos when a multi-repo session omits the target", async () => {
+      const { handler, createPullRequest } = createMultiRepoHandler();
+
+      const response = await postPr(handler, { title: "PR", body: "desc" });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error:
+          "This session spans multiple repositories — specify repoOwner and repoName (one of: acme/repo, acme/backend)",
+      });
+      expect(createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 when only one of repoOwner/repoName is provided", async () => {
+      const { handler, createPullRequest } = createMultiRepoHandler();
+
+      const response = await postPr(handler, { title: "PR", body: "desc", repoOwner: "acme" });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "repoOwner and repoName must be provided together",
+      });
+      expect(createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("returns 403 when the target repo is not a session member", async () => {
+      const { handler, createPullRequest } = createMultiRepoHandler();
+
+      const response = await postPr(handler, {
+        title: "PR",
+        body: "desc",
+        repoOwner: "evil",
+        repoName: "exfil",
+      });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "Repository evil/exfil is not part of this session",
+      });
+      expect(createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("targets a secondary member with the list's canonical casing", async () => {
+      const { handler, createPullRequest } = createMultiRepoHandler();
+
+      const response = await postPr(handler, {
+        title: "PR",
+        body: "desc",
+        repoOwner: "Acme",
+        repoName: "Backend",
+      });
+
+      expect(response.status).toBe(200);
+      expect(createPullRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ repoOwner: "acme", repoName: "backend" })
+      );
+    });
+
+    it("defaults to the sole member when the target is omitted", async () => {
+      const harness = createMultiRepoHandler();
+      harness.getSessionRepositories.mockReturnValue([createRepositoryRow(0, "acme", "repo")]);
+
+      const response = await postPr(harness.handler, { title: "PR", body: "desc" });
+
+      expect(response.status).toBe(200);
+      expect(harness.createPullRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ repoOwner: "acme", repoName: "repo" })
+      );
     });
   });
 });

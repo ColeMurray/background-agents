@@ -402,6 +402,15 @@ export class SessionRepository {
     return this.rows<SessionRepositoryRow>(result);
   }
 
+  updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void {
+    this.sql.exec(
+      `UPDATE session_repositories SET branch_name = ? WHERE repo_owner = ? AND repo_name = ?`,
+      branchName,
+      repoOwner,
+      repoName
+    );
+  }
+
   // === SANDBOX ===
   // Note: Each session DO has exactly one sandbox row, so update methods use
   // a subquery `WHERE id = (SELECT id FROM sandbox LIMIT 1)` to find it.

@@ -146,6 +146,13 @@ export async function initNamedSession(
     repoOwner?: string;
     repoName?: string;
     repoId?: number;
+    defaultBranch?: string;
+    repositories?: Array<{
+      repoOwner: string;
+      repoName: string;
+      repoId: number;
+      baseBranch: string;
+    }>;
     title?: string;
     model?: string;
     userId?: string;

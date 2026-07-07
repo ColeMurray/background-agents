@@ -116,6 +116,10 @@ export interface GitPushSpec {
   refspec: string;
   /** Remote branch name (for observability and event correlation) */
   targetBranch: string;
+  /** Target repository owner — selects the checkout in multi-repo sandboxes */
+  repoOwner: string;
+  /** Target repository name — selects the checkout in multi-repo sandboxes */
+  repoName: string;
   /** Whether force push is required */
   force: boolean;
 }
