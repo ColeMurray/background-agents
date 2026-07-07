@@ -1,6 +1,7 @@
 import type { CreateSessionRequest, RepositoryRef } from "@open-inspect/shared";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
+import type { SourceControlProvider } from "../source-control";
 import { createRouteSourceControlProvider, HttpError, type RequestContext } from "../routes/shared";
 
 /**
@@ -31,9 +32,10 @@ export async function resolveSessionRepositories(
   env: Env,
   inputs: SessionRepositoryResolutionInput[],
   ctx: RequestContext,
-  logger: Logger
+  logger: Logger,
+  sourceControlProvider?: SourceControlProvider
 ): Promise<RepositoryRef[]> {
-  const provider = createRouteSourceControlProvider(env);
+  const provider = sourceControlProvider ?? createRouteSourceControlProvider(env);
 
   const outcomes = await Promise.all(
     inputs.map(async (input): Promise<ResolutionOutcome> => {
@@ -85,5 +87,26 @@ export async function resolveSessionRepositories(
     );
   }
 
-  return outcomes.map((outcome) => outcome.ref as RepositoryRef);
+  const refs = outcomes.map((outcome) => outcome.ref as RepositoryRef);
+
+  // Providers may canonicalize identities (GitLab follows project redirects
+  // after renames), so the input schema's uniqueness invariants must be
+  // re-checked on the RESOLVED identities: distinct repositories (D1 keys
+  // member rows by owner/name) and distinct repo names (checkout paths are
+  // /workspace/{repoName}).
+  const seenFullNames = new Set<string>();
+  const seenNames = new Set<string>();
+  for (const ref of refs) {
+    const fullName = `${ref.repoOwner}/${ref.repoName}`;
+    if (seenFullNames.has(fullName)) {
+      throw new HttpError(`repositories resolve to the same repository: ${fullName}`, 400);
+    }
+    if (seenNames.has(ref.repoName)) {
+      throw new HttpError(`repositories resolve to the same checkout path: ${ref.repoName}`, 400);
+    }
+    seenFullNames.add(fullName);
+    seenNames.add(ref.repoName);
+  }
+
+  return refs;
 }
