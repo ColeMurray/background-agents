@@ -3,10 +3,16 @@ import { resolveSessionRepositories } from "./resolve";
 import { HttpError, type RequestContext } from "../routes/shared";
 import type { SourceControlProvider, RepositoryAccessResult } from "../source-control";
 import type { Env } from "../types";
+import type { Logger } from "../logger";
 
 const ctx = { request_id: "req-1", trace_id: "trace-1" } as unknown as RequestContext;
 const env = {} as Env;
-const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
+const logger = {
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+} as unknown as Logger;
 
 function createFakeProvider(
   results: Record<string, RepositoryAccessResult | null | Error>
