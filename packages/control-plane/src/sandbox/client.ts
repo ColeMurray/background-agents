@@ -70,7 +70,6 @@ export interface CreateSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
-  workingBranchName?: string;
 }
 
 export interface CreateSandboxResponse {
@@ -102,7 +101,6 @@ export interface RestoreSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
-  workingBranchName?: string;
 }
 
 export interface RestoreSandboxResponse {
@@ -267,7 +265,6 @@ export class ModalClient {
           repositories: request.repositories?.length
             ? request.repositories.map(toRepositoryConfigPayload)
             : null,
-          working_branch_name: request.workingBranchName || null,
         }),
       });
 

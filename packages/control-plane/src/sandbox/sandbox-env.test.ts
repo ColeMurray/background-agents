@@ -34,28 +34,25 @@ describe("buildSessionConfig", () => {
     );
   });
 
-  it("maps multi-repo members and the working branch to snake_case wire fields", () => {
+  it("maps multi-repo members to snake_case wire fields", () => {
     const config = buildSessionConfig({
       ...baseInput,
       repositories: [
         { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
         { repoOwner: "testowner", repoName: "backend", branch: "develop" },
       ],
-      workingBranchName: "open-inspect/session-123",
     });
 
     expect(config.repositories).toEqual([
       { repo_owner: "testowner", repo_name: "testrepo", branch: "main" },
       { repo_owner: "testowner", repo_name: "backend", branch: "develop" },
     ]);
-    expect(config.working_branch_name).toBe("open-inspect/session-123");
   });
 
-  it("omits repositories and working_branch_name for single-repo inputs", () => {
+  it("omits repositories for single-repo inputs", () => {
     const parsed = JSON.parse(JSON.stringify(buildSessionConfig(baseInput)));
 
     expect(parsed).not.toHaveProperty("repositories");
-    expect(parsed).not.toHaveProperty("working_branch_name");
   });
 
   it("serializes to a SESSION_CONFIG that omits undefined mcp_servers", () => {

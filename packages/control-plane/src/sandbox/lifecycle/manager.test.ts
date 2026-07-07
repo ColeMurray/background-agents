@@ -5,7 +5,6 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { generateBranchName } from "@open-inspect/shared";
 import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
@@ -1890,20 +1889,17 @@ describe("SandboxLifecycleManager", () => {
       return { manager, provider, storage };
     }
 
-    it("passes the member list and a derived working branch on fresh spawns", async () => {
+    it("passes the member list on fresh spawns", async () => {
       const { manager, provider } = createMultiRepoManager();
 
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repositories: MULTI_REPO_MEMBERS,
-          workingBranchName: generateBranchName("test-session"),
-        })
+        expect.objectContaining({ repositories: MULTI_REPO_MEMBERS })
       );
     });
 
-    it("omits multi-repo fields for single-member sessions", async () => {
+    it("omits the member list for single-member sessions", async () => {
       const { manager, provider } = createMultiRepoManager({
         sessionRepositories: [MULTI_REPO_MEMBERS[0]],
       });
@@ -1912,17 +1908,15 @@ describe("SandboxLifecycleManager", () => {
 
       const config = vi.mocked(provider.createSandbox).mock.calls[0][0];
       expect(config.repositories).toBeUndefined();
-      expect(config.workingBranchName).toBeUndefined();
     });
 
-    it("omits multi-repo fields for pre-list sessions with no member rows", async () => {
+    it("omits the member list for pre-list sessions with no member rows", async () => {
       const { manager, provider } = createMultiRepoManager({ sessionRepositories: [] });
 
       await manager.spawnSandbox();
 
       const config = vi.mocked(provider.createSandbox).mock.calls[0][0];
       expect(config.repositories).toBeUndefined();
-      expect(config.workingBranchName).toBeUndefined();
     });
 
     it("skips the repo image lookup for multi-repo sessions", async () => {
@@ -1969,7 +1963,7 @@ describe("SandboxLifecycleManager", () => {
       ]);
     });
 
-    it("passes the member list and working branch on snapshot restores", async () => {
+    it("passes the member list on snapshot restores", async () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "snapshot-img-1",
@@ -1980,10 +1974,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repositories: MULTI_REPO_MEMBERS,
-          workingBranchName: generateBranchName("test-session"),
-        })
+        expect.objectContaining({ repositories: MULTI_REPO_MEMBERS })
       );
     });
   });

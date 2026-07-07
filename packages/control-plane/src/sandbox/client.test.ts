@@ -147,7 +147,6 @@ describe("ModalClient", () => {
         { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
         { repoOwner: "testowner", repoName: "backend", branch: "develop" },
       ],
-      workingBranchName: "open-inspect/session-123",
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
@@ -155,10 +154,9 @@ describe("ModalClient", () => {
       { repo_owner: "testowner", repo_name: "testrepo", branch: "main" },
       { repo_owner: "testowner", repo_name: "backend", branch: "develop" },
     ]);
-    expect(body.working_branch_name).toBe("open-inspect/session-123");
   });
 
-  it("sends null multi-repo create fields for single-repo sessions", async () => {
+  it("sends a null repositories create field for single-repo sessions", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -180,7 +178,6 @@ describe("ModalClient", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body.repositories).toBeNull();
-    expect(body.working_branch_name).toBeNull();
   });
 
   it("routes multi-repo members through the restore session_config", async () => {
@@ -206,7 +203,6 @@ describe("ModalClient", () => {
         { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
         { repoOwner: "testowner", repoName: "backend", branch: "develop" },
       ],
-      workingBranchName: "open-inspect/session-123",
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
@@ -214,7 +210,6 @@ describe("ModalClient", () => {
       { repo_owner: "testowner", repo_name: "testrepo", branch: "main" },
       { repo_owner: "testowner", repo_name: "backend", branch: "develop" },
     ]);
-    expect(body.session_config.working_branch_name).toBe("open-inspect/session-123");
   });
 
   it("threads the build timeout into the repo image build request body", async () => {

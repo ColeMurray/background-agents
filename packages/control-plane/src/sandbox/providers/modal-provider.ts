@@ -108,7 +108,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
           repositories: config.repositories,
-          workingBranchName: config.workingBranchName,
         },
         config.correlation
       );
@@ -152,7 +151,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
           repositories: config.repositories,
-          workingBranchName: config.workingBranchName,
         },
         config.correlation
       );

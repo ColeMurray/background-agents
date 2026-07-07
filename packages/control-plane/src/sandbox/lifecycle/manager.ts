@@ -12,7 +12,6 @@
 
 import {
   extractProviderAndModel,
-  generateBranchName,
   type McpServerConfig,
   type SandboxSettings,
 } from "@open-inspect/shared";
@@ -1225,20 +1224,16 @@ export class SandboxLifecycleManager {
    * Multi-repo additions to a spawn/restore config. Single-repo sessions keep
    * the scalar wire form untouched (the runtime synthesizes its one-entry
    * list from repo_owner/repo_name/branch), so nothing changes for them.
+   * Working-branch names stay lazily derived at PR-creation time
+   * (pull-request-service) and reach the sandbox via per-repo push specs,
+   * never via spawn config.
    */
-  private multiRepoSpawnFields(
-    session: SessionRow
-  ): Pick<CreateSandboxConfig, "repositories" | "workingBranchName"> {
+  private multiRepoSpawnFields(session: SessionRow): Pick<CreateSandboxConfig, "repositories"> {
     const repositories = this.sessionRepositories(session);
     if (repositories.length <= 1) {
       return {};
     }
-    return {
-      repositories,
-      // Deterministic and shared across members; matches the head branch the
-      // create-pull-request path derives (pull-request-service.ts).
-      workingBranchName: generateBranchName(session.session_name || session.id),
-    };
+    return { repositories };
   }
 
   /**

@@ -88,15 +88,11 @@ export interface CreateSandboxConfig {
    * Ordered member list for multi-repo sessions. Only set when the session
    * has more than one member — single-repo sessions keep the scalar
    * repoOwner/repoName/branch wire form (the runtime synthesizes its
-   * one-entry list from them).
+   * one-entry list from them). Working-branch names are not part of this
+   * config: they are derived lazily at PR-creation time
+   * (pull-request-service) and travel in per-repo push specs.
    */
   repositories?: SessionRepositoryInfo[];
-  /**
-   * Shared working-branch name across all members, computed control-plane
-   * side (generateBranchName) — the runtime never derives branch names.
-   * Set together with repositories.
-   */
-  workingBranchName?: string;
 }
 
 /**
@@ -161,8 +157,6 @@ export interface RestoreConfig {
   sandboxSettings?: SandboxSettings;
   /** Multi-repo member list — see CreateSandboxConfig. */
   repositories?: SessionRepositoryInfo[];
-  /** Shared working-branch name — see CreateSandboxConfig. */
-  workingBranchName?: string;
 }
 
 /**

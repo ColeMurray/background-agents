@@ -37,8 +37,6 @@ export interface SessionConfigPayload {
   branch?: string | null;
   /** Ordered member list; only present for multi-repo sessions. */
   repositories?: SessionRepositoryConfigPayload[];
-  /** Shared working-branch name; only present with repositories. */
-  working_branch_name?: string;
 }
 
 /** Provider-agnostic inputs needed to assemble a {@link SessionConfigPayload}. */
@@ -51,7 +49,6 @@ export interface SessionConfigInput {
   mcpServers?: McpServerConfig[];
   branch?: string | null;
   repositories?: SessionRepositoryInfo[];
-  workingBranchName?: string;
 }
 
 /**
@@ -76,9 +73,6 @@ export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayl
   }
   if (input.repositories?.length) {
     payload.repositories = input.repositories.map(toRepositoryConfigPayload);
-  }
-  if (input.workingBranchName) {
-    payload.working_branch_name = input.workingBranchName;
   }
   return payload;
 }
