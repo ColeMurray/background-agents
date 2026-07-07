@@ -82,6 +82,31 @@ export interface UpsertSessionData {
 }
 
 /**
+ * One member repository row, in position order (position 0 = primary).
+ */
+export interface SessionRepositoryRow {
+  position: number;
+  repo_owner: string;
+  repo_name: string;
+  repo_id: number | null;
+  base_branch: string;
+  branch_name: string | null;
+  base_sha: string | null;
+  current_sha: string | null;
+}
+
+/**
+ * Data for writing a session's member repository set.
+ */
+export interface SessionRepositoryData {
+  position: number;
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
+
+/**
  * Data for creating a sandbox.
  */
 export interface CreateSandboxData {
@@ -346,6 +371,33 @@ export class SessionRepository {
       cost,
       updatedAt
     );
+  }
+
+  // === SESSION REPOSITORIES ===
+
+  /**
+   * Replace the session's member repository set (DELETE + INSERT).
+   * Per-repo git state columns (branch_name, base_sha, current_sha) reset
+   * with the set — they describe work on the replaced members.
+   */
+  replaceSessionRepositories(repositories: SessionRepositoryData[]): void {
+    this.sql.exec(`DELETE FROM session_repositories`);
+    for (const repo of repositories) {
+      this.sql.exec(
+        `INSERT INTO session_repositories (position, repo_owner, repo_name, repo_id, base_branch)
+         VALUES (?, ?, ?, ?, ?)`,
+        repo.position,
+        repo.repoOwner,
+        repo.repoName,
+        repo.repoId,
+        repo.baseBranch
+      );
+    }
+  }
+
+  getSessionRepositories(): SessionRepositoryRow[] {
+    const result = this.sql.exec(`SELECT * FROM session_repositories ORDER BY position`);
+    return this.rows<SessionRepositoryRow>(result);
   }
 
   // === SANDBOX ===

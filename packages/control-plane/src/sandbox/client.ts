@@ -9,7 +9,8 @@ import { generateInternalToken, type SandboxSettings } from "@open-inspect/share
 import type { McpServerConfig } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
-import { buildSessionConfig } from "./sandbox-env";
+import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
+import type { SessionRepositoryInfo } from "./provider";
 
 const log = createLogger("modal-client");
 
@@ -68,6 +69,8 @@ export interface CreateSandboxRequest {
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
+  repositories?: SessionRepositoryInfo[];
+  workingBranchName?: string;
 }
 
 export interface CreateSandboxResponse {
@@ -98,6 +101,8 @@ export interface RestoreSandboxRequest {
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
+  repositories?: SessionRepositoryInfo[];
+  workingBranchName?: string;
 }
 
 export interface RestoreSandboxResponse {
@@ -256,6 +261,13 @@ export class ModalClient {
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
+          // Flat keys matching SessionConfig field names — Modal's create
+          // handler builds its SessionConfig from the request by field name
+          // (unlike restore, which carries a nested session_config).
+          repositories: request.repositories?.length
+            ? request.repositories.map(toRepositoryConfigPayload)
+            : null,
+          working_branch_name: request.workingBranchName || null,
         }),
       });
 

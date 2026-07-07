@@ -28,6 +28,17 @@ export interface SandboxProviderCapabilities {
 }
 
 /**
+ * One member repository of a session, in position order (first = primary).
+ * The runtime's SessionRepositoryConfig is the snake_case wire twin.
+ */
+export interface SessionRepositoryInfo {
+  repoOwner: string;
+  repoName: string;
+  /** Base branch to clone (resolved at session create; never null). */
+  branch: string;
+}
+
+/**
  * Configuration for creating a new sandbox.
  */
 export interface CreateSandboxConfig {
@@ -73,6 +84,19 @@ export interface CreateSandboxConfig {
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /**
+   * Ordered member list for multi-repo sessions. Only set when the session
+   * has more than one member — single-repo sessions keep the scalar
+   * repoOwner/repoName/branch wire form (the runtime synthesizes its
+   * one-entry list from them).
+   */
+  repositories?: SessionRepositoryInfo[];
+  /**
+   * Shared working-branch name across all members, computed control-plane
+   * side (generateBranchName) — the runtime never derives branch names.
+   * Set together with repositories.
+   */
+  workingBranchName?: string;
 }
 
 /**
@@ -135,6 +159,10 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** Multi-repo member list — see CreateSandboxConfig. */
+  repositories?: SessionRepositoryInfo[];
+  /** Shared working-branch name — see CreateSandboxConfig. */
+  workingBranchName?: string;
 }
 
 /**

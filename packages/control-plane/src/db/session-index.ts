@@ -1,5 +1,17 @@
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
 
+/**
+ * One member of a session's repository set. Ordered — array position is the
+ * persisted `position` column ([0] = primary, mirrored into the scalar
+ * repo_owner/repo_name columns).
+ */
+export interface SessionIndexRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
+
 export interface SessionEntry {
   id: string;
   title: string | null;
@@ -22,6 +34,20 @@ export interface SessionEntry {
   prCount?: number;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Ordered member list; [0] = primary. Absent on pre-feature sessions —
+   * consumers synthesize from repoOwner/repoName.
+   */
+  repositories?: SessionIndexRepository[];
+}
+
+interface SessionRepositoryRow {
+  session_id: string;
+  position: number;
+  repo_owner: string;
+  repo_name: string;
+  repo_id: number | null;
+  base_branch: string;
 }
 
 interface SessionRow {
@@ -119,7 +145,7 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     const repository = normalizeSessionRepository(session);
 
-    const result = await this.db
+    const sessionStmt = this.db
       .prepare(
         `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -142,14 +168,31 @@ export class SessionIndexStore {
         session.userId ?? null,
         session.createdAt,
         session.updatedAt
-      )
-      .run();
+      );
+
+    const repositoryStmts = (session.repositories ?? []).map((repo, position) =>
+      this.db
+        .prepare(
+          `INSERT INTO session_repositories (session_id, position, repo_owner, repo_name, repo_id, base_branch)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          session.id,
+          position,
+          normalizeRepoIdentifier(repo.repoOwner),
+          normalizeRepoIdentifier(repo.repoName),
+          repo.repoId,
+          repo.baseBranch
+        )
+    );
+
+    const results = await this.db.batch([sessionStmt, ...repositoryStmts]);
 
     // INSERT OR IGNORE swallows every constraint violation, which would leave
     // the session invisible to dashboards while the DO proceeds. Session ids
     // are always freshly generated, so a skipped insert is a bug — surface it;
     // initialize.ts relies on D1 failures being caught before sandbox spawn.
-    if ((result.meta?.changes ?? 0) === 0) {
+    if ((results[0]?.meta?.changes ?? 0) === 0) {
       throw new Error(
         `Session index insert was skipped for session ${session.id} (duplicate id or constraint violation)`
       );
@@ -216,11 +259,50 @@ export class SessionIndexStore {
 
     const rows = result.results || [];
     const sessions = rows.slice(0, limit).map(toEntry);
+    await this.hydrateRepositories(sessions);
 
     return {
       sessions,
       hasMore: rows.length > limit,
     };
+  }
+
+  /**
+   * Attach member repository lists to the given entries in one query.
+   * Sessions without rows (pre-feature) are left without the field so
+   * consumers fall back to the scalar columns.
+   */
+  private async hydrateRepositories(sessions: SessionEntry[]): Promise<void> {
+    if (sessions.length === 0) return;
+
+    const placeholders = sessions.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM session_repositories
+         WHERE session_id IN (${placeholders})
+         ORDER BY session_id, position`
+      )
+      .bind(...sessions.map((s) => s.id))
+      .all<SessionRepositoryRow>();
+
+    const bySession = new Map<string, SessionIndexRepository[]>();
+    for (const row of result.results || []) {
+      const list = bySession.get(row.session_id) ?? [];
+      list.push({
+        repoOwner: row.repo_owner,
+        repoName: row.repo_name,
+        repoId: row.repo_id,
+        baseBranch: row.base_branch,
+      });
+      bySession.set(row.session_id, list);
+    }
+
+    for (const session of sessions) {
+      const repositories = bySession.get(session.id);
+      if (repositories) {
+        session.repositories = repositories;
+      }
+    }
   }
 
   async updateTitle(id: string, title: string): Promise<boolean> {
@@ -279,7 +361,11 @@ export class SessionIndexStore {
   }
 
   async delete(id: string): Promise<boolean> {
-    const result = await this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id).run();
+    // Member rows first — they hold a foreign key onto sessions(id).
+    const [, result] = await this.db.batch([
+      this.db.prepare("DELETE FROM session_repositories WHERE session_id = ?").bind(id),
+      this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id),
+    ]);
 
     return (result.meta?.changes ?? 0) > 0;
   }

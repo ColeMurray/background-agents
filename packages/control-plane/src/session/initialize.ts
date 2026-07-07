@@ -1,6 +1,6 @@
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
-import type { SpawnSource, SandboxSettings } from "@open-inspect/shared";
+import type { RepositoryRef, SpawnSource, SandboxSettings } from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { createLogger } from "../logger";
@@ -24,6 +24,12 @@ export interface SessionInitInput {
   repoId?: number | null;
   defaultBranch?: string | null;
   branch?: string | null;
+  /**
+   * Ordered member list for multi-repo sessions ([0] = primary, which must
+   * match the scalar mirror above). Absent/empty for scalar callers — a
+   * one-entry list is synthesized from the scalar fields.
+   */
+  repositories?: RepositoryRef[];
 
   // Session config
   title?: string;
@@ -87,6 +93,30 @@ export async function initializeSession(
   const now = Date.now();
   const baseBranch = hasRepoOwner ? branch || defaultBranch || "main" : null;
 
+  if (input.repositories?.length) {
+    const primary = input.repositories[0];
+    if (
+      primary.repoOwner !== input.repoOwner ||
+      primary.repoName !== input.repoName ||
+      primary.repoId !== input.repoId ||
+      primary.baseBranch !== baseBranch
+    ) {
+      throw new Error("repositories[0] must match the scalar repository mirror");
+    }
+  }
+  const repositories: RepositoryRef[] = input.repositories?.length
+    ? input.repositories
+    : hasRepoOwner && input.repoOwner && input.repoName && input.repoId != null && baseBranch
+      ? [
+          {
+            repoOwner: input.repoOwner,
+            repoName: input.repoName,
+            repoId: input.repoId,
+            baseBranch,
+          },
+        ]
+      : [];
+
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(env.DB);
   await sessionStore.create({
@@ -97,6 +127,7 @@ export async function initializeSession(
     model: input.model,
     reasoningEffort: input.reasoningEffort,
     baseBranch,
+    repositories,
     status: "created",
     parentSessionId: input.parentSessionId,
     spawnSource: input.spawnSource,
@@ -132,6 +163,7 @@ export async function initializeSession(
           repoId: input.repoId,
           defaultBranch,
           branch,
+          repositories,
           title: input.title,
           model: input.model,
           reasoningEffort: input.reasoningEffort,

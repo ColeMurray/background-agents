@@ -238,6 +238,52 @@ describe("SessionRepository", () => {
     });
   });
 
+  // === SESSION REPOSITORIES ===
+
+  describe("replaceSessionRepositories", () => {
+    it("deletes existing rows before inserting the new set in order", () => {
+      repo.replaceSessionRepositories([
+        { position: 0, repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "backend",
+          repoId: null,
+          baseBranch: "develop",
+        },
+      ]);
+
+      expect(mock.calls.length).toBe(3);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+      expect(mock.calls[1].query).toContain("INSERT INTO session_repositories");
+      expect(mock.calls[1].params).toEqual([0, "acme", "frontend", 1, "main"]);
+      expect(mock.calls[2].params).toEqual([1, "acme", "backend", null, "develop"]);
+    });
+
+    it("clears all rows when given an empty set", () => {
+      repo.replaceSessionRepositories([]);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+    });
+  });
+
+  describe("getSessionRepositories", () => {
+    it("returns rows ordered by position", () => {
+      const rows = [
+        { position: 0, repo_owner: "acme", repo_name: "frontend" },
+        { position: 1, repo_owner: "acme", repo_name: "backend" },
+      ];
+      mock.setData(`SELECT * FROM session_repositories ORDER BY position`, rows);
+
+      expect(repo.getSessionRepositories()).toEqual(rows);
+    });
+
+    it("returns an empty list for pre-feature sessions", () => {
+      expect(repo.getSessionRepositories()).toEqual([]);
+    });
+  });
+
   // === SANDBOX ===
 
   describe("getSandbox", () => {

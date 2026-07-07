@@ -100,6 +100,8 @@ async function handleSpawnChild(
     return error("repoOwner and repoName must be provided together", 400);
   }
 
+  // Children pin to the parent's scalar repository, which for a multi-repo
+  // parent is its primary member — child sessions are single-repo by design.
   const parentRepoOwner = spawnContext.repoOwner?.toLowerCase() ?? null;
   const parentRepoName = spawnContext.repoName?.toLowerCase() ?? null;
   if (requestedRepoOwner || requestedRepoName) {

@@ -26,8 +26,20 @@ type SessionRow = {
   updated_at: number;
 };
 
+type SessionRepositoryRow = {
+  session_id: string;
+  position: number;
+  repo_owner: string;
+  repo_name: string;
+  repo_id: number | null;
+  base_branch: string;
+};
+
 const QUERY_PATTERNS = {
   INSERT_SESSION: /^INSERT OR IGNORE INTO sessions/,
+  INSERT_SESSION_REPO: /^INSERT INTO session_repositories/,
+  SELECT_SESSION_REPOS: /^SELECT \* FROM session_repositories WHERE session_id IN/,
+  DELETE_SESSION_REPOS: /^DELETE FROM session_repositories WHERE session_id = \?$/,
   SELECT_BY_ID: /^SELECT \* FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
@@ -50,11 +62,20 @@ function normalizeQuery(query: string): string {
 
 class FakeD1Database {
   private rows = new Map<string, SessionRow>();
+  readonly repositoryRows: SessionRepositoryRow[] = [];
   readonly preparedQueries: string[] = [];
 
   prepare(query: string) {
     this.preparedQueries.push(normalizeQuery(query));
     return new FakePreparedStatement(this, query);
+  }
+
+  async batch(statements: FakePreparedStatement[]) {
+    const results = [];
+    for (const statement of statements) {
+      results.push(await statement.run());
+    }
+    return results;
   }
 
   first(query: string, args: unknown[]) {
@@ -115,6 +136,13 @@ class FakeD1Database {
         .filter((r) => r.parent_session_id === parentId)
         .sort((a, b) => b.created_at - a.created_at);
       return children;
+    }
+
+    if (QUERY_PATTERNS.SELECT_SESSION_REPOS.test(normalized)) {
+      const ids = new Set(args as string[]);
+      return this.repositoryRows
+        .filter((r) => ids.has(r.session_id))
+        .sort((a, b) => a.session_id.localeCompare(b.session_id) || a.position - b.position);
     }
 
     throw new Error(`Unexpected all() query: ${query}`);
@@ -222,6 +250,35 @@ class FakeD1Database {
         return { meta: { changes: 1 } };
       }
       return { meta: { changes: 0 } };
+    }
+
+    if (QUERY_PATTERNS.INSERT_SESSION_REPO.test(normalized)) {
+      const [sessionId, position, repoOwner, repoName, repoId, baseBranch] = args as [
+        string,
+        number,
+        string,
+        string,
+        number | null,
+        string,
+      ];
+      this.repositoryRows.push({
+        session_id: sessionId,
+        position,
+        repo_owner: repoOwner,
+        repo_name: repoName,
+        repo_id: repoId,
+        base_branch: baseBranch,
+      });
+      return { meta: { changes: 1 } };
+    }
+
+    if (QUERY_PATTERNS.DELETE_SESSION_REPOS.test(normalized)) {
+      const id = args[0] as string;
+      const before = this.repositoryRows.length;
+      for (let i = this.repositoryRows.length - 1; i >= 0; i--) {
+        if (this.repositoryRows[i].session_id === id) this.repositoryRows.splice(i, 1);
+      }
+      return { meta: { changes: before - this.repositoryRows.length } };
     }
 
     if (QUERY_PATTERNS.DELETE_SESSION.test(normalized)) {

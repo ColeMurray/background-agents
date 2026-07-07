@@ -122,6 +122,101 @@ describe("ModalClient", () => {
     });
   });
 
+  it("sends multi-repo members as flat snake_case create fields", async () => {
+    // Modal's create handler builds its SessionConfig from the request by
+    // field name, so the wire keys must match SessionConfig exactly.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.createSandbox({
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+      repositories: [
+        { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
+        { repoOwner: "testowner", repoName: "backend", branch: "develop" },
+      ],
+      workingBranchName: "open-inspect/session-123",
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body.repositories).toEqual([
+      { repo_owner: "testowner", repo_name: "testrepo", branch: "main" },
+      { repo_owner: "testowner", repo_name: "backend", branch: "develop" },
+    ]);
+    expect(body.working_branch_name).toBe("open-inspect/session-123");
+  });
+
+  it("sends null multi-repo create fields for single-repo sessions", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.createSandbox({
+      sessionId: "session-123",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body.repositories).toBeNull();
+    expect(body.working_branch_name).toBeNull();
+  });
+
+  it("routes multi-repo members through the restore session_config", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.restoreSandbox({
+      snapshotImageId: "img-1",
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      sandboxAuthToken: "auth-token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-5",
+      repositories: [
+        { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
+        { repoOwner: "testowner", repoName: "backend", branch: "develop" },
+      ],
+      workingBranchName: "open-inspect/session-123",
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body.session_config.repositories).toEqual([
+      { repo_owner: "testowner", repo_name: "testrepo", branch: "main" },
+      { repo_owner: "testowner", repo_name: "backend", branch: "develop" },
+    ]);
+    expect(body.session_config.working_branch_name).toBe("open-inspect/session-123");
+  });
+
   it("threads the build timeout into the repo image build request body", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

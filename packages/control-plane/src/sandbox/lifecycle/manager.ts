@@ -12,12 +12,18 @@
 
 import {
   extractProviderAndModel,
+  generateBranchName,
   type McpServerConfig,
   type SandboxSettings,
 } from "@open-inspect/shared";
 import type { SandboxStatus } from "../../types";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
-import { SandboxProviderError, type SandboxProvider, type CreateSandboxConfig } from "../provider";
+import {
+  SandboxProviderError,
+  type SandboxProvider,
+  type CreateSandboxConfig,
+  type SessionRepositoryInfo,
+} from "../provider";
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
@@ -70,6 +76,8 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Get current session */
   getSession(): SessionRow | null;
+  /** Get the session's member repositories in position order (empty for pre-list sessions) */
+  getSessionRepositories(): SessionRepositoryInfo[];
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
   /** Update sandbox status */
@@ -199,11 +207,12 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
 /**
  * Lookup interface for MCP servers applicable to a session.
  * Keeps the lifecycle manager free of direct D1Database dependencies.
+ * Receives the session's member repositories (empty for repo-less sessions);
+ * a scoped server applies when any member matches one of its scopes.
  */
 export interface McpServerLookup {
   getDecryptedForSession(
-    repoOwner: string | null,
-    repoName: string | null
+    repositories: Array<{ repoOwner: string; repoName: string }>
   ): Promise<McpServerConfig[]>;
 }
 
@@ -407,11 +416,14 @@ export class SandboxLifecycleManager {
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
+      const multiRepoFields = this.multiRepoSpawnFields(session);
 
-      // Look up pre-built repo image (graceful fallback on failure)
+      // Look up pre-built repo image (graceful fallback on failure).
+      // Repo images bake a single checkout, so multi-repo sessions boot from
+      // the base image and clone every member.
       let repoImageId: string | null = null;
       let repoImageSha: string | null = null;
-      if (hasRepository && this.repoImageLookup) {
+      if (hasRepository && !multiRepoFields.repositories && this.repoImageLookup) {
         try {
           const repoImage = await this.repoImageLookup.getLatestReady(
             session.repo_owner,
@@ -460,6 +472,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
+        ...multiRepoFields,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -554,8 +567,10 @@ export class SandboxLifecycleManager {
     try {
       if (!this.config.mcpServerLookup) return undefined;
       const servers = await this.config.mcpServerLookup.getDecryptedForSession(
-        session.repo_owner,
-        session.repo_name
+        this.sessionRepositories(session).map(({ repoOwner, repoName }) => ({
+          repoOwner,
+          repoName,
+        }))
       );
       this.log.info("MCP servers loaded", {
         event: "mcp.loaded",
@@ -641,6 +656,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
+        ...this.multiRepoSpawnFields(session),
       });
 
       if (result.success) {
@@ -1181,6 +1197,48 @@ export class SandboxLifecycleManager {
    */
   private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
     return extractProviderAndModel(session.model || this.config.model);
+  }
+
+  /**
+   * The session's member repositories in position order. Falls back to a
+   * one-entry list synthesized from the scalar columns for sessions that
+   * predate the session_repositories table.
+   */
+  private sessionRepositories(session: SessionRow): SessionRepositoryInfo[] {
+    const repositories = this.storage.getSessionRepositories();
+    if (repositories.length > 0) {
+      return repositories;
+    }
+    if (sessionHasRepository(session)) {
+      return [
+        {
+          repoOwner: session.repo_owner,
+          repoName: session.repo_name,
+          branch: session.base_branch ?? "main",
+        },
+      ];
+    }
+    return [];
+  }
+
+  /**
+   * Multi-repo additions to a spawn/restore config. Single-repo sessions keep
+   * the scalar wire form untouched (the runtime synthesizes its one-entry
+   * list from repo_owner/repo_name/branch), so nothing changes for them.
+   */
+  private multiRepoSpawnFields(
+    session: SessionRow
+  ): Pick<CreateSandboxConfig, "repositories" | "workingBranchName"> {
+    const repositories = this.sessionRepositories(session);
+    if (repositories.length <= 1) {
+      return {};
+    }
+    return {
+      repositories,
+      // Deterministic and shared across members; matches the head branch the
+      // create-pull-request path derives (pull-request-service.ts).
+      workingBranchName: generateBranchName(session.session_name || session.id),
+    };
   }
 
   /**

@@ -53,6 +53,7 @@ import type {
   ClientInfo,
   ServerMessage,
   SandboxEvent,
+  SessionRepositoryState,
   SessionState,
   SessionStatus,
   SandboxStatus,
@@ -579,6 +580,12 @@ export class SessionDO extends DurableObject<Env> {
       getSandbox: () => this.repository.getSandbox(),
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
+      getSessionRepositories: () =>
+        this.repository.getSessionRepositories().map((row) => ({
+          repoOwner: row.repo_owner,
+          repoName: row.repo_name,
+          branch: row.base_branch,
+        })),
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
@@ -660,8 +667,7 @@ export class SessionDO extends DurableObject<Env> {
     if (this.env.DB) {
       const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
       mcpServerLookup = {
-        getDecryptedForSession: (repoOwner, repoName) =>
-          mcpStore.getDecryptedForSession(repoOwner, repoName),
+        getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
       };
     }
 
@@ -1691,7 +1697,49 @@ export class SessionDO extends DurableObject<Env> {
       ttydUrl: sandbox?.ttyd_url ?? null,
       ttydToken,
       sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
+      repositories: this.getSessionRepositoryStates(session),
     };
+  }
+
+  /**
+   * Member repositories for SessionState, in position order. Sessions that
+   * predate the session_repositories table get a one-entry list synthesized
+   * from the scalar columns. Per-repo git state columns are written from
+   * PR-5 onward, so the primary entry is overlaid with the session scalars
+   * (which describe the primary until then); prUrl arrives with per-repo PR
+   * artifacts.
+   */
+  private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
+    const rows = this.repository.getSessionRepositories();
+    if (rows.length > 0) {
+      return rows.map((row, index) => ({
+        position: row.position,
+        repoOwner: row.repo_owner,
+        repoName: row.repo_name,
+        repoId: row.repo_id,
+        baseBranch: row.base_branch,
+        branchName: row.branch_name ?? (index === 0 ? (session?.branch_name ?? null) : null),
+        baseSha: row.base_sha ?? (index === 0 ? (session?.base_sha ?? null) : null),
+        currentSha: row.current_sha ?? (index === 0 ? (session?.current_sha ?? null) : null),
+        prUrl: null,
+      }));
+    }
+    if (session?.repo_owner && session.repo_name) {
+      return [
+        {
+          position: 0,
+          repoOwner: session.repo_owner,
+          repoName: session.repo_name,
+          repoId: session.repo_id ?? null,
+          baseBranch: session.base_branch ?? "main",
+          branchName: session.branch_name ?? null,
+          baseSha: session.base_sha ?? null,
+          currentSha: session.current_sha ?? null,
+          prUrl: null,
+        },
+      ];
+    }
+    return [];
   }
 
   private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {

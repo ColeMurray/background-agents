@@ -1,5 +1,10 @@
-import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared";
+import {
+  getValidModelOrDefault,
+  isValidReasoningEffort,
+  type RepositoryRef,
+} from "@open-inspect/shared";
 import { encryptTokenPair, generateId } from "../auth/crypto";
+import { resolveSessionRepositories } from "../repos/resolve";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -32,6 +37,9 @@ import {
 const logger = createLogger("router:session-create");
 const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 
+// Defense in depth on top of schema validation — matches git ref charsets.
+const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
+
 async function handleCreateSession(
   request: Request,
   env: Env,
@@ -52,16 +60,32 @@ async function handleCreateSession(
     throw e;
   }
 
-  // Validate branch name if provided (defense in depth)
-  if (body.branch && !/^[\w.\-/]+$/.test(body.branch)) {
+  // Validate branch names if provided (defense in depth)
+  if (body.branch && !BRANCH_NAME_PATTERN.test(body.branch)) {
     return error("Invalid branch name");
+  }
+  for (const entry of body.repositories ?? []) {
+    if (entry.baseBranch && !BRANCH_NAME_PATTERN.test(entry.baseBranch)) {
+      return error(`Invalid branch name for ${entry.repoOwner}/${entry.repoName}`);
+    }
   }
 
   let repoId: number | null = null;
   let defaultBranch: string | null = null;
   let repoOwner: string | null = null;
   let repoName: string | null = null;
-  if (repositoryContext) {
+  let repositories: RepositoryRef[] | undefined;
+  if (body.repositories) {
+    // List mode (mutually exclusive with the scalar fields by schema). The
+    // primary entry is mirrored into the scalar columns so filters, settings
+    // resolution, and pre-list consumers keep working unchanged.
+    repositories = await resolveSessionRepositories(env, body.repositories, ctx, logger);
+    const primary = repositories[0];
+    repoOwner = primary.repoOwner;
+    repoName = primary.repoName;
+    repoId = primary.repoId;
+    defaultBranch = primary.baseBranch;
+  } else if (repositoryContext) {
     repoOwner = repositoryContext.repoOwner;
     repoName = repositoryContext.repoName;
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
@@ -167,6 +191,7 @@ async function handleCreateSession(
     repoId,
     defaultBranch,
     branch: body.branch,
+    repositories,
     title: body.title,
     model,
     reasoningEffort,
