@@ -15,7 +15,6 @@ import type {
 } from "./types";
 import type {
   SessionStatus,
-  SessionRepositoryState,
   SandboxStatus,
   GitSyncStatus,
   MessageStatus,
@@ -97,12 +96,17 @@ export interface SessionRepositoryRow {
 }
 
 /**
- * Data for writing a session's member repository set.
+ * Data for writing a session's member repository set — mirrors the
+ * session_repositories columns the init path populates (per-repo git state
+ * is written separately, by push handling).
  */
-export type SessionRepositoryData = Pick<
-  SessionRepositoryState,
-  "position" | "repoOwner" | "repoName" | "repoId" | "baseBranch"
->;
+export interface SessionRepositoryData {
+  position: number;
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
 
 /**
  * Data for creating a sandbox.

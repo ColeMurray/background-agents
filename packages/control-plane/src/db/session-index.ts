@@ -1,14 +1,17 @@
-import type { SessionRepositoryState, SessionStatus, SpawnSource } from "@open-inspect/shared";
+import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
 
 /**
- * One member of a session's repository set. Ordered — array position is the
- * persisted `position` column ([0] = primary, mirrored into the scalar
- * repo_owner/repo_name columns).
+ * One member of a session's repository set — the identity subset of the
+ * shared SessionRepositoryState (no git state; D1 doesn't store it).
+ * Ordered — array position is the persisted `position` column ([0] =
+ * primary, mirrored into the scalar repo_owner/repo_name columns).
  */
-export type SessionIndexRepository = Pick<
-  SessionRepositoryState,
-  "repoOwner" | "repoName" | "repoId" | "baseBranch"
->;
+export interface SessionIndexRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
 
 export interface SessionEntry {
   id: string;

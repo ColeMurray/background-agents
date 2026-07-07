@@ -5,7 +5,7 @@
  * enabling unit testing and future provider support.
  */
 
-import type { SandboxSettings, SessionRepositoryState } from "@open-inspect/shared";
+import type { SandboxSettings } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { McpServerConfig } from "@open-inspect/shared";
 
@@ -29,14 +29,16 @@ export interface SandboxProviderCapabilities {
 
 /**
  * One member repository of a session, in position order (first = primary).
- * Derived from the shared SessionRepositoryState contract; the runtime's
- * SessionRepositoryConfig is the snake_case wire twin (baseBranch maps to
- * its `branch` field in toRepositoryConfigPayload).
+ * Mirrors the runtime's SessionRepositoryConfig, whose snake_case wire form
+ * (with baseBranch renamed to `branch`) is produced by
+ * toRepositoryConfigPayload.
  */
-export type SessionRepositoryInfo = Pick<
-  SessionRepositoryState,
-  "repoOwner" | "repoName" | "baseBranch"
->;
+export interface SessionRepositoryInfo {
+  repoOwner: string;
+  repoName: string;
+  /** Base branch to clone (resolved at session create; never null). */
+  baseBranch: string;
+}
 
 /**
  * Configuration for creating a new sandbox.
