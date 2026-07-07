@@ -1,4 +1,4 @@
-import type { SpawnContext } from "@open-inspect/shared";
+import { sessionStatusSchema, type SpawnContext } from "@open-inspect/shared";
 import type { SessionStatus } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
@@ -10,6 +10,13 @@ import {
   type ChildSummaryFinalResponseInput,
   type ChildSummaryTrajectoryInput,
 } from "./child-session-summary";
+import { z } from "zod";
+
+const childSessionUpdateRequestSchema = z.object({
+  childSessionId: z.string(),
+  status: sessionStatusSchema,
+  title: z.string().nullable().optional(),
+});
 
 export interface ChildSessionsHandlerDeps {
   repository: Pick<
@@ -131,11 +138,18 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {
-      const body = (await request.json()) as {
-        childSessionId: string;
-        status: SessionStatus;
-        title: string | null;
-      };
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const parsed = childSessionUpdateRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
+      }
+      const body = parsed.data;
 
       if (!body.childSessionId || !body.status) {
         return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
