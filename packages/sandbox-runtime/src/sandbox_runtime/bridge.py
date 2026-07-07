@@ -57,6 +57,23 @@ class PushRequest:
     redacted_push_url: str
     force: bool
 
+    @classmethod
+    def from_push_spec(cls, push_spec: dict[str, Any] | None) -> "PushRequest":
+        """Normalize the raw spec; missing fields become ""/False, never errors."""
+
+        def field(key: str) -> str:
+            return str(push_spec.get(key, "")).strip() if push_spec else ""
+
+        return cls(
+            branch_name=field("targetBranch"),
+            repo_owner=field("repoOwner"),
+            repo_name=field("repoName"),
+            refspec=field("refspec"),
+            push_url=field("remoteUrl"),
+            redacted_push_url=field("redactedRemoteUrl"),
+            force=bool(push_spec.get("force", False)) if push_spec else False,
+        )
+
     @property
     def has_repo_identity(self) -> bool:
         """True when the spec names its target repository.
@@ -1570,7 +1587,7 @@ class AgentBridge:
         the single push_error emitter below.
         """
         push_spec = cmd.get("pushSpec") if isinstance(cmd.get("pushSpec"), dict) else None
-        request = self._parse_push_request(push_spec)
+        request = PushRequest.from_push_spec(push_spec)
 
         self.log.info(
             "git.push_start",
@@ -1605,23 +1622,6 @@ class AgentBridge:
                 **request.repo_fields(),
                 "timestamp": time.time(),
             }
-        )
-
-    @staticmethod
-    def _parse_push_request(push_spec: dict[str, Any] | None) -> PushRequest:
-        """Normalize the raw spec; missing fields become ""/False, never errors."""
-
-        def field(key: str) -> str:
-            return str(push_spec.get(key, "")).strip() if push_spec else ""
-
-        return PushRequest(
-            branch_name=field("targetBranch"),
-            repo_owner=field("repoOwner"),
-            repo_name=field("repoName"),
-            refspec=field("refspec"),
-            push_url=field("remoteUrl"),
-            redacted_push_url=field("redactedRemoteUrl"),
-            force=bool(push_spec.get("force", False)) if push_spec else False,
         )
 
     def _reject_push(self, *, reason: str, message: str, **log_fields: Any) -> NoReturn:
