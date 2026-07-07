@@ -532,12 +532,20 @@ export const repositoriesInputSchema = z
   });
 
 /**
- * Session flavor of the list: additionally rejects duplicate repoName across
- * different owners — clone paths are /workspace/{repoName}, and a clear 400
- * beats path disambiguation.
+ * Session flavor of the list: additionally rejects empty lists (the field is
+ * either absent — scalar-era request — or names at least one member, so an
+ * empty array never masquerades as a third mode) and duplicate repoName
+ * across different owners — clone paths are /workspace/{repoName}, and a
+ * clear 400 beats path disambiguation.
  */
 export const sessionRepositoriesInputSchema = repositoriesInputSchema.superRefine(
   (repositories, ctx) => {
+    if (repositories.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "repositories must contain at least one entry (omit the field instead)",
+      });
+    }
     const seenNames = new Set<string>();
     repositories.forEach((repository, index) => {
       if (seenNames.has(repository.repoName)) {
@@ -850,7 +858,10 @@ function hasRepositoryForBranch(data: CreateSessionRepositoryFields): boolean {
 function hasExclusiveRepositoryTarget(
   data: CreateSessionRepositoryFields & { repositories?: unknown[] | null }
 ): boolean {
-  if (!data.repositories || data.repositories.length === 0) {
+  // Presence-based, not length-based: any provided array selects the
+  // repository-list mode (sessionRepositoriesInputSchema separately rejects
+  // empty lists, so [] can never smuggle scalar fields through).
+  if (!data.repositories) {
     return true;
   }
   return (

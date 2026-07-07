@@ -58,6 +58,10 @@ describe("sessionRepositoriesInputSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects empty lists (the field is either absent or names a member)", () => {
+    expect(sessionRepositoriesInputSchema.safeParse([]).success).toBe(false);
+  });
+
   it("automation flavor keeps accepting duplicate repoName across owners", () => {
     const result = automationRepositoriesInputSchema.safeParse([
       { repoOwner: "acme", repoName: "app" },
@@ -105,6 +109,24 @@ describe("createSessionRequestSchema repositories", () => {
       branch: "main",
       repositories: [{ repoOwner: "acme", repoName: "frontend" }],
     });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty repositories list even alongside scalar fields", () => {
+    // [] must never act as a third mode that smuggles the scalar form
+    // through the exclusivity check.
+    const result = createSessionRequestSchema.safeParse({
+      repoOwner: "acme",
+      repoName: "app",
+      repositories: [],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a bare empty repositories list", () => {
+    const result = createSessionRequestSchema.safeParse({ repositories: [] });
 
     expect(result.success).toBe(false);
   });
