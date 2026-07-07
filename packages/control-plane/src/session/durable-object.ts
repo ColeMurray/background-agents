@@ -584,7 +584,7 @@ export class SessionDO extends DurableObject<Env> {
         this.repository.getSessionRepositories().map((row) => ({
           repoOwner: row.repo_owner,
           repoName: row.repo_name,
-          branch: row.base_branch,
+          baseBranch: row.base_branch,
         })),
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),

@@ -38,8 +38,8 @@ describe("buildSessionConfig", () => {
     const config = buildSessionConfig({
       ...baseInput,
       repositories: [
-        { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
-        { repoOwner: "testowner", repoName: "backend", branch: "develop" },
+        { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+        { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
       ],
     });
 

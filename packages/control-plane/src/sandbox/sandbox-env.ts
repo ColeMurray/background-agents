@@ -83,6 +83,6 @@ export function toRepositoryConfigPayload(
   return {
     repo_owner: repository.repoOwner,
     repo_name: repository.repoName,
-    branch: repository.branch,
+    branch: repository.baseBranch,
   };
 }

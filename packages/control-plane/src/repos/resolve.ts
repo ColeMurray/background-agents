@@ -1,14 +1,15 @@
-import type { RepositoryRef } from "@open-inspect/shared";
+import type { CreateSessionRequest, RepositoryRef } from "@open-inspect/shared";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import { createRouteSourceControlProvider, HttpError, type RequestContext } from "../routes/shared";
 
-/** One requested member of a session's repository list (normalized by the input schema). */
-export interface SessionRepositoryResolutionInput {
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string | null;
-}
+/**
+ * One requested member of a session's repository list, exactly as normalized
+ * by sessionRepositoriesInputSchema (derived, so it cannot drift from it).
+ */
+export type SessionRepositoryResolutionInput = NonNullable<
+  CreateSessionRequest["repositories"]
+>[number];
 
 interface ResolutionOutcome {
   input: SessionRepositoryResolutionInput;

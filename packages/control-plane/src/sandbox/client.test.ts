@@ -144,8 +144,8 @@ describe("ModalClient", () => {
       controlPlaneUrl: "https://control-plane.test",
       sandboxAuthToken: "auth-token",
       repositories: [
-        { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
-        { repoOwner: "testowner", repoName: "backend", branch: "develop" },
+        { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+        { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
       ],
     });
 
@@ -200,8 +200,8 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       repositories: [
-        { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
-        { repoOwner: "testowner", repoName: "backend", branch: "develop" },
+        { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+        { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
       ],
     });
 

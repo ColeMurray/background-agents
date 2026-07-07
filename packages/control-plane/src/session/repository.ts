@@ -15,6 +15,7 @@ import type {
 } from "./types";
 import type {
   SessionStatus,
+  SessionRepositoryState,
   SandboxStatus,
   GitSyncStatus,
   MessageStatus,
@@ -98,13 +99,10 @@ export interface SessionRepositoryRow {
 /**
  * Data for writing a session's member repository set.
  */
-export interface SessionRepositoryData {
-  position: number;
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  baseBranch: string;
-}
+export type SessionRepositoryData = Pick<
+  SessionRepositoryState,
+  "position" | "repoOwner" | "repoName" | "repoId" | "baseBranch"
+>;
 
 /**
  * Data for creating a sandbox.

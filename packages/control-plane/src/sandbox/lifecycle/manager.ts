@@ -1213,7 +1213,7 @@ export class SandboxLifecycleManager {
         {
           repoOwner: session.repo_owner,
           repoName: session.repo_name,
-          branch: session.base_branch ?? "main",
+          baseBranch: session.base_branch ?? "main",
         },
       ];
     }

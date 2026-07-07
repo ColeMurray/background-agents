@@ -1854,8 +1854,8 @@ describe("SandboxLifecycleManager", () => {
 
   describe("multi-repo spawn", () => {
     const MULTI_REPO_MEMBERS: SessionRepositoryInfo[] = [
-      { repoOwner: "testowner", repoName: "testrepo", branch: "main" },
-      { repoOwner: "testowner", repoName: "backend", branch: "develop" },
+      { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+      { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
     ];
 
     function createMultiRepoManager(overrides?: {
