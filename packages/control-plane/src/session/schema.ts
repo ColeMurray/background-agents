@@ -5,6 +5,20 @@
  * This ensures high performance even with hundreds of concurrent sessions.
  */
 
+// Shared between SCHEMA_SQL (fresh DOs) and migration 31 (existing DOs) so
+// the two paths can never diverge.
+const SESSION_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_repositories (
+  position INTEGER NOT NULL,
+  repo_owner TEXT NOT NULL,
+  repo_name TEXT NOT NULL,
+  repo_id INTEGER,
+  base_branch TEXT NOT NULL,
+  branch_name TEXT,                                 -- Working branch (set after first push to this repo)
+  base_sha TEXT,
+  current_sha TEXT,
+  PRIMARY KEY (repo_owner, repo_name)
+)`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -125,17 +139,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
 -- from the session scalar columns. Per-repo git state columns are written
 -- by push handling from PR-5 onward; until then the position-0 row is
 -- overlaid with the session scalar branch/sha columns at read time.
-CREATE TABLE IF NOT EXISTS session_repositories (
-  position INTEGER NOT NULL,
-  repo_owner TEXT NOT NULL,
-  repo_name TEXT NOT NULL,
-  repo_id INTEGER,
-  base_branch TEXT NOT NULL,
-  branch_name TEXT,                                 -- Working branch (set after first push to this repo)
-  base_sha TEXT,
-  current_sha TEXT,
-  PRIMARY KEY (repo_owner, repo_name)
-);
+${SESSION_REPOSITORIES_TABLE_SQL};
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -411,17 +415,7 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   {
     id: 31,
     description: "Add session_repositories table for multi-repo sessions",
-    run: `CREATE TABLE IF NOT EXISTS session_repositories (
-      position INTEGER NOT NULL,
-      repo_owner TEXT NOT NULL,
-      repo_name TEXT NOT NULL,
-      repo_id INTEGER,
-      base_branch TEXT NOT NULL,
-      branch_name TEXT,
-      base_sha TEXT,
-      current_sha TEXT,
-      PRIMARY KEY (repo_owner, repo_name)
-    )`,
+    run: SESSION_REPOSITORIES_TABLE_SQL,
   },
 ];
 

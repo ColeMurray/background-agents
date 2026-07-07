@@ -147,6 +147,37 @@ describe("D1 session index repositories", () => {
     expect(sessions[0].repositories).toBeUndefined();
   });
 
+  it("list repo filters match secondary members", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await store.create(
+      makeEntry("multi-filter", [
+        { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+        { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" },
+      ])
+    );
+    await store.create(
+      makeEntry("other-filter", [
+        { repoOwner: "acme", repoName: "unrelated", repoId: 3, baseBranch: "main" },
+      ])
+    );
+
+    const bySecondary = await store.list({ repoOwner: "acme", repoName: "backend" });
+    expect(bySecondary.sessions.map((s) => s.id)).toEqual(["multi-filter"]);
+
+    const byPrimary = await store.list({ repoOwner: "acme", repoName: "frontend" });
+    expect(byPrimary.sessions.map((s) => s.id)).toEqual(["multi-filter"]);
+  });
+
+  it("list repo filters fall back to scalars for pre-feature sessions", async () => {
+    const store = new SessionIndexStore(env.DB);
+    // No repositories list — simulates a session created before the
+    // membership table existed (scalar columns only).
+    await store.create(makeEntry("legacy-filter"));
+
+    const result = await store.list({ repoOwner: "acme", repoName: "web-app" });
+    expect(result.sessions.map((s) => s.id)).toEqual(["legacy-filter"]);
+  });
+
   it("deletes member rows together with the session", async () => {
     const store = new SessionIndexStore(env.DB);
     await store.create(

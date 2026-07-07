@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS session_repositories (
   repo_id     INTEGER,
   base_branch TEXT    NOT NULL,
   PRIMARY KEY (session_id, repo_owner, repo_name),
-  FOREIGN KEY (session_id) REFERENCES sessions(id)
+  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
 -- Serves "sessions touching repo X" lookups across the member set.

@@ -201,6 +201,20 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
   return `sandbox-${sandboxName}-${now}`;
 }
 
+/**
+ * Multi-repo additions to a spawn/restore config. Single-repo sessions keep
+ * the scalar wire form untouched (the runtime synthesizes its one-entry
+ * list from repo_owner/repo_name/branch), so nothing changes for them.
+ * Working-branch names stay lazily derived at PR-creation time
+ * (pull-request-service) and reach the sandbox via per-repo push specs,
+ * never via spawn config.
+ */
+function multiRepoSpawnFields(
+  repositories: SessionRepositoryInfo[]
+): Pick<CreateSandboxConfig, "repositories"> {
+  return repositories.length > 1 ? { repositories } : {};
+}
+
 // ==================== MCP Server Lookup ====================
 
 /**
@@ -415,7 +429,8 @@ export class SandboxLifecycleManager {
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const multiRepoFields = this.multiRepoSpawnFields(session);
+      const repositories = this.sessionRepositories(session);
+      const multiRepoFields = multiRepoSpawnFields(repositories);
 
       // Look up pre-built repo image (graceful fallback on failure).
       // Repo images bake a single checkout, so multi-repo sessions boot from
@@ -448,7 +463,7 @@ export class SandboxLifecycleManager {
       const timeoutSeconds =
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
-      const mcpServers = await this.loadMcpServers(session);
+      const mcpServers = await this.loadMcpServers(repositories);
 
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
@@ -562,14 +577,13 @@ export class SandboxLifecycleManager {
    * Load MCP servers applicable to the current session's repository.
    * Returns undefined if none are found or DB is not configured.
    */
-  private async loadMcpServers(session: SessionRow): Promise<McpServerConfig[] | undefined> {
+  private async loadMcpServers(
+    repositories: SessionRepositoryInfo[]
+  ): Promise<McpServerConfig[] | undefined> {
     try {
       if (!this.config.mcpServerLookup) return undefined;
       const servers = await this.config.mcpServerLookup.getDecryptedForSession(
-        this.sessionRepositories(session).map(({ repoOwner, repoName }) => ({
-          repoOwner,
-          repoName,
-        }))
+        repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
       );
       this.log.info("MCP servers loaded", {
         event: "mcp.loaded",
@@ -634,9 +648,10 @@ export class SandboxLifecycleManager {
       const timeoutSeconds =
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
+      const repositories = this.sessionRepositories(session);
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const mcpServers = await this.loadMcpServers(session);
+      const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
@@ -655,7 +670,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        ...this.multiRepoSpawnFields(session),
+        ...multiRepoSpawnFields(repositories),
       });
 
       if (result.success) {
@@ -1218,22 +1233,6 @@ export class SandboxLifecycleManager {
       ];
     }
     return [];
-  }
-
-  /**
-   * Multi-repo additions to a spawn/restore config. Single-repo sessions keep
-   * the scalar wire form untouched (the runtime synthesizes its one-entry
-   * list from repo_owner/repo_name/branch), so nothing changes for them.
-   * Working-branch names stay lazily derived at PR-creation time
-   * (pull-request-service) and reach the sandbox via per-repo push specs,
-   * never via spawn config.
-   */
-  private multiRepoSpawnFields(session: SessionRow): Pick<CreateSandboxConfig, "repositories"> {
-    const repositories = this.sessionRepositories(session);
-    if (repositories.length <= 1) {
-      return {};
-    }
-    return { repositories };
   }
 
   /**

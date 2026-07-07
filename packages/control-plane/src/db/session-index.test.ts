@@ -349,14 +349,26 @@ class FakeD1Database {
         rows = rows.filter((r) => r.status !== statusVal);
       }
 
-      if (conditions.includes("repo_owner = ?")) {
-        const ownerVal = args[argIdx++] as string;
-        rows = rows.filter((r) => r.repo_owner === ownerVal);
-      }
-
-      if (conditions.includes("repo_name = ?")) {
-        const nameVal = args[argIdx++] as string;
-        rows = rows.filter((r) => r.repo_name === nameVal);
+      if (conditions.includes("EXISTS (SELECT 1 FROM session_repositories")) {
+        // Combined member/scalar repo filter: params are the member arm's
+        // owner/name followed by the scalar arm's identical owner/name.
+        const hasOwner = conditions.includes("sr.repo_owner = ?");
+        const hasName = conditions.includes("sr.repo_name = ?");
+        const ownerVal = hasOwner ? (args[argIdx++] as string) : null;
+        const nameVal = hasName ? (args[argIdx++] as string) : null;
+        argIdx += (hasOwner ? 1 : 0) + (hasName ? 1 : 0); // scalar-arm copies
+        rows = rows.filter((r) => {
+          const memberMatch = this.repositoryRows.some(
+            (repo) =>
+              repo.session_id === r.id &&
+              (ownerVal === null || repo.repo_owner === ownerVal) &&
+              (nameVal === null || repo.repo_name === nameVal)
+          );
+          const scalarMatch =
+            (ownerVal === null || r.repo_owner === ownerVal) &&
+            (nameVal === null || r.repo_name === nameVal);
+          return memberMatch || scalarMatch;
+        });
       }
 
       const userIdMatch = conditions.match(/user_id IN \(([^)]+)\)/);
@@ -579,6 +591,33 @@ describe("SessionIndexStore", () => {
 
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0].id).toBe("match");
+    });
+
+    it("matches sessions through secondary members, not just the scalar primary", async () => {
+      await store.create(
+        makeSession({
+          id: "multi",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repositories: [
+            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+            { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" },
+          ],
+        })
+      );
+      await store.create(makeSession({ id: "other", repoOwner: "acme", repoName: "unrelated" }));
+
+      const result = await store.list({ repoOwner: "acme", repoName: "backend" });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["multi"]);
+    });
+
+    it("falls back to the scalar columns for pre-feature sessions without member rows", async () => {
+      await store.create(makeSession({ id: "legacy", repoOwner: "acme", repoName: "app" }));
+
+      const result = await store.list({ repoOwner: "acme", repoName: "app" });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["legacy"]);
     });
 
     it("supports multiple creator user ids", async () => {

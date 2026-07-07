@@ -233,16 +233,29 @@ export class SessionIndexStore {
       params.push(excludeStatus);
     }
 
+    // Repo filters match against the membership table so a session is found
+    // through ANY member, not just the scalar primary mirror. The scalar arm
+    // is the fallback for pre-feature sessions without member rows.
     const normalizedRepoOwner = normalizeRepoIdentifier(repoOwner);
-    if (normalizedRepoOwner) {
-      conditions.push("repo_owner = ?");
-      params.push(normalizedRepoOwner);
-    }
-
     const normalizedRepoName = normalizeRepoIdentifier(repoName);
-    if (normalizedRepoName) {
-      conditions.push("repo_name = ?");
-      params.push(normalizedRepoName);
+    if (normalizedRepoOwner || normalizedRepoName) {
+      const memberConditions: string[] = [];
+      const scalarConditions: string[] = [];
+      const repoFilterParams: unknown[] = [];
+      if (normalizedRepoOwner) {
+        memberConditions.push("sr.repo_owner = ?");
+        scalarConditions.push("repo_owner = ?");
+        repoFilterParams.push(normalizedRepoOwner);
+      }
+      if (normalizedRepoName) {
+        memberConditions.push("sr.repo_name = ?");
+        scalarConditions.push("repo_name = ?");
+        repoFilterParams.push(normalizedRepoName);
+      }
+      conditions.push(
+        `(EXISTS (SELECT 1 FROM session_repositories sr WHERE sr.session_id = sessions.id AND ${memberConditions.join(" AND ")}) OR (${scalarConditions.join(" AND ")}))`
+      );
+      params.push(...repoFilterParams, ...repoFilterParams);
     }
 
     if (createdByUserIds?.length) {
@@ -360,7 +373,8 @@ export class SessionIndexStore {
   }
 
   async delete(id: string): Promise<boolean> {
-    // Member rows first — they hold a foreign key onto sessions(id).
+    // Member rows are removed explicitly for clarity; the FK's ON DELETE
+    // CASCADE also covers callers that delete the session row directly.
     const [, result] = await this.db.batch([
       this.db.prepare("DELETE FROM session_repositories WHERE session_id = ?").bind(id),
       this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id),
