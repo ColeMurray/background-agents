@@ -177,7 +177,7 @@ export async function setLinearAuthState(
       ? {
           ...existingInstallation,
           ...params.installation,
-          ...(params.status === "connected"
+          ...(params.status === "connected" && params.reason === "oauth_callback"
             ? {
                 connectedAt: existingInstallation?.connectedAt ?? now,
                 lastConnectedAt: now,

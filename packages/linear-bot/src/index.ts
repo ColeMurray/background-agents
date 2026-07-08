@@ -142,9 +142,7 @@ function readPermissionChangeDetails(payload: Record<string, unknown>): {
 }
 
 function latestConnectedAt(state: Awaited<ReturnType<typeof getLinearAuthState>>): number | null {
-  const candidate =
-    state?.installation?.lastConnectedAt ??
-    (state?.status === "connected" ? state.updatedAt : null);
+  const candidate = state?.installation?.lastConnectedAt;
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : null;
 }
 

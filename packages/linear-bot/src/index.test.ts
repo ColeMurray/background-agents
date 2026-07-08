@@ -380,6 +380,46 @@ describe("POST /webhook", () => {
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
   });
 
+  it("does not use connected diagnostic updatedAt to ignore OAuth app revocation", async () => {
+    const now = Date.now();
+    const { kv, store } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: "refresh-token",
+        expires_at: now + 60 * 60 * 1000,
+      }),
+      "linear_auth:org-1": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-1",
+        status: "connected",
+        reason: "permission_change",
+        updatedAt: now,
+        details: { eventType: "PermissionChange" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const payload = {
+      type: "OAuthApp",
+      action: "revoked",
+      organizationId: "org-1",
+      webhookTimestamp: now - 1_000,
+    };
+
+    const res = await app.fetch(
+      await makeWebhookRequest(payload, "delivery-auth-real-revoke"),
+      env
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(store.has("oauth:token:org-1")).toBe(false);
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "oauth_app_revoked",
+    });
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+  });
+
   it("records permission-change diagnostics without clearing an existing reauth-required state", async () => {
     const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv);

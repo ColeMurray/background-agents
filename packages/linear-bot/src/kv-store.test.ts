@@ -206,6 +206,37 @@ describe("linear auth health", () => {
     });
   });
 
+  it("does not advance OAuth connection timestamps for diagnostic connected writes", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+    const { kv, store } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+
+    await setLinearAuthState(env, {
+      orgId: "org-1",
+      status: "connected",
+      reason: "oauth_callback",
+      installation: { orgName: "Acme" },
+    });
+    await setLinearAuthState(env, {
+      orgId: "org-1",
+      status: "connected",
+      reason: "permission_change",
+      details: { eventType: "PermissionChange" },
+    });
+
+    const state = JSON.parse(store.get("linear_auth:org-1") ?? "{}");
+    expect(state).toMatchObject({
+      status: "connected",
+      reason: "permission_change",
+      installation: {
+        connectedAt: 1_000,
+        lastConnectedAt: 1_000,
+      },
+    });
+    expect(state.updatedAt).toBe(2_000);
+    nowSpy.mockRestore();
+  });
+
   it("uses all KV list pages when building the auth health response", async () => {
     const now = Date.now();
     const { kv } = createFakeKV({
