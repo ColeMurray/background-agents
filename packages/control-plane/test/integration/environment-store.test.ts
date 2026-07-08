@@ -155,21 +155,27 @@ describe("EnvironmentStore", () => {
     expect(await store.delete(row.id)).toBe(false);
   });
 
-  it("never inserts orphan repository rows when the parent is gone (no-FK guard)", async () => {
+  it("cascade-deletes child repository + secret rows via FK on parent delete", async () => {
     const store = new EnvironmentStore(env.DB);
-    // Stands in for the delete-between-check-and-batch race: updating a missing
-    // environment must not leave orphan environment_repositories rows behind.
-    const result = await store.update(
-      "env_missing",
-      { name: "x" },
-      repos(["acme", "web", 1, "main"])
-    );
-    expect(result).toBeNull();
-    const count = await env.DB.prepare(
-      "SELECT COUNT(*) AS c FROM environment_repositories WHERE environment_id = ?"
+    const row = makeEnv({ name: "FkCascade" });
+    await store.create(row, repos(["acme", "web", 1, "main"], ["acme", "api", 2, "main"]));
+    const now = Date.now();
+    await env.DB.prepare(
+      "INSERT INTO environment_secrets (environment_id, key, encrypted_value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
     )
-      .bind("env_missing")
+      .bind(row.id, "TOKEN", "cipher", now, now)
+      .run();
+
+    // Raw parent delete (bypassing store.delete's explicit child deletes) so the
+    // ON DELETE CASCADE FK is what reclaims the children.
+    await env.DB.prepare("DELETE FROM environments WHERE id = ?").bind(row.id).run();
+
+    expect((await store.getRepositoriesForEnvironment(row.id)).length).toBe(0);
+    const secretCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM environment_secrets WHERE environment_id = ?"
+    )
+      .bind(row.id)
       .first<{ c: number }>();
-    expect(count?.c).toBe(0);
+    expect(secretCount?.c).toBe(0);
   });
 });

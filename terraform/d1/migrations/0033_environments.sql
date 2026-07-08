@@ -6,10 +6,12 @@
 -- session_repositories and record provenance in sessions.environment_id; the
 -- environment can later be edited or deleted without affecting those sessions.
 --
--- No foreign keys: cascade is application-level (DELETE /environments/:id
--- removes member + secret rows and supersedes images in one batch), matching
--- the rest of the D1 schema and letting sessions keep a benignly dangling
--- environment_id after their source environment is gone.
+-- Cascade model: environment_repositories and environment_secrets are owned
+-- children declared with ON DELETE CASCADE (matching session_repositories,
+-- 0032), so deleting an environment reclaims them. environment_images is
+-- deliberately FK-less — DELETE supersedes its rows so the reaper can still
+-- delete the provider artifacts — and sessions.environment_id is FK-less so a
+-- session keeps a benignly dangling id after its source environment is gone.
 
 CREATE TABLE environments (
   id               TEXT PRIMARY KEY,            -- env_<id>
@@ -30,7 +32,8 @@ CREATE TABLE environment_repositories (
   repo_name      TEXT NOT NULL,
   repo_id        INTEGER,
   base_branch    TEXT NOT NULL,
-  PRIMARY KEY (environment_id, repo_owner, repo_name)
+  PRIMARY KEY (environment_id, repo_owner, repo_name),
+  FOREIGN KEY (environment_id) REFERENCES environments(id) ON DELETE CASCADE
 );
 
 CREATE TABLE environment_secrets (          -- mirrors repo_secrets (0001)
@@ -39,7 +42,8 @@ CREATE TABLE environment_secrets (          -- mirrors repo_secrets (0001)
   encrypted_value TEXT NOT NULL,
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL,
-  PRIMARY KEY (environment_id, key)
+  PRIMARY KEY (environment_id, key),
+  FOREIGN KEY (environment_id) REFERENCES environments(id) ON DELETE CASCADE
 );
 
 CREATE TABLE environment_images (           -- generalizes repo_images (0009/0022/0023)

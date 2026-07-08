@@ -244,11 +244,9 @@ export class EnvironmentStore {
 
   /**
    * INSERT statements for an environment's repository rows (composable into a
-   * batch). Each insert is guarded on the parent environment still existing:
-   * with no foreign keys, a concurrent DELETE between a caller's existence check
-   * and this batch would otherwise commit orphan rows. Within a batch (one
-   * transaction) the create path's parent INSERT is already visible, so the
-   * guard holds for create as well as replace.
+   * batch). The environment_repositories → environments ON DELETE CASCADE FK
+   * enforces referential integrity, so a replace against a concurrently-deleted
+   * environment is rejected rather than left as orphan rows.
    */
   bindRepositoryInserts(
     environmentId: string,
@@ -259,8 +257,7 @@ export class EnvironmentStore {
         .prepare(
           `INSERT INTO environment_repositories
            (environment_id, position, repo_owner, repo_name, repo_id, base_branch)
-           SELECT ?, ?, ?, ?, ?, ?
-           WHERE EXISTS (SELECT 1 FROM environments WHERE id = ?)`
+           VALUES (?, ?, ?, ?, ?, ?)`
         )
         .bind(
           environmentId,
@@ -268,8 +265,7 @@ export class EnvironmentStore {
           repository.repo_owner,
           repository.repo_name,
           repository.repo_id,
-          repository.base_branch,
-          environmentId
+          repository.base_branch
         )
     );
   }

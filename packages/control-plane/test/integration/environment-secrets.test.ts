@@ -15,8 +15,19 @@ import { cleanD1Tables } from "./cleanup";
 const key = () => env.REPO_SECRETS_ENCRYPTION_KEY!;
 const ENV_ID = "env_secrets_test";
 
+/** Insert a parent environments row so the FK-backed secret writes are valid. */
+async function seedEnv(id: string): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO environments (id, name, prebuild_enabled, created_at, updated_at) VALUES (?, ?, 0, ?, ?)"
+  )
+    .bind(id, id, now, now)
+    .run();
+}
+
 describe("EnvironmentSecretsStore", () => {
   beforeEach(cleanD1Tables);
+  beforeEach(() => seedEnv(ENV_ID));
 
   it("sets, lists, decrypts, and deletes environment secrets", async () => {
     const store = new EnvironmentSecretsStore(env.DB, key());
@@ -33,6 +44,8 @@ describe("EnvironmentSecretsStore", () => {
 
   it("scopes secrets per environment", async () => {
     const store = new EnvironmentSecretsStore(env.DB, key());
+    await seedEnv("env_a");
+    await seedEnv("env_b");
     await store.setSecrets("env_a", { A: "1" });
     await store.setSecrets("env_b", { B: "2" });
     expect(Object.keys(await store.getDecryptedSecrets("env_a"))).toEqual(["A"]);
