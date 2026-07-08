@@ -4,6 +4,7 @@ import type { SessionRepositoryRow } from "./repository";
 import {
   AmbiguousRepositoryTargetError,
   buildSessionRepositories,
+  mapRepositoryTargetError,
   RepositoryNotMemberError,
   resolveSessionRepositoryTarget,
 } from "./repository-target";
@@ -31,9 +32,29 @@ const SCALAR = { repoOwner: "acme", repoName: "web" };
 
 describe("buildSessionRepositories", () => {
   it("synthesizes a sole primary member from the scalar mirror when no rows exist", () => {
-    expect(buildSessionRepositories(SCALAR, [])).toEqual([
-      { repoOwner: "acme", repoName: "web", position: 0, isPrimary: true, row: null },
+    expect(buildSessionRepositories({ ...SCALAR, baseBranch: "develop" }, [])).toEqual([
+      {
+        repoOwner: "acme",
+        repoName: "web",
+        position: 0,
+        baseBranch: "develop",
+        isPrimary: true,
+        row: null,
+      },
     ]);
+  });
+
+  it("leaves the synthesized base branch null when the scalar mirror has none", () => {
+    expect(buildSessionRepositories(SCALAR, [])[0].baseBranch).toBeNull();
+  });
+
+  it("takes each entry's base branch from its row", () => {
+    const members = buildSessionRepositories({ ...SCALAR, baseBranch: "ignored" }, [
+      createRow(0, "acme", "web"),
+      createRow(1, "acme", "backend", { base_branch: "develop" }),
+    ]);
+
+    expect(members.map((member) => member.baseBranch)).toEqual(["main", "develop"]);
   });
 
   it("maps rows and marks the scalar-mirror member primary", () => {
@@ -106,5 +127,27 @@ describe("resolveSessionRepositoryTarget", () => {
     expect(() => resolveSessionRepositoryTarget({}, [])).toThrow(
       "Session has no member repositories"
     );
+  });
+});
+
+describe("mapRepositoryTargetError", () => {
+  const members = buildSessionRepositories(SCALAR, []);
+
+  it("maps non-membership to 403", () => {
+    expect(
+      mapRepositoryTargetError(new RepositoryNotMemberError({ repoOwner: "evil", repoName: "x" }))
+    ).toEqual({ status: 403, error: "Repository evil/x is not part of this session" });
+  });
+
+  it("maps ambiguous and half-specified targets to 400", () => {
+    expect(mapRepositoryTargetError(new AmbiguousRepositoryTargetError(members))?.status).toBe(400);
+    expect(mapRepositoryTargetError(new RepositoryPairValidationError("half"))).toEqual({
+      status: 400,
+      error: "half",
+    });
+  });
+
+  it("returns null for unrelated errors so callers rethrow", () => {
+    expect(mapRepositoryTargetError(new Error("boom"))).toBeNull();
   });
 });

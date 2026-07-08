@@ -1,4 +1,7 @@
-import { normalizeOptionalRepositoryPair } from "@open-inspect/shared";
+import {
+  normalizeOptionalRepositoryPair,
+  RepositoryPairValidationError,
+} from "@open-inspect/shared";
 import type { SessionRepositoryRow } from "./repository";
 
 /** A repository identified by owner and name (canonical casing unless noted). */
@@ -19,6 +22,13 @@ export interface SessionRepositoryEntry {
   repoOwner: string;
   repoName: string;
   position: number;
+  /**
+   * The entry's base branch: the row's, or the scalar mirror's for
+   * synthesized entries. Null only for legacy sessions without a stored
+   * base branch — consumers apply their own default ("main" for state and
+   * spawn, the repo's default branch for PR creation).
+   */
+  baseBranch: string | null;
   /** Whether this member is the session's primary (scalar-mirror) repo. */
   isPrimary: boolean;
   /** Backing member row; null when synthesized from the scalar mirror. */
@@ -33,7 +43,7 @@ export interface SessionRepositoryEntry {
  * with position 0 by the row-0-mirrors-scalars invariant.
  */
 export function buildSessionRepositories(
-  scalarRepo: RepoIdentity,
+  scalarRepo: RepoIdentity & { baseBranch?: string | null },
   rows: SessionRepositoryRow[]
 ): SessionRepositoryEntry[] {
   if (rows.length === 0) {
@@ -42,6 +52,7 @@ export function buildSessionRepositories(
         repoOwner: scalarRepo.repoOwner,
         repoName: scalarRepo.repoName,
         position: 0,
+        baseBranch: scalarRepo.baseBranch ?? null,
         isPrimary: true,
         row: null,
       },
@@ -51,6 +62,7 @@ export function buildSessionRepositories(
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
     position: row.position,
+    baseBranch: row.base_branch,
     isPrimary: repoIdentityEquals(
       { repoOwner: row.repo_owner, repoName: row.repo_name },
       scalarRepo
@@ -116,4 +128,24 @@ export function resolveSessionRepositoryTarget(
     throw new RepositoryNotMemberError(pair);
   }
   return match;
+}
+
+/**
+ * Map a resolveSessionRepositoryTarget throw to its status/message shape,
+ * or null for unrelated errors (callers rethrow those). Shared by the HTTP
+ * handler and the PR service so the two mappings cannot drift — 403 for
+ * non-membership (the security boundary), 400 for a malformed or ambiguous
+ * target.
+ */
+export function mapRepositoryTargetError(error: unknown): { status: number; error: string } | null {
+  if (error instanceof RepositoryNotMemberError) {
+    return { status: 403, error: error.message };
+  }
+  if (
+    error instanceof AmbiguousRepositoryTargetError ||
+    error instanceof RepositoryPairValidationError
+  ) {
+    return { status: 400, error: error.message };
+  }
+  return null;
 }

@@ -1950,11 +1950,17 @@ describe("SandboxLifecycleManager", () => {
       ]);
     });
 
-    it("synthesizes the scalar member for the MCP lookup on pre-list sessions", async () => {
+    it("passes storage-synthesized members to the MCP lookup on pre-list sessions", async () => {
+      // Pre-list sessions get their scalar member synthesized by the storage
+      // adapter (buildSessionRepositories owns the rule) — the manager passes
+      // the list through as-is.
       const mcpServerLookup: McpServerLookup = {
         getDecryptedForSession: vi.fn(async () => []),
       };
-      const { manager } = createMultiRepoManager({ mcpServerLookup, sessionRepositories: [] });
+      const { manager } = createMultiRepoManager({
+        mcpServerLookup,
+        sessionRepositories: [{ repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" }],
+      });
 
       await manager.spawnSandbox();
 

@@ -1,9 +1,7 @@
-import { RepositoryPairValidationError } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
 import {
-  AmbiguousRepositoryTargetError,
-  RepositoryNotMemberError,
+  mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
   type SessionRepositoryEntry,
 } from "../../repository-target";
@@ -79,16 +77,9 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
           deps.getSessionRepositories()
         );
       } catch (error) {
-        if (error instanceof RepositoryNotMemberError) {
-          return Response.json({ error: error.message }, { status: 403 });
-        }
-        if (
-          error instanceof AmbiguousRepositoryTargetError ||
-          error instanceof RepositoryPairValidationError
-        ) {
-          return Response.json({ error: error.message }, { status: 400 });
-        }
-        throw error;
+        const mapped = mapRepositoryTargetError(error);
+        if (!mapped) throw error;
+        return Response.json({ error: mapped.error }, { status: mapped.status });
       }
 
       const promptingParticipantResult = await deps.getPromptingParticipantForPR();

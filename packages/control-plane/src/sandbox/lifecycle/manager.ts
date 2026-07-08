@@ -75,7 +75,12 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Get current session */
   getSession(): SessionRow | null;
-  /** Get the session's member repositories in position order (empty for pre-list sessions) */
+  /**
+   * Get the session's member repositories in position order. Pre-list
+   * sessions get a one-entry list synthesized from the scalar columns
+   * (buildSessionRepositories owns the rule); empty only for repo-less
+   * sessions.
+   */
   getSessionRepositories(): SessionRepositoryInfo[];
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
@@ -429,7 +434,7 @@ export class SandboxLifecycleManager {
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const repositories = this.sessionRepositories(session);
+      const repositories = this.storage.getSessionRepositories();
       const multiRepoFields = multiRepoSpawnFields(repositories);
 
       // Look up pre-built repo image (graceful fallback on failure).
@@ -648,7 +653,7 @@ export class SandboxLifecycleManager {
       const timeoutSeconds =
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
-      const repositories = this.sessionRepositories(session);
+      const repositories = this.storage.getSessionRepositories();
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(repositories);
@@ -1211,28 +1216,6 @@ export class SandboxLifecycleManager {
    */
   private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
     return extractProviderAndModel(session.model || this.config.model);
-  }
-
-  /**
-   * The session's member repositories in position order. Falls back to a
-   * one-entry list synthesized from the scalar columns for sessions that
-   * predate the session_repositories table.
-   */
-  private sessionRepositories(session: SessionRow): SessionRepositoryInfo[] {
-    const repositories = this.storage.getSessionRepositories();
-    if (repositories.length > 0) {
-      return repositories;
-    }
-    if (sessionHasRepository(session)) {
-      return [
-        {
-          repoOwner: session.repo_owner,
-          repoName: session.repo_name,
-          baseBranch: session.base_branch ?? "main",
-        },
-      ];
-    }
-    return [];
   }
 
   /**

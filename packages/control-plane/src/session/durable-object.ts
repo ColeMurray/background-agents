@@ -586,10 +586,10 @@ export class SessionDO extends DurableObject<Env> {
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
       getSessionRepositories: () =>
-        this.repository.getSessionRepositoryRows().map((row) => ({
-          repoOwner: row.repo_owner,
-          repoName: row.repo_name,
-          baseBranch: row.base_branch,
+        this.repository.getSessionRepositories().map((entry) => ({
+          repoOwner: entry.repoOwner,
+          repoName: entry.repoName,
+          baseBranch: entry.baseBranch ?? "main",
         })),
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
@@ -1719,7 +1719,7 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: member.repoOwner,
       repoName: member.repoName,
       repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
-      baseBranch: member.row ? member.row.base_branch : (session?.base_branch ?? "main"),
+      baseBranch: member.baseBranch ?? "main",
       branchName:
         member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
       baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),

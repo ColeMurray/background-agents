@@ -412,7 +412,11 @@ export class SessionRepository {
     const session = this.getSession();
     if (!session?.repo_owner || !session.repo_name) return [];
     return buildSessionRepositories(
-      { repoOwner: session.repo_owner, repoName: session.repo_name },
+      {
+        repoOwner: session.repo_owner,
+        repoName: session.repo_name,
+        baseBranch: session.base_branch,
+      },
       this.getSessionRepositoryRows()
     );
   }

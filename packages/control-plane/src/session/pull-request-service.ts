@@ -1,8 +1,4 @@
-import {
-  generateBranchName,
-  RepositoryPairValidationError,
-  type SessionArtifact,
-} from "@open-inspect/shared";
+import { generateBranchName, type SessionArtifact } from "@open-inspect/shared";
 import type { Logger } from "../logger";
 import { resolveHeadBranchForPr, sanitizeBranchName } from "../source-control/branch-resolution";
 import {
@@ -14,8 +10,7 @@ import {
 } from "../source-control";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import {
-  AmbiguousRepositoryTargetError,
-  RepositoryNotMemberError,
+  mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
   type RepoIdentity,
   type SessionRepositoryEntry,
@@ -145,16 +140,9 @@ export class SessionPullRequestService {
     try {
       target = resolveSessionRepositoryTarget(input, this.deps.repository.getSessionRepositories());
     } catch (error) {
-      if (error instanceof RepositoryNotMemberError) {
-        return { kind: "error", status: 403, error: error.message };
-      }
-      if (
-        error instanceof AmbiguousRepositoryTargetError ||
-        error instanceof RepositoryPairValidationError
-      ) {
-        return { kind: "error", status: 400, error: error.message };
-      }
-      throw error;
+      const mapped = mapRepositoryTargetError(error);
+      if (!mapped) throw error;
+      return { kind: "error", ...mapped };
     }
     const memberRow = target.row;
     const isPrimary = target.isPrimary;
@@ -210,11 +198,9 @@ export class SessionPullRequestService {
         owner: targetRepo.repoOwner,
         name: targetRepo.repoName,
       });
-      // Base: requested > target repo's base branch (scalar mirror for
-      // sessions without member rows) > repo default. Behavioral parity with
-      // the session-base injection the HTTP handler used to do.
-      const baseBranch =
-        input.baseBranch || memberRow?.base_branch || session.base_branch || repoInfo.defaultBranch;
+      // Base: requested > the entry's base branch (the row's, or the scalar
+      // mirror's for sessions without member rows) > repo default.
+      const baseBranch = input.baseBranch || target.baseBranch || repoInfo.defaultBranch;
       // The target repo's working branch; member rows written before PR flow
       // existed have a null branch_name while the scalar mirror is set, so
       // the primary falls back to the scalar.
