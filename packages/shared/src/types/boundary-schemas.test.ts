@@ -5,6 +5,7 @@ import {
   clientMessageSchema,
   createSessionResponseSchema,
   createSessionRequestSchema,
+  enqueuePromptRequestSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -124,6 +125,55 @@ describe("boundary schemas", () => {
         createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
       ).toBe(false);
       expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
+    });
+  });
+
+  describe("enqueuePromptRequestSchema", () => {
+    it("parses prompt requests with typed sources and shared attachments", () => {
+      const result = enqueuePromptRequestSchema.safeParse({
+        content: "Investigate the failing build",
+        authorId: "user-1",
+        source: "slack",
+        attachments: [
+          {
+            type: "file",
+            name: "error.log",
+            content: "stack trace",
+            mimeType: "text/plain",
+          },
+        ],
+        callbackContext: { source: "slack", channel: "C123", threadTs: "1.2" },
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.attachments).toEqual([
+          {
+            type: "file",
+            name: "error.log",
+            content: "stack trace",
+            mimeType: "text/plain",
+          },
+        ]);
+      }
+    });
+
+    it("rejects unknown prompt sources and malformed attachments", () => {
+      expect(
+        enqueuePromptRequestSchema.safeParse({
+          content: "hello",
+          authorId: "user-1",
+          source: "unknown",
+        }).success
+      ).toBe(false);
+      expect(
+        enqueuePromptRequestSchema.safeParse({
+          content: "hello",
+          authorId: "user-1",
+          source: "web",
+          attachments: [{ type: "text", name: "notes.txt" }],
+        }).success
+      ).toBe(false);
     });
   });
 

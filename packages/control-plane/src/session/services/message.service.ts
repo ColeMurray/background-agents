@@ -1,29 +1,9 @@
+import type { EnqueuePromptRequest } from "@open-inspect/shared";
 import type { ArtifactRow, MessageRow } from "../types";
 import type { ArtifactResponse, ListEventsResponse } from "../../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
-
-export interface EnqueuePromptRequest {
-  content: string;
-  authorId: string;
-  source: string;
-  model?: string;
-  reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string }>;
-  callbackContext?: Record<string, unknown>;
-
-  // Identity enrichment (from router D1 lookup at prompt time)
-  authorDisplayName?: string;
-  authorEmail?: string;
-  authorLogin?: string;
-
-  // SCM token enrichment (from cross-provider identity resolution)
-  scmUserId?: string;
-  scmAccessTokenEncrypted?: string;
-  scmRefreshTokenEncrypted?: string;
-  scmTokenExpiresAt?: number;
-}
 
 export type ListEventsRequest = SessionEventListRequest;
 

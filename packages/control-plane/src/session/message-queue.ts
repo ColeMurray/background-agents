@@ -6,29 +6,23 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
+  type Attachment,
+  type EnqueuePromptRequest,
 } from "@open-inspect/shared";
-import type {
-  ClientInfo,
-  Env,
-  MessageSource,
-  SandboxEvent,
-  ServerMessage,
-  SessionStatus,
-} from "../types";
+import type { ClientInfo, Env, SandboxEvent, ServerMessage, SessionStatus } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SessionRow, ParticipantRow, SandboxCommand } from "./types";
 import type { SessionRepository } from "./repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
-import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 
 interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+  attachments?: Attachment[];
 }
 
 interface MessageQueueDeps {
@@ -382,7 +376,7 @@ export class SessionMessageQueue {
       id: messageId,
       authorId: participant.id,
       content: data.content,
-      source: data.source as MessageSource,
+      source: data.source,
       model: messageModel,
       reasoningEffort: messageReasoningEffort,
       attachments: data.attachments ? JSON.stringify(data.attachments) : null,

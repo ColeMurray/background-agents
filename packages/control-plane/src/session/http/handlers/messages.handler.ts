@@ -1,32 +1,7 @@
 import type { Logger } from "../../../logger";
-import type { EnqueuePromptRequest, MessageService } from "../../services/message.service";
+import { enqueuePromptRequestSchema } from "@open-inspect/shared";
+import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
-import { z } from "zod";
-
-const enqueuePromptRequestSchema = z.object({
-  content: z.string(),
-  authorId: z.string(),
-  source: z.string(),
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-  attachments: z
-    .array(
-      z.object({
-        type: z.string(),
-        name: z.string(),
-        url: z.string().optional(),
-      })
-    )
-    .optional(),
-  callbackContext: z.record(z.string(), z.unknown()).optional(),
-  authorDisplayName: z.string().optional(),
-  authorEmail: z.string().optional(),
-  authorLogin: z.string().optional(),
-  scmUserId: z.string().optional(),
-  scmAccessTokenEncrypted: z.string().optional(),
-  scmRefreshTokenEncrypted: z.string().optional(),
-  scmTokenExpiresAt: z.number().optional(),
-}) satisfies z.ZodType<EnqueuePromptRequest>;
 
 /**
  * Valid event types for filtering.
@@ -69,13 +44,19 @@ export interface MessagesHandler {
 export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandler {
   return {
     async enqueuePrompt(request: Request): Promise<Response> {
+      let raw: unknown;
       try {
-        const raw = await request.json();
-        const result = enqueuePromptRequestSchema.safeParse(raw);
-        if (!result.success) {
-          return Response.json({ error: "Invalid prompt request" }, { status: 400 });
-        }
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid prompt request" }, { status: 400 });
+      }
 
+      const result = enqueuePromptRequestSchema.safeParse(raw);
+      if (!result.success) {
+        return Response.json({ error: "Invalid prompt request" }, { status: 400 });
+      }
+
+      try {
         return Response.json(await deps.messageService.enqueuePrompt(result.data));
       } catch (error) {
         deps.getLog().error("handleEnqueuePrompt error", {

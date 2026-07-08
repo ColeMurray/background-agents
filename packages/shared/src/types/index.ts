@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import type { Attachment } from "./websocket";
+import { attachmentSchema, type Attachment } from "./websocket";
 export { attachmentSchema, clientMessageSchema } from "./websocket";
 export type { Attachment, ClientMessage } from "./websocket";
 
@@ -31,7 +31,15 @@ export type SandboxStatus =
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" | "automation";
+export const messageSourceSchema = z.enum([
+  "web",
+  "slack",
+  "linear",
+  "extension",
+  "github",
+  "automation",
+]);
+export type MessageSource = z.infer<typeof messageSourceSchema>;
 export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
 export type EventType =
   | "heartbeat"
@@ -49,7 +57,8 @@ export type EventType =
   | "push_error"
   | "warning"
   | "user_message";
-export type ParticipantRole = "owner" | "member";
+export const participantRoleSchema = z.enum(["owner", "member"]);
+export type ParticipantRole = z.infer<typeof participantRoleSchema>;
 export type SpawnSource =
   | "user"
   | "agent"
@@ -941,6 +950,25 @@ export const createMediaArtifactRequestSchema = z.object({
 });
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
+
+export const enqueuePromptRequestSchema = z.object({
+  content: z.string(),
+  authorId: z.string(),
+  source: messageSourceSchema,
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  attachments: z.array(attachmentSchema).optional(),
+  callbackContext: recordSchema.optional(),
+  authorDisplayName: z.string().optional(),
+  authorEmail: z.string().optional(),
+  authorLogin: z.string().optional(),
+  scmUserId: z.string().optional(),
+  scmAccessTokenEncrypted: z.string().optional(),
+  scmRefreshTokenEncrypted: z.string().optional(),
+  scmTokenExpiresAt: z.number().optional(),
+});
+
+export type EnqueuePromptRequest = z.infer<typeof enqueuePromptRequestSchema>;
 
 export const createSessionResponseSchema = z.object({
   sessionId: z.string().min(1),

@@ -257,7 +257,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
         authorDisplayName: "Octo Cat",
       });
 
@@ -271,7 +271,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
       });
 
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
@@ -283,7 +283,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
         authorDisplayName: "Octo Cat",
         authorEmail: "1001+octocat@users.noreply.github.com",
         authorLogin: "octocat",
@@ -311,7 +311,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
       });
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();

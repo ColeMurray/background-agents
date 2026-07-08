@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionEventStream, type SessionEventStreamRepository } from "./event-stream";
+import type { SandboxEvent } from "../types";
 import type { EventRow } from "./types";
+
+type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
+type ToolResultEvent = Extract<SandboxEvent, { type: "tool_result" }>;
 
 function createStream() {
   const repository = {
@@ -15,18 +20,49 @@ function createStream() {
   };
 }
 
-function eventRow(
-  id: string,
-  type: EventRow["type"],
-  data: Record<string, unknown> | string,
-  createdAt: number
-): EventRow {
+function eventRow(id: string, type: EventRow["type"], data: unknown, createdAt: number): EventRow {
   return {
     id,
     type,
     data: typeof data === "string" ? data : JSON.stringify(data),
     message_id: null,
     created_at: createdAt,
+  };
+}
+
+function tokenEvent(overrides: Partial<Omit<TokenEvent, "type">> = {}): TokenEvent {
+  return {
+    type: "token",
+    sandboxId: "sandbox-1",
+    timestamp: 1,
+    messageId: "msg-1",
+    content: "hello",
+    ...overrides,
+  };
+}
+
+function toolCallEvent(overrides: Partial<Omit<ToolCallEvent, "type">> = {}): ToolCallEvent {
+  return {
+    type: "tool_call",
+    sandboxId: "sandbox-1",
+    timestamp: 1,
+    messageId: "msg-1",
+    tool: "read_file",
+    args: {},
+    callId: "call-1",
+    ...overrides,
+  };
+}
+
+function toolResultEvent(overrides: Partial<Omit<ToolResultEvent, "type">> = {}): ToolResultEvent {
+  return {
+    type: "tool_result",
+    sandboxId: "sandbox-1",
+    timestamp: 2,
+    messageId: "msg-1",
+    callId: "call-1",
+    result: "ok",
+    ...overrides,
   };
 }
 
@@ -43,58 +79,17 @@ describe("SessionEventStream", () => {
 
     it("returns parsed replay events and the oldest cursor from the loaded window", () => {
       const { stream, repository } = createStream();
+      const toolCall = toolCallEvent({ timestamp: 1 });
+      const toolResult = toolResultEvent({ timestamp: 2 });
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow(
-          "e1",
-          "tool_call",
-          {
-            type: "tool_call",
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-            messageId: "msg-1",
-            tool: "read_file",
-            args: {},
-            callId: "call-1",
-          },
-          1000
-        ),
-        eventRow(
-          "e2",
-          "tool_result",
-          {
-            type: "tool_result",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-            messageId: "msg-1",
-            callId: "call-1",
-            result: "ok",
-          },
-          2000
-        ),
+        eventRow("e1", "tool_call", toolCall, 1000),
+        eventRow("e2", "tool_result", toolResult, 2000),
       ]);
 
       const replay = stream.getReplay();
 
       expect(replay).toEqual({
-        events: [
-          {
-            type: "tool_call",
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-            messageId: "msg-1",
-            tool: "read_file",
-            args: {},
-            callId: "call-1",
-          },
-          {
-            type: "tool_result",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-            messageId: "msg-1",
-            callId: "call-1",
-            result: "ok",
-          },
-        ],
+        events: [toolCall, toolResult],
         hasMore: false,
         cursor: { timestamp: 1000, id: "e1" },
       });
@@ -103,30 +98,8 @@ describe("SessionEventStream", () => {
     it("marks replay as having more when the loaded window reaches the limit", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow(
-          "e1",
-          "token",
-          {
-            type: "token",
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-            messageId: "msg-1",
-            content: "a",
-          },
-          1000
-        ),
-        eventRow(
-          "e2",
-          "token",
-          {
-            type: "token",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-            messageId: "msg-1",
-            content: "b",
-          },
-          2000
-        ),
+        eventRow("e1", "token", tokenEvent({ content: "a", timestamp: 1 }), 1000),
+        eventRow("e2", "token", tokenEvent({ content: "b", timestamp: 2 }), 2000),
       ]);
 
       const replay = stream.getReplay(2);
@@ -136,90 +109,38 @@ describe("SessionEventStream", () => {
 
     it("skips malformed replay event JSON", () => {
       const { stream, repository } = createStream();
+      const toolResult = toolResultEvent({ timestamp: 2 });
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
         eventRow("bad", "tool_call", "{bad", 1000),
-        eventRow(
-          "good",
-          "tool_result",
-          {
-            type: "tool_result",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-            messageId: "msg-1",
-            callId: "call-1",
-            result: "ok",
-          },
-          2000
-        ),
+        eventRow("good", "tool_result", toolResult, 2000),
       ]);
 
       const replay = stream.getReplay();
 
-      expect(replay.events).toEqual([
-        {
-          type: "tool_result",
-          sandboxId: "sandbox-1",
-          timestamp: 2,
-          messageId: "msg-1",
-          callId: "call-1",
-          result: "ok",
-        },
-      ]);
+      expect(replay.events).toEqual([toolResult]);
       expect(replay.cursor).toEqual({ timestamp: 1000, id: "bad" });
     });
 
     it("skips replay events that do not match the sandbox event schema", () => {
       const { stream, repository } = createStream();
+      const token = tokenEvent({ timestamp: 2 });
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
         eventRow("bad", "tool_call", { type: "tool_call", tool: "read_file" }, 1000),
-        eventRow(
-          "good",
-          "token",
-          {
-            type: "token",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-            messageId: "msg-1",
-            content: "hello",
-          },
-          2000
-        ),
+        eventRow("good", "token", token, 2000),
       ]);
 
       const replay = stream.getReplay();
 
-      expect(replay.events).toEqual([
-        {
-          type: "token",
-          sandboxId: "sandbox-1",
-          timestamp: 2,
-          messageId: "msg-1",
-          content: "hello",
-        },
-      ]);
+      expect(replay.events).toEqual([token]);
     });
   });
 
   describe("getHistoryPage", () => {
     it("loads history after a client cursor while excluding heartbeats", () => {
       const { stream, repository } = createStream();
+      const toolCall = toolCallEvent({ tool: "write_file", timestamp: 1 });
       vi.mocked(repository.getEventTimelinePage).mockReturnValue({
-        events: [
-          eventRow(
-            "e1",
-            "tool_call",
-            {
-              type: "tool_call",
-              sandboxId: "sandbox-1",
-              timestamp: 1,
-              messageId: "msg-1",
-              tool: "write_file",
-              args: {},
-              callId: "call-1",
-            },
-            1000
-          ),
-        ],
+        events: [eventRow("e1", "tool_call", toolCall, 1000)],
         hasMore: false,
         nextCursor: { kind: "timeline", createdAt: 1000, id: "e1" },
       });
@@ -235,17 +156,7 @@ describe("SessionEventStream", () => {
         limit: 100,
       });
       expect(page).toEqual({
-        items: [
-          {
-            type: "tool_call",
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-            messageId: "msg-1",
-            tool: "write_file",
-            args: {},
-            callId: "call-1",
-          },
-        ],
+        items: [toolCall],
         hasMore: false,
         cursor: { timestamp: 1000, id: "e1" },
       });
@@ -282,22 +193,11 @@ describe("SessionEventStream", () => {
 
     it("skips malformed history event JSON", () => {
       const { stream, repository } = createStream();
+      const toolResult = toolResultEvent({ timestamp: 2 });
       vi.mocked(repository.getEventTimelinePage).mockReturnValue({
         events: [
           eventRow("bad", "tool_call", "{bad", 1000),
-          eventRow(
-            "good",
-            "tool_result",
-            {
-              type: "tool_result",
-              sandboxId: "sandbox-1",
-              timestamp: 2,
-              messageId: "msg-1",
-              callId: "call-1",
-              result: "ok",
-            },
-            2000
-          ),
+          eventRow("good", "tool_result", toolResult, 2000),
         ],
         hasMore: true,
         nextCursor: { kind: "timeline", createdAt: 1000, id: "bad" },
@@ -309,16 +209,7 @@ describe("SessionEventStream", () => {
       });
 
       expect(page).toEqual({
-        items: [
-          {
-            type: "tool_result",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-            messageId: "msg-1",
-            callId: "call-1",
-            result: "ok",
-          },
-        ],
+        items: [toolResult],
         hasMore: true,
         cursor: { timestamp: 1000, id: "bad" },
       });

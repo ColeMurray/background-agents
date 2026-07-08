@@ -1,6 +1,7 @@
 import type { Logger } from "../../../logger";
 import {
   createMediaArtifactRequestSchema,
+  participantRoleSchema,
   sandboxEventSchema,
   type CreateMediaArtifactRequest,
   type SessionArtifact,
@@ -19,7 +20,7 @@ const addParticipantRequestSchema = z.object({
   scmLogin: z.string().optional(),
   scmName: z.string().optional(),
   scmEmail: z.string().optional(),
-  role: z.enum(["owner", "member"]).optional(),
+  role: participantRoleSchema.optional(),
 });
 
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;

@@ -77,7 +77,14 @@ describe("createMessagesHandler", () => {
           source: "web",
           model: "openai/gpt-5.5",
           reasoningEffort: "medium",
-          attachments: [{ type: "text", name: "notes.txt", url: "https://example.com/notes.txt" }],
+          attachments: [
+            {
+              type: "file",
+              name: "notes.txt",
+              content: "notes",
+              mimeType: "text/plain",
+            },
+          ],
           callbackContext: { source: "slack" },
           authorDisplayName: "Ada Lovelace",
           authorEmail: "ada@example.com",
@@ -97,7 +104,14 @@ describe("createMessagesHandler", () => {
       source: "web",
       model: "openai/gpt-5.5",
       reasoningEffort: "medium",
-      attachments: [{ type: "text", name: "notes.txt", url: "https://example.com/notes.txt" }],
+      attachments: [
+        {
+          type: "file",
+          name: "notes.txt",
+          content: "notes",
+          mimeType: "text/plain",
+        },
+      ],
       callbackContext: { source: "slack" },
       authorDisplayName: "Ada Lovelace",
       authorEmail: "ada@example.com",
@@ -117,6 +131,26 @@ describe("createMessagesHandler", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ content: "hello", source: "web" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid prompt request" });
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for invalid prompt sources", async () => {
+    const { handler, messageService } = createHandler();
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "hello",
+          authorId: "user-1",
+          source: "not-a-source",
+        }),
       })
     );
 
@@ -146,22 +180,44 @@ describe("createMessagesHandler", () => {
     expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
   });
 
-  it("logs and rethrows when enqueue prompt parsing fails", async () => {
-    const { handler, log } = createHandler();
+  it("returns 400 for malformed prompt JSON", async () => {
+    const { handler, messageService, log } = createHandler();
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{invalid",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid prompt request" });
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("logs and rethrows when enqueue prompt fails after validation", async () => {
+    const { handler, messageService, log } = createHandler();
+    vi.mocked(messageService.enqueuePrompt).mockRejectedValue(new Error("queue unavailable"));
 
     await expect(
       handler.enqueuePrompt(
         new Request("http://internal/internal/prompt", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: "{invalid",
+          body: JSON.stringify({
+            content: "hello",
+            authorId: "user-1",
+            source: "web",
+          }),
         })
       )
-    ).rejects.toBeTruthy();
+    ).rejects.toThrow("queue unavailable");
 
     expect(log.error).toHaveBeenCalledWith(
       "handleEnqueuePrompt error",
-      expect.objectContaining({ error: expect.anything() })
+      expect.objectContaining({ error: expect.any(Error) })
     );
   });
 
