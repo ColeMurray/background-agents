@@ -5,10 +5,12 @@ import * as branchResolution from "../source-control/branch-resolution";
 import type { SessionRepositoryRow } from "./repository";
 import type { ArtifactRow, SessionRow } from "./types";
 import {
+  PullRequestCreationClaims,
   SessionPullRequestService,
   type CreatePullRequestInput,
   type PullRequestRepository,
   type PullRequestServiceDeps,
+  type PushBranchResult,
 } from "./pull-request-service";
 
 function createMockLogger(): Logger {
@@ -151,6 +153,7 @@ function createTestHarness() {
   let idCounter = 0;
   const deps: PullRequestServiceDeps = {
     repository,
+    claims: new PullRequestCreationClaims(),
     sourceControlProvider: provider,
     log,
     generateId: () => `id-${++idCounter}`,
@@ -578,6 +581,81 @@ describe("SessionPullRequestService", () => {
         error: "Repository evil/exfil is not part of this session",
       });
       expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("in-flight creation claims", () => {
+    it("rejects a concurrent request for the same repo with 409", async () => {
+      let releasePush: (() => void) | undefined;
+      harness.deps.pushBranchToRemote = vi.fn(
+        () =>
+          new Promise<PushBranchResult>((resolve) => {
+            releasePush = () => resolve({ success: true });
+          })
+      );
+      harness.service = new SessionPullRequestService(harness.deps);
+
+      const first = harness.service.createPullRequest(createInput());
+      await vi.waitFor(() => expect(releasePush).toBeDefined());
+
+      const second = await harness.service.createPullRequest(createInput());
+      expect(second).toEqual({
+        kind: "error",
+        status: 409,
+        error: "A pull request is already being created for acme/web in this session.",
+      });
+
+      releasePush!();
+      expect((await first).kind).toBe("created");
+    });
+
+    it("releases the claim when creation fails, allowing a retry", async () => {
+      harness.deps.pushBranchToRemote = vi
+        .fn<(pushSpec: unknown) => Promise<PushBranchResult>>()
+        .mockResolvedValueOnce({ success: false, error: "Failed to push branch: boom" })
+        .mockResolvedValue({ success: true });
+      harness.service = new SessionPullRequestService(harness.deps);
+
+      const failed = await harness.service.createPullRequest(createInput());
+      expect(failed).toEqual({
+        kind: "error",
+        status: 500,
+        error: "Failed to push branch: boom",
+      });
+
+      const retried = await harness.service.createPullRequest(createInput());
+      expect(retried.kind).toBe("created");
+    });
+
+    it("allows concurrent creation for different repos", async () => {
+      harness.setRepositories([
+        createRepositoryRow({ position: 0 }),
+        createRepositoryRow({
+          position: 1,
+          repo_owner: "acme",
+          repo_name: "backend",
+          repo_id: 456,
+          base_branch: "develop",
+        }),
+      ]);
+      const resolvers: Array<() => void> = [];
+      harness.deps.pushBranchToRemote = vi.fn(
+        () =>
+          new Promise<PushBranchResult>((resolve) => {
+            resolvers.push(() => resolve({ success: true }));
+          })
+      );
+      harness.service = new SessionPullRequestService(harness.deps);
+
+      const first = harness.service.createPullRequest(createInput());
+      const second = harness.service.createPullRequest(
+        createInput({ repoOwner: "acme", repoName: "backend" })
+      );
+      await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+      resolvers.forEach((resolve) => resolve());
+
+      expect((await first).kind).toBe("created");
+      expect((await second).kind).toBe("created");
     });
   });
 

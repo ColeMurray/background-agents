@@ -8,7 +8,9 @@ import {
   type GitPushAuthContext,
   type GitPushSpec,
 } from "../source-control";
+import { findPrArtifactForRepo } from "./pr-artifacts";
 import type { SessionRepositoryRow } from "./repository";
+import { resolveSessionRepositoryTarget, type RepoIdentity } from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
 
 /**
@@ -41,33 +43,31 @@ export type CreatePullRequestResult =
 
 export type PushBranchResult = { success: true } | { success: false; error: string };
 
-function repoIdentityEquals(
-  a: { repoOwner: string; repoName: string },
-  b: { repoOwner: string; repoName: string }
-): boolean {
-  return (
-    a.repoOwner.toLowerCase() === b.repoOwner.toLowerCase() &&
-    a.repoName.toLowerCase() === b.repoName.toLowerCase()
-  );
+function claimKey(repo: RepoIdentity): string {
+  return `${repo.repoOwner.toLowerCase()}/${repo.repoName.toLowerCase()}`;
 }
 
 /**
- * Repo identity from a PR artifact's metadata. Null when the metadata carries
- * no identity — artifacts written before multi-repo support, which by
- * construction belong to the session's primary repository.
+ * In-flight PR creation claims, one per target repository. PR creation spans
+ * several awaits (push, provider calls) during which the DO serves other
+ * requests, so the persisted-artifact scan alone cannot enforce one PR per
+ * repo — two concurrent requests could both pass it. Claims are in-memory on
+ * the DO instance: a claim's lifetime is its request's, and both die with
+ * the instance.
  */
-function parseArtifactRepo(
-  metadata: string | null
-): { repoOwner: string; repoName: string } | null {
-  if (!metadata) return null;
-  try {
-    const parsed: unknown = JSON.parse(metadata);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const { repoOwner, repoName } = parsed as { repoOwner?: unknown; repoName?: unknown };
-    if (typeof repoOwner !== "string" || typeof repoName !== "string") return null;
-    return { repoOwner, repoName };
-  } catch {
-    return null;
+export class PullRequestCreationClaims {
+  private readonly inFlight = new Set<string>();
+
+  /** True when the claim was acquired; false when creation is already in flight. */
+  claim(repo: RepoIdentity): boolean {
+    const key = claimKey(repo);
+    if (this.inFlight.has(key)) return false;
+    this.inFlight.add(key);
+    return true;
+  }
+
+  release(repo: RepoIdentity): void {
+    this.inFlight.delete(claimKey(repo));
   }
 }
 
@@ -94,6 +94,8 @@ export interface PullRequestRepository {
  */
 export interface PullRequestServiceDeps {
   repository: PullRequestRepository;
+  /** DO-instance-scoped in-flight claims — must outlive individual requests. */
+  claims: PullRequestCreationClaims;
   sourceControlProvider: SourceControlProvider;
   log: Logger;
   generateId: () => string;
@@ -127,30 +129,23 @@ export class SessionPullRequestService {
       return { kind: "error", status: 400, error: "Pull requests require a repository context" };
     }
 
-    const memberRow =
-      this.deps.repository
-        .getSessionRepositories()
-        .find((row) =>
-          repoIdentityEquals({ repoOwner: row.repo_owner, repoName: row.repo_name }, input)
-        ) ?? null;
-    const isPrimary = repoIdentityEquals(
-      { repoOwner: session.repo_owner, repoName: session.repo_name },
-      input
-    );
-    // Sessions predating the member table have no rows; the target must then
-    // be the scalar repository. Re-checked here (the handler already 403s)
-    // because this is a sandbox-auth security boundary.
-    if (!memberRow && !isPrimary) {
+    // Re-resolved here even though the handler already validated the target:
+    // this is a sandbox-auth security boundary, so the service must not
+    // trust its caller (defense in depth).
+    const resolution = resolveSessionRepositoryTarget({
+      requested: input,
+      scalarRepo: { repoOwner: session.repo_owner, repoName: session.repo_name },
+      memberRows: this.deps.repository.getSessionRepositories(),
+    });
+    if (!resolution.ok) {
       return {
         kind: "error",
-        status: 403,
-        error: `Repository ${input.repoOwner}/${input.repoName} is not part of this session`,
+        status: resolution.reason === "not_member" ? 403 : 400,
+        error: resolution.error,
       };
     }
-    const targetRepo = {
-      repoOwner: memberRow?.repo_owner ?? session.repo_owner,
-      repoName: memberRow?.repo_name ?? session.repo_name,
-    };
+    const { memberRow, isPrimary } = resolution;
+    const targetRepo = { repoOwner: resolution.repoOwner, repoName: resolution.repoName };
 
     this.deps.log.info("Creating PR", {
       user_id: input.promptingUserId,
@@ -158,12 +153,20 @@ export class SessionPullRequestService {
       repo_name: targetRepo.repoName,
     });
 
+    if (!this.deps.claims.claim(targetRepo)) {
+      return {
+        kind: "error",
+        status: 409,
+        error: `A pull request is already being created for ${targetRepo.repoOwner}/${targetRepo.repoName} in this session.`,
+      };
+    }
     try {
       const sessionId = session.session_name || session.id;
       const generatedHeadBranch = generateBranchName(sessionId);
 
-      const initialArtifacts = this.deps.repository.listArtifacts();
-      if (this.findPrArtifactForRepo(initialArtifacts, targetRepo, isPrimary)) {
+      // The claim above serializes in-flight creation; this scan catches PRs
+      // persisted by earlier (completed) requests.
+      if (findPrArtifactForRepo(this.deps.repository.listArtifacts(), targetRepo, isPrimary)) {
         return this.duplicatePrError(targetRepo);
       }
 
@@ -255,11 +258,6 @@ export class SessionPullRequestService {
       // after missed or out-of-order updates.
       this.deps.broadcastSessionBranch(sanitizedHeadBranch, targetRepo);
 
-      const latestArtifacts = this.deps.repository.listArtifacts();
-      if (this.findPrArtifactForRepo(latestArtifacts, targetRepo, isPrimary)) {
-        return this.duplicatePrError(targetRepo);
-      }
-
       // Use user OAuth if available, otherwise fall back to GitHub App token
       // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
       const prAuth = input.promptingAuth ?? appAuth;
@@ -325,31 +323,12 @@ export class SessionPullRequestService {
         status: 500,
         error: error instanceof Error ? error.message : "Failed to create PR",
       };
+    } finally {
+      this.deps.claims.release(targetRepo);
     }
   }
 
-  /**
-   * One PR per repo per session: find an existing PR artifact for the target
-   * repo. Artifact metadata without repo identity predates multi-repo
-   * sessions and belongs to the primary.
-   */
-  private findPrArtifactForRepo(
-    artifacts: ArtifactRow[],
-    targetRepo: { repoOwner: string; repoName: string },
-    isPrimary: boolean
-  ): ArtifactRow | undefined {
-    return artifacts.find((artifact) => {
-      if (artifact.type !== "pr") return false;
-      const artifactRepo = parseArtifactRepo(artifact.metadata);
-      if (!artifactRepo) return isPrimary;
-      return repoIdentityEquals(artifactRepo, targetRepo);
-    });
-  }
-
-  private duplicatePrError(targetRepo: {
-    repoOwner: string;
-    repoName: string;
-  }): CreatePullRequestResult {
+  private duplicatePrError(targetRepo: RepoIdentity): CreatePullRequestResult {
     return {
       kind: "error",
       status: 409,

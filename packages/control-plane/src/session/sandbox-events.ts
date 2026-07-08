@@ -33,6 +33,9 @@ interface SessionSandboxEventProcessorDeps {
   processMessageQueue: () => Promise<void>;
 }
 
+/** How long a pending push waits for its terminal event before rejecting. */
+const PUSH_TIMEOUT_MS = 360_000;
+
 /** Event types that require delivery acknowledgement. */
 const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "execution_complete",
@@ -282,9 +285,9 @@ export class SessionSandboxEventProcessor {
       timeoutId = setTimeout(() => {
         if (this.pendingPushResolvers.has(resolverKey)) {
           this.pendingPushResolvers.delete(resolverKey);
-          reject(new Error("Push operation timed out after 360 seconds"));
+          reject(new Error(`Push operation timed out after ${PUSH_TIMEOUT_MS / 1000} seconds`));
         }
-      }, 360000);
+      }, PUSH_TIMEOUT_MS);
     });
 
     this.deps.log.info("Sending push command", {
@@ -348,18 +351,18 @@ export class SessionSandboxEventProcessor {
 
   /**
    * Match a terminal push event to its pending resolver. Events carrying the
-   * full identity match by key; anything else (legacy single-repo runtimes
-   * echo no repo identity, and their "no repository found" push_error carries
-   * no branchName either) settles the sole pending push — by construction
-   * only one can be in flight when identity is missing.
+   * full identity match strictly by key — a fully identified miss is a stale
+   * or wrong-repo event and must not settle anything. Only events missing
+   * identity (legacy single-repo runtimes echo no repo identity, and their
+   * "no repository found" push_error carries no branchName either) settle
+   * the sole pending push — by construction only one can be in flight when
+   * identity is missing.
    */
   private findPushResolver(event: PushTerminalEvent): [string, PushResolver] | null {
     if (event.repoOwner && event.repoName && event.branchName) {
       const resolverKey = this.pushResolverKey(event.repoOwner, event.repoName, event.branchName);
       const resolver = this.pendingPushResolvers.get(resolverKey);
-      if (resolver) {
-        return [resolverKey, resolver];
-      }
+      return resolver ? [resolverKey, resolver] : null;
     }
     if (this.pendingPushResolvers.size === 1) {
       const [sole] = this.pendingPushResolvers.entries();

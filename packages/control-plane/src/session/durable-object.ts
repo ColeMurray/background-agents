@@ -62,7 +62,8 @@ import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
-import { SessionPullRequestService } from "./pull-request-service";
+import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
+import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
@@ -162,6 +163,7 @@ export class SessionDO extends DurableObject<Env> {
   private _sessionLifecycleHandler: SessionLifecycleHandler | null = null;
   // Pull request handler (lazily initialized)
   private _pullRequestHandler: PullRequestHandler | null = null;
+  private readonly prCreationClaims = new PullRequestCreationClaims();
   // Participants handler (lazily initialized)
   private _participantsHandler: ParticipantsHandler | null = null;
   // Alarm handler (lazily initialized)
@@ -484,6 +486,7 @@ export class SessionDO extends DurableObject<Env> {
         createPullRequest: async (input) => {
           const pullRequestService = new SessionPullRequestService({
             repository: this.repository,
+            claims: this.prCreationClaims,
             sourceControlProvider: this.sourceControlProvider,
             log: this.log,
             generateId: () => generateId(),
@@ -1743,51 +1746,15 @@ export class SessionDO extends DurableObject<Env> {
     return [];
   }
 
-  /**
-   * Per-repo PR URL lookup over the session's PR artifacts. Artifact
-   * metadata without repo identity predates multi-repo sessions and belongs
-   * to the primary.
-   */
+  /** Per-repo PR URL lookup over the session's PR artifacts. */
   private getPrUrlLookup(): (
     repoOwner: string,
     repoName: string,
     isPrimary: boolean
   ) => string | null {
-    const prArtifacts = this.repository
-      .listArtifacts()
-      .filter((artifact) => artifact.type === "pr" && artifact.url);
-    if (prArtifacts.length === 0) {
-      return () => null;
-    }
-
-    const entries = prArtifacts.map((artifact) => {
-      let repo: { repoOwner: string; repoName: string } | null = null;
-      try {
-        const metadata: unknown = artifact.metadata ? JSON.parse(artifact.metadata) : null;
-        if (typeof metadata === "object" && metadata !== null) {
-          const { repoOwner, repoName } = metadata as { repoOwner?: unknown; repoName?: unknown };
-          if (typeof repoOwner === "string" && typeof repoName === "string") {
-            repo = { repoOwner, repoName };
-          }
-        }
-      } catch {
-        // Unparseable metadata — treat as identity-less (primary).
-      }
-      return { url: artifact.url, repo };
-    });
-
-    return (repoOwner, repoName, isPrimary) => {
-      for (const entry of entries) {
-        const matches = entry.repo
-          ? entry.repo.repoOwner.toLowerCase() === repoOwner.toLowerCase() &&
-            entry.repo.repoName.toLowerCase() === repoName.toLowerCase()
-          : isPrimary;
-        if (matches) {
-          return entry.url;
-        }
-      }
-      return null;
-    };
+    const artifacts = this.repository.listArtifacts().filter((artifact) => artifact.url !== null);
+    return (repoOwner, repoName, isPrimary) =>
+      findPrArtifactForRepo(artifacts, { repoOwner, repoName }, isPrimary)?.url ?? null;
   }
 
   private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {

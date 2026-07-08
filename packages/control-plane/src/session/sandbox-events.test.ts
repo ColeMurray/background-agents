@@ -410,6 +410,36 @@ describe("SessionSandboxEventProcessor", () => {
       });
     });
 
+    it("drops a fully identified event that mismatches the sole pending push", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const pushPromise = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/test")
+      );
+
+      // A stale event for a different repo must not settle the pending push
+      // just because it is the only one in flight.
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        branchName: "feature/test",
+        repoOwner: "acme",
+        repoName: "backend",
+        error: "remote rejected",
+        timestamp: 1000,
+      });
+
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/test",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1001,
+      });
+
+      await expect(pushPromise).resolves.toEqual({ success: true });
+    });
+
     it("drops an identity-less terminal event when several pushes are pending", async () => {
       const h = createProcessor();
       connectSandbox(h);

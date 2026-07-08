@@ -1,6 +1,7 @@
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
 import type { SessionRepositoryRow } from "../../repository";
+import { resolveSessionRepositoryTarget } from "../../repository-target";
 import type { ParticipantRow, SessionRow } from "../../types";
 import { z } from "zod";
 
@@ -36,60 +37,6 @@ export interface PullRequestHandler {
   createPr: (request: Request) => Promise<Response>;
 }
 
-/**
- * Resolve and authorize the PR's target repository against the session's
- * member list (sessions predating member rows fall back to the scalar
- * mirror). Returns the member's canonical identity, or an error Response:
- * 400 when the target is ambiguous or half-specified, 403 when it names a
- * repo outside the session — creation is reachable with sandbox auth, so
- * this is a security boundary, not just input validation.
- */
-function resolveTargetRepository(
-  body: CreatePrRequest,
-  scalarRepo: { repoOwner: string; repoName: string },
-  memberRows: SessionRepositoryRow[]
-): { repoOwner: string; repoName: string } | Response {
-  const members =
-    memberRows.length > 0
-      ? memberRows.map((row) => ({ repoOwner: row.repo_owner, repoName: row.repo_name }))
-      : [scalarRepo];
-
-  if ((body.repoOwner == null) !== (body.repoName == null)) {
-    return Response.json(
-      { error: "repoOwner and repoName must be provided together" },
-      { status: 400 }
-    );
-  }
-
-  if (body.repoOwner == null || body.repoName == null) {
-    if (members.length > 1) {
-      const memberList = members.map((m) => `${m.repoOwner}/${m.repoName}`).join(", ");
-      return Response.json(
-        {
-          error: `This session spans multiple repositories — specify repoOwner and repoName (one of: ${memberList})`,
-        },
-        { status: 400 }
-      );
-    }
-    return members[0];
-  }
-
-  const requestedOwner = body.repoOwner.toLowerCase();
-  const requestedName = body.repoName.toLowerCase();
-  const match = members.find(
-    (member) =>
-      member.repoOwner.toLowerCase() === requestedOwner &&
-      member.repoName.toLowerCase() === requestedName
-  );
-  if (!match) {
-    return Response.json(
-      { error: `Repository ${body.repoOwner}/${body.repoName} is not part of this session` },
-      { status: 403 }
-    );
-  }
-  return match;
-}
-
 export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequestHandler {
   return {
     async createPr(request: Request): Promise<Response> {
@@ -117,13 +64,19 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         );
       }
 
-      const target = resolveTargetRepository(
-        body,
-        { repoOwner: session.repo_owner, repoName: session.repo_name },
-        deps.getSessionRepositories()
-      );
-      if (target instanceof Response) {
-        return target;
+      // Membership is a security boundary (this route is reachable with
+      // sandbox auth): naming a repo outside the session is 403, an
+      // ambiguous or half-specified target is 400.
+      const target = resolveSessionRepositoryTarget({
+        requested: { repoOwner: body.repoOwner, repoName: body.repoName },
+        scalarRepo: { repoOwner: session.repo_owner, repoName: session.repo_name },
+        memberRows: deps.getSessionRepositories(),
+      });
+      if (!target.ok) {
+        return Response.json(
+          { error: target.error },
+          { status: target.reason === "not_member" ? 403 : 400 }
+        );
       }
 
       const promptingParticipantResult = await deps.getPromptingParticipantForPR();
