@@ -26,6 +26,7 @@ import type {
 } from "../environment-images/types";
 import { getRepoImagesUnsupportedMessage } from "../repo-images/provider-policy";
 import type { Env } from "../types";
+import { getRepoImageCallbackBearerToken } from "./repo-image-callback-auth";
 import { type RequestContext, type Route, error, json, parsePattern } from "./shared";
 
 const logger = createLogger("router:environment-images");
@@ -70,11 +71,15 @@ async function workflowResultToResponse(
   result: EnvironmentImageWorkflowResult,
   ctx: RequestContext
 ): Promise<Response> {
-  if (result.cleanup) {
+  if (result.type === "completion_accepted") {
+    await scheduleWorkflowTask(result.finalization, ctx);
+  } else if (result.cleanup) {
     await scheduleWorkflowTask(result.cleanup, ctx);
   }
 
   switch (result.type) {
+    case "completion_accepted":
+      return json({ ok: true, snapshotPending: true });
     case "build_ready":
       return json({
         ok: true,
@@ -271,6 +276,7 @@ async function handleBuildComplete(
     const result = await createEnvironmentImageBuildWorkflowFromEnv(env).acceptBuildComplete({
       completion,
       authorizationHeader: request.headers.get("Authorization"),
+      callbackToken: getRepoImageCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
     return workflowResultToResponse(result, ctx);
@@ -302,6 +308,7 @@ async function handleBuildFailed(
     const result = await createEnvironmentImageBuildWorkflowFromEnv(env).acceptBuildFailed({
       failure,
       authorizationHeader: request.headers.get("Authorization"),
+      callbackToken: getRepoImageCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
     return workflowResultToResponse(result, ctx);

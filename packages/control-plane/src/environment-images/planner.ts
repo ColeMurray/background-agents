@@ -8,19 +8,36 @@ import {
   parseSecretsCapMode,
 } from "../db/secrets-validation";
 import { createLogger, type CorrelationContext } from "../logger";
-import { resolveSandboxSettings } from "../session/integration-settings-resolution";
-import type { Env } from "../types";
+// Environment images share the repo-image callback-token scheme and per-provider
+// policy wholesale (design §7.3 "Provider coverage") — one token scheme, one
+// policy table, both renamed together in the build-subsystem unification.
 import {
-  EnvironmentImageEnvironmentNotFoundError,
-  EnvironmentImagePlanningError,
-  EnvironmentImageProviderUnconfiguredError,
-} from "./errors";
+  generateRepoImageCallbackToken,
+  hashRepoImageCallbackToken,
+  REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
+} from "../repo-images/auth";
+import {
+  getRepoImageCallbackMode,
+  getRepoImageCloneAuthMode,
+} from "../repo-images/provider-policy";
+import { resolveSandboxSettings } from "../session/integration-settings-resolution";
+import { createSourceControlProviderFromEnv } from "../source-control";
+import type { Env } from "../types";
+import { EnvironmentImageEnvironmentNotFoundError, EnvironmentImagePlanningError } from "./errors";
 import { computeMembersFingerprint } from "./fingerprint";
 import type { EnvironmentImageProvider } from "./model";
-import type { EnvironmentImageBuildMember, PlannedEnvironmentImageBuild } from "./types";
+import type {
+  EnvironmentImageBuildMember,
+  EnvironmentImageCloneAuth,
+  PlannedEnvironmentImageBuild,
+} from "./types";
 
 const logger = createLogger("environment-images:planner");
 const MS_PER_SECOND = 1000;
+
+type PlannedCallbackAuth =
+  | { kind: "none" }
+  | { kind: "bearer_token"; token: string; tokenHash: string; expiresAt: number };
 
 /**
  * Resolves a trigger request into a concrete provider build plan.
@@ -65,11 +82,14 @@ export class EnvironmentImageBuildPlanner {
     }));
     const primary = repositories[0];
 
-    const [membersFingerprint, sandboxSettings, userEnvVars] = await Promise.all([
-      computeMembersFingerprint(repositories),
-      resolveSandboxSettings(this.env.DB, primary.repoOwner, primary.repoName),
-      this.loadUserEnvVars(params.environmentId),
-    ]);
+    const [membersFingerprint, sandboxSettings, userEnvVars, callbackAuth, cloneAuth] =
+      await Promise.all([
+        computeMembersFingerprint(repositories),
+        resolveSandboxSettings(this.env.DB, primary.repoOwner, primary.repoName),
+        this.loadUserEnvVars(params.environmentId),
+        this.createCallbackAuth(),
+        this.resolveCloneAuth(params.environmentId),
+      ]);
 
     const basePlan = {
       buildId: params.buildId,
@@ -85,20 +105,83 @@ export class EnvironmentImageBuildPlanner {
       },
     };
 
-    if (this.provider !== "modal") {
-      throw new EnvironmentImageProviderUnconfiguredError(
-        `Environment image builds are not supported for provider: ${this.provider}`
-      );
+    switch (this.provider) {
+      case "modal":
+        return {
+          plan: { ...basePlan, provider: "modal", callbackMode: "provider_image" },
+          callbackAuth: { type: "none" },
+        };
+      case "vercel": {
+        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+        return {
+          plan: {
+            ...basePlan,
+            provider: "vercel",
+            callbackMode: "provider_session",
+            callbackToken: bearerAuth.token,
+            cloneAuth,
+          },
+          callbackAuth: {
+            type: "bearer_token",
+            tokenHash: bearerAuth.tokenHash,
+            expiresAt: bearerAuth.expiresAt,
+          },
+        };
+      }
+      case "opencomputer": {
+        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+        return {
+          plan: {
+            ...basePlan,
+            provider: "opencomputer",
+            callbackMode: "provider_session",
+            callbackToken: bearerAuth.token,
+            cloneAuth,
+          },
+          callbackAuth: {
+            type: "bearer_token",
+            tokenHash: bearerAuth.tokenHash,
+            expiresAt: bearerAuth.expiresAt,
+          },
+        };
+      }
+      default: {
+        const exhaustive: never = this.provider;
+        throw new Error(`Unsupported environment image provider: ${String(exhaustive)}`);
+      }
+    }
+  }
+
+  private async createCallbackAuth(): Promise<PlannedCallbackAuth> {
+    if (getRepoImageCallbackMode(this.provider) !== "provider_session") {
+      return { kind: "none" };
     }
 
+    const token = generateRepoImageCallbackToken();
     return {
-      plan: {
-        ...basePlan,
-        provider: "modal",
-        callbackMode: "provider_image",
-      },
-      callbackAuth: { type: "none" },
+      kind: "bearer_token",
+      token,
+      tokenHash: await hashRepoImageCallbackToken(token, this.env),
+      expiresAt: Date.now() + REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
     };
+  }
+
+  private async resolveCloneAuth(environmentId: string): Promise<EnvironmentImageCloneAuth> {
+    if (getRepoImageCloneAuthMode(this.provider) !== "credential_helper") {
+      return { type: "unavailable" };
+    }
+
+    try {
+      const provider = createSourceControlProviderFromEnv(this.env);
+      const auth = await provider.generateCredentialHelperAuth();
+      return { type: "credential_helper", token: auth.password };
+    } catch (e) {
+      logger.warn("environment_image.clone_token_failed", {
+        error: errorMessage(e),
+        environment_id: environmentId,
+      });
+      return { type: "unavailable" };
+    }
   }
 
   private async loadUserEnvVars(
@@ -161,4 +244,14 @@ export class EnvironmentImageBuildPlanner {
 
 function errorMessage(errorValue: unknown): string {
   return errorValue instanceof Error ? errorValue.message : String(errorValue);
+}
+
+function requireBearerCallbackAuth(
+  provider: EnvironmentImageProvider,
+  callbackAuth: PlannedCallbackAuth
+): Extract<PlannedCallbackAuth, { kind: "bearer_token" }> {
+  if (callbackAuth.kind !== "bearer_token") {
+    throw new Error(`${provider} environment image builds require callback token auth`);
+  }
+  return callbackAuth;
 }

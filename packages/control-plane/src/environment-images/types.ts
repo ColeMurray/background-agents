@@ -27,6 +27,7 @@ export type TriggerEnvironmentImageBuildResult =
   | { type: "up_to_date" };
 
 export type EnvironmentImageWorkflowResult =
+  | { type: "completion_accepted"; finalization: Promise<void> }
   | {
       type: "build_ready";
       replacedImages: SupersededEnvironmentImage[];
@@ -53,12 +54,42 @@ export interface ModalEnvironmentImageBuildPlan extends BaseEnvironmentImageBuil
   callbackMode: "provider_image";
 }
 
-export type EnvironmentImageBuildPlan = ModalEnvironmentImageBuildPlan;
+/** Same clone-auth shape as repo-image builds (repo-images/types.ts). */
+export type EnvironmentImageCloneAuth =
+  | { type: "credential_helper"; token: string }
+  | { type: "unavailable" };
 
-export type PlannedEnvironmentImageBuild = {
-  plan: ModalEnvironmentImageBuildPlan;
-  callbackAuth: { type: "none" };
-};
+/** Vercel builds inside a sandbox; the control plane snapshots it after callback success. */
+export interface VercelEnvironmentImageBuildPlan extends BaseEnvironmentImageBuildPlan {
+  provider: "vercel";
+  callbackMode: "provider_session";
+  callbackToken: string;
+  cloneAuth: EnvironmentImageCloneAuth;
+}
+
+/** OpenComputer builds inside a sandbox; the control plane checkpoints it after callback success. */
+export interface OpenComputerEnvironmentImageBuildPlan extends BaseEnvironmentImageBuildPlan {
+  provider: "opencomputer";
+  callbackMode: "provider_session";
+  callbackToken: string;
+  cloneAuth: EnvironmentImageCloneAuth;
+}
+
+export type EnvironmentImageBuildPlan =
+  | ModalEnvironmentImageBuildPlan
+  | VercelEnvironmentImageBuildPlan
+  | OpenComputerEnvironmentImageBuildPlan;
+
+export type PlannedEnvironmentImageBuild =
+  | { plan: ModalEnvironmentImageBuildPlan; callbackAuth: { type: "none" } }
+  | {
+      plan: VercelEnvironmentImageBuildPlan;
+      callbackAuth: { type: "bearer_token"; tokenHash: string; expiresAt: number };
+    }
+  | {
+      plan: OpenComputerEnvironmentImageBuildPlan;
+      callbackAuth: { type: "bearer_token"; tokenHash: string; expiresAt: number };
+    };
 
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */
 export interface EnvironmentImageBuildStartCallbacks {
@@ -91,15 +122,38 @@ export interface DeleteEnvironmentImageInput {
   correlation?: CorrelationContext;
 }
 
+/** Finalization input for provider-session builds (the deferred snapshot/checkpoint). */
+export interface FinalizeEnvironmentImageBuildInput {
+  buildId: string;
+  providerSessionId: string;
+  correlation: CorrelationContext;
+}
+
+export interface FailedEnvironmentImageBuildInput {
+  buildId: string;
+  providerSessionId: string;
+  errorMessage: string;
+  correlation: CorrelationContext;
+}
+
 /**
  * Provider-facing operations for environment image builds. The workflow owns
  * state transitions; adapters own translating lifecycle steps into provider
- * API calls (start build, delete artifact).
+ * API calls (start build, snapshot/checkpoint, teardown, artifact deletion).
+ * The finalize/cleanup hooks apply to provider_session builds only — Modal's
+ * callback already carries the artifact id.
  */
 export type EnvironmentImageBuildAdapter<Plan extends EnvironmentImageBuildPlan> = {
   startBuild(plan: Plan, callbacks: EnvironmentImageBuildStartCallbacks): Promise<void>;
   deleteImage(input: DeleteEnvironmentImageInput): Promise<void>;
+  finalizeSuccessfulBuild?(
+    input: FinalizeEnvironmentImageBuildInput
+  ): Promise<EnvironmentImageProviderImageRef>;
+  cleanupFailedBuild?(input: FailedEnvironmentImageBuildInput): Promise<void>;
+  cleanupCompletedBuild?(input: FinalizeEnvironmentImageBuildInput): Promise<void>;
 };
 
 export type AnyEnvironmentImageBuildAdapter =
-  EnvironmentImageBuildAdapter<ModalEnvironmentImageBuildPlan>;
+  | EnvironmentImageBuildAdapter<ModalEnvironmentImageBuildPlan>
+  | EnvironmentImageBuildAdapter<VercelEnvironmentImageBuildPlan>
+  | EnvironmentImageBuildAdapter<OpenComputerEnvironmentImageBuildPlan>;

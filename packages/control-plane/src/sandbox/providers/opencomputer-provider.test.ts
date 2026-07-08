@@ -624,6 +624,56 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
+  it("starts environment image builds with a repositories-bearing SESSION_CONFIG", async () => {
+    const client = createMockClient();
+    const onProviderSessionCreated = vi.fn(async () => undefined);
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.triggerEnvironmentImageBuild({
+      buildId: "envimg-1",
+      environmentId: "env_flagship",
+      repositories: [
+        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+      ],
+      callbackUrl: "https://control.example/environment-images/build-complete",
+      callbackToken: "callback-token",
+      cloneToken: "clone-token",
+      onProviderSessionCreated,
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    // Primary member mirrors into the scalar identity; the list drives the
+    // list-native runtime.
+    expect(createCall.env).toMatchObject({
+      IMAGE_BUILD_MODE: "true",
+      REPO_OWNER: "acme",
+      REPO_NAME: "web",
+      SANDBOX_ID: "build-env-env_flagship",
+      OI_REPO_IMAGE_BUILD_ID: "envimg-1",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/environment-images/build-complete",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+    });
+    expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toEqual({
+      branch: "main",
+      repositories: [
+        { repo_owner: "acme", repo_name: "web", branch: "main" },
+        { repo_owner: "acme", repo_name: "api", branch: "develop" },
+      ],
+    });
+    expect(createCall.labels).toMatchObject({
+      openinspect_kind: "environment-image-build",
+      openinspect_environment: "env_flagship",
+    });
+    expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1", {
+      OI_REPO_IMAGE_PROVIDER_SESSION_ID: "oc-sandbox-1",
+    });
+  });
+
   it("cleans up a repo image build sandbox when runtime startup fails", async () => {
     const client = createMockClient({
       startRuntime: vi.fn(async () => {

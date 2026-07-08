@@ -98,6 +98,26 @@ export interface TriggerVercelRepoImageBuildResult {
   status: string;
 }
 
+export interface TriggerVercelEnvironmentImageBuildConfig {
+  buildId: string;
+  environmentId: string;
+  /** Members in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  callbackUrl: string;
+  callbackToken: string;
+  userEnvVars?: Record<string, string>;
+  cloneToken?: string;
+  /** Same semantics as the repo-image build timeout above. */
+  buildTimeoutSeconds?: number;
+  onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
+  correlation?: CorrelationContext;
+}
+
+export interface TriggerVercelEnvironmentImageBuildResult {
+  buildId: string;
+  status: string;
+}
+
 export class VercelSandboxProvider implements SandboxProvider {
   readonly name = "vercel";
   private baseSnapshotIdPromise?: Promise<string>;
@@ -267,7 +287,14 @@ export class VercelSandboxProvider implements SandboxProvider {
       }
 
       const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
-      const env = await this.buildBuildEnvVars(config);
+      const env = this.buildBuildEnvVars({
+        userEnvVars: config.userEnvVars,
+        cloneToken: config.cloneToken,
+        sandboxId: `build-${config.repoOwner}-${config.repoName}`,
+        repoOwner: config.repoOwner,
+        repoName: config.repoName,
+        sessionConfig: { branch: config.defaultBranch },
+      });
       const created = await this.client.createSandbox(
         {
           name: sandboxName,
@@ -310,6 +337,88 @@ export class VercelSandboxProvider implements SandboxProvider {
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to trigger Vercel repo image build", error);
+    }
+  }
+
+  /**
+   * Trigger a Vercel environment-image build (design §7.3). Same lifecycle as
+   * the repo-image build; the SESSION_CONFIG carries the member list so the
+   * list-native runtime clones and sets up every member.
+   */
+  async triggerEnvironmentImageBuild(
+    config: TriggerVercelEnvironmentImageBuildConfig
+  ): Promise<TriggerVercelEnvironmentImageBuildResult> {
+    try {
+      const baseSnapshotId = await this.resolveBaseSnapshotId(config.correlation);
+      if (!baseSnapshotId) {
+        throw new Error(
+          "VERCEL_BASE_SNAPSHOT_ID or VERCEL_BASE_SNAPSHOT_NAME is required to build Vercel environment image snapshots"
+        );
+      }
+
+      const primary = config.repositories[0];
+      if (!primary) {
+        throw new Error("environment build requires at least one repository");
+      }
+
+      const sandboxName = `build-env-${config.environmentId}-${Date.now()}`;
+      const env = this.buildBuildEnvVars({
+        userEnvVars: config.userEnvVars,
+        cloneToken: config.cloneToken,
+        sandboxId: `build-env-${config.environmentId}`,
+        repoOwner: primary.repoOwner,
+        repoName: primary.repoName,
+        sessionConfig: {
+          branch: primary.baseBranch,
+          // SessionRepositoryConfig wire form (sandbox_runtime/types.py).
+          repositories: config.repositories.map((repo) => ({
+            repo_owner: repo.repoOwner,
+            repo_name: repo.repoName,
+            branch: repo.baseBranch,
+          })),
+        },
+      });
+      const created = await this.client.createSandbox(
+        {
+          name: sandboxName,
+          runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
+          timeoutMs: resolveVercelTimeoutMs(
+            config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS
+          ),
+          env,
+          tags: {
+            openinspect_framework: "open-inspect",
+            openinspect_kind: "environment-image-build",
+            openinspect_build_id: config.buildId,
+            openinspect_environment: config.environmentId,
+          },
+          sourceSnapshotId: baseSnapshotId,
+        },
+        config.correlation
+      );
+
+      if (config.onProviderSessionCreated) {
+        await config.onProviderSessionCreated(created.session.id);
+      }
+
+      const command = await this.launchEntrypoint(
+        created.session.id,
+        this.buildRepoImageCallbackEnv(config, created.session.id),
+        config.correlation
+      );
+
+      log.info("vercel.environment_image_build_triggered", {
+        build_id: config.buildId,
+        environment_id: config.environmentId,
+        session_id: created.session.id,
+        command_id: command.commandId,
+        sandbox_name: sandboxName,
+      });
+
+      return { buildId: config.buildId, status: "building" };
+    } catch (error) {
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to trigger Vercel environment image build", error);
     }
   }
 
@@ -378,9 +487,15 @@ export class VercelSandboxProvider implements SandboxProvider {
     return envVars;
   }
 
-  private async buildBuildEnvVars(
-    config: TriggerVercelRepoImageBuildConfig
-  ): Promise<Record<string, string>> {
+  /** Build-sandbox env for both repo- and environment-image builds; the caller owns identity + SESSION_CONFIG shape. */
+  private buildBuildEnvVars(config: {
+    userEnvVars?: Record<string, string>;
+    cloneToken?: string;
+    sandboxId: string;
+    repoOwner: string;
+    repoName: string;
+    sessionConfig: Record<string, unknown>;
+  }): Record<string, string> {
     const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
     for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
       delete envVars[key];
@@ -393,11 +508,11 @@ export class VercelSandboxProvider implements SandboxProvider {
       PYTHONPATH: "/app",
       PYTHONUNBUFFERED: "1",
       NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
-      SANDBOX_ID: `build-${config.repoOwner}-${config.repoName}`,
+      SANDBOX_ID: config.sandboxId,
       REPO_OWNER: config.repoOwner,
       REPO_NAME: config.repoName,
       IMAGE_BUILD_MODE: "true",
-      SESSION_CONFIG: JSON.stringify({ branch: config.defaultBranch }),
+      SESSION_CONFIG: JSON.stringify(config.sessionConfig),
     });
 
     this.injectScmEnvVars(envVars, config.cloneToken);
@@ -569,7 +684,7 @@ export class VercelSandboxProvider implements SandboxProvider {
   }
 
   private buildRepoImageCallbackEnv(
-    config: TriggerVercelRepoImageBuildConfig,
+    config: { buildId: string; callbackUrl: string; callbackToken: string },
     sessionId: string
   ): Record<string, string> {
     return {

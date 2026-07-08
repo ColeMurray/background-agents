@@ -596,6 +596,65 @@ describe("VercelSandboxProvider", () => {
     expect(result).toEqual({ buildId: "build-123", status: "building" });
   });
 
+  it("starts environment image builds with a repositories-bearing SESSION_CONFIG", async () => {
+    const client = createMockClient();
+    const onProviderSessionCreated = vi.fn(async () => undefined);
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    const result = await provider.triggerEnvironmentImageBuild({
+      buildId: "envimg-1",
+      environmentId: "env_flagship",
+      repositories: [
+        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+      ],
+      callbackUrl: "https://control-plane.test/environment-images/build-complete",
+      callbackToken: "callback-token",
+      cloneToken: "clone-token",
+      onProviderSessionCreated,
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    // Primary member mirrors into the scalar identity; the list drives the
+    // list-native runtime.
+    expect(createCall.env).toEqual(
+      expect.objectContaining({
+        IMAGE_BUILD_MODE: "true",
+        REPO_OWNER: "acme",
+        REPO_NAME: "web",
+        SANDBOX_ID: "build-env-env_flagship",
+        VCS_CLONE_TOKEN: "clone-token",
+      })
+    );
+    expect(JSON.parse(createCall.env?.SESSION_CONFIG as string)).toEqual({
+      branch: "main",
+      repositories: [
+        { repo_owner: "acme", repo_name: "web", branch: "main" },
+        { repo_owner: "acme", repo_name: "api", branch: "develop" },
+      ],
+    });
+    expect(createCall.tags).toEqual(
+      expect.objectContaining({
+        openinspect_kind: "environment-image-build",
+        openinspect_environment: "env_flagship",
+      })
+    );
+    expect(onProviderSessionCreated).toHaveBeenCalledWith("vercel-session-1");
+    expect(vi.mocked(client.startCommand)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: {
+          OI_REPO_IMAGE_PROVIDER_SESSION_ID: "vercel-session-1",
+          OI_REPO_IMAGE_BUILD_ID: "envimg-1",
+          OI_REPO_IMAGE_CALLBACK_URL:
+            "https://control-plane.test/environment-images/build-complete",
+          OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+        },
+      }),
+      undefined
+    );
+    expect(result).toEqual({ buildId: "envimg-1", status: "building" });
+  });
+
   it("honors an explicit build timeout below the Vercel limit for repo image builds", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);

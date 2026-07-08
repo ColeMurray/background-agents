@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "@open-inspect/shared";
 import type {
   EnvironmentImageBuildStatus,
   EnvironmentImageCallbackBuild,
@@ -8,6 +9,18 @@ import type {
 } from "../environment-images/model";
 
 const MS_PER_SECOND = 1000;
+
+/** Row slice read by the callback-token auth checks. */
+interface CallbackTokenRow {
+  id: string;
+  environment_id: string;
+  provider: EnvironmentImageProvider;
+  provider_session_id: string | null;
+  status: EnvironmentImageBuildStatus;
+  callback_token_hash: string | null;
+  callback_token_expires_at: number | null;
+  callback_token_used_at: number | null;
+}
 
 export interface EnvironmentImageBuild {
   id: string;
@@ -87,6 +100,122 @@ export class EnvironmentImageStore {
         Date.now()
       )
       .run();
+  }
+
+  async bindProviderSession(
+    buildId: string,
+    provider: EnvironmentImageProvider,
+    providerSessionId: string
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE environment_images SET provider_session_id = ? WHERE id = ? AND provider = ? AND status = 'building'"
+      )
+      .bind(providerSessionId, buildId, provider)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async consumeCallbackToken(params: {
+    buildId: string;
+    provider: EnvironmentImageProvider;
+    tokenHash: string;
+    providerSessionId: string;
+    now: number;
+  }): Promise<EnvironmentImageCallbackBuild | null> {
+    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
+    if (!this.callbackTokenRowIsUsable(build, params)) return null;
+
+    const result = await this.db
+      .prepare(
+        `UPDATE environment_images SET callback_token_used_at = ?
+         WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
+           AND callback_token_hash = ?
+           AND callback_token_expires_at >= ?
+           AND callback_token_used_at IS NULL`
+      )
+      .bind(
+        params.now,
+        params.buildId,
+        params.provider,
+        params.providerSessionId,
+        params.tokenHash,
+        params.now
+      )
+      .run();
+
+    if ((result.meta?.changes ?? 0) === 0) return null;
+
+    return {
+      id: build.id,
+      environmentId: build.environment_id,
+      provider: build.provider,
+      providerSessionId: build.provider_session_id,
+      status: build.status,
+    };
+  }
+
+  async markBuildFailedWithCallbackToken(params: {
+    buildId: string;
+    provider: EnvironmentImageProvider;
+    tokenHash: string;
+    providerSessionId: string;
+    error: string;
+    now: number;
+  }): Promise<boolean> {
+    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
+    if (!this.callbackTokenRowIsUsable(build, params)) return false;
+
+    const result = await this.db
+      .prepare(
+        `UPDATE environment_images
+         SET status = 'failed', error_message = ?, callback_token_used_at = ?
+         WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
+           AND callback_token_hash = ?
+           AND callback_token_expires_at >= ?
+           AND callback_token_used_at IS NULL`
+      )
+      .bind(
+        params.error,
+        params.now,
+        params.buildId,
+        params.provider,
+        params.providerSessionId,
+        params.tokenHash,
+        params.now
+      )
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  private async readCallbackTokenRow(
+    buildId: string,
+    provider: EnvironmentImageProvider
+  ): Promise<CallbackTokenRow | null> {
+    return this.db
+      .prepare(
+        `SELECT id, environment_id, provider, provider_session_id, status,
+                callback_token_hash, callback_token_expires_at, callback_token_used_at
+         FROM environment_images WHERE id = ? AND provider = ?`
+      )
+      .bind(buildId, provider)
+      .first<CallbackTokenRow>();
+  }
+
+  /** Timing-safe, single-use, unexpired token bound to the build's provider session. */
+  private callbackTokenRowIsUsable(
+    build: CallbackTokenRow | null,
+    params: { tokenHash: string; providerSessionId: string; now: number }
+  ): build is CallbackTokenRow {
+    if (!build || build.status !== "building") return false;
+    if (!build.callback_token_hash || !build.callback_token_expires_at) return false;
+    if (build.callback_token_used_at !== null) return false;
+    if (build.callback_token_expires_at < params.now) return false;
+    if (!timingSafeEqual(build.callback_token_hash, params.tokenHash)) return false;
+    if (build.provider_session_id !== params.providerSessionId) return false;
+    return true;
   }
 
   /** The per-environment concurrency guard: at most one in-flight build (design §7.3). */

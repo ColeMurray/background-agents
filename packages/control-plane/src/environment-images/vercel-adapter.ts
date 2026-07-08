@@ -1,0 +1,107 @@
+import { createLogger } from "../logger";
+import type { VercelSandboxProvider } from "../sandbox/providers/vercel/provider";
+import type { EnvironmentImageProviderImageRef } from "./model";
+import type {
+  DeleteEnvironmentImageInput,
+  EnvironmentImageBuildAdapter,
+  EnvironmentImageBuildStartCallbacks,
+  FailedEnvironmentImageBuildInput,
+  FinalizeEnvironmentImageBuildInput,
+  VercelEnvironmentImageBuildPlan,
+} from "./types";
+
+const logger = createLogger("environment-images:vercel-adapter");
+const MS_PER_SECOND = 1000;
+
+/**
+ * Vercel adapter for provider-session environment image builds.
+ *
+ * Builds run in a temporary Vercel sandbox. On success, the adapter turns
+ * that sandbox into the durable environment image artifact; cleanup hooks
+ * handle teardown.
+ */
+export class VercelEnvironmentImageBuildAdapter implements EnvironmentImageBuildAdapter<VercelEnvironmentImageBuildPlan> {
+  constructor(private readonly provider: VercelSandboxProvider) {}
+
+  async startBuild(
+    plan: VercelEnvironmentImageBuildPlan,
+    callbacks: EnvironmentImageBuildStartCallbacks
+  ): Promise<void> {
+    await this.provider.triggerEnvironmentImageBuild({
+      environmentId: plan.environmentId,
+      repositories: plan.repositories,
+      buildId: plan.buildId,
+      callbackUrl: plan.callbackUrl,
+      callbackToken: plan.callbackToken,
+      userEnvVars: plan.userEnvVars,
+      cloneToken: plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.token : undefined,
+      buildTimeoutSeconds: Math.ceil(plan.buildTimeoutMs / MS_PER_SECOND),
+      onProviderSessionCreated: callbacks.bindProviderSession,
+      correlation: plan.correlation,
+    });
+  }
+
+  async finalizeSuccessfulBuild(
+    input: FinalizeEnvironmentImageBuildInput
+  ): Promise<EnvironmentImageProviderImageRef> {
+    try {
+      const snapshot = await this.provider.takeSnapshot({
+        providerObjectId: input.providerSessionId,
+        sessionId: input.buildId,
+        reason: "environment_image_build",
+        correlation: {
+          ...input.correlation,
+          sandbox_id: input.providerSessionId,
+        },
+      });
+
+      if (!snapshot.success || !snapshot.imageId) {
+        throw new Error(snapshot.error || "Vercel snapshot did not return an image id");
+      }
+
+      return {
+        providerImageId: snapshot.imageId,
+        providerSessionId: input.providerSessionId,
+      };
+    } finally {
+      await this.stopBuildSandbox(input);
+    }
+  }
+
+  async cleanupFailedBuild(input: FailedEnvironmentImageBuildInput): Promise<void> {
+    await this.stopBuildSandbox(input);
+  }
+
+  async deleteImage(input: DeleteEnvironmentImageInput): Promise<void> {
+    await this.provider.deleteProviderImage(input.image.providerImageId);
+  }
+
+  private async stopBuildSandbox(input: {
+    buildId: string;
+    providerSessionId: string;
+    correlation: FinalizeEnvironmentImageBuildInput["correlation"];
+  }): Promise<void> {
+    try {
+      const stopResult = await this.provider.stopSandbox({
+        providerObjectId: input.providerSessionId,
+        sessionId: input.buildId,
+        reason: "environment_image_build_complete",
+        correlation: {
+          ...input.correlation,
+          sandbox_id: input.providerSessionId,
+        },
+      });
+      if (!stopResult.success) {
+        throw new Error(stopResult.error || "Failed to stop Vercel build sandbox");
+      }
+    } catch (error) {
+      logger.warn("environment_image.vercel_build_stop_failed", {
+        build_id: input.buildId,
+        provider_session_id: input.providerSessionId,
+        error: error instanceof Error ? error.message : String(error),
+        request_id: input.correlation.request_id,
+        trace_id: input.correlation.trace_id,
+      });
+    }
+  }
+}
