@@ -19,6 +19,7 @@ export async function initSession(overrides?: {
     repoId: number;
     baseBranch: string;
   }>;
+  environmentId?: string | null;
   title?: string;
   model?: string;
   reasoningEffort?: string;

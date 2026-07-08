@@ -3,16 +3,23 @@ import type { SessionRepositoryEntry } from "./repository-target";
 
 export interface LaunchUnitSecretSourcesInput {
   /**
-   * The launch unit's environment id, or null for repo-launched sessions. PR-9
-   * passes `session.environment_id`; until migration 0033 adds the column this
-   * is always null and every session is repo-launched.
+   * The launch unit's environment id (`session.environment_id`), or null for
+   * repo-launched/ad-hoc sessions. When set, secrets come from global +
+   * environment only — the session's member repos never contribute (launch-unit
+   * scoping, §6.4/§7.4).
    */
-  environmentId: number | null;
+  environmentId: string | null;
   globalSecrets: Record<string, string>;
   /** Session member repositories in position order (index 0 = primary). */
   members: SessionRepositoryEntry[];
   /** Decrypt a member's secrets, or {} when it has no resolvable repo id. */
   loadMemberSecrets: (member: SessionRepositoryEntry) => Promise<Record<string, string>>;
+  /**
+   * Decrypt a launch environment's secrets. Called only for environment-launched
+   * sessions (when environmentId is set), so repo-launched sessions never touch
+   * the environment store.
+   */
+  loadEnvironmentSecrets: (environmentId: string) => Promise<Record<string, string>>;
 }
 
 /**
@@ -24,9 +31,7 @@ export interface LaunchUnitSecretSourcesInput {
  * it wins collisions. A single-repo session degenerates to today's global+repo.
  *
  * This owns the launch-unit sourcing policy so the DO only loads sources, merges
- * (mergeSecretSources), and audits the cap. The environment source is filled in
- * by PR-9 with the environment secrets store; until then environmentId is always
- * null and this is always the repo path.
+ * (mergeSecretSources), and audits the cap.
  */
 export async function buildLaunchUnitSecretSources(
   input: LaunchUnitSecretSourcesInput
@@ -34,7 +39,10 @@ export async function buildLaunchUnitSecretSources(
   const sources: SecretSource[] = [{ label: "global", secrets: input.globalSecrets }];
 
   if (input.environmentId !== null) {
-    // PR-9: sources.push({ label: "environment", secrets: <environment secrets> })
+    const environmentSecrets = await input.loadEnvironmentSecrets(input.environmentId);
+    if (Object.keys(environmentSecrets).length > 0) {
+      sources.push({ label: "environment", secrets: environmentSecrets });
+    }
     return sources;
   }
 

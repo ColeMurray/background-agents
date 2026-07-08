@@ -144,6 +144,12 @@ export interface Session {
    * session list index (SessionEntry.repositories).
    */
   repositories?: SessionListRepository[];
+  /**
+   * The environment this session was launched from (provenance), or null.
+   * Populated by the session list index (SessionEntry.environmentId); PR-12
+   * renders it.
+   */
+  environmentId?: string | null;
 }
 
 // Message in a session
@@ -440,6 +446,14 @@ export interface SessionState {
    * consumers default to [] / synthesize from repoOwner/repoName.
    */
   repositories?: SessionRepositoryState[];
+  /**
+   * The environment this session was launched from (provenance), or null for
+   * repo-launched/ad-hoc sessions. `environmentName` is resolved live and is
+   * null when the environment has since been deleted (design §7.6) — the UI
+   * renders "environment deleted" in that case.
+   */
+  environmentId?: string | null;
+  environmentName?: string | null;
 }
 
 // Participant presence info
@@ -623,6 +637,10 @@ const sessionStateSchema = z.object({
    * session; synthesize from repoOwner/repoName when rendering).
    */
   repositories: z.array(sessionRepositoryStateSchema).optional(),
+  // Environment provenance (design §7.6). environmentName resolves live —
+  // null when the environment was deleted after launch.
+  environmentId: z.string().nullable().optional(),
+  environmentName: z.string().nullable().optional(),
 });
 
 const participantPresenceSchema = z.object({
@@ -890,20 +908,32 @@ function hasRepositoryForBranch(data: CreateSessionRepositoryFields): boolean {
   return hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim();
 }
 
-function hasExclusiveRepositoryTarget(
-  data: CreateSessionRepositoryFields & { repositories?: unknown[] | null }
-): boolean {
-  // Presence-based, not length-based: any provided array selects the
-  // repository-list mode (sessionRepositoriesInputSchema separately rejects
-  // empty lists, so [] can never smuggle scalar fields through).
-  if (!data.repositories) {
-    return true;
-  }
+function hasScalarRepositoryTarget(data: CreateSessionRepositoryFields): boolean {
   return (
-    !hasRepositoryIdentifier(data.repoOwner) &&
-    !hasRepositoryIdentifier(data.repoName) &&
-    !data.branch?.trim()
+    hasRepositoryIdentifier(data.repoOwner) ||
+    hasRepositoryIdentifier(data.repoName) ||
+    Boolean(data.branch?.trim())
   );
+}
+
+function hasExclusiveSessionTarget(
+  data: CreateSessionRepositoryFields & {
+    repositories?: unknown[] | null;
+    environmentId?: string | null;
+  }
+): boolean {
+  // At most one target mode may be selected: a named environment
+  // (environmentId), an ad-hoc repository list (repositories), or the scalar
+  // repoOwner/repoName/branch form. Presence-based, not length-based: any
+  // provided array selects the list mode (sessionRepositoriesInputSchema
+  // separately rejects empty lists, so [] can never smuggle another mode
+  // through).
+  const activeModes = [
+    Boolean(data.repositories),
+    hasRepositoryIdentifier(data.environmentId),
+    hasScalarRepositoryTarget(data),
+  ].filter(Boolean).length;
+  return activeModes <= 1;
 }
 
 // API response types
@@ -916,9 +946,15 @@ const createSessionRequestBaseSchema = z.object({
   branch: z.string().optional(),
   /**
    * Ordered member list for multi-repo sessions ([0] = primary). Mutually
-   * exclusive with the scalar repoOwner/repoName/branch fields.
+   * exclusive with the scalar repoOwner/repoName/branch fields and environmentId.
    */
   repositories: sessionRepositoriesInputSchema.optional(),
+  /**
+   * Launch from a named environment: its snapshotted repositories become the
+   * session's members and sessions.environment_id records provenance (design
+   * §5.5/§7.6). Mutually exclusive with repositories and the scalar fields.
+   */
+  environmentId: z.string().trim().min(1).nullish(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema
@@ -930,8 +966,8 @@ export const createSessionRequestSchema = createSessionRequestBaseSchema
     message: "branch requires repoOwner and repoName",
     path: ["branch"],
   })
-  .refine(hasExclusiveRepositoryTarget, {
-    message: "repositories is mutually exclusive with repoOwner/repoName/branch",
+  .refine(hasExclusiveSessionTarget, {
+    message: "environmentId, repositories, and repoOwner/repoName/branch are mutually exclusive",
     path: ["repositories"],
   });
 
@@ -967,8 +1003,8 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     message: "branch requires repoOwner and repoName",
     path: ["branch"],
   })
-  .refine(hasExclusiveRepositoryTarget, {
-    message: "repositories is mutually exclusive with repoOwner/repoName/branch",
+  .refine(hasExclusiveSessionTarget, {
+    message: "environmentId, repositories, and repoOwner/repoName/branch are mutually exclusive",
     path: ["repositories"],
   });
 

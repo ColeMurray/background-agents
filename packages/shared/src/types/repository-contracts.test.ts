@@ -133,6 +133,42 @@ describe("createSessionRequestSchema repositories", () => {
   });
 });
 
+describe("createSessionRequestSchema environmentId (three-way exclusivity)", () => {
+  it("accepts an environmentId without any repository target", () => {
+    const result = createSessionRequestSchema.safeParse({ environmentId: "env_abc123" });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects environmentId combined with scalar repo fields", () => {
+    const result = createSessionRequestSchema.safeParse({
+      environmentId: "env_abc123",
+      repoOwner: "acme",
+      repoName: "app",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects environmentId combined with a scalar branch", () => {
+    const result = createSessionRequestSchema.safeParse({
+      environmentId: "env_abc123",
+      branch: "main",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects environmentId combined with a repositories list", () => {
+    const result = createSessionRequestSchema.safeParse({
+      environmentId: "env_abc123",
+      repositories: [{ repoOwner: "acme", repoName: "frontend" }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("push event schemas", () => {
   it("accepts legacy events without repo identity", () => {
     const result = sandboxEventSchema.safeParse({

@@ -78,6 +78,8 @@ export interface UpsertSessionData {
   spawnDepth?: number;
   codeServerEnabled?: boolean;
   sandboxSettings?: string | null;
+  /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
+  environmentId?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -293,8 +295,8 @@ export class SessionRepository {
     }
 
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, environment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -310,6 +312,7 @@ export class SessionRepository {
       data.spawnDepth ?? 0,
       data.codeServerEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
+      data.environmentId ?? null,
       data.createdAt,
       data.updatedAt
     );

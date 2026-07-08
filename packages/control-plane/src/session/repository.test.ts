@@ -121,6 +121,7 @@ describe("SessionRepository", () => {
         0,
         0,
         null,
+        null,
         1000,
         2000,
       ]);
