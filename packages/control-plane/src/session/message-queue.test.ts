@@ -11,6 +11,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: null,
     scm_name: "Octo Cat",
+    auth_name: null,
     role: "member",
     scm_access_token_encrypted: null,
     scm_refresh_token_encrypted: null,

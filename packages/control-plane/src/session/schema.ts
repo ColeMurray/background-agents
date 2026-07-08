@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS participants (
   scm_login TEXT,                                   -- SCM username
   scm_email TEXT,                                   -- For git commit attribution
   scm_name TEXT,                                    -- Display name for git commits
+  auth_name TEXT,                                   -- Provider-agnostic display name (e.g. Google/OIDC) for presence
   role TEXT NOT NULL DEFAULT 'member',              -- 'owner', 'member'
   -- Token storage (AES-GCM encrypted)
   scm_access_token_encrypted TEXT,
@@ -416,6 +417,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 31,
     description: "Add session_repositories table for multi-repo sessions",
     run: SESSION_REPOSITORIES_TABLE_SQL,
+  },
+  {
+    id: 32,
+    description: "Add auth_name to participants (provider-agnostic presence display name)",
+    run: `ALTER TABLE participants ADD COLUMN auth_name TEXT`,
   },
 ];
 
