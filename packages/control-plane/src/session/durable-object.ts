@@ -1752,7 +1752,7 @@ export class SessionDO extends DurableObject<Env> {
     if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
     return buildModalSandboxDashboardUrl({
       workspace: this.env.MODAL_WORKSPACE,
-      environment: this.env.MODAL_ENVIRONMENT,
+      modalEnvironment: this.env.MODAL_ENVIRONMENT,
       providerObjectId,
     });
   }

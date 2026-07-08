@@ -1220,6 +1220,68 @@ export const automationRepositoryInputSchema = repositoryInputSchema;
 export type AutomationRepositoryInput = RepositoryInput;
 export const automationRepositoriesInputSchema = repositoriesInputSchema;
 
+// ==================== Environments ====================
+
+/** Maximum characters in an environment's display name. */
+export const MAX_ENVIRONMENT_NAME_LENGTH = 200;
+/** Maximum characters in an environment's description. */
+export const MAX_ENVIRONMENT_DESCRIPTION_LENGTH = 2000;
+
+/**
+ * An environment's repositories share the session list contract: non-empty,
+ * deduplicated by owner/name AND by repoName (checkout paths are
+ * /workspace/{repoName}, so a name collision is rejected), and capped at
+ * MAX_TARGET_REPOSITORIES. An environment is a prebuildable repository set, so
+ * it inherits exactly the session's list rules.
+ */
+export const environmentRepositoriesInputSchema = sessionRepositoriesInputSchema;
+
+export const createEnvironmentInputSchema = z.object({
+  name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH),
+  description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
+  prebuildEnabled: z.boolean().optional(),
+  repositories: environmentRepositoriesInputSchema,
+});
+
+export const updateEnvironmentInputSchema = z.object({
+  name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH).optional(),
+  description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
+  prebuildEnabled: z.boolean().optional(),
+  repositories: environmentRepositoriesInputSchema.optional(),
+});
+
+export type CreateEnvironmentInput = z.input<typeof createEnvironmentInputSchema>;
+export type UpdateEnvironmentInput = z.input<typeof updateEnvironmentInputSchema>;
+
+/**
+ * A resolved environment repository. baseBranch is non-null (the DDL column is
+ * NOT NULL — resolution fills the repo's default branch when the request omits
+ * it); repoId is nullable to tolerate rows written before a repo resolved.
+ */
+export interface EnvironmentRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
+
+/** An environment: a named, prebuildable repository set (design §7.1). */
+export interface Environment {
+  id: string;
+  name: string;
+  description: string | null;
+  prebuildEnabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  /** Ordered repositories; [0] is the primary (sandbox/code-server settings source). */
+  repositories: EnvironmentRepository[];
+}
+
+export interface ListEnvironmentsResponse {
+  environments: Environment[];
+  total: number;
+}
+
 export interface Automation {
   id: string;
   name: string;

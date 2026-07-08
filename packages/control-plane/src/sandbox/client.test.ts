@@ -32,7 +32,7 @@ describe("buildModalSandboxDashboardUrl", () => {
     expect(
       buildModalSandboxDashboardUrl({
         workspace: "acme",
-        environment: "production",
+        modalEnvironment: "production",
         providerObjectId: "sb-123",
       })
     ).toBe(
@@ -44,7 +44,7 @@ describe("buildModalSandboxDashboardUrl", () => {
     expect(
       buildModalSandboxDashboardUrl({
         workspace: "acme team",
-        environment: "prod/main",
+        modalEnvironment: "prod/main",
         providerObjectId: "sb 123/456?x=1",
       })
     ).toBe(

@@ -39,14 +39,16 @@ function getModalBaseUrl(workspace: string, environmentWebSuffix?: string): stri
  */
 export function buildModalSandboxDashboardUrl(params: {
   workspace: string | undefined;
-  environment?: string | undefined;
+  // Modal workspace environment (unrelated to the Environment entity); named
+  // modalEnvironment to keep the term unambiguous (design §7.1).
+  modalEnvironment?: string | undefined;
   providerObjectId: string | null | undefined;
 }): string | null {
   if (!params.workspace || !params.providerObjectId) return null;
   const workspace = encodeURIComponent(params.workspace);
-  const environment = encodeURIComponent(params.environment || DEFAULT_MODAL_ENVIRONMENT);
+  const modalEnvironment = encodeURIComponent(params.modalEnvironment || DEFAULT_MODAL_ENVIRONMENT);
   const providerObjectId = encodeURIComponent(params.providerObjectId);
-  return `https://modal.com/apps/${workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
+  return `https://modal.com/apps/${workspace}/${modalEnvironment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
 }
 
 export interface CreateSandboxRequest {
