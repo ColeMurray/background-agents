@@ -41,6 +41,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       method: "POST",
       body: JSON.stringify({
         userId,
+        // Provider-agnostic display name for presence, so non-GitHub providers
+        // (e.g. Google) show a real name instead of falling back to the raw user id.
+        authName: user.name ?? undefined,
         // GitHub-only SCM credentials + attribution; empty for Google, which
         // keeps participant identity via userId and writes no SCM token.
         ...buildScmCredentials(user, jwt),
