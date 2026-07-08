@@ -18,6 +18,7 @@ import re
 import shutil
 import signal
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
@@ -40,6 +41,17 @@ from .repo_image_callback import RepoImageBuildCallback
 configure_logging()
 
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
+
+# asyncio.StreamReader raises (rather than returns) once a single line exceeds
+# its buffer, which defaults to 64 KiB. Child-process log lines — JSON events
+# carrying command output or diffs — can legitimately run larger, so the log
+# forwarders read with this more generous per-line limit before a line has to
+# be truncated.
+_LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
+
+# Substituted for a single log line too large to forward intact, so the gap is
+# visible instead of silently dropped.
+_TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 
 
 def _port_from_env(env_var: str, default: int) -> int:
@@ -903,21 +915,50 @@ class SandboxSupervisor:
             env={**os.environ, "PASSWORD": password},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         asyncio.create_task(self._forward_code_server_logs())
         self.log.info("code_server.started", port=code_server_port)
 
+    async def _iter_process_lines(
+        self, stream: asyncio.StreamReader, *, error_event: str
+    ) -> AsyncIterator[str]:
+        """Yield decoded stdout lines from a child process, resiliently.
+
+        ``async for line in stream`` reads through ``StreamReader.readline``,
+        which raises (rather than returns) once a single line is larger than the
+        stream buffer and then ends iteration for good, silently dropping every
+        later line; an undecodable byte ends it just as permanently. This keeps
+        going instead — an oversized line becomes a truncation notice and bad
+        bytes are replaced — so forwarding survives for the life of the process.
+        """
+        while True:
+            try:
+                raw = await stream.readline()
+            except ValueError:
+                # Line exceeded the buffer limit. readline() has already dropped
+                # the offending bytes, so flag the gap and keep forwarding.
+                yield _TRUNCATED_LINE_NOTICE
+                continue
+            except Exception as e:
+                # An unexpected reader failure (e.g. a closed transport) is
+                # terminal for this stream — log once and stop.
+                self.log.warn(error_event, exc=e)
+                return
+            if not raw:
+                return  # EOF: the process closed its stdout.
+            yield raw.decode("utf-8", errors="replace").rstrip()
+
     async def _forward_code_server_logs(self) -> None:
         """Forward code-server stdout to supervisor stdout."""
         if not self.code_server_process or not self.code_server_process.stdout:
             return
-
-        try:
-            async for line in self.code_server_process.stdout:
-                self.log.info("code_server.stdout", line=line.decode().rstrip())
-        except Exception as e:
-            self.log.warn("code_server.log_forward_error", exc=e)
+        async for line in self._iter_process_lines(
+            self.code_server_process.stdout,
+            error_event="code_server.log_forward_error",
+        ):
+            self.log.info("code_server.stdout", line=line)
 
     def _resolve_mcp_servers(self) -> list[dict]:
         """Resolve MCP servers from session config."""
@@ -1051,6 +1092,7 @@ class SandboxSupervisor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=os.environ.copy(),
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         asyncio.create_task(self._forward_ttyd_logs())
@@ -1073,6 +1115,7 @@ class SandboxSupervisor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=os.environ.copy(),
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         asyncio.create_task(self._forward_ttyd_proxy_logs())
@@ -1082,23 +1125,21 @@ class SandboxSupervisor:
         """Forward ttyd stdout to supervisor stdout."""
         if not self.ttyd_process or not self.ttyd_process.stdout:
             return
-
-        try:
-            async for line in self.ttyd_process.stdout:
-                self.log.info("ttyd.stdout", line=line.decode().rstrip())
-        except Exception as e:
-            self.log.warn("ttyd.log_forward_error", exc=e)
+        async for line in self._iter_process_lines(
+            self.ttyd_process.stdout,
+            error_event="ttyd.log_forward_error",
+        ):
+            self.log.info("ttyd.stdout", line=line)
 
     async def _forward_ttyd_proxy_logs(self) -> None:
         """Forward ttyd proxy stdout to supervisor stdout."""
         if not self.ttyd_proxy_process or not self.ttyd_proxy_process.stdout:
             return
-
-        try:
-            async for line in self.ttyd_proxy_process.stdout:
-                self.log.info("ttyd_proxy.stdout", line=line.decode().rstrip())
-        except Exception as e:
-            self.log.warn("ttyd_proxy.log_forward_error", exc=e)
+        async for line in self._iter_process_lines(
+            self.ttyd_proxy_process.stdout,
+            error_event="ttyd_proxy.log_forward_error",
+        ):
+            self.log.info("ttyd_proxy.stdout", line=line)
 
     async def _wait_for_port(self, port: int, timeout_seconds: float | None = None) -> bool:
         timeout_seconds = timeout_seconds or self.SIDECAR_TIMEOUT_SECONDS
@@ -1177,6 +1218,7 @@ class SandboxSupervisor:
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         # Start log forwarder
@@ -1191,12 +1233,11 @@ class SandboxSupervisor:
         """Forward OpenCode stdout to supervisor stdout."""
         if not self.opencode_process or not self.opencode_process.stdout:
             return
-
-        try:
-            async for line in self.opencode_process.stdout:
-                print(f"[opencode] {line.decode().rstrip()}")
-        except Exception as e:
-            print(f"[supervisor] Log forwarding error: {e}")
+        async for line in self._iter_process_lines(
+            self.opencode_process.stdout,
+            error_event="opencode.log_forward_error",
+        ):
+            print(f"[opencode] {line}")
 
     async def _wait_for_health(self) -> None:
         """Poll health endpoint until server is ready."""
@@ -1256,6 +1297,7 @@ class SandboxSupervisor:
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         # Start log forwarder for bridge
@@ -1281,13 +1323,12 @@ class SandboxSupervisor:
         """Forward bridge stdout to supervisor stdout."""
         if not self.bridge_process or not self.bridge_process.stdout:
             return
-
-        try:
-            async for line in self.bridge_process.stdout:
-                # Bridge already prefixes its output with [bridge], don't double it
-                print(line.decode().rstrip())
-        except Exception as e:
-            print(f"[supervisor] Bridge log forwarding error: {e}")
+        # Bridge already prefixes its output with [bridge], so forward verbatim.
+        async for line in self._iter_process_lines(
+            self.bridge_process.stdout,
+            error_event="bridge.log_forward_error",
+        ):
+            print(line)
 
     async def monitor_processes(self) -> None:
         """Monitor child processes and restart on crash."""
