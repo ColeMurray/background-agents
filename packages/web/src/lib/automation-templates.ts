@@ -17,15 +17,15 @@ export type TemplateCategory =
   | "data-research";
 
 /**
- * The create-form fields a template pre-fills. Repository fields and
- * `scheduleTz` are statically excluded (repo is always the user's choice; the
+ * The create-form fields a template pre-fills. The repository selection and
+ * `scheduleTz` are statically excluded (repos are always the user's choice; the
  * form's timezone default applies), and `name`/`triggerType`/`instructions` are
  * required so every template is complete by construction — making these
  * invariants compile-time rather than test-only.
  */
 export type AutomationTemplatePrefill = Omit<
   Partial<AutomationFormValues>,
-  "repoOwner" | "repoName" | "baseBranch" | "scheduleTz"
+  "repositories" | "scheduleTz"
 > & {
   name: string;
   triggerType: AutomationTriggerType;

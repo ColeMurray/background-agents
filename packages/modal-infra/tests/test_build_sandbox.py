@@ -285,3 +285,36 @@ async def test_system_vars_override_user_env_vars(monkeypatch):
     env = captured["env"]
     assert env["IMAGE_BUILD_MODE"] == "true"
     assert env["SANDBOX_ID"].startswith("build-acme-my-repo-")
+
+
+@pytest.mark.asyncio
+async def test_session_config_includes_repositories_when_passed(monkeypatch):
+    """Multi-repo builds (environment images) pass the member list through."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    members = [
+        {"repo_owner": "acme", "repo_name": "frontend", "branch": "main"},
+        {"repo_owner": "acme", "repo_name": "backend", "branch": "develop"},
+    ]
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="frontend",
+        repositories=members,
+    )
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert session_config["repositories"] == members
+
+
+@pytest.mark.asyncio
+async def test_session_config_omits_repositories_by_default(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(repo_owner="acme", repo_name="my-repo")
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert "repositories" not in session_config

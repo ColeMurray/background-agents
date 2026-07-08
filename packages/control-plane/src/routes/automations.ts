@@ -23,6 +23,7 @@ import {
   toAutomation,
   toAutomationRun,
   type AutomationRow,
+  type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
@@ -30,6 +31,7 @@ import { resolveProviderIdentity, type SessionIdentityFields } from "../session/
 import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
+import { automationRepositoriesInputSchema } from "@open-inspect/shared";
 import {
   type Route,
   type RequestContext,
@@ -38,9 +40,6 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
-  normalizeOptionalRepositoryContext,
-  RepositoryContextValidationError,
-  type OptionalRepositoryContext,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -66,18 +65,88 @@ function resolveReasoningEffort(
   return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
 }
 
-function parseRepositoryContext(
-  input: { repoOwner?: string | null; repoName?: string | null },
-  partialMessage?: string
-): OptionalRepositoryContext | Response {
-  try {
-    return normalizeOptionalRepositoryContext(input, partialMessage);
-  } catch (e) {
-    if (e instanceof RepositoryContextValidationError) {
-      return error(e.message, 400);
-    }
-    throw e;
+interface NormalizedRepositoryInput {
+  repoOwner: string;
+  repoName: string;
+  baseBranch: string | null;
+}
+
+type RepositorySelectionRequest =
+  | { kind: "unchanged" }
+  | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
+
+/**
+ * Thrown by {@link parseRepositorySelection} when the `repositories` payload is
+ * invalid. Route handlers catch it and answer 400 — the parser stays free of
+ * HTTP concerns (mirrors normalizeOptionalRepositoryPair / RepositoryPairValidationError).
+ */
+class RepositorySelectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepositorySelectionError";
   }
+}
+
+/**
+ * Parse the repository selection from a create/update body. `unchanged` means
+ * the body did not touch the selection (create treats that as empty).
+ *
+ * @throws RepositorySelectionError when the `repositories` payload is invalid.
+ */
+function parseRepositorySelection(body: { repositories?: unknown }): RepositorySelectionRequest {
+  if (body.repositories === undefined) return { kind: "unchanged" };
+  const parsed = automationRepositoriesInputSchema.safeParse(body.repositories);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
+    throw new RepositorySelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
+  }
+  return { kind: "replace", repositories: parsed.data };
+}
+
+/**
+ * Repository-count rules: repo-scoped event triggers need exactly one
+ * repository; fan-out over several is a schedule/manual-only product scope
+ * (event fan-out semantics are undefined, not technically prevented).
+ */
+function validateRepositoryCount(triggerType: AutomationTriggerType, count: number): void {
+  if (count === 0 && (triggerType === "github_event" || triggerType === "linear_event")) {
+    throw new RepositorySelectionError("Repository-scoped triggers require exactly one repository");
+  }
+  if (count > 1 && triggerType !== "schedule") {
+    throw new RepositorySelectionError("Multi-repository selections require a schedule trigger");
+  }
+}
+
+/**
+ * Resolve every requested repository through the SCM provider concurrently.
+ * The first failure IN INPUT ORDER wins. A repo change always takes the body
+ * branch or the freshly resolved default — never a previous row's branch.
+ */
+async function resolveRepositorySelection(
+  env: Env,
+  repositories: NormalizedRepositoryInput[],
+  ctx: RequestContext
+): Promise<AutomationRepositoryInsert[]> {
+  const settled = await Promise.allSettled(
+    repositories.map((repository) =>
+      resolveRepoOrError(env, repository.repoOwner, repository.repoName, ctx, logger)
+    )
+  );
+  const resolved = settled.map((result) => {
+    if (result.status === "rejected") throw result.reason;
+    return result.value;
+  });
+
+  return repositories.map((repository, index) => {
+    const access = resolved[index];
+    return {
+      repo_owner: repository.repoOwner,
+      repo_name: repository.repoName,
+      repo_id: access.repoId,
+      base_branch: repository.baseBranch ?? access.defaultBranch,
+    };
+  });
 }
 
 /**
@@ -138,9 +207,14 @@ async function handleListAutomations(
 
   const store = new AutomationStore(env.DB);
   const result = await store.list({ repoOwner, repoName });
+  const repositoriesByAutomation = await store.getRepositoriesForAutomationIds(
+    result.automations.map((row) => row.id)
+  );
 
   return json({
-    automations: result.automations.map(toAutomation),
+    automations: result.automations.map((row) =>
+      toAutomation(row, repositoriesByAutomation.get(row.id) ?? [])
+    ),
     total: result.total,
   });
 }
@@ -172,8 +246,14 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  const repositoryContext = parseRepositoryContext(body);
-  if (repositoryContext instanceof Response) return repositoryContext;
+  let selection: RepositorySelectionRequest;
+  try {
+    selection = parseRepositorySelection(body);
+  } catch (e) {
+    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    throw e;
+  }
+  const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
 
   // Validate trigger type
   const triggerType: AutomationTriggerType = body.triggerType || "schedule";
@@ -188,11 +268,11 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
-  if (!repositoryContext && (triggerType === "github_event" || triggerType === "linear_event")) {
-    return error("repoOwner and repoName are required for repo-scoped triggers", 400);
-  }
-  if (!repositoryContext && body.baseBranch?.trim()) {
-    return error("baseBranch requires repoOwner and repoName", 400);
+  try {
+    validateRepositoryCount(triggerType, requestedRepositories.length);
+  } catch (e) {
+    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    throw e;
   }
 
   const isSchedule = triggerType === "schedule";
@@ -252,21 +332,7 @@ async function handleCreateAutomation(
     return error("Invalid reasoning effort for selected model", 400);
   }
 
-  let repoOwner: string | null = null;
-  let repoName: string | null = null;
-  let repoId: number | null = null;
-  let baseBranch: string | null = null;
-
-  if (repositoryContext) {
-    repoOwner = repositoryContext.repoOwner;
-    repoName = repositoryContext.repoName;
-
-    const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-    if (resolved instanceof Response) return resolved;
-
-    repoId = resolved.repoId;
-    baseBranch = body.baseBranch || resolved.defaultBranch;
-  }
+  const newRepositories = await resolveRepositorySelection(env, requestedRepositories, ctx);
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -319,10 +385,6 @@ async function handleCreateAutomation(
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
-    repo_owner: repoOwner,
-    repo_name: repoName,
-    base_branch: baseBranch,
-    repo_id: repoId,
     instructions: body.instructions,
     trigger_type: triggerType,
     schedule_cron: body.scheduleCron ?? null,
@@ -342,26 +404,31 @@ async function handleCreateAutomation(
     trigger_auth_data: triggerAuthData,
   };
 
-  // Persist the automation and (for slack_event) its watched-channel index in a
-  // single atomic write, so the canonical trigger_config and the channel index
-  // that drives scheduler candidate selection can never drift apart on a partial
-  // failure. The batch composes the two single-table stores' prepared statements.
+  // Persist the automation, its repository selection, and (for slack_event)
+  // its watched-channel index in a single atomic write, so none of the three
+  // can drift apart on a partial failure. The batch composes the single-table
+  // stores' prepared statements.
+  const createStatements = [
+    store.bindAutomationInsert(row),
+    ...store.bindRepositoryInserts(id, newRepositories, now),
+  ];
   if (triggerType === "slack_event") {
     const slackStore = new SlackChannelStore(env.DB);
-    await env.DB.batch([
-      store.bindAutomationInsert(row),
-      ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig)),
-    ]);
-  } else {
-    await store.create(row);
+    createStatements.push(
+      ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
+    );
   }
+  await env.DB.batch(createStatements);
 
-  const automation = toAutomation((await store.getById(id))!);
+  const automation = toAutomation(
+    (await store.getById(id))!,
+    await store.getRepositoriesForAutomation(id)
+  );
 
   logger.info("automation.created", {
     event: "automation.created",
     automation_id: id,
-    repo: repoOwner && repoName ? `${repoOwner}/${repoName}` : null,
+    repo: newRepositories.map((repo) => `${repo.repo_owner}/${repo.repo_name}`).join(",") || null,
     trigger_type: triggerType,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
@@ -405,7 +472,9 @@ async function handleGetAutomation(
   const row = await store.getById(id);
   if (!row) return error("Automation not found", 404);
 
-  return json({ automation: toAutomation(row) });
+  return json({
+    automation: toAutomation(row, await store.getRepositoriesForAutomation(id)),
+  });
 }
 
 async function handleUpdateAutomation(
@@ -489,48 +558,31 @@ async function handleUpdateAutomation(
     updateFields.reasoning_effort = resolvedReasoningEffort;
   }
 
-  const repoOwnerChanged = "repoOwner" in body;
-  const repoNameChanged = "repoName" in body;
-  const repositoryChanged = repoOwnerChanged || repoNameChanged;
-  if (repositoryChanged) {
-    if (repoOwnerChanged !== repoNameChanged) {
-      return error("repoOwner and repoName must be provided together", 400);
-    }
+  // Repository-set edits are UNCONDITIONAL — no cardinality freeze and no
+  // active-invocation guard. In-flight invocations already materialized their
+  // children from their firing-time snapshot, so an edit cannot corrupt them;
+  // it simply applies from the next invocation.
+  let selection: RepositorySelectionRequest;
+  try {
+    selection = parseRepositorySelection(body);
+  } catch (e) {
+    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    throw e;
+  }
 
-    const repositoryContext = parseRepositoryContext(body);
-    if (repositoryContext instanceof Response) return repositoryContext;
-
-    if (!repositoryContext) {
-      if (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event") {
-        return error("repoOwner and repoName are required for repo-scoped triggers", 400);
-      }
-      if (body.baseBranch?.trim()) {
-        return error("baseBranch requires repoOwner and repoName", 400);
-      }
-      updateFields.repo_owner = null;
-      updateFields.repo_name = null;
-      updateFields.repo_id = null;
-      updateFields.base_branch = null;
-    } else {
-      const resolved = await resolveRepoOrError(
-        env,
-        repositoryContext.repoOwner,
-        repositoryContext.repoName,
-        ctx,
-        logger
+  let replacementRepositories: AutomationRepositoryInsert[] | null = null;
+  if (selection.kind === "replace") {
+    try {
+      validateRepositoryCount(
+        existing.trigger_type as AutomationTriggerType,
+        selection.repositories.length
       );
-      if (resolved instanceof Response) return resolved;
-
-      updateFields.repo_owner = repositoryContext.repoOwner;
-      updateFields.repo_name = repositoryContext.repoName;
-      updateFields.repo_id = resolved.repoId;
-      updateFields.base_branch = body.baseBranch || resolved.defaultBranch;
+    } catch (e) {
+      if (e instanceof RepositorySelectionError) return error(e.message, 400);
+      throw e;
     }
-  } else if (body.baseBranch !== undefined) {
-    if (!existing.repo_owner || !existing.repo_name) {
-      return error("baseBranch requires repoOwner and repoName", 400);
-    }
-    updateFields.base_branch = body.baseBranch;
+    const resolved = await resolveRepositorySelection(env, selection.repositories, ctx);
+    replacementRepositories = resolved;
   }
 
   // Update event type — only for non-schedule types
@@ -604,28 +656,29 @@ async function handleUpdateAutomation(
     updateFields.next_run_at = nextCronOccurrence(cron, tz).getTime();
   }
 
-  // Apply the update and, when a slack_event automation's conditions changed,
-  // re-sync its watched-channel index in the same atomic write so trigger_config
-  // and the channel index can never drift apart on a partial failure. The batch
-  // composes the two single-table stores' prepared statements, tolerating a null
-  // update statement (no automation fields changed, channels-only re-sync).
+  // Apply the field update, the repository-selection replacement (which
+  // carries the transitional scalar-mirror dual-write), and any slack
+  // watched-channel re-sync in ONE atomic batch so none of them can drift
+  // apart on a partial failure. Tolerates a null update statement (e.g. a
+  // repositories-only edit).
   const resyncSlackChannels =
     existing.trigger_type === "slack_event" && body.triggerConfig !== undefined;
-  let updated: AutomationRow | null;
+  const statements: D1PreparedStatement[] = [];
+  const updateStatement = store.bindAutomationUpdate(id, updateFields);
+  if (updateStatement) statements.push(updateStatement);
+  if (replacementRepositories !== null) {
+    statements.push(...store.bindReplaceRepositories(id, replacementRepositories, Date.now()));
+  }
   if (resyncSlackChannels) {
     const slackStore = new SlackChannelStore(env.DB);
-    const updateStatement = store.bindAutomationUpdate(id, updateFields);
-    const channelStatements = slackStore.bindChannelStatements(
-      id,
-      extractSlackChannels(body.triggerConfig)
+    statements.push(
+      ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
     );
-    await env.DB.batch(
-      updateStatement ? [updateStatement, ...channelStatements] : channelStatements
-    );
-    updated = await store.getById(id);
-  } else {
-    updated = await store.update(id, updateFields);
   }
+  if (statements.length > 0) {
+    await env.DB.batch(statements);
+  }
+  const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);
 
   logger.info("automation.updated", {
@@ -635,7 +688,9 @@ async function handleUpdateAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json({ automation: toAutomation(updated) });
+  return json({
+    automation: toAutomation(updated, await store.getRepositoriesForAutomation(id)),
+  });
 }
 
 async function handleDeleteAutomation(
@@ -682,7 +737,9 @@ async function handlePauseAutomation(
   });
 
   const row = await store.getById(id);
-  return json({ automation: row ? toAutomation(row) : null });
+  return json({
+    automation: row ? toAutomation(row, await store.getRepositoriesForAutomation(id)) : null,
+  });
 }
 
 async function handleResumeAutomation(
@@ -722,7 +779,9 @@ async function handleResumeAutomation(
   });
 
   const row = await store.getById(id);
-  return json({ automation: row ? toAutomation(row) : null });
+  return json({
+    automation: row ? toAutomation(row, await store.getRepositoriesForAutomation(id)) : null,
+  });
 }
 
 async function handleTriggerAutomation(
@@ -781,7 +840,15 @@ async function handleTriggerAutomation(
   return json(triggerResult, 201);
 }
 
-async function handleListRuns(
+function parseRunListParams(request: Request): { limit: number; offset: number } {
+  const url = new URL(request.url);
+  const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "20") || 20, 100));
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0") || 0);
+  return { limit, offset };
+}
+
+/** GET /automations/:id/invocations — one row per firing; `total` counts invocations. */
+async function handleListInvocations(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
@@ -791,19 +858,14 @@ async function handleListRuns(
   if (!automationId) return error("Automation ID required", 400);
 
   const store = new AutomationStore(env.DB);
-
-  // Verify automation exists
   const automation = await store.getById(automationId);
   if (!automation) return error("Automation not found", 404);
 
-  const url = new URL(request.url);
-  const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "20") || 20, 100));
-  const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0") || 0);
-
-  const result = await store.listRunsForAutomation(automationId, { limit, offset });
+  const { limit, offset } = parseRunListParams(request);
+  const result = await store.listInvocations(automationId, { limit, offset });
 
   return json({
-    runs: result.runs.map(toAutomationRun),
+    invocations: result.invocations,
     total: result.total,
   });
 }
@@ -997,8 +1059,8 @@ export const automationRoutes: Route[] = [
   },
   {
     method: "GET",
-    pattern: parsePattern("/automations/:id/runs"),
-    handler: handleListRuns,
+    pattern: parsePattern("/automations/:id/invocations"),
+    handler: handleListInvocations,
   },
   {
     method: "GET",

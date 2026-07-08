@@ -93,7 +93,6 @@ describe("ModalSandboxProvider", () => {
       expect(provider.name).toBe("modal");
       expect(provider.capabilities.supportsSnapshots).toBe(true);
       expect(provider.capabilities.supportsRestore).toBe(true);
-      expect(provider.capabilities.supportsWarm).toBe(true);
     });
   });
 

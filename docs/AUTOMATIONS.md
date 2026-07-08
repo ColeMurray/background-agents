@@ -28,22 +28,21 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 
 ### Required Fields
 
-| Field                        | Description                                                                                                                                                                                |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Trigger Type**             | How the automation starts: schedule, inbound webhook, Sentry alert, or Slack message.                                                                                                      |
-| **Name**                     | A short label for the automation (max 200 characters). Appears in the automations list and in session titles prefixed with `[Auto]`.                                                       |
-| **Repository Configuration** | Choose **Single repository** to clone one repository and branch, or **No repository** to run without a cloned code workspace.                                                              |
-| **Repository**               | Required for single-repo automations. Only repositories installed on the GitHub App are available.                                                                                         |
-| **Instructions**             | The prompt sent to the coding agent each time the automation fires (max 15,000 characters). Write this as you would a normal session prompt and reference the trigger context when useful. |
+| Field                        | Description                                                                                                                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Trigger Type**             | How the automation starts: schedule, inbound webhook, Sentry alert, or Slack message.                                                                                                                                                            |
+| **Name**                     | A short label for the automation (max 200 characters). Appears in the automations list and in session titles prefixed with `[Auto]`.                                                                                                             |
+| **Repository Configuration** | Pick no repository, one repository, or (for scheduled automations) up to 10 repositories. Selecting several fans each firing out into one session per repository. Only repositories installed on the GitHub App are available.                   |
+| **Instructions**             | The prompt sent to the coding agent each time the automation fires (max 15,000 characters). Write this as you would a normal session prompt and reference the trigger context when useful. Multi-repo automations share one prompt across repos. |
 
 ### Optional Fields
 
-| Field          | Description                                                                                       |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| **Branch**     | The base branch for each session. Defaults to the repository's default branch (usually `main`).   |
-| **Model**      | The AI model to use. Defaults to the system default model.                                        |
-| **Reasoning**  | Optional reasoning level for models that support it.                                              |
-| **Conditions** | Optional trigger filters for event-driven automations such as inbound webhooks and Sentry alerts. |
+| Field          | Description                                                                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Branch**     | The base branch for each session (shown when exactly one repository is selected). Multi-repo selections use each repository's default branch. |
+| **Model**      | The AI model to use. Defaults to the system default model.                                                                                    |
+| **Reasoning**  | Optional reasoning level for models that support it.                                                                                          |
+| **Conditions** | Optional trigger filters for event-driven automations such as inbound webhooks and Sentry alerts.                                             |
 
 ### Trigger-Specific Fields
 
@@ -60,12 +59,21 @@ For non-schedule automations, schedule fields are not used.
 
 ## Repository Context
 
-Automations can run with or without repository context:
+Automations can run with zero, one, or several repositories:
 
-- **Single repository**: clone one configured repository and branch for each run.
 - **No repository**: no repository is cloned. The agent still starts a normal session and can use
   configured tools such as MCP servers, but repo workspace actions like opening pull requests
   require repository context.
+- **One repository**: clone the configured repository and branch for each run.
+- **Multiple repositories** (scheduled automations only, up to 10): each firing starts one
+  independent session per repository, concurrently. Every session clones its own repository on that
+  repository's default branch, runs the same instructions, and opens its own pull request if needed.
+  Event-driven triggers stay limited to one repository for now — an event arrives scoped to a
+  repository, and fanning it out to unrelated repositories has no defined semantics yet.
+
+You can change the repository selection at any time, including while runs are in flight: history
+always shows the repositories a run actually used, in-flight runs are unaffected, and the next
+firing uses the new selection.
 
 ---
 
@@ -309,15 +317,19 @@ consecutive failure counter (see [Auto-Pause](#auto-pause) below).
 
 ### Trigger Now
 
-Click **Trigger Now** to fire a one-off run immediately. For scheduled automations, this does not
-affect the next scheduled run time. Manual triggers follow the same concurrency rules as all other
-runs: if a run is already active, the trigger is rejected.
+Click **Trigger Now** to fire a one-off run immediately across the automation's full repository
+selection. For scheduled automations, this does not affect the next scheduled run time. Manual
+triggers follow the same concurrency rules as all other runs: if a run is already active, the
+trigger is rejected. Trigger Now also works while the automation is paused, so you can verify a fix
+before resuming.
 
 ### Edit
 
-You can change an automation's name, repository context, branch, model, and instructions at any
-time. For scheduled automations, you can also change the schedule and timezone. Repository-scoped
-triggers require repository context; other trigger types can be changed to **No repository**.
+You can change an automation's name, repository selection, branch, model, and instructions at any
+time — including adding or removing repositories while a run is active (in-flight sessions are
+unaffected; the next firing uses the new selection). For scheduled automations, you can also change
+the schedule and timezone. Repository-scoped triggers require exactly one repository; other trigger
+types can be changed to **No repository**.
 
 If you update the schedule or timezone, the next run time is recalculated automatically.
 
@@ -330,18 +342,24 @@ any sessions it created are preserved.
 
 ## Run History
 
-Each automation's detail page shows a chronological list of runs with status, duration, and links to
-the underlying session.
+Each automation's detail page shows a chronological list of runs — one row per firing — with status,
+duration, and links to the underlying sessions.
+
+A single-repository firing renders as a flat row, exactly as before. A multi-repository firing
+renders as one expandable row summarizing its repositories (for example "10 repositories — 8
+completed, 1 failed, 1 running"); expanding it shows each repository with its own status, failure
+reason, and session link.
 
 ### Run Statuses
 
-| Status        | Meaning                                                                                                |
-| ------------- | ------------------------------------------------------------------------------------------------------ |
-| **Starting**  | A session is being created for this run.                                                               |
-| **Running**   | The session is actively executing.                                                                     |
-| **Completed** | The session finished successfully.                                                                     |
-| **Failed**    | The session encountered an error. The failure reason is shown on the run.                              |
-| **Skipped**   | The run was skipped because a previous run was still active (see [Concurrent Runs](#concurrent-runs)). |
+| Status              | Meaning                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Starting**        | A session is being created for this run.                                                               |
+| **Running**         | At least one session is actively executing.                                                            |
+| **Completed**       | Every session finished successfully.                                                                   |
+| **Failed**          | Every session encountered an error. The failure reason is shown on the run.                            |
+| **Partial failure** | A multi-repository run where some repositories completed and some failed.                              |
+| **Skipped**         | The run was skipped because a previous run was still active (see [Concurrent Runs](#concurrent-runs)). |
 
 Click **View session** on any run to jump to the full session with its output and artifacts.
 
@@ -386,8 +404,12 @@ failures. The status changes to **Paused** and no further runs will start until 
 To re-enable the automation, click **Resume**. This resets the failure counter. Scheduled
 automations also compute their next run at that point.
 
-Consecutive failures are tracked across both scheduled and manually triggered runs. A single
-successful run resets the counter to zero.
+Consecutive failures are tracked across both scheduled and manually triggered runs. For
+multi-repository runs, a firing with **any** failed repository counts as one failure — a weekly
+sweep that fails the same repository every week is still broken. The counter resets only when a
+firing finishes with every repository completed; partial failures never reset it. Skipped runs count
+neither way. Auto-pause stops future firings but never cancels repository sessions that already
+started.
 
 Runs that time out (sessions running longer than 90 minutes) also count as failures toward the
 auto-pause threshold.
@@ -396,12 +418,13 @@ auto-pause threshold.
 
 ## Limits
 
-| Limit                                  | Value                                |
-| -------------------------------------- | ------------------------------------ |
-| Automation name length                 | 200 characters                       |
-| Instructions length                    | 10,000 characters                    |
-| Minimum schedule interval              | 15 minutes                           |
-| Webhook payload size                   | 64 KB                                |
-| Concurrent runs per automation         | 1 for scheduled/manual triggers only |
-| Consecutive failures before auto-pause | 3                                    |
-| Run execution timeout                  | 90 minutes                           |
+| Limit                                  | Value                                  |
+| -------------------------------------- | -------------------------------------- |
+| Automation name length                 | 200 characters                         |
+| Instructions length                    | 15,000 characters                      |
+| Repositories per automation            | 10 (multi-select on schedule triggers) |
+| Minimum schedule interval              | 15 minutes                             |
+| Webhook payload size                   | 64 KB                                  |
+| Concurrent runs per automation         | 1 for scheduled/manual triggers only   |
+| Consecutive failures before auto-pause | 3                                      |
+| Run execution timeout                  | 90 minutes                             |

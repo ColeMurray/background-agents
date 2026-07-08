@@ -1,122 +1,104 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AutomationRow } from "../db/automation-store";
+import type { AutomationRepositoryInsert } from "../db/automation-store";
 import type { Env } from "../types";
 import type { SourceControlProvider } from "../source-control";
-import { resolveAutomationRepository } from "./repository";
+import { resolveAutomationRepositories } from "./repository";
 
-const automation: AutomationRow = {
-  id: "auto-1",
-  name: "Daily sync",
-  repo_owner: "ACME",
-  repo_name: "Web-App",
-  base_branch: "release",
-  repo_id: 111,
-  instructions: "Run tests",
-  trigger_type: "schedule",
-  schedule_cron: "0 9 * * *",
-  schedule_tz: "UTC",
-  model: "anthropic/claude-sonnet-4-6",
-  reasoning_effort: null,
-  enabled: 1,
-  next_run_at: 1000,
-  consecutive_failures: 0,
-  created_by: "user-1",
-  user_id: null,
-  created_at: 1000,
-  updated_at: 1000,
-  deleted_at: null,
-  event_type: null,
-  trigger_config: null,
-  trigger_auth_data: null,
-};
-
-function createProvider(
-  result: Awaited<ReturnType<SourceControlProvider["checkRepositoryAccess"]>>
-): SourceControlProvider {
+function repo(overrides?: Partial<AutomationRepositoryInsert>): AutomationRepositoryInsert {
   return {
-    checkRepositoryAccess: vi.fn().mockResolvedValue(result),
-  } as unknown as SourceControlProvider;
+    repo_owner: "acme",
+    repo_name: "web-app",
+    repo_id: 111,
+    base_branch: "release",
+    ...overrides,
+  };
 }
 
-describe("resolveAutomationRepository", () => {
-  it("validates repo access and returns session repo fields", async () => {
-    const provider = createProvider({
-      repoId: 98765,
-      repoOwner: "acme",
-      repoName: "web-app",
-      defaultBranch: "main",
-    });
+function createProvider(
+  checkRepositoryAccess: SourceControlProvider["checkRepositoryAccess"]
+): SourceControlProvider {
+  return { checkRepositoryAccess } as unknown as SourceControlProvider;
+}
 
-    await expect(resolveAutomationRepository({} as Env, automation, provider)).resolves.toEqual({
+describe("resolveAutomationRepositories", () => {
+  it("resolves access and keeps the selection's fixed branch", async () => {
+    const provider = createProvider(
+      vi.fn().mockResolvedValue({
+        repoId: 98765,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "main",
+      })
+    );
+
+    const [resolution] = await resolveAutomationRepositories({} as Env, [repo()], provider);
+
+    expect(resolution.error).toBeNull();
+    expect(resolution.repository).toEqual({
       repoOwner: "acme",
       repoName: "web-app",
       repoId: 98765,
       baseBranch: "release",
     });
-
     expect(provider.checkRepositoryAccess).toHaveBeenCalledWith({
-      owner: "ACME",
-      name: "Web-App",
+      owner: "acme",
+      name: "web-app",
     });
   });
 
   it("falls back to the repository default branch when no fixed branch is configured", async () => {
-    const provider = createProvider({
-      repoId: 98765,
-      repoOwner: "acme",
-      repoName: "web-app",
-      defaultBranch: "develop",
-    });
+    const provider = createProvider(
+      vi.fn().mockResolvedValue({
+        repoId: 98765,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "develop",
+      })
+    );
 
-    const result = await resolveAutomationRepository(
+    const [resolution] = await resolveAutomationRepositories(
       {} as Env,
-      { ...automation, base_branch: "" },
+      [repo({ base_branch: null })],
       provider
     );
 
-    expect(result).toMatchObject({ baseBranch: "develop" });
+    expect(resolution.repository).toMatchObject({ baseBranch: "develop" });
   });
 
-  it("resolves repo-less automations without checking repository access", async () => {
-    const provider = createProvider({
-      repoId: 98765,
-      repoOwner: "acme",
-      repoName: "web-app",
-      defaultBranch: "main",
-    });
+  it("returns no resolutions (and skips the provider) for an empty selection", async () => {
+    const provider = createProvider(vi.fn());
 
-    await expect(
-      resolveAutomationRepository(
-        {} as Env,
-        {
-          ...automation,
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-          base_branch: null,
-        },
-        provider
-      )
-    ).resolves.toBeNull();
-
+    await expect(resolveAutomationRepositories({} as Env, [], provider)).resolves.toEqual([]);
     expect(provider.checkRepositoryAccess).not.toHaveBeenCalled();
   });
 
-  it("fails when the configured repository is not accessible", async () => {
-    const provider = createProvider(null);
+  it("captures an inaccessible repository as a per-repo error entry", async () => {
+    const provider = createProvider(vi.fn().mockResolvedValue(null));
 
-    await expect(resolveAutomationRepository({} as Env, automation, provider)).rejects.toThrow(
-      "Repository is not accessible for the configured SCM provider"
-    );
+    const [resolution] = await resolveAutomationRepositories({} as Env, [repo()], provider);
+
+    expect(resolution.repository).toBeNull();
+    expect(resolution.error).toBe("Repository is not accessible for the configured SCM provider");
+    expect(resolution.requested).toEqual(repo());
   });
 
-  it("rejects partial repository fields", async () => {
-    await expect(
-      resolveAutomationRepository(
-        {} as Env,
-        { ...automation, repo_name: null },
-        createProvider(null)
-      )
-    ).rejects.toThrow("Automation repository must include repo_owner and repo_name together");
+  it("one failing repository never blocks its siblings", async () => {
+    const provider = createProvider(
+      vi.fn().mockImplementation(async ({ name }: { owner: string; name: string }) => {
+        if (name === "broken") throw new Error("SCM exploded");
+        return { repoId: 1, repoOwner: "acme", repoName: name, defaultBranch: "main" };
+      })
+    );
+
+    const resolutions = await resolveAutomationRepositories(
+      {} as Env,
+      [repo({ repo_name: "broken" }), repo({ repo_name: "web-app" })],
+      provider
+    );
+
+    expect(resolutions[0].repository).toBeNull();
+    expect(resolutions[0].error).toBe("SCM exploded");
+    expect(resolutions[1].error).toBeNull();
+    expect(resolutions[1].repository).toMatchObject({ repoName: "web-app" });
   });
 });

@@ -110,7 +110,8 @@ Terraform passes these provider-level values to the control plane:
 
 The runtime also receives repository credentials from Open-Inspect for Git operations. If you use
 additional model providers or custom agent tools, add those keys through Open-Inspect's secrets
-settings. See [SECRETS.md](./SECRETS.md).
+settings. For example, Z.AI Coding Plan GLM models require `ZHIPU_API_KEY`. See
+[SECRETS.md](./SECRETS.md).
 
 ## Verify
 
@@ -162,5 +163,5 @@ debugging OpenComputer.
 ### LLM/API Key Problems
 
 The control plane passes `ANTHROPIC_API_KEY` for the default Claude models. If OpenCode reports a
-model or provider error, confirm that the key is present in Terraform and that the selected model is
-available for that account.
+model or provider error, confirm that the required provider key is available through Terraform or
+Open-Inspect secrets and that the selected model is available for that account.

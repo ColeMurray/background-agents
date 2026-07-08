@@ -3,9 +3,7 @@ Sandbox lifecycle management for Open-Inspect.
 
 This module handles:
 - Creating sandboxes from filesystem snapshots
-- Pre-warming sandboxes for faster startup
 - Taking snapshots for session persistence
-- Managing sandbox pools for high-volume repos
 
 Updated: 2026-01-15 to fix Sandbox.create API
 """
@@ -29,7 +27,7 @@ from sandbox_runtime.constants import (
     TUNNEL_ENV_FILE_PATH,
 )
 from sandbox_runtime.log_config import get_logger
-from sandbox_runtime.types import SandboxStatus, SessionConfig
+from sandbox_runtime.types import SandboxStatus, SessionConfig, SessionRepositoryConfig
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
@@ -118,7 +116,7 @@ class SandboxConfig:
 
 @dataclass
 class SandboxHandle:
-    """Handle to a running or warm sandbox."""
+    """Handle to a sandbox."""
 
     sandbox_id: str
     modal_sandbox: modal.Sandbox
@@ -146,17 +144,8 @@ class SandboxManager:
 
     Responsibilities:
     - Create sandboxes from snapshots or fresh images
-    - Warm sandboxes proactively when user starts typing
     - Take snapshots for session persistence
-    - Maintain warm pools for high-volume repos
     """
-
-    def __init__(self) -> None:
-        self._warm_pools: dict[str, list[SandboxHandle]] = {}
-
-    def _get_repo_key(self, repo_owner: str, repo_name: str) -> str:
-        """Get unique key for a repository."""
-        return f"{repo_owner}/{repo_name}"
 
     @staticmethod
     def _generate_code_server_password() -> str:
@@ -418,13 +407,15 @@ class SandboxManager:
             }
         )
 
-        if has_repository:
-            fallback_clone_token = config.fallback_clone_token
-            self._inject_vcs_env_vars(
-                env_vars,
-                clone_token=fallback_clone_token,
-                include_github_cli_aliases=bool(fallback_clone_token),
-            )
+        # Host scoping (VCS_HOST / VCS_CLONE_USERNAME) is injected even without a
+        # repository so GitLab/Bitbucket deployments don't fall back to github.com
+        # credential-helper behavior; clone tokens stay repository-gated.
+        fallback_clone_token = config.fallback_clone_token if has_repository else None
+        self._inject_vcs_env_vars(
+            env_vars,
+            clone_token=fallback_clone_token,
+            include_github_cli_aliases=bool(fallback_clone_token),
+        )
 
         code_server_password: str | None = None
         if config.code_server_enabled:
@@ -529,6 +520,7 @@ class SandboxManager:
         clone_token: str = "",
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
+        repositories: list[SessionRepositoryConfig] | None = None,
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.
@@ -559,7 +551,13 @@ class SandboxManager:
                 "REPO_OWNER": repo_owner,
                 "REPO_NAME": repo_name,
                 "IMAGE_BUILD_MODE": "true",
-                "SESSION_CONFIG": json.dumps({"branch": default_branch}),
+                # Multi-repo builds (environment images) pass the member list;
+                # the list-native runtime clones and sets up every member.
+                "SESSION_CONFIG": json.dumps(
+                    {"branch": default_branch, "repositories": repositories}
+                    if repositories
+                    else {"branch": default_branch}
+                ),
             }
         )
 
@@ -596,41 +594,6 @@ class SandboxManager:
             created_at=time.time(),
             modal_object_id=modal_object_id,
         )
-
-    async def warm_sandbox(
-        self,
-        repo_owner: str,
-        repo_name: str,
-        control_plane_url: str = "",
-    ) -> SandboxHandle:
-        """
-        Pre-warm a sandbox for a repository.
-
-        Called when user starts typing to reduce latency. The sandbox
-        begins syncing with the latest code immediately.
-
-        Args:
-            repo_owner: GitHub repository owner
-            repo_name: GitHub repository name
-            control_plane_url: URL for the control plane WebSocket
-
-        Returns:
-            SandboxHandle for the warming sandbox
-        """
-        repo_key = self._get_repo_key(repo_owner, repo_name)
-
-        # Check if we have a warm sandbox in the pool
-        if self._warm_pools.get(repo_key):
-            return self._warm_pools[repo_key].pop(0)
-
-        # Create a new warming sandbox
-        config = SandboxConfig(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            control_plane_url=control_plane_url,
-        )
-
-        return await self.create_sandbox(config)
 
     def take_snapshot(
         self,
@@ -776,16 +739,18 @@ class SandboxManager:
             }
         )
 
-        if has_repository:
-            # Snapshot restore still passes the clone token through for
-            # repo-backed sandboxes. Snapshots taken before the credential-helper
-            # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env
-            # and embeds it in the origin URL; without it, those legacy snapshots
-            # can't fetch. GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too
-            # so the gh CLI keeps working on snapshots predating the gh wrapper.
-            self._inject_vcs_env_vars(
-                env_vars, clone_token=clone_token, include_github_cli_aliases=True
-            )
+        # Snapshot restore still passes the clone token through for
+        # repo-backed sandboxes. Snapshots taken before the credential-helper
+        # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env
+        # and embeds it in the origin URL; without it, those legacy snapshots
+        # can't fetch. GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too
+        # so the gh CLI keeps working on snapshots predating the gh wrapper.
+        # Host scoping is injected even without a repository (matches
+        # create_sandbox); clone tokens stay repository-gated.
+        restore_clone_token = clone_token if has_repository else None
+        self._inject_vcs_env_vars(
+            env_vars, clone_token=restore_clone_token, include_github_cli_aliases=True
+        )
 
         code_server_password: str | None = None
         if code_server_enabled:
@@ -869,56 +834,6 @@ class SandboxManager:
             ttyd_url=ttyd_url,
             tunnel_urls=extra_tunnel_urls,
         )
-
-    async def maintain_warm_pool(
-        self,
-        repo_owner: str,
-        repo_name: str,
-        pool_size: int = 2,
-    ) -> None:
-        """
-        Maintain a pool of warm sandboxes for a high-volume repo.
-
-        Args:
-            repo_owner: GitHub repository owner
-            repo_name: GitHub repository name
-            pool_size: Number of warm sandboxes to maintain
-        """
-        repo_key = self._get_repo_key(repo_owner, repo_name)
-
-        if repo_key not in self._warm_pools:
-            self._warm_pools[repo_key] = []
-
-        current_size = len(self._warm_pools[repo_key])
-
-        # Create additional warm sandboxes if needed
-        for _ in range(pool_size - current_size):
-            handle = await self.warm_sandbox(repo_owner, repo_name)
-            self._warm_pools[repo_key].append(handle)
-
-    async def cleanup_stale_pools(
-        self,
-        max_age_seconds: float = 1800,  # 30 minutes
-    ) -> None:
-        """
-        Clean up stale sandboxes from warm pools.
-
-        Sandboxes older than max_age_seconds are terminated
-        to prevent using outdated code.
-
-        Args:
-            max_age_seconds: Maximum age before sandbox is considered stale
-        """
-        now = time.time()
-
-        for repo_key, pool in self._warm_pools.items():
-            fresh_sandboxes = []
-            for handle in pool:
-                if now - handle.created_at > max_age_seconds:
-                    await handle.terminate()
-                else:
-                    fresh_sandboxes.append(handle)
-            self._warm_pools[repo_key] = fresh_sandboxes
 
 
 # Global sandbox manager instance

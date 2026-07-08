@@ -34,6 +34,27 @@ describe("buildSessionConfig", () => {
     );
   });
 
+  it("maps multi-repo members to snake_case wire fields", () => {
+    const config = buildSessionConfig({
+      ...baseInput,
+      repositories: [
+        { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+        { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
+      ],
+    });
+
+    expect(config.repositories).toEqual([
+      { repo_owner: "testowner", repo_name: "testrepo", branch: "main" },
+      { repo_owner: "testowner", repo_name: "backend", branch: "develop" },
+    ]);
+  });
+
+  it("omits repositories for single-repo inputs", () => {
+    const parsed = JSON.parse(JSON.stringify(buildSessionConfig(baseInput)));
+
+    expect(parsed).not.toHaveProperty("repositories");
+  });
+
   it("serializes to a SESSION_CONFIG that omits undefined mcp_servers", () => {
     // With no MCP servers configured, the key must not appear in the serialized
     // payload — the runtime treats an absent key and an empty list identically.

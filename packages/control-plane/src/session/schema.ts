@@ -5,6 +5,20 @@
  * This ensures high performance even with hundreds of concurrent sessions.
  */
 
+// Shared between SCHEMA_SQL (fresh DOs) and migration 31 (existing DOs) so
+// the two paths can never diverge.
+const SESSION_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_repositories (
+  position INTEGER NOT NULL,
+  repo_owner TEXT NOT NULL,
+  repo_name TEXT NOT NULL,
+  repo_id INTEGER,
+  base_branch TEXT NOT NULL,
+  branch_name TEXT,                                 -- Working branch (set after first push to this repo)
+  base_sha TEXT,
+  current_sha TEXT,
+  PRIMARY KEY (repo_owner, repo_name)
+)`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -118,6 +132,14 @@ CREATE TABLE IF NOT EXISTS sandbox (
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   created_at INTEGER NOT NULL
 );
+
+-- Member repositories for multi-repo sessions, in position order
+-- (position 0 = primary, mirrored into session.repo_owner/repo_name).
+-- Pre-feature sessions have no rows; readers synthesize a one-entry list
+-- from the session scalar columns. Per-repo git state columns are written
+-- by push handling from PR-5 onward; until then the position-0 row is
+-- overlaid with the session scalar branch/sha columns at read time.
+${SESSION_REPOSITORIES_TABLE_SQL};
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -389,6 +411,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 30,
     description: "Add total_cost to session",
     run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 31,
+    description: "Add session_repositories table for multi-repo sessions",
+    run: SESSION_REPOSITORIES_TABLE_SQL,
   },
 ];
 

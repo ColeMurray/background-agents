@@ -202,6 +202,15 @@ describe("applyMigrations", () => {
     expect(transactionControlStatements).toEqual([]);
   });
 
+  it("creates session_repositories for both fresh DOs and migrated DOs", () => {
+    // Fresh DOs get the table from SCHEMA_SQL; existing DOs via migration 31.
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
+
+    const migration = MIGRATIONS.find((m) => m.id === 31);
+    expect(migration).toBeDefined();
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
+  });
+
   it("keeps repository context consistent at the session table boundary", () => {
     expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
     expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");

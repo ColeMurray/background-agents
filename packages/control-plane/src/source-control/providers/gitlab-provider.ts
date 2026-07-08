@@ -399,6 +399,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       redactedRemoteUrl,
       refspec: `${config.sourceRef}:refs/heads/${config.targetBranch}`,
       targetBranch: config.targetBranch,
+      repoOwner: config.owner,
+      repoName: config.name,
       force,
     };
   }

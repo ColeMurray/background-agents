@@ -87,6 +87,30 @@ def _normalize_optional_repository_context(
     return normalized_owner, normalized_name
 
 
+def _session_config_from_create_request(
+    request: dict, *, repo_owner: str | None, repo_name: str | None
+):
+    """Build the create-path SessionConfig from the flat wire request.
+
+    Create is a lossy reconstruction — the manager re-serializes this typed
+    model into SESSION_CONFIG — while restore forwards its session_config
+    dict verbatim. Wire fields share their names with SessionConfig fields,
+    so the model's own field list drives the pickup: a new field only needs
+    the SessionConfig change, not another line here. repo_owner/repo_name
+    are set from the normalized pair, never the raw request.
+    """
+    from .sandbox import SessionConfig
+
+    fields = {
+        name: request[name]
+        for name in SessionConfig.model_fields
+        if name in request and request[name] is not None
+    }
+    fields["repo_owner"] = repo_owner
+    fields["repo_name"] = repo_name
+    return SessionConfig(**fields)
+
+
 @app.function(
     image=function_image,
     secrets=[github_app_secrets, internal_api_secret],
@@ -128,8 +152,6 @@ async def api_create_sandbox(
     require_valid_control_plane_url(control_plane_url)
 
     try:
-        # Import types and manager directly
-        from .sandbox import SessionConfig
         from .sandbox.manager import SandboxConfig, SandboxManager
 
         manager = SandboxManager()
@@ -144,15 +166,8 @@ async def api_create_sandbox(
             resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
 
-        session_config = SessionConfig(
-            session_id=request.get("session_id"),
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            branch=request.get("branch"),
-            opencode_session_id=request.get("opencode_session_id"),
-            provider=request.get("provider", "anthropic"),
-            model=request.get("model", "claude-sonnet-4-6"),
-            mcp_servers=request.get("mcp_servers"),
+        session_config = _session_config_from_create_request(
+            request, repo_owner=repo_owner, repo_name=repo_name
         )
 
         config = SandboxConfig(
@@ -206,79 +221,6 @@ async def api_create_sandbox(
             duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_create_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            session_id=x_session_id,
-            sandbox_id=x_sandbox_id,
-        )
-
-
-@app.function(
-    image=function_image,
-    secrets=[internal_api_secret],
-)
-@fastapi_endpoint(method="POST")
-async def api_warm_sandbox(
-    request: dict,
-    authorization: str | None = Header(None),
-    x_trace_id: str | None = Header(None),
-    x_request_id: str | None = Header(None),
-    x_session_id: str | None = Header(None),
-    x_sandbox_id: str | None = Header(None),
-) -> dict:
-    """
-    HTTP endpoint to warm a sandbox.
-
-    Requires authentication via Authorization header.
-
-    POST body:
-    {
-        "repo_owner": "...",
-        "repo_name": "...",
-        "control_plane_url": "..."
-    }
-    """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
-
-    try:
-        from .sandbox.manager import SandboxManager
-
-        manager = SandboxManager()
-        handle = await manager.warm_sandbox(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
-            control_plane_url=control_plane_url,
-        )
-
-        return {
-            "success": True,
-            "data": {
-                "sandbox_id": handle.sandbox_id,
-                "status": handle.status.value,
-            },
-        }
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_warm_sandbox",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_warm_sandbox",
             trace_id=x_trace_id,
             request_id=x_request_id,
             session_id=x_session_id,

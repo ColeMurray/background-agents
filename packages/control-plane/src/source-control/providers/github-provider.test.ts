@@ -218,6 +218,8 @@ describe("GitHubSourceControlProvider", () => {
       redactedRemoteUrl: "https://x-access-token:<redacted>@github.com/acme/web.git",
       refspec: "HEAD:refs/heads/feature/one",
       targetBranch: "feature/one",
+      repoOwner: "acme",
+      repoName: "web",
       force: false,
     });
   });

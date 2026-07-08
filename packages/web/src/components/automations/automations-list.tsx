@@ -8,7 +8,7 @@ import { AutomationStatusBadge } from "@/components/automations/automation-statu
 import { Button } from "@/components/ui/button";
 import { FolderIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
-import { formatRepoLabel } from "@/lib/repo-label";
+import { formatRepositoriesLabel } from "@/lib/repo-label";
 
 interface AutomationsListProps {
   automations: Automation[];
@@ -145,7 +145,7 @@ export function AutomationsList({
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1">
               <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-              {formatRepoLabel(automation.repoOwner, automation.repoName)}
+              {formatRepositoriesLabel(automation.repositories)}
             </span>
             <span className="inline-flex items-center gap-1">
               <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />

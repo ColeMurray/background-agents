@@ -8,6 +8,13 @@ import {
   type GitPushAuthContext,
   type GitPushSpec,
 } from "../source-control";
+import { findPrArtifactForRepo } from "./pr-artifacts";
+import {
+  mapRepositoryTargetError,
+  resolveSessionRepositoryTarget,
+  type RepoIdentity,
+  type SessionRepositoryEntry,
+} from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
 
 /**
@@ -18,6 +25,12 @@ export interface CreatePullRequestInput {
   body: string;
   baseBranch?: string;
   headBranch?: string;
+  /**
+   * Target member repository, already validated against the session's
+   * repository list by the HTTP handler (canonical casing).
+   */
+  repoOwner: string;
+  repoName: string;
   promptingUserId: string;
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
@@ -34,12 +47,42 @@ export type CreatePullRequestResult =
 
 export type PushBranchResult = { success: true } | { success: false; error: string };
 
+function claimKey(repo: RepoIdentity): string {
+  return `${repo.repoOwner.toLowerCase()}/${repo.repoName.toLowerCase()}`;
+}
+
+/**
+ * In-flight PR creation claims, one per target repository. PR creation spans
+ * several awaits (push, provider calls) during which the DO serves other
+ * requests, so the persisted-artifact scan alone cannot enforce one PR per
+ * repo — two concurrent requests could both pass it. Claims are in-memory on
+ * the DO instance: a claim's lifetime is its request's, and both die with
+ * the instance.
+ */
+export class PullRequestCreationClaims {
+  private readonly inFlight = new Set<string>();
+
+  /** True when the claim was acquired; false when creation is already in flight. */
+  claim(repo: RepoIdentity): boolean {
+    const key = claimKey(repo);
+    if (this.inFlight.has(key)) return false;
+    this.inFlight.add(key);
+    return true;
+  }
+
+  release(repo: RepoIdentity): void {
+    this.inFlight.delete(claimKey(repo));
+  }
+}
+
 /**
  * Session persistence operations required by pull request orchestration.
  */
 export interface PullRequestRepository {
   getSession(): SessionRow | null;
+  getSessionRepositories(): SessionRepositoryEntry[];
   updateSessionBranch(sessionId: string, branchName: string): void;
+  updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void;
   listArtifacts(): ArtifactRow[];
   createArtifact(data: {
     id: string;
@@ -55,11 +98,16 @@ export interface PullRequestRepository {
  */
 export interface PullRequestServiceDeps {
   repository: PullRequestRepository;
+  /** DO-instance-scoped in-flight claims — must outlive individual requests. */
+  claims: PullRequestCreationClaims;
   sourceControlProvider: SourceControlProvider;
   log: Logger;
   generateId: () => string;
-  pushBranchToRemote: (headBranch: string, pushSpec: GitPushSpec) => Promise<PushBranchResult>;
-  broadcastSessionBranch: (branchName: string) => void;
+  pushBranchToRemote: (pushSpec: GitPushSpec) => Promise<PushBranchResult>;
+  broadcastSessionBranch: (
+    branchName: string,
+    repo: { repoOwner: string; repoName: string }
+  ) => void;
   broadcastArtifactCreated: (artifact: SessionArtifact) => void;
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
@@ -85,20 +133,42 @@ export class SessionPullRequestService {
       return { kind: "error", status: 400, error: "Pull requests require a repository context" };
     }
 
-    this.deps.log.info("Creating PR", { user_id: input.promptingUserId });
+    // Re-resolved here even though the handler already validated the target:
+    // this is a sandbox-auth security boundary, so the service must not
+    // trust its caller (defense in depth).
+    let target: SessionRepositoryEntry;
+    try {
+      target = resolveSessionRepositoryTarget(input, this.deps.repository.getSessionRepositories());
+    } catch (error) {
+      const mapped = mapRepositoryTargetError(error);
+      if (!mapped) throw error;
+      return { kind: "error", ...mapped };
+    }
+    const memberRow = target.row;
+    const isPrimary = target.isPrimary;
+    const targetRepo = { repoOwner: target.repoOwner, repoName: target.repoName };
 
+    this.deps.log.info("Creating PR", {
+      user_id: input.promptingUserId,
+      repo_owner: targetRepo.repoOwner,
+      repo_name: targetRepo.repoName,
+    });
+
+    if (!this.deps.claims.claim(targetRepo)) {
+      return {
+        kind: "error",
+        status: 409,
+        error: `A pull request is already being created for ${targetRepo.repoOwner}/${targetRepo.repoName} in this session.`,
+      };
+    }
     try {
       const sessionId = session.session_name || session.id;
       const generatedHeadBranch = generateBranchName(sessionId);
 
-      const initialArtifacts = this.deps.repository.listArtifacts();
-      const existingPrArtifact = initialArtifacts.find((artifact) => artifact.type === "pr");
-      if (existingPrArtifact) {
-        return {
-          kind: "error",
-          status: 409,
-          error: "A pull request has already been created for this session.",
-        };
+      // The claim above serializes in-flight creation; this scan catches PRs
+      // persisted by earlier (completed) requests.
+      if (findPrArtifactForRepo(this.deps.repository.listArtifacts(), targetRepo, isPrimary)) {
+        return this.duplicatePrError(targetRepo);
       }
 
       let pushAuth: GitPushAuthContext;
@@ -125,20 +195,26 @@ export class SessionPullRequestService {
       };
 
       const repoInfo = await this.deps.sourceControlProvider.getRepository(appAuth, {
-        owner: session.repo_owner,
-        name: session.repo_name,
+        owner: targetRepo.repoOwner,
+        name: targetRepo.repoName,
       });
-      const baseBranch = input.baseBranch || repoInfo.defaultBranch;
+      // Base: requested > the entry's base branch (the row's, or the scalar
+      // mirror's for sessions without member rows) > repo default.
+      const baseBranch = input.baseBranch || target.baseBranch || repoInfo.defaultBranch;
+      // The target repo's working branch; member rows written before PR flow
+      // existed have a null branch_name while the scalar mirror is set, so
+      // the primary falls back to the scalar.
+      const targetBranchName = memberRow?.branch_name ?? (isPrimary ? session.branch_name : null);
       const branchResolution = resolveHeadBranchForPr({
         requestedHeadBranch: input.headBranch,
-        sessionBranchName: session.branch_name,
+        sessionBranchName: targetBranchName,
         generatedBranchName: generatedHeadBranch,
         baseBranch,
       });
       const headBranch = branchResolution.headBranch;
       this.deps.log.info("Resolved PR head branch", {
         requested_head_branch: input.headBranch ?? null,
-        session_branch_name: session.branch_name,
+        session_branch_name: targetBranchName,
         generated_head_branch: generatedHeadBranch,
         resolved_head_branch: headBranch,
         resolution_source: branchResolution.source,
@@ -154,35 +230,32 @@ export class SessionPullRequestService {
       }
 
       const pushSpec = this.deps.sourceControlProvider.buildGitPushSpec({
-        owner: session.repo_owner,
-        name: session.repo_name,
+        owner: targetRepo.repoOwner,
+        name: targetRepo.repoName,
         sourceRef: "HEAD",
         targetBranch: sanitizedHeadBranch,
         auth: pushAuth,
         force: true,
       });
 
-      const pushResult = await this.deps.pushBranchToRemote(sanitizedHeadBranch, pushSpec);
+      const pushResult = await this.deps.pushBranchToRemote(pushSpec);
       if (!pushResult.success) {
         return { kind: "error", status: 500, error: pushResult.error };
       }
 
-      if (session.branch_name !== sanitizedHeadBranch) {
+      if (memberRow && memberRow.branch_name !== sanitizedHeadBranch) {
+        this.deps.repository.updateSessionRepositoryBranch(
+          memberRow.repo_owner,
+          memberRow.repo_name,
+          sanitizedHeadBranch
+        );
+      }
+      if (isPrimary && session.branch_name !== sanitizedHeadBranch) {
         this.deps.repository.updateSessionBranch(session.id, sanitizedHeadBranch);
       }
       // Broadcast even when the stored branch is already current so connected clients converge
       // after missed or out-of-order updates.
-      this.deps.broadcastSessionBranch(sanitizedHeadBranch);
-
-      const latestArtifacts = this.deps.repository.listArtifacts();
-      const latestPrArtifact = latestArtifacts.find((artifact) => artifact.type === "pr");
-      if (latestPrArtifact) {
-        return {
-          kind: "error",
-          status: 409,
-          error: "A pull request has already been created for this session.",
-        };
-      }
+      this.deps.broadcastSessionBranch(sanitizedHeadBranch, targetRepo);
 
       // Use user OAuth if available, otherwise fall back to GitHub App token
       // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
@@ -206,6 +279,8 @@ export class SessionPullRequestService {
         state: prResult.state,
         head: sanitizedHeadBranch,
         base: baseBranch,
+        repoOwner: targetRepo.repoOwner,
+        repoName: targetRepo.repoName,
       };
       this.deps.repository.createArtifact({
         id: artifactId,
@@ -247,6 +322,16 @@ export class SessionPullRequestService {
         status: 500,
         error: error instanceof Error ? error.message : "Failed to create PR",
       };
+    } finally {
+      this.deps.claims.release(targetRepo);
     }
+  }
+
+  private duplicatePrError(targetRepo: RepoIdentity): CreatePullRequestResult {
+    return {
+      kind: "error",
+      status: 409,
+      error: `A pull request has already been created for ${targetRepo.repoOwner}/${targetRepo.repoName} in this session.`,
+    };
   }
 }

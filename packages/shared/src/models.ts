@@ -30,6 +30,7 @@ export const VALID_MODELS = [
   "opencode/qwen3.7-max",
   "opencode/glm-5",
   "opencode/glm-5.1",
+  "zai-coding-plan/glm-5.2",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
 ] as const;
@@ -172,6 +173,10 @@ export const MODEL_OPTIONS: ModelCategory[] = [
     ],
   },
   {
+    category: "Z.AI Coding Plan",
+    models: [{ id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" }],
+  },
+  {
     category: "DeepSeek",
     models: [
       { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "Fast model" },
@@ -182,7 +187,7 @@ export const MODEL_OPTIONS: ModelCategory[] = [
 
 /**
  * Models enabled by default when no preferences are stored.
- * Excludes zen models which must be opted into via settings.
+ * Excludes opt-in providers which must be enabled via settings.
  */
 export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "anthropic/claude-haiku-4-5",

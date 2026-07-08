@@ -689,6 +689,8 @@ describe("GitLabSourceControlProvider", () => {
         redactedRemoteUrl: "https://oauth2:<redacted>@gitlab.com/acme/web.git",
         refspec: "HEAD:refs/heads/feature/one",
         targetBranch: "feature/one",
+        repoOwner: "acme",
+        repoName: "web",
         force: false,
       });
     });

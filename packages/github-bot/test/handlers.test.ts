@@ -67,7 +67,9 @@ function createMockEnv(): Env {
   const controlPlaneFetch = vi.fn().mockImplementation((url: string) => {
     if (url === "https://internal/sessions") {
       return Promise.resolve(
-        new Response(JSON.stringify({ sessionId: "session-123" }), { status: 200 })
+        new Response(JSON.stringify({ sessionId: "session-123", status: "created" }), {
+          status: 200,
+        })
       );
     }
     if (/\/sessions\/.+\/prompt$/.test(url)) {
@@ -213,6 +215,29 @@ describe("handlePullRequestOpened", () => {
       "session.created",
       expect.objectContaining({ action: "auto_review" })
     );
+  });
+
+  it("rejects a malformed session creation response before sending a prompt", async () => {
+    const env = createMockEnv();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      if (url === "https://internal/sessions") {
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
+      }
+      if (/\/sessions\/.+\/prompt$/.test(url)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ messageId: "msg-456" }), { status: 200 })
+        );
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+    const log = createMockLogger();
+
+    await expect(
+      handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0")
+    ).rejects.toThrow("Session creation failed: invalid response");
+
+    expect(cpFetch).toHaveBeenCalledTimes(1);
   });
 
   it("returns early for draft PRs", async () => {

@@ -1,4 +1,5 @@
 import type { McpServerConfig } from "@open-inspect/shared";
+import type { SessionRepositoryInfo } from "./provider";
 
 /**
  * Shared assembly for the sandbox environment contract.
@@ -16,6 +17,13 @@ import type { McpServerConfig } from "@open-inspect/shared";
  * mirror the full contract.
  */
 
+/** Snake_case wire twin of {@link SessionRepositoryInfo} (runtime SessionRepositoryConfig). */
+export interface SessionRepositoryConfigPayload {
+  repo_owner: string;
+  repo_name: string;
+  branch: string;
+}
+
 /** Canonical `SESSION_CONFIG` payload handed to the sandbox runtime. */
 export interface SessionConfigPayload {
   session_id: string;
@@ -27,6 +35,8 @@ export interface SessionConfigPayload {
   mcp_servers?: McpServerConfig[];
   /** Omitted from the serialized payload when undefined. */
   branch?: string | null;
+  /** Ordered member list; only present for multi-repo sessions. */
+  repositories?: SessionRepositoryConfigPayload[];
 }
 
 /** Provider-agnostic inputs needed to assemble a {@link SessionConfigPayload}. */
@@ -38,6 +48,7 @@ export interface SessionConfigInput {
   model: string;
   mcpServers?: McpServerConfig[];
   branch?: string | null;
+  repositories?: SessionRepositoryInfo[];
 }
 
 /**
@@ -60,5 +71,18 @@ export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayl
   if (input.branch !== undefined) {
     payload.branch = input.branch;
   }
+  if (input.repositories?.length) {
+    payload.repositories = input.repositories.map(toRepositoryConfigPayload);
+  }
   return payload;
+}
+
+export function toRepositoryConfigPayload(
+  repository: SessionRepositoryInfo
+): SessionRepositoryConfigPayload {
+  return {
+    repo_owner: repository.repoOwner,
+    repo_name: repository.repoName,
+    branch: repository.baseBranch,
+  };
 }

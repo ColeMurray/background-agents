@@ -22,6 +22,10 @@ import {
   getChannelInfo,
   getThreadMessages,
   getUserInfo,
+  createSessionResponseSchema,
+  sendPromptResponseSchema,
+  type CreateSessionResponse,
+  type SendPromptResponse,
 } from "@open-inspect/shared";
 import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
@@ -63,7 +67,7 @@ async function createSession(
   slackUserId?: string,
   actorDisplayName?: string,
   actorEmail?: string
-): Promise<{ sessionId: string; status: string } | null> {
+): Promise<CreateSessionResponse | null> {
   const startTime = Date.now();
   const base = {
     trace_id: traceId,
@@ -102,15 +106,24 @@ async function createSession(
       return null;
     }
 
-    const result = (await response.json()) as { sessionId: string; status: string };
+    const result = createSessionResponseSchema.safeParse(await response.json());
+    if (!result.success) {
+      log.error("control_plane.create_session", {
+        ...base,
+        outcome: "error",
+        error: new Error("Invalid control plane create session response"),
+        duration_ms: Date.now() - startTime,
+      });
+      return null;
+    }
     log.info("control_plane.create_session", {
       ...base,
       outcome: "success",
-      session_id: result.sessionId,
+      session_id: result.data.sessionId,
       http_status: 200,
       duration_ms: Date.now() - startTime,
     });
-    return result;
+    return result.data;
   } catch (e) {
     log.error("control_plane.create_session", {
       ...base,
@@ -132,7 +145,7 @@ async function sendPrompt(
   authorId: string,
   callbackContext?: CallbackContext,
   traceId?: string
-): Promise<{ messageId: string } | null> {
+): Promise<SendPromptResponse | null> {
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
@@ -161,15 +174,24 @@ async function sendPrompt(
       return null;
     }
 
-    const result = (await response.json()) as { messageId: string };
+    const result = sendPromptResponseSchema.safeParse(await response.json());
+    if (!result.success) {
+      log.error("control_plane.send_prompt", {
+        ...base,
+        outcome: "error",
+        error: new Error("Invalid control plane send prompt response"),
+        duration_ms: Date.now() - startTime,
+      });
+      return null;
+    }
     log.info("control_plane.send_prompt", {
       ...base,
       outcome: "success",
-      message_id: result.messageId,
+      message_id: result.data.messageId,
       http_status: 200,
       duration_ms: Date.now() - startTime,
     });
-    return result;
+    return result.data;
   } catch (e) {
     log.error("control_plane.send_prompt", {
       ...base,
