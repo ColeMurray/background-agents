@@ -220,8 +220,51 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
             meta.previewStatus === "stopped"
               ? meta.previewStatus
               : undefined,
+          repoOwner: typeof meta.repoOwner === "string" ? meta.repoOwner : undefined,
+          repoName: typeof meta.repoName === "string" ? meta.repoName : undefined,
         }
       : undefined,
+  };
+}
+
+/**
+ * Apply a `session_branch` update. In a multi-repo session the message names
+ * the member whose branch changed (repoOwner/repoName); we update that member's
+ * `branchName` in `state.repositories` and mirror to the scalar `branchName`
+ * only when it names the primary (position 0). An absent identity names the
+ * session's sole repo (the primary), so it mirrors to the scalar too. Sessions
+ * without a hydrated member list stay scalar-only, exactly as before.
+ */
+function applySessionBranchUpdate(
+  prev: SessionState,
+  branchName: string,
+  repoOwner: string | undefined,
+  repoName: string | undefined
+): SessionState {
+  const repositories = prev.repositories;
+  if (!repositories || repositories.length === 0) {
+    return { ...prev, branchName };
+  }
+
+  const targetIndex =
+    repoOwner && repoName
+      ? repositories.findIndex((r) => r.repoOwner === repoOwner && r.repoName === repoName)
+      : 0; // absent identity → the session's sole/primary repo
+
+  if (targetIndex === -1) {
+    // Branch update for a repo not in the member list — leave state untouched
+    // rather than clobber the scalar branch.
+    return prev;
+  }
+
+  const updatedRepositories = repositories.map((repo, index) =>
+    index === targetIndex ? { ...repo, branchName } : repo
+  );
+  const isPrimary = targetIndex === 0;
+  return {
+    ...prev,
+    repositories: updatedRepositories,
+    ...(isPrimary ? { branchName } : {}),
   };
 }
 
@@ -459,7 +502,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "session_branch":
           // Branch updates apply only to the active session detail view.
-          setSessionState((prev) => (prev ? { ...prev, branchName: data.branchName } : null));
+          setSessionState((prev) =>
+            prev
+              ? applySessionBranchUpdate(prev, data.branchName, data.repoOwner, data.repoName)
+              : null
+          );
           break;
 
         case "session_title":

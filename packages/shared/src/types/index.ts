@@ -138,6 +138,12 @@ export interface Session {
   spawnDepth: number;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Ordered member list; [0] = primary. Absent on scalar-era sessions —
+   * consumers fall back to the scalar repoOwner/repoName. Populated by the
+   * session list index (SessionEntry.repositories).
+   */
+  repositories?: SessionListRepository[];
 }
 
 // Message in a session
@@ -484,6 +490,21 @@ export const sessionRepositoryStateSchema = z.object({
 });
 
 export type SessionRepositoryState = z.infer<typeof sessionRepositoryStateSchema>;
+
+/**
+ * A session's repository-set member as carried on the session list contract
+ * (Session.repositories / control-plane SessionEntry.repositories). The
+ * identity subset of SessionRepositoryState — no git state, since the list
+ * index doesn't store it. Ordered; [0] = primary (mirrored into the scalar
+ * repoOwner/repoName columns). Control-plane's SessionIndexRepository aliases
+ * this so the wire shape has a single home.
+ */
+export interface SessionListRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
 
 /**
  * One repository entry on a create/update request. Identifiers are normalized
