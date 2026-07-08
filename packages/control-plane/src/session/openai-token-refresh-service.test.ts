@@ -303,10 +303,11 @@ describe("OpenAITokenRefreshService", () => {
   });
 
   it("falls back to global for an environment session with no environment token", async () => {
+    const globalCachedTokenTtlMs = 15 * 60 * 1000;
     mockState.globalSecrets = {
       OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh",
       OPENAI_OAUTH_ACCESS_TOKEN: "global-access",
-      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 15 * 60 * 1000),
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + globalCachedTokenTtlMs),
     };
 
     const service = new OpenAITokenRefreshService(

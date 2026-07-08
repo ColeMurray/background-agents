@@ -1690,21 +1690,10 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Environment provenance: the id is stored on the session; the name is
-    // resolved live so a deleted environment surfaces as a null name (design
-    // §7.6) — the UI renders "environment deleted" in that case.
+    // resolved live (resolveEnvironmentName) so a deleted environment surfaces
+    // as null — the UI renders "environment deleted" (§7.6).
     const environmentId = session?.environment_id ?? null;
-    let environmentName: string | null = null;
-    if (environmentId && this.env.DB) {
-      try {
-        const environment = await new EnvironmentStore(this.env.DB).getById(environmentId);
-        environmentName = environment?.name ?? null;
-      } catch (e) {
-        this.log.warn("Failed to resolve environment name for session state", {
-          environment_id: environmentId,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
+    const environmentName = await this.resolveEnvironmentName(environmentId);
 
     return {
       id: this.getPublicSessionId(session),
@@ -1732,6 +1721,28 @@ export class SessionDO extends DurableObject<Env> {
       environmentId,
       environmentName,
     };
+  }
+
+  /**
+   * The launch environment's current display name, or null when the session has
+   * no environment or the environment was deleted after launch (§7.6). Resolved
+   * live rather than snapshotted so deletion is reflected; best-effort, so a
+   * lookup failure resolves null rather than failing the whole state read.
+   */
+  private async resolveEnvironmentName(environmentId: string | null): Promise<string | null> {
+    if (!environmentId || !this.env.DB) {
+      return null;
+    }
+    try {
+      const environment = await new EnvironmentStore(this.env.DB).getById(environmentId);
+      return environment?.name ?? null;
+    } catch (e) {
+      this.log.warn("Failed to resolve environment name for session state", {
+        environment_id: environmentId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
   }
 
   /**
