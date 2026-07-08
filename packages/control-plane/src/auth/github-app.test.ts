@@ -273,5 +273,45 @@ describe("github-app utilities", () => {
         )
       ).rejects.toThrow("Failed to get installation token: invalid response");
     });
+
+    it("rejects an invalid JSON GitHub installation token response", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const { privateKeyPem } = await generateTestKeyPair();
+      fetchMock.mockResolvedValue(new Response("not json", { status: 201 }));
+
+      await expect(
+        getCachedInstallationTokenWithExpiry(
+          {
+            appId: `app-refresh-invalid-json-${Date.now()}`,
+            privateKey: privateKeyPem,
+            installationId: "installation-refresh-invalid-json",
+          },
+          undefined,
+          { forceRefresh: true }
+        )
+      ).rejects.toThrow("Failed to get installation token: invalid response");
+    });
+
+    it("rejects an unparsable GitHub installation token expiry", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const { privateKeyPem } = await generateTestKeyPair();
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ token: "fresh-token", expires_at: "not-a-date" }), {
+          status: 201,
+        })
+      );
+
+      await expect(
+        getCachedInstallationTokenWithExpiry(
+          {
+            appId: `app-refresh-invalid-expiry-${Date.now()}`,
+            privateKey: privateKeyPem,
+            installationId: "installation-refresh-invalid-expiry",
+          },
+          undefined,
+          { forceRefresh: true }
+        )
+      ).rejects.toThrow("Failed to get installation token: invalid response");
+    });
   });
 });

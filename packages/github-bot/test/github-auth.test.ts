@@ -176,6 +176,19 @@ describe("generateInstallationToken", () => {
       })
     ).rejects.toThrow("Failed to get installation token: invalid response");
   });
+
+  it("rejects an invalid JSON GitHub token response", async () => {
+    const { privateKeyPem } = await generateTestKeyPair();
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("not json", { status: 201 }));
+
+    await expect(
+      generateInstallationToken({
+        appId: "12345",
+        privateKey: privateKeyPem,
+        installationId: "67890",
+      })
+    ).rejects.toThrow("Failed to get installation token: invalid response");
+  });
 });
 
 describe("checkSenderPermission", () => {

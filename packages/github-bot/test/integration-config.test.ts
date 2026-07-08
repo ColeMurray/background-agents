@@ -126,6 +126,27 @@ describe("getGitHubConfig", () => {
     );
   });
 
+  it("returns fail-closed config and logs warn on invalid JSON response", async () => {
+    const env = createMockEnv(() => Promise.resolve(new Response("not json", { status: 200 })));
+    const log = createMockLogger();
+
+    const result = await getGitHubConfig(env, "acme/widgets", log);
+
+    expect(result).toEqual({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      autoReviewOnOpen: false,
+      enabledRepos: [],
+      allowedTriggerUsers: [],
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.invalid_response",
+      expect.objectContaining({ repo: "acme/widgets", fallback: "fail_closed" })
+    );
+  });
+
   it("returns fail-closed config and logs warn on network error", async () => {
     const env = createMockEnv(() => Promise.reject(new Error("connection refused")));
     const log = createMockLogger();

@@ -96,10 +96,15 @@ export interface GitHubAppConfig {
   installationId: string;
 }
 
-const installationTokenResponseSchema = z.object({
-  token: z.string(),
-  expires_at: z.string(),
-});
+const installationTokenResponseSchema = z
+  .object({
+    token: z.string(),
+    expires_at: z.string().refine((value) => Number.isFinite(Date.parse(value))),
+  })
+  .transform(({ token, expires_at }) => ({
+    token,
+    expiresAtEpochMs: Date.parse(expires_at),
+  }));
 
 /** GitHub installation token response. */
 type InstallationTokenResponse = z.infer<typeof installationTokenResponseSchema>;
@@ -252,7 +257,14 @@ async function getInstallationTokenWithMetadata(
     );
   }
 
-  const parsed = installationTokenResponseSchema.safeParse(await response.json());
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new Error("Failed to get installation token: invalid response");
+  }
+
+  const parsed = installationTokenResponseSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error("Failed to get installation token: invalid response");
   }
@@ -345,12 +357,9 @@ async function refreshInstallationToken(
     config.installationId,
     resolveUserAgent(env)
   );
-  const parsedExpiresAtEpochMs = Date.parse(tokenData.expires_at);
   const cached: CachedInstallationToken = {
     token: tokenData.token,
-    expiresAtEpochMs: Number.isFinite(parsedExpiresAtEpochMs)
-      ? parsedExpiresAtEpochMs
-      : nowEpochMs + INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
+    expiresAtEpochMs: tokenData.expiresAtEpochMs,
     cachedAtEpochMs: nowEpochMs,
   };
 

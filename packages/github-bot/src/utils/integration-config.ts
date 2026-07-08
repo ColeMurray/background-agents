@@ -68,15 +68,25 @@ export async function getGitHubConfig(
     return { ...FAIL_CLOSED, model: env.DEFAULT_MODEL };
   }
 
-  const parsed = resolvedGitHubConfigResponseSchema.safeParse(await response.json());
-  if (!parsed.success) {
+  let data: z.infer<typeof resolvedGitHubConfigResponseSchema>;
+  try {
+    const parsed = resolvedGitHubConfigResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log?.warn("config.invalid_response", {
+        repo,
+        fallback: "fail_closed",
+      });
+      return { ...FAIL_CLOSED, model: env.DEFAULT_MODEL };
+    }
+    data = parsed.data;
+  } catch (err) {
     log?.warn("config.invalid_response", {
       repo,
+      error: err instanceof Error ? err : new Error(String(err)),
       fallback: "fail_closed",
     });
     return { ...FAIL_CLOSED, model: env.DEFAULT_MODEL };
   }
-  const data = parsed.data;
 
   if (!data.config) {
     return {
