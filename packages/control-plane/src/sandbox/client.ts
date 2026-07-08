@@ -582,12 +582,7 @@ export class ModalClient {
           environment_id: request.environmentId,
           build_id: request.buildId,
           callback_url: request.callbackUrl,
-          // SessionRepositoryConfig wire form (sandbox_runtime/types.py).
-          repositories: request.repositories.map((repo) => ({
-            repo_owner: repo.repoOwner,
-            repo_name: repo.repoName,
-            branch: repo.baseBranch,
-          })),
+          repositories: request.repositories.map(toRepositoryConfigPayload),
           user_env_vars: request.userEnvVars,
           build_timeout_seconds: request.buildTimeoutSeconds ?? null,
         }),

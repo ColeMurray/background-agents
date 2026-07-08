@@ -29,18 +29,34 @@ const logger = createLogger("router:environment-secrets");
 /**
  * Post-mutation hook (design §7.4): supersede every live image — their baked
  * secrets are now outdated — then kick a rebuild for prebuild-enabled
- * environments. The supersede is awaited so a failure surfaces to the caller;
- * the rebuild is detached and best-effort.
+ * environments. The supersede is awaited and fail-visible: the secrets are
+ * already stored at this point, so a failure returns a distinct error telling
+ * the caller to retry (a retried mutation re-runs the supersede) instead of
+ * masquerading as a failed write. The rebuild is detached and best-effort.
  */
 async function invalidateImagesAfterSecretsChange(
   env: Env,
   environment: EnvironmentRow,
   ctx: RequestContext
-): Promise<void> {
-  await supersedeEnvironmentImagesForSecretsChange(env, environment.id, ctx);
+): Promise<Response | null> {
+  try {
+    await supersedeEnvironmentImagesForSecretsChange(env, environment.id, ctx);
+  } catch (e) {
+    logger.error("environment.secrets_image_invalidation_failed", {
+      environment_id: environment.id,
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error(
+      "Secrets were saved, but prebuilt image invalidation failed — retry the update",
+      500
+    );
+  }
   if (environment.prebuild_enabled === 1) {
     scheduleEnvironmentImageBuildOnSave(env, environment.id, ctx);
   }
+  return null;
 }
 
 /**
@@ -128,7 +144,8 @@ async function handleSetEnvironmentSecrets(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    await invalidateImagesAfterSecretsChange(env, environment, ctx);
+    const invalidationError = await invalidateImagesAfterSecretsChange(env, environment, ctx);
+    if (invalidationError) return invalidationError;
     return json({
       status: "updated",
       environmentId: id,
@@ -177,7 +194,8 @@ async function handleDeleteEnvironmentSecret(
     });
     const environment = await new EnvironmentStore(env.DB).getById(id);
     if (environment) {
-      await invalidateImagesAfterSecretsChange(env, environment, ctx);
+      const invalidationError = await invalidateImagesAfterSecretsChange(env, environment, ctx);
+      if (invalidationError) return invalidationError;
     }
     return json({ status: "deleted", environmentId: id, key: normalizedKey });
   } catch (e) {
@@ -257,7 +275,8 @@ async function handleImportEnvironmentSecrets(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    await invalidateImagesAfterSecretsChange(env, environment, ctx);
+    const invalidationError = await invalidateImagesAfterSecretsChange(env, environment, ctx);
+    if (invalidationError) return invalidationError;
     return json({
       status: "imported",
       environmentId: id,

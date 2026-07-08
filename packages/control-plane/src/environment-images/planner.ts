@@ -35,18 +35,29 @@ import type {
 const logger = createLogger("environment-images:planner");
 const MS_PER_SECOND = 1000;
 
-type PlannedCallbackAuth =
+export type PlannedCallbackAuth =
   | { kind: "none" }
   | { kind: "bearer_token"; token: string; tokenHash: string; expiresAt: number };
+
+/** Members + fingerprint, resolved before a build row exists. */
+export interface ResolvedEnvironmentBuildTarget {
+  repositories: EnvironmentImageBuildMember[];
+  membersFingerprint: string;
+}
 
 /**
  * Resolves a trigger request into a concrete provider build plan.
  *
  * The planner is the only environment-image layer that talks to the
- * environment and secrets stores. Build-time secrets are the same set the
- * environment's sessions get — global + environment, member repos never
- * inherit (design §6.4/§7.3 build/session parity) — and the build timeout
- * honors the primary member's sandbox settings.
+ * environment and secrets stores. Split deliberately: resolveTarget and
+ * createCallbackAuth run BEFORE the build row is registered (cheap D1 read +
+ * pure crypto), while planBuild — which decrypts secrets — runs AFTER, so a
+ * concurrent secret change always sees a row to supersede and the build's
+ * now-stale secrets can never reach a still-selectable image (§7.4).
+ * Build-time secrets are the same set the environment's sessions get —
+ * global + environment, member repos never inherit (§6.4 build/session
+ * parity) — and the build timeout honors the primary member's sandbox
+ * settings.
  */
 export class EnvironmentImageBuildPlanner {
   constructor(
@@ -54,25 +65,18 @@ export class EnvironmentImageBuildPlanner {
     private readonly provider: EnvironmentImageProvider
   ) {}
 
-  async planBuild(params: {
-    buildId: string;
-    environmentId: string;
-    callbackUrl: string;
-    correlation: CorrelationContext;
-  }): Promise<PlannedEnvironmentImageBuild> {
+  async resolveTarget(environmentId: string): Promise<ResolvedEnvironmentBuildTarget> {
     const store = new EnvironmentStore(this.env.DB);
-    const environment = await store.getById(params.environmentId);
+    const environment = await store.getById(environmentId);
     if (!environment) {
-      throw new EnvironmentImageEnvironmentNotFoundError(params.environmentId);
+      throw new EnvironmentImageEnvironmentNotFoundError(environmentId);
     }
 
-    const memberRows = await store.getRepositoriesForEnvironment(params.environmentId);
+    const memberRows = await store.getRepositoriesForEnvironment(environmentId);
     if (memberRows.length === 0) {
       // Unreachable through the schema (environments require >= 1 repository);
       // defensive against direct store writes.
-      throw new EnvironmentImagePlanningError(
-        `Environment has no repositories: ${params.environmentId}`
-      );
+      throw new EnvironmentImagePlanningError(`Environment has no repositories: ${environmentId}`);
     }
 
     const repositories: EnvironmentImageBuildMember[] = memberRows.map((row) => ({
@@ -80,16 +84,44 @@ export class EnvironmentImageBuildPlanner {
       repoName: row.repo_name,
       baseBranch: row.base_branch,
     }));
-    const primary = repositories[0];
 
-    const [membersFingerprint, sandboxSettings, userEnvVars, callbackAuth, cloneAuth] =
-      await Promise.all([
-        computeMembersFingerprint(repositories),
-        resolveSandboxSettings(this.env.DB, primary.repoOwner, primary.repoName),
-        this.loadUserEnvVars(params.environmentId),
-        this.createCallbackAuth(),
-        this.resolveCloneAuth(params.environmentId),
-      ]);
+    return {
+      repositories,
+      membersFingerprint: await computeMembersFingerprint(repositories),
+    };
+  }
+
+  async createCallbackAuth(): Promise<PlannedCallbackAuth> {
+    if (getRepoImageCallbackMode(this.provider) !== "provider_session") {
+      return { kind: "none" };
+    }
+
+    const token = generateRepoImageCallbackToken();
+    return {
+      kind: "bearer_token",
+      token,
+      tokenHash: await hashRepoImageCallbackToken(token, this.env),
+      expiresAt: Date.now() + REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
+    };
+  }
+
+  async planBuild(params: {
+    buildId: string;
+    environmentId: string;
+    callbackUrl: string;
+    correlation: CorrelationContext;
+    target: ResolvedEnvironmentBuildTarget;
+    callbackAuth: PlannedCallbackAuth;
+  }): Promise<PlannedEnvironmentImageBuild> {
+    const { repositories, membersFingerprint } = params.target;
+    const primary = repositories[0];
+    const callbackAuth = params.callbackAuth;
+
+    const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
+      resolveSandboxSettings(this.env.DB, primary.repoOwner, primary.repoName),
+      this.loadUserEnvVars(params.environmentId),
+      this.resolveCloneAuth(params.environmentId),
+    ]);
 
     const basePlan = {
       buildId: params.buildId,
@@ -150,20 +182,6 @@ export class EnvironmentImageBuildPlanner {
         throw new Error(`Unsupported environment image provider: ${String(exhaustive)}`);
       }
     }
-  }
-
-  private async createCallbackAuth(): Promise<PlannedCallbackAuth> {
-    if (getRepoImageCallbackMode(this.provider) !== "provider_session") {
-      return { kind: "none" };
-    }
-
-    const token = generateRepoImageCallbackToken();
-    return {
-      kind: "bearer_token",
-      token,
-      tokenHash: await hashRepoImageCallbackToken(token, this.env),
-      expiresAt: Date.now() + REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
-    };
   }
 
   private async resolveCloneAuth(environmentId: string): Promise<EnvironmentImageCloneAuth> {

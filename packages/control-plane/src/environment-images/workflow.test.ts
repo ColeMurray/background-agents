@@ -32,6 +32,8 @@ function createStore() {
     getActiveBuild: vi.fn().mockResolvedValue(null),
     hasReadyImageForFingerprint: vi.fn().mockResolvedValue(false),
     getCallbackBuild: vi.fn().mockResolvedValue(null),
+    getBuildRow: vi.fn().mockResolvedValue(null),
+    recordArtifactOnSupersededBuild: vi.fn().mockResolvedValue(true),
     bindProviderSession: vi.fn().mockResolvedValue(true),
     consumeCallbackToken: vi.fn().mockResolvedValue(null),
     markBuildFailedWithCallbackToken: vi.fn().mockResolvedValue(false),
@@ -101,6 +103,8 @@ function createWorkflow(options: {
   store?: ReturnType<typeof createStore>;
   adapter?: ReturnType<typeof createAdapter>;
   planBuild?: ReturnType<typeof vi.fn>;
+  resolveTarget?: ReturnType<typeof vi.fn>;
+  createCallbackAuth?: ReturnType<typeof vi.fn>;
   env?: Env;
   provider?: "modal" | "vercel" | "opencomputer" | null;
 }) {
@@ -110,14 +114,24 @@ function createWorkflow(options: {
     create: vi.fn().mockReturnValue(adapter),
   };
   const planBuild = options.planBuild ?? vi.fn().mockResolvedValue(plannedBuild());
+  const resolveTarget =
+    options.resolveTarget ??
+    vi.fn().mockResolvedValue({
+      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+      membersFingerprint: "fp-1",
+    });
+  const createCallbackAuth =
+    options.createCallbackAuth ?? vi.fn().mockResolvedValue({ kind: "none" });
   const workflow = new EnvironmentImageBuildWorkflow(
     options.env ?? createEnv(),
     store as unknown as EnvironmentImageStore,
     factory,
     options.provider === undefined ? "modal" : options.provider,
-    { planBuild } as unknown as ConstructorParameters<typeof EnvironmentImageBuildWorkflow>[4]
+    { planBuild, resolveTarget, createCallbackAuth } as unknown as ConstructorParameters<
+      typeof EnvironmentImageBuildWorkflow
+    >[4]
   );
-  return { workflow, store, adapter, factory, planBuild };
+  return { workflow, store, adapter, factory, planBuild, resolveTarget, createCallbackAuth };
 }
 
 const ctx = { trace_id: "t", request_id: "r" };
@@ -172,16 +186,57 @@ describe("EnvironmentImageBuildWorkflow", () => {
       expect(store.registerBuild).not.toHaveBeenCalled();
     });
 
-    it("propagates environment-not-found from the planner", async () => {
-      const planBuild = vi
+    it("propagates environment-not-found from target resolution without writing a row", async () => {
+      const resolveTarget = vi
         .fn()
         .mockRejectedValue(new EnvironmentImageEnvironmentNotFoundError("env_missing"));
-      const { workflow, store } = createWorkflow({ planBuild });
+      const { workflow, store } = createWorkflow({ resolveTarget });
 
       await expect(workflow.triggerBuild("env_missing", ctx)).rejects.toBeInstanceOf(
         EnvironmentImageEnvironmentNotFoundError
       );
       expect(store.registerBuild).not.toHaveBeenCalled();
+    });
+
+    it("registers the build row before secrets are read (§7.4 supersede window)", async () => {
+      const { workflow, store, planBuild } = createWorkflow({});
+
+      await workflow.triggerBuild("env_1", ctx);
+
+      // planBuild is where secrets are decrypted; a concurrent secret change
+      // must always find a row to supersede.
+      expect(store.registerBuild.mock.invocationCallOrder[0]).toBeLessThan(
+        planBuild.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("fails a misconfigured provider closed without writing a row", async () => {
+      const factoryError = vi.fn(() => {
+        throw new Error("MODAL_WORKSPACE not configured");
+      });
+      const store = createStore();
+      const adapter = createAdapter();
+      const workflow = new EnvironmentImageBuildWorkflow(
+        createEnv(),
+        store as unknown as EnvironmentImageStore,
+        { create: factoryError },
+        "modal",
+        {
+          planBuild: vi.fn(),
+          resolveTarget: vi.fn().mockResolvedValue({
+            repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+            membersFingerprint: "fp-1",
+          }),
+          createCallbackAuth: vi.fn().mockResolvedValue({ kind: "none" }),
+        } as unknown as ConstructorParameters<typeof EnvironmentImageBuildWorkflow>[4]
+      );
+
+      await expect(workflow.triggerBuild("env_1", ctx)).rejects.toMatchObject({
+        code: "provider_unconfigured",
+      });
+      // No junk failed rows accumulate from a misconfigured provider.
+      expect(store.registerBuild).not.toHaveBeenCalled();
+      expect(adapter.startBuild).not.toHaveBeenCalled();
     });
 
     it("marks the build failed when the adapter cannot start it", async () => {
@@ -220,13 +275,15 @@ describe("EnvironmentImageBuildWorkflow", () => {
     it("skips when a ready image matches the current fingerprint", async () => {
       const store = createStore();
       store.hasReadyImageForFingerprint.mockResolvedValue(true);
-      const { workflow } = createWorkflow({ store });
+      const { workflow, planBuild } = createWorkflow({ store });
 
       const result = await workflow.triggerBuildIfStale("env_1", ctx);
 
       expect(result).toEqual({ type: "up_to_date" });
       expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith("env_1", "modal", "fp-1");
       expect(store.registerBuild).not.toHaveBeenCalled();
+      // A no-op save must not decrypt secrets or mint clone tokens.
+      expect(planBuild).not.toHaveBeenCalled();
     });
 
     it("builds when no ready image matches", async () => {
@@ -357,7 +414,7 @@ describe("EnvironmentImageBuildWorkflow", () => {
       expect(store.deleteSupersededImage).toHaveBeenCalledWith("late-1");
     });
 
-    it("rejects completion the state machine no longer accepts", async () => {
+    it("rejects completion the state machine no longer accepts, recording the artifact", async () => {
       const store = readyBuildStore();
       store.tryMarkEnvironmentImageReady.mockResolvedValue({
         type: "not_accepting_completion",
@@ -371,6 +428,58 @@ describe("EnvironmentImageBuildWorkflow", () => {
           context: ctx,
         })
       ).rejects.toBeInstanceOf(EnvironmentImageCompletionNotAcceptedError);
+      // Superseded mid-transition: the artifact must reach the reaper.
+      expect(store.recordArtifactOnSupersededBuild).toHaveBeenCalledWith(
+        "envimg-env_1-1-abcd",
+        "modal",
+        "im-modal-1"
+      );
+    });
+
+    it("records the artifact of an out-of-band superseded build before rejecting", async () => {
+      const store = createStore();
+      store.getCallbackBuild.mockResolvedValue(null);
+      store.getBuildRow.mockResolvedValue({
+        id: "envimg-env_1-1-abcd",
+        environment_id: "env_1",
+        provider: "modal",
+        status: "superseded",
+      });
+      const { workflow } = createWorkflow({ store });
+
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion(),
+          authorizationHeader: await validAuthHeader(),
+          context: ctx,
+        })
+      ).rejects.toBeInstanceOf(EnvironmentImageCompletionNotAcceptedError);
+      expect(store.recordArtifactOnSupersededBuild).toHaveBeenCalledWith(
+        "envimg-env_1-1-abcd",
+        "modal",
+        "im-modal-1"
+      );
+    });
+
+    it("never records late artifacts for unauthenticated callers", async () => {
+      const store = createStore();
+      store.getCallbackBuild.mockResolvedValue(null);
+      store.getBuildRow.mockResolvedValue({
+        id: "envimg-env_1-1-abcd",
+        environment_id: "env_1",
+        provider: "modal",
+        status: "superseded",
+      });
+      const { workflow } = createWorkflow({ store });
+
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion(),
+          authorizationHeader: "Bearer forged",
+          context: ctx,
+        })
+      ).rejects.toBeInstanceOf(EnvironmentImageCallbackAuthRejectedError);
+      expect(store.recordArtifactOnSupersededBuild).not.toHaveBeenCalled();
     });
   });
 
@@ -433,13 +542,26 @@ describe("EnvironmentImageBuildWorkflow", () => {
       return store;
     }
 
+    const bearerCallbackAuth = () =>
+      vi.fn().mockResolvedValue({
+        kind: "bearer_token",
+        token: "callback-token",
+        tokenHash: "hash-1",
+        expiresAt: 9_999_999_999_999,
+      });
+
     it("registers the callback token and binds the provider session on trigger", async () => {
       const planBuild = vi.fn().mockResolvedValue(vercelPlannedBuild());
       const adapter = createAdapter();
       adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
         await callbacks.bindProviderSession("vercel-session-1");
       });
-      const { workflow, store } = createWorkflow({ planBuild, adapter, provider: "vercel" });
+      const { workflow, store } = createWorkflow({
+        planBuild,
+        adapter,
+        provider: "vercel",
+        createCallbackAuth: bearerCallbackAuth(),
+      });
 
       const result = await workflow.triggerBuild("env_1", ctx);
 
@@ -465,7 +587,12 @@ describe("EnvironmentImageBuildWorkflow", () => {
         await callbacks.bindProviderSession("vercel-session-1");
         throw new Error("launch failed");
       });
-      const { workflow, store } = createWorkflow({ planBuild, adapter, provider: "vercel" });
+      const { workflow, store } = createWorkflow({
+        planBuild,
+        adapter,
+        provider: "vercel",
+        createCallbackAuth: bearerCallbackAuth(),
+      });
 
       await expect(workflow.triggerBuild("env_1", ctx)).rejects.toBeInstanceOf(
         EnvironmentImageTriggerFailedError

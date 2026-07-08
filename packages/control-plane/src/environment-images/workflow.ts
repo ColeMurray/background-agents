@@ -27,7 +27,7 @@ import {
   type EnvironmentImageProviderImageRef,
   type SupersededEnvironmentImage,
 } from "./model";
-import { EnvironmentImageBuildPlanner } from "./planner";
+import { EnvironmentImageBuildPlanner, type PlannedCallbackAuth } from "./planner";
 import {
   createEnvironmentImageBuildAdapterFactory,
   type EnvironmentImageBuildAdapterFactory,
@@ -48,11 +48,10 @@ const logger = createLogger("environment-images:workflow");
 /** Superseded rows reclaimed per cleanup pass; leftovers wait for the next tick. */
 const SUPERSEDED_REAP_BATCH_LIMIT = 25;
 
-interface EnvironmentImageBuildPlannerLike {
-  planBuild(
-    params: Parameters<EnvironmentImageBuildPlanner["planBuild"]>[0]
-  ): ReturnType<EnvironmentImageBuildPlanner["planBuild"]>;
-}
+type EnvironmentImageBuildPlannerLike = Pick<
+  EnvironmentImageBuildPlanner,
+  "resolveTarget" | "createCallbackAuth" | "planBuild"
+>;
 
 export interface AcceptEnvironmentBuildCompleteCommand {
   completion: CompleteEnvironmentImageBuildCallback;
@@ -155,14 +154,29 @@ export class EnvironmentImageBuildWorkflow {
     const buildId = createBuildId(environmentId);
     const callbackUrl = `${this.env.WORKER_URL}/environment-images/build-complete`;
 
-    let planned;
+    // Everything before registerBuild must stay cheap and secret-free: the
+    // §7.4 secret-change supersede can only see builds that have a row, so
+    // the row is registered BEFORE secrets are decrypted (planBuild below).
+    let target;
+    let callbackAuth;
     try {
-      planned = await this.planner.planBuild({
-        buildId,
-        environmentId,
-        callbackUrl,
-        correlation: ctx,
-      });
+      target = await this.planner.resolveTarget(environmentId);
+
+      if (
+        options.onlyIfStale &&
+        (await this.store.hasReadyImageForFingerprint(
+          environmentId,
+          provider,
+          target.membersFingerprint
+        ))
+      ) {
+        return { type: "up_to_date" };
+      }
+
+      // Probe the adapter now so a misconfigured provider fails 503 without
+      // writing a failed row on every cron tick.
+      this.createAdapterForOperation(provider, "trigger_build", ctx, buildId);
+      callbackAuth = await this.planner.createCallbackAuth();
     } catch (e) {
       if (
         e instanceof EnvironmentImageEnvironmentNotFoundError ||
@@ -181,17 +195,6 @@ export class EnvironmentImageBuildWorkflow {
       throw new EnvironmentImageTriggerFailedError("Failed to trigger build", e);
     }
 
-    if (
-      options.onlyIfStale &&
-      (await this.store.hasReadyImageForFingerprint(
-        environmentId,
-        provider,
-        planned.plan.membersFingerprint
-      ))
-    ) {
-      return { type: "up_to_date" };
-    }
-
     let providerSessionIdForCleanup: string | null = null;
     let startAdapter: AnyEnvironmentImageBuildAdapter | null = null;
     try {
@@ -199,8 +202,17 @@ export class EnvironmentImageBuildWorkflow {
         id: buildId,
         environmentId,
         provider,
-        membersFingerprint: planned.plan.membersFingerprint,
-        ...callbackAuthRegistration(planned),
+        membersFingerprint: target.membersFingerprint,
+        ...callbackAuthRegistration(callbackAuth),
+      });
+
+      const planned = await this.planner.planBuild({
+        buildId,
+        environmentId,
+        callbackUrl,
+        correlation: ctx,
+        target,
+        callbackAuth,
       });
 
       const start = this.preparePlannedBuildStart(planned, ctx);
@@ -317,13 +329,17 @@ export class EnvironmentImageBuildWorkflow {
     const { completion, context: ctx } = command;
     const build = await this.store.getCallbackBuild(completion.buildId);
     if (!build) {
+      // The build may have been superseded out-of-band (environment delete,
+      // secret change) while in flight — record its artifact for the reaper
+      // before rejecting, or the provider-side snapshot leaks forever.
+      await this.recordLateProviderImageArtifact(completion, command, ctx);
       throw new EnvironmentImageCompletionNotAcceptedError("Build is not accepting completion");
     }
 
     const provider = build.provider;
-    const validated = this.validateCompletion(completion);
 
     if (getRepoImageCallbackMode(provider) === "provider_session") {
+      const validated = this.validateCompletion(completion);
       // The sandbox itself reports completion with a bearer token; the
       // artifact does not exist yet — snapshotting is the deferred
       // finalization the route schedules via waitUntil.
@@ -362,7 +378,10 @@ export class EnvironmentImageBuildWorkflow {
       return { type: "completion_accepted", finalization };
     }
 
+    // Internal-HMAC mode: authenticate before revealing anything about the
+    // payload's validity (parity with the repo-image workflow).
     await this.requireInternalBuildCallbackAuth(command.authorizationHeader, build.id, ctx);
+    const validated = this.validateCompletion(completion);
     if (!completion.providerImageId) {
       throw new EnvironmentImageInvalidCallbackError("provider_image_id is required");
     }
@@ -418,7 +437,50 @@ export class EnvironmentImageBuildWorkflow {
         return cleanup ? { type: "build_superseded", cleanup } : { type: "build_superseded" };
       }
       case "not_accepting_completion":
+        // Superseded between getCallbackBuild and the transition — record the
+        // artifact for the reaper (auth already passed above).
+        await this.store.recordArtifactOnSupersededBuild(
+          validated.buildId,
+          provider,
+          providerImageId
+        );
         throw new EnvironmentImageCompletionNotAcceptedError("Build is not accepting completion");
+    }
+  }
+
+  /**
+   * A provider_image completion for a build whose row is no longer building:
+   * the artifact already exists provider-side, so after authenticating,
+   * record it on the (out-of-band superseded) row for the reaper. No-ops for
+   * provider_session builds — their artifact is only created at finalization,
+   * so nothing has leaked when the callback is rejected.
+   */
+  private async recordLateProviderImageArtifact(
+    completion: CompleteEnvironmentImageBuildCallback,
+    command: AcceptEnvironmentBuildCompleteCommand,
+    ctx: EnvironmentImageWorkflowContext
+  ): Promise<void> {
+    if (!completion.providerImageId) return;
+
+    const row = await this.store.getBuildRow(completion.buildId);
+    if (!row || getRepoImageCallbackMode(row.provider) !== "provider_image") return;
+
+    await this.requireInternalBuildCallbackAuth(command.authorizationHeader, row.id, ctx);
+
+    const recorded = await this.store.recordArtifactOnSupersededBuild(
+      row.id,
+      row.provider,
+      completion.providerImageId
+    );
+    if (recorded) {
+      logger.info("environment_image.late_artifact_recorded", {
+        build_id: row.id,
+        environment_id: row.environment_id,
+        provider: row.provider,
+        provider_image_id: completion.providerImageId,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
     }
   }
 
@@ -647,10 +709,20 @@ export class EnvironmentImageBuildWorkflow {
 
     const superseded = await this.store.getSupersededImages(SUPERSEDED_REAP_BATCH_LIMIT);
     let reapedSuperseded = 0;
+    const adaptersByProvider = new Map<
+      EnvironmentImageProvider,
+      AnyEnvironmentImageBuildAdapter | null
+    >();
     await Promise.all(
       superseded.map(async (row) => {
         if (row.provider_image_id) {
-          const adapter = this.createAdapterForBestEffortCleanup(row.provider, row.id, ctx);
+          if (!adaptersByProvider.has(row.provider)) {
+            adaptersByProvider.set(
+              row.provider,
+              this.createAdapterForBestEffortCleanup(row.provider, row.id, ctx)
+            );
+          }
+          const adapter = adaptersByProvider.get(row.provider) ?? null;
           if (!adapter) return;
           const deleted = await this.deleteImageBestEffort(
             row.provider,
@@ -933,7 +1005,11 @@ export class EnvironmentImageBuildWorkflow {
   ): Promise<void> | undefined {
     if (replacedImages.length === 0) return undefined;
 
-    const adapter = this.createAdapterForBestEffortCleanup(provider, "", ctx);
+    const adapter = this.createAdapterForBestEffortCleanup(
+      provider,
+      replacedImages[0].environmentImageId,
+      ctx
+    );
     if (!adapter) return undefined;
 
     return Promise.all(
@@ -1005,12 +1081,12 @@ function createBuildId(environmentId: string, now = Date.now()): string {
 }
 
 function callbackAuthRegistration(
-  planned: PlannedEnvironmentImageBuild
+  callbackAuth: PlannedCallbackAuth
 ): Partial<Pick<EnvironmentImageBuild, "callbackTokenHash" | "callbackTokenExpiresAt">> {
-  return planned.callbackAuth.type === "bearer_token"
+  return callbackAuth.kind === "bearer_token"
     ? {
-        callbackTokenHash: planned.callbackAuth.tokenHash,
-        callbackTokenExpiresAt: planned.callbackAuth.expiresAt,
+        callbackTokenHash: callbackAuth.tokenHash,
+        callbackTokenExpiresAt: callbackAuth.expiresAt,
       }
     : {};
 }

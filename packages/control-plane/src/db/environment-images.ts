@@ -447,6 +447,48 @@ export class EnvironmentImageStore {
     };
   }
 
+  /** Any-status row lookup for late-completion handling. */
+  async getBuildRow(buildId: string): Promise<{
+    id: string;
+    environment_id: string;
+    provider: EnvironmentImageProvider;
+    status: EnvironmentImageBuildStatus;
+  } | null> {
+    return this.db
+      .prepare("SELECT id, environment_id, provider, status FROM environment_images WHERE id = ?")
+      .bind(buildId)
+      .first<{
+        id: string;
+        environment_id: string;
+        provider: EnvironmentImageProvider;
+        status: EnvironmentImageBuildStatus;
+      }>();
+  }
+
+  /**
+   * Late completion for a build superseded out-of-band (environment delete,
+   * secret change) while it was in flight: the callback is rejected, but the
+   * provider artifact it reports already exists — record it on the superseded
+   * row so the reaper reclaims it instead of leaking it (Modal snapshots
+   * never expire). Only artifact-less superseded rows are written, so a
+   * ready row's artifact can never be clobbered by a replayed callback.
+   */
+  async recordArtifactOnSupersededBuild(
+    buildId: string,
+    provider: EnvironmentImageProvider,
+    providerImageId: string
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE environment_images SET provider_image_id = ?
+         WHERE id = ? AND provider = ? AND status = 'superseded' AND provider_image_id IS NULL`
+      )
+      .bind(providerImageId, buildId, provider)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   async deleteSupersededImage(environmentImageId: string): Promise<boolean> {
     const result = await this.db
       .prepare("DELETE FROM environment_images WHERE id = ? AND status = 'superseded'")

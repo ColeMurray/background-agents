@@ -432,6 +432,33 @@ describe("Environment images", () => {
       expect(row?.error_message).toBe("setup.failed: boom");
     });
 
+    it("records the artifact when a secret change superseded the build mid-flight", async () => {
+      const environmentId = await seedEnvironment();
+      await registerBuild(environmentId, "cb-late");
+      // Secret-change save-hook flips the in-flight build to superseded.
+      await new EnvironmentImageStore(env.DB).supersedeActiveImages(environmentId);
+
+      const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
+        method: "POST",
+        headers: await authHeaders(),
+        body: JSON.stringify({
+          build_id: "cb-late",
+          provider_image_id: "im-late-orphan",
+          member_shas: MEMBER_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 30,
+        }),
+      });
+
+      // Rejected — but the already-created provider artifact is recorded on
+      // the superseded row so the cleanup reaper reclaims it instead of
+      // leaking it (Modal snapshots never expire).
+      expect(response.status).toBe(409);
+      const row = await getRow("cb-late");
+      expect(row?.status).toBe("superseded");
+      expect(row?.provider_image_id).toBe("im-late-orphan");
+    });
+
     it("rejects completion for unknown builds with 409", async () => {
       const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
         method: "POST",

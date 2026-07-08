@@ -1,5 +1,6 @@
 """Tests for the image build scheduler (cron)."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from src.scheduler.image_builder import (
     _git_ls_remote_sha,
     _should_rebuild,
+    _should_rebuild_environment,
 )
 
 
@@ -173,6 +175,103 @@ class TestShouldRebuild:
         ]
         result = _should_rebuild("acme", "repo", "abc123", images)
         assert result is True
+
+
+def _environment(fingerprint="fp-current", repositories=None):
+    return {
+        "id": "env_1",
+        "name": "Flagship",
+        "membersFingerprint": fingerprint,
+        "repositories": repositories
+        or [
+            {"repoOwner": "acme", "repoName": "web", "baseBranch": "main"},
+            {"repoOwner": "acme", "repoName": "api", "baseBranch": "develop"},
+        ],
+    }
+
+
+def _environment_image(**overrides):
+    image = {
+        "id": "envimg-1",
+        "environment_id": "env_1",
+        "status": "ready",
+        "members_fingerprint": "fp-current",
+        "member_shas": json.dumps(
+            [
+                {"repoOwner": "acme", "repoName": "web", "baseSha": "sha-web"},
+                {"repoOwner": "acme", "repoName": "api", "baseSha": "sha-api"},
+            ]
+        ),
+        "runtime_version": "v53-list-native-runtime",
+    }
+    image.update(overrides)
+    return image
+
+
+class TestShouldRebuildEnvironment:
+    """Test the _should_rebuild_environment trigger logic (design §7.3)."""
+
+    def _ls_remote(self, shas_by_repo):
+        def lookup(repo_owner, repo_name, ref, clone_token):
+            return shas_by_repo.get(f"{repo_owner}/{repo_name}")
+
+        return lookup
+
+    def test_rebuild_when_no_ready_image(self):
+        """Trigger 1: no images at all → rebuild."""
+        assert _should_rebuild_environment(_environment(), [], 53, "") is True
+
+    def test_rebuild_when_fingerprint_mismatch(self):
+        """Trigger 1: ready image for an older member set → rebuild."""
+        images = [_environment_image(members_fingerprint="fp-old")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_skip_when_building(self):
+        """Per-environment concurrency 1: in-flight build → skip."""
+        images = [_environment_image(status="building")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is False
+
+    def test_rebuild_when_runtime_below_floor(self):
+        """Trigger 3: baked runtime below the compatibility floor → rebuild."""
+        images = [_environment_image(runtime_version="v52-old")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_rebuild_when_runtime_unparseable(self):
+        """Trigger 3 fails closed: unparseable runtime_version → rebuild."""
+        images = [_environment_image(runtime_version="not-a-version")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_rebuild_when_member_shas_malformed(self):
+        """Malformed provenance means drift is undetectable → rebuild."""
+        images = [_environment_image(member_shas="not-json")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_rebuild_when_member_branch_drifts(self):
+        """Trigger 2: any member's branch tip moved → rebuild."""
+        images = [_environment_image()]
+        with patch(
+            "src.scheduler.image_builder._git_ls_remote_sha",
+            side_effect=self._ls_remote({"acme/web": "sha-web", "acme/api": "sha-api-NEW"}),
+        ):
+            assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_skip_when_all_members_match(self):
+        """All shas match, runtime fine, fingerprint matches → skip."""
+        images = [_environment_image()]
+        with patch(
+            "src.scheduler.image_builder._git_ls_remote_sha",
+            side_effect=self._ls_remote({"acme/web": "sha-web", "acme/api": "sha-api"}),
+        ):
+            assert _should_rebuild_environment(_environment(), images, 53, "") is False
+
+    def test_ls_remote_failure_is_not_drift(self):
+        """A transient lookup failure must not cause rebuild storms."""
+        images = [_environment_image()]
+        with patch(
+            "src.scheduler.image_builder._git_ls_remote_sha",
+            side_effect=self._ls_remote({"acme/web": "sha-web", "acme/api": None}),
+        ):
+            assert _should_rebuild_environment(_environment(), images, 53, "") is False
 
 
 class TestRebuildRepoImages:

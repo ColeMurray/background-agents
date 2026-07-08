@@ -24,7 +24,7 @@ import {
   type OpenComputerSandboxResponse,
   type OpenComputerSecretStoreResponse,
 } from "../opencomputer-rest-client";
-import { buildSessionConfig } from "../sandbox-env";
+import { buildSessionConfig, toRepositoryConfigPayload } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -467,12 +467,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         repoName: primary.repoName,
         sessionConfig: {
           branch: primary.baseBranch,
-          // SessionRepositoryConfig wire form (sandbox_runtime/types.py).
-          repositories: config.repositories.map((repo) => ({
-            repo_owner: repo.repoOwner,
-            repo_name: repo.repoName,
-            branch: repo.baseBranch,
-          })),
+          repositories: config.repositories.map(toRepositoryConfigPayload),
         },
         buildId: config.buildId,
         callbackUrl: config.callbackUrl,

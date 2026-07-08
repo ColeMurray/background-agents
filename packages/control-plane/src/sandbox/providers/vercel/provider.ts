@@ -11,7 +11,7 @@ import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
-import { buildSessionConfig } from "../../sandbox-env";
+import { buildSessionConfig, toRepositoryConfigPayload } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -370,12 +370,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         repoName: primary.repoName,
         sessionConfig: {
           branch: primary.baseBranch,
-          // SessionRepositoryConfig wire form (sandbox_runtime/types.py).
-          repositories: config.repositories.map((repo) => ({
-            repo_owner: repo.repoOwner,
-            repo_name: repo.repoName,
-            branch: repo.baseBranch,
-          })),
+          repositories: config.repositories.map(toRepositoryConfigPayload),
         },
       });
       const created = await this.client.createSandbox(
