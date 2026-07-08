@@ -14,11 +14,11 @@ const OPENAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 /**
  * Where a session's OpenAI OAuth tokens are read from and rotated back to. A
- * session checks its launch unit first — the environment for environment-
- * launched sessions, the repo for repo-launched ones (launch-unit scoping,
- * §6.4/§7.4) — then falls back to global. Each variant carries everything
- * needed to write the rotated tokens back to the same place, so refresh never
- * has to re-derive the identity (and the old repoId-null guard disappears).
+ * session reads from its own secret scope first — the environment for
+ * environment-launched sessions, the repo for repo-launched ones (§6.4/§7.4) —
+ * then falls back to global. Each variant carries everything needed to write
+ * the rotated tokens back to the same place, so refresh never has to re-derive
+ * the identity (and the old repoId-null guard disappears).
  */
 type TokenSecretSource =
   | { kind: "environment"; environmentId: string }
@@ -110,11 +110,11 @@ export class OpenAITokenRefreshService {
   }
 
   /**
-   * The session's launch-unit secret source, or null for repo-less sessions
-   * with no environment (global-only). Environment-launched sessions resolve to
-   * the environment and never read member repo secrets — launch-unit scoping.
+   * The session's own secret source, or null for repo-less sessions with no
+   * environment (global-only). Environment-launched sessions resolve to the
+   * environment and never read member repo secrets (§6.4/§7.4).
    */
-  private async resolveLaunchUnitSource(session: SessionRow): Promise<TokenSecretSource | null> {
+  private async resolveSessionSecretSource(session: SessionRow): Promise<TokenSecretSource | null> {
     if (session.environment_id) {
       return { kind: "environment", environmentId: session.environment_id };
     }
@@ -169,12 +169,12 @@ export class OpenAITokenRefreshService {
   }
 
   private async readTokenState(session: SessionRow): Promise<OpenAITokenState | null> {
-    const launchUnit = await this.resolveLaunchUnitSource(session);
-    if (launchUnit) {
-      const secrets = await this.readSecretsForSource(launchUnit);
-      const launchUnitState = this.getTokenStateFromSecrets(secrets, launchUnit);
-      if (launchUnitState) {
-        return launchUnitState;
+    const source = await this.resolveSessionSecretSource(session);
+    if (source) {
+      const secrets = await this.readSecretsForSource(source);
+      const state = this.getTokenStateFromSecrets(secrets, source);
+      if (state) {
+        return state;
       }
     }
 

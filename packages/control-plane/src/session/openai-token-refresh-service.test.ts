@@ -259,8 +259,8 @@ describe("OpenAITokenRefreshService", () => {
   });
 
   it("reads and rotates environment secrets for an environment-launched session", async () => {
-    // Repo secrets exist but must be ignored — launch-unit scoping means an
-    // environment session sources tokens from the environment, never its members.
+    // Repo secrets exist but must be ignored — an environment session sources
+    // tokens from the environment, never its members (§6.4/§7.4).
     mockState.repoSecrets.set(123, {
       OPENAI_OAUTH_REFRESH_TOKEN: "repo-refresh-should-be-ignored",
       OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",

@@ -1,9 +1,9 @@
 /**
  * Sessions launched from an environment (PR-9, design §7.6): the environment's
  * repositories are snapshotted into session_repositories and sessions.environment_id
- * records provenance. Secrets follow launch-unit scoping — global + environment
- * only, never the member repos' — and editing/deleting the environment afterwards
- * never mutates the session (its name simply resolves null once deleted).
+ * records provenance. Secrets come from global + environment only — never the
+ * member repos' — and editing/deleting the environment afterwards never mutates
+ * the session (its name simply resolves null once deleted).
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
@@ -41,7 +41,7 @@ async function seedEnvironment(id: string, name: string, repos: RepoSpec[]): Pro
   );
 }
 
-/** Invoke the DO's real (private) getUserEnvVars, exercising the launch-unit fold. */
+/** Invoke the DO's real (private) getUserEnvVars, exercising the session secret fold. */
 function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
   return runInDurableObject(stub, (instance: SessionDO) =>
     (
@@ -159,7 +159,7 @@ describe("sessions from environments", () => {
       ONLY_ENV: "e",
     });
     // The member repo has its own secrets that must NOT leak into an
-    // environment-launched session (launch-unit scoping, §6.4/§7.4).
+    // environment-launched session (§6.4/§7.4).
     await new RepoSecretsStore(env.DB, KEY()).setSecrets(WEB.repoId, "acme", "web", {
       SHARED: "web",
       ONLY_WEB: "w",
