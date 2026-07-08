@@ -1,5 +1,6 @@
 """Tests for entrypoint boot modes and git sync."""
 
+import json
 import os
 from dataclasses import replace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -207,6 +208,66 @@ class TestImageBuildMode:
         assert sync_calls[0].kwargs["head_sha"] == "abc123def456"
 
     @pytest.mark.asyncio
+    async def test_build_mode_reports_member_shas_per_repo(self, build_env, tmp_path):
+        """Multi-repo builds report one member sha per repository, in position order."""
+        env = {
+            **build_env,
+            "SESSION_CONFIG": json.dumps(
+                {
+                    "branch": "main",
+                    "repositories": [
+                        {"repo_owner": "acme", "repo_name": "web", "branch": "main"},
+                        {"repo_owner": "acme", "repo_name": "api", "branch": "develop"},
+                    ],
+                }
+            ),
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.workspace_path = tmp_path
+        supervisor.repositories = [
+            replace(repo, path=tmp_path / repo.name) for repo in supervisor.repositories
+        ]
+        for repo in supervisor.repositories:
+            repo.path.mkdir(parents=True, exist_ok=True)
+
+        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.shutdown = AsyncMock()
+        supervisor.shutdown_event.set()
+        supervisor.log = MagicMock()
+
+        shas_by_cwd = {tmp_path / "web": b"aaa111\n", tmp_path / "api": b"bbb222\n"}
+
+        async def fake_subprocess(*args, **kwargs):
+            stdout = shas_by_cwd.get(kwargs.get("cwd"), b"")
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(stdout, b""))
+            mock_proc.wait = AsyncMock(return_value=0)
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                side_effect=fake_subprocess,
+            ),
+        ):
+            await supervisor.run()
+
+        sync_calls = [
+            c
+            for c in supervisor.log.info.call_args_list
+            if c.args and c.args[0] == "git.sync_complete"
+        ]
+        assert len(sync_calls) == 1
+        assert sync_calls[0].kwargs["head_sha"] == "aaa111"
+        assert sync_calls[0].kwargs["member_shas"] == [
+            {"repoOwner": "acme", "repoName": "web", "baseSha": "aaa111"},
+            {"repoOwner": "acme", "repoName": "api", "baseSha": "bbb222"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_reports_success_callback_from_build_mode(self, build_env, tmp_path):
         """Build mode should report completion itself when callback metadata is configured."""
         supervisor = _make_supervisor(build_env)
@@ -229,7 +290,7 @@ class TestImageBuildMode:
             return mock_proc
 
         with (
-            patch.dict(os.environ, build_env, clear=False),
+            patch.dict(os.environ, {**build_env, "SANDBOX_VERSION": "v99-test"}, clear=False),
             patch(
                 "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
@@ -244,6 +305,8 @@ class TestImageBuildMode:
         callback.report_success.assert_awaited_once_with(
             base_sha="abc123def456",
             build_duration_seconds=ANY,
+            member_shas=[{"repoOwner": "acme", "repoName": "my-repo", "baseSha": "abc123def456"}],
+            runtime_version="v99-test",
         )
         callback.report_failure.assert_not_called()
 

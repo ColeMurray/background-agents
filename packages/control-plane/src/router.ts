@@ -29,6 +29,7 @@ import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { environmentRoutes } from "./routes/environments";
 import { environmentSecretsRoutes } from "./routes/environment-secrets";
+import { environmentImageRoutes } from "./routes/environment-images";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
@@ -60,6 +61,10 @@ const PUBLIC_ROUTES: RegExp[] = [
   /^\/webhooks\/automation\/[^/]+$/,
   /^\/repo-images\/build-complete$/,
   /^\/repo-images\/build-failed$/,
+  // Environment-image callbacks authenticate inside the workflow (internal
+  // HMAC for provider_image mode), same as the repo-image callbacks above.
+  /^\/environment-images\/build-complete$/,
+  /^\/environment-images\/build-failed$/,
 ];
 
 /**
@@ -317,6 +322,7 @@ const routes: Route[] = [
   // Environments (Phase-2 launch unit; internal-HMAC only, web BFF proxied)
   ...environmentRoutes,
   ...environmentSecretsRoutes,
+  ...environmentImageRoutes,
 
   // Model preferences
   ...modelPreferencesRoutes,

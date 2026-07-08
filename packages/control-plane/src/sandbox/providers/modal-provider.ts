@@ -50,6 +50,33 @@ export interface ModalRepoImageBuildProvider {
   deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
 }
 
+export interface TriggerModalEnvironmentImageBuildConfig {
+  buildId: string;
+  environmentId: string;
+  /** Members in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  callbackUrl: string;
+  userEnvVars?: Record<string, string>;
+  /**
+   * Build sandbox lifetime, in milliseconds. Already capped by the trigger.
+   * Omitted -> Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
+   */
+  buildTimeoutMs?: number;
+  correlation?: CorrelationContext;
+}
+
+export interface TriggerModalEnvironmentImageBuildResult {
+  buildId: string;
+  status: string;
+}
+
+export interface ModalEnvironmentImageBuildProvider {
+  triggerEnvironmentImageBuild(
+    config: TriggerModalEnvironmentImageBuildConfig
+  ): Promise<TriggerModalEnvironmentImageBuildResult>;
+  deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
+}
+
 /**
  * Modal sandbox provider.
  *
@@ -70,7 +97,9 @@ export interface ModalRepoImageBuildProvider {
  * }
  * ```
  */
-export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuildProvider {
+export class ModalSandboxProvider
+  implements SandboxProvider, ModalRepoImageBuildProvider, ModalEnvironmentImageBuildProvider
+{
   readonly name = "modal";
 
   readonly capabilities: SandboxProviderCapabilities = {
@@ -263,6 +292,47 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
         throw error;
       }
       throw this.classifyError("Failed to trigger Modal repo image build", error);
+    }
+  }
+
+  /**
+   * Trigger a Modal environment-image build (design §7.3).
+   */
+  async triggerEnvironmentImageBuild(
+    config: TriggerModalEnvironmentImageBuildConfig
+  ): Promise<TriggerModalEnvironmentImageBuildResult> {
+    try {
+      const result = await this.client.buildEnvironmentImage(
+        {
+          environmentId: config.environmentId,
+          buildId: config.buildId,
+          callbackUrl: config.callbackUrl,
+          repositories: config.repositories,
+          userEnvVars: config.userEnvVars,
+          buildTimeoutSeconds:
+            config.buildTimeoutMs === undefined
+              ? undefined
+              : Math.ceil(config.buildTimeoutMs / MS_PER_SECOND),
+        },
+        config.correlation
+      );
+
+      return {
+        buildId: result.buildId,
+        status: result.status,
+      };
+    } catch (error) {
+      if (error instanceof ModalApiError) {
+        throw this.classifyErrorWithStatus(
+          `Environment image build failed with HTTP ${error.status}: ${error.message}`,
+          error.status,
+          error
+        );
+      }
+      if (error instanceof SandboxProviderError) {
+        throw error;
+      }
+      throw this.classifyError("Failed to trigger Modal environment image build", error);
     }
   }
 

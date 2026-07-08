@@ -197,10 +197,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123def456"
-        assert complete is True
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123def456"
+        assert result.complete is True
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_complete_without_sha(self):
@@ -212,10 +212,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is True
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is True
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_incomplete_when_sandbox_exits(self):
@@ -228,10 +228,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123"
-        assert complete is False
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123"
+        assert result.complete is False
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_captures_setup_failure_tail(self):
@@ -256,10 +256,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123"
-        assert complete is False
-        assert error == "setup.failed: npm install\nmissing dependency"
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123"
+        assert result.complete is False
+        assert result.error == "setup.failed: npm install\nmissing dependency"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_supervisor_error(self):
@@ -276,10 +276,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is False
-        assert error == "supervisor.error: unexpected startup failure"
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is False
+        assert result.error == "supervisor.error: unexpected startup failure"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_supervisor_fatal(self):
@@ -296,10 +296,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is False
-        assert error == "supervisor.fatal: unexpected startup failure"
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is False
+        assert result.error == "supervisor.fatal: unexpected startup failure"
 
     @pytest.mark.asyncio
     async def test_returns_incomplete_on_error(self):
@@ -312,10 +312,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = _raise()
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is False
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is False
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_handles_malformed_json(self):
@@ -328,10 +328,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123"
-        assert complete is True
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123"
+        assert result.complete is True
+        assert result.error is None
 
 
 class TestBuildError:

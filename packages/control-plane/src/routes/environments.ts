@@ -14,6 +14,7 @@ import {
   type EnvironmentRepositoryInsert,
 } from "../db/environments";
 import { generateId } from "../auth/crypto";
+import { scheduleEnvironmentImageBuildOnSave } from "../environment-images/save-hooks";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -144,6 +145,10 @@ async function handleCreateEnvironment(
     trace_id: ctx.trace_id,
   });
 
+  if (row.prebuild_enabled === 1) {
+    scheduleEnvironmentImageBuildOnSave(env, id, ctx);
+  }
+
   return json(
     { environment: toEnvironment(row, await store.getRepositoriesForEnvironment(id)) },
     201
@@ -219,6 +224,10 @@ async function handleUpdateEnvironment(
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   });
+
+  if (updated.prebuild_enabled === 1) {
+    scheduleEnvironmentImageBuildOnSave(env, id, ctx);
+  }
 
   return json({
     environment: toEnvironment(updated, await store.getRepositoriesForEnvironment(id)),

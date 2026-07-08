@@ -571,6 +571,119 @@ async def api_build_repo_image(
 
 @app.function(
     image=function_image,
+    secrets=[internal_api_secret, github_app_secrets],
+)
+@fastapi_endpoint(method="POST")
+async def api_build_environment_image(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+) -> dict:
+    """
+    Kick off an async environment image build (design §7.3). Returns immediately.
+
+    Spawns a build_environment_image worker that clones every member repo,
+    runs their setup hooks sequentially, snapshots the filesystem, and POSTs
+    the result (member_shas + runtime_version) to callback_url.
+
+    POST body:
+    {
+        "environment_id": "env_...",
+        "build_id": "...",
+        "callback_url": "...",
+        "repositories": [{"repo_owner": "...", "repo_name": "...", "branch": "..."}],
+        "user_env_vars": {...},          // optional
+        "build_timeout_seconds": 1800    // optional
+    }
+    """
+    start_time = time.time()
+    http_status = 200
+    outcome = "success"
+
+    require_auth(authorization)
+
+    try:
+        from .sandbox.manager import (
+            DEFAULT_BUILD_TIMEOUT_SECONDS,
+            build_function_timeout_seconds,
+        )
+        from .scheduler.image_builder import build_environment_image
+
+        environment_id = request.get("environment_id")
+        build_id = request.get("build_id", "")
+        callback_url = request.get("callback_url", "")
+        repositories = request.get("repositories")
+        user_env_vars = request.get("user_env_vars") or None
+        # Already capped by the control plane; default when absent/null.
+        build_timeout_seconds = int(
+            request.get("build_timeout_seconds") or DEFAULT_BUILD_TIMEOUT_SECONDS
+        )
+
+        if not environment_id:
+            raise HTTPException(status_code=400, detail="environment_id is required")
+
+        if not build_id:
+            raise HTTPException(status_code=400, detail="build_id is required")
+
+        if not isinstance(repositories, list) or not repositories:
+            raise HTTPException(status_code=400, detail="repositories must be a non-empty list")
+        for entry in repositories:
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("repo_owner")
+                or not entry.get("repo_name")
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="repositories entries require repo_owner and repo_name",
+                )
+
+        function_timeout = build_function_timeout_seconds(build_timeout_seconds)
+
+        # Spawn the async builder — returns immediately
+        await build_environment_image.with_options(timeout=function_timeout).spawn.aio(
+            environment_id=environment_id,
+            repositories=repositories,
+            callback_url=callback_url,
+            build_id=build_id,
+            user_env_vars=user_env_vars,
+            build_timeout_seconds=build_timeout_seconds,
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "build_id": build_id,
+                "status": "building",
+            },
+        }
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        raise
+    except Exception as e:
+        outcome = "error"
+        http_status = 500
+        log.error("api.error", exc=e, endpoint_name="api_build_environment_image")
+        return {"success": False, "error": str(e)}
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "modal.http_request",
+            http_method="POST",
+            http_path="/api_build_environment_image",
+            http_status=http_status,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            endpoint_name="api_build_environment_image",
+            trace_id=x_trace_id,
+            request_id=x_request_id,
+        )
+
+
+@app.function(
+    image=function_image,
     secrets=[internal_api_secret],
 )
 @fastapi_endpoint(method="POST")

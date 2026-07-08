@@ -394,9 +394,19 @@ class TestRebuildRepoImages:
 
             await rebuild_repo_images.local()
 
-        # Check that mark-stale and cleanup were called
-        stale_calls = [c for c in mock_post.call_args_list if "mark-stale" in str(c)]
+        # Both passes run their own mark-stale and cleanup
+        stale_calls = [c for c in mock_post.call_args_list if "repo-images/mark-stale" in str(c)]
         assert len(stale_calls) == 1
 
-        cleanup_calls = [c for c in mock_post.call_args_list if "cleanup" in str(c)]
+        cleanup_calls = [c for c in mock_post.call_args_list if "repo-images/cleanup" in str(c)]
         assert len(cleanup_calls) == 1
+
+        environment_stale_calls = [
+            c for c in mock_post.call_args_list if "environment-images/mark-stale" in str(c)
+        ]
+        assert len(environment_stale_calls) == 1
+
+        environment_cleanup_calls = [
+            c for c in mock_post.call_args_list if "environment-images/cleanup" in str(c)
+        ]
+        assert len(environment_cleanup_calls) == 1

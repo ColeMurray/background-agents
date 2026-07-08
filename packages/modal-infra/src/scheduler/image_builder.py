@@ -23,9 +23,11 @@ The scheduler flow:
 import asyncio
 import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 import httpx
 import modal
@@ -174,24 +176,32 @@ async def _callback_with_retry(
     return False
 
 
-async def _stream_build_logs(
-    sandbox, redact_values: Iterable[str] = ()
-) -> tuple[str, bool, str | None]:
+@dataclass
+class BuildLogResult:
+    """What the build runtime reported through its structured log stream."""
+
+    head_sha: str = ""
+    member_shas: list[dict] = field(default_factory=list)
+    runtime_version: str = ""
+    complete: bool = False
+    error: str | None = None
+
+
+async def _stream_build_logs(sandbox, redact_values: Iterable[str] = ()) -> BuildLogResult:
     """
     Stream sandbox stdout and extract build results.
 
     The entrypoint logs structured JSON lines. We look for:
-    - event="git.sync_complete" with "head_sha" field
-    - event="image_build.complete" to know the build finished
+    - event="git.sync_complete" with "head_sha" (single-repo) and "member_shas"
+      (per-member provenance, [{repoOwner, repoName, baseSha}])
+    - event="image_build.complete" with "runtime_version" to know the build
+      finished and which runtime it baked
     - setup/supervisor errors to preserve the actual build failure
 
     The sandbox stays alive after logging image_build.complete (it awaits
     shutdown_event), so we can snapshot_filesystem() while it's still running.
-
-    Returns:
-        (head_sha, build_complete, error_message) tuple. head_sha is empty string if not found.
     """
-    head_sha = ""
+    result = BuildLogResult()
     setup_error: str | None = None
     supervisor_error: str | None = None
     redact_values = tuple(redact_values)
@@ -204,10 +214,16 @@ async def _stream_build_logs(
                 event = entry.get("event")
                 if not isinstance(event, str):
                     continue
-                if event == "git.sync_complete" and entry.get("head_sha"):
-                    head_sha = entry["head_sha"]
+                if event == "git.sync_complete":
+                    if entry.get("head_sha"):
+                        result.head_sha = entry["head_sha"]
+                    if isinstance(entry.get("member_shas"), list):
+                        result.member_shas = entry["member_shas"]
                 elif event == "image_build.complete":
-                    return head_sha, True, None
+                    if isinstance(entry.get("runtime_version"), str):
+                        result.runtime_version = entry["runtime_version"]
+                    result.complete = True
+                    return result
 
                 failure_message = _format_build_failure_event(entry, redact_values)
                 if failure_message and event in _SETUP_FAILURE_EVENTS and setup_error is None:
@@ -218,7 +234,8 @@ async def _stream_build_logs(
                 continue
     except Exception as e:
         log.warn("build.stream_error", error=str(e))
-    return head_sha, False, setup_error or supervisor_error
+    result.error = setup_error or supervisor_error
+    return result
 
 
 @app.function(
@@ -289,15 +306,16 @@ async def build_repo_image(
 
         # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)
         redact_values = (clone_token, *((user_env_vars or {}).values()))
-        base_sha, build_complete, build_error = await _stream_build_logs(
+        build_logs = await _stream_build_logs(
             handle.modal_sandbox,
             redact_values=redact_values,
         )
-        if not build_complete:
+        if not build_logs.complete:
             exit_code = handle.modal_sandbox.returncode
-            if build_error:
-                raise BuildError(f"Build sandbox exited without completing: {build_error}")
+            if build_logs.error:
+                raise BuildError(f"Build sandbox exited without completing: {build_logs.error}")
             raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
+        base_sha = build_logs.head_sha
 
         # 4. Snapshot the running sandbox's filesystem
         image = await handle.modal_sandbox.snapshot_filesystem.aio(
@@ -358,6 +376,160 @@ async def build_repo_image(
             await _terminate_build_sandbox(handle, build_id, "cleanup")
 
 
+@app.function(
+    image=function_image,
+    secrets=[internal_api_secret, github_app_secrets],
+    timeout=build_function_timeout_seconds(DEFAULT_BUILD_TIMEOUT_SECONDS),
+)
+async def build_environment_image(
+    environment_id: str,
+    repositories: list[dict],
+    callback_url: str = "",
+    build_id: str = "",
+    user_env_vars: dict[str, str] | None = None,
+    build_timeout_seconds: int | None = None,
+) -> None:
+    """
+    Async worker: build an environment image (design §7.3).
+
+    Generalizes build_repo_image to a repository set: the build sandbox gets
+    SESSION_CONFIG.repositories and the list-native runtime clones every
+    member and runs each member's setup.sh sequentially, fatally. The success
+    callback carries what only the build knows — per-member clone provenance
+    (member_shas) and the baked runtime_version — while the members
+    fingerprint stays control-plane-side on the registered row.
+
+    Args:
+        environment_id: Environment the image belongs to (env_<id>)
+        repositories: SessionRepositoryConfig list ([{repo_owner, repo_name,
+            branch}], position order, [0] = primary)
+        callback_url: URL to POST success result to
+        build_id: Build identifier from the control plane
+        user_env_vars: Build secrets (global + environment, merged by the
+            control plane) injected into the build sandbox
+        build_timeout_seconds: Build sandbox lifetime (already clamped by the
+            control plane). None → DEFAULT_BUILD_TIMEOUT_SECONDS.
+    """
+    from ..sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, SandboxManager
+
+    sandbox_timeout_seconds = build_timeout_seconds or DEFAULT_BUILD_TIMEOUT_SECONDS
+
+    # Validate callback URL against allowed hosts to prevent SSRF
+    if callback_url and not validate_control_plane_url(callback_url):
+        log.error("build.invalid_callback_url", url=callback_url, build_id=build_id)
+        return
+
+    start_time = time.time()
+    manager = SandboxManager()
+    handle = None
+    sandbox_terminated = False
+
+    try:
+        if not repositories:
+            raise BuildError("environment build requires at least one repository")
+        primary = repositories[0]
+
+        clone_token = resolve_clone_token() or ""
+
+        log.info(
+            "environment_build.start",
+            build_id=build_id,
+            environment_id=environment_id,
+            repository_count=len(repositories),
+        )
+
+        handle = await manager.create_build_sandbox(
+            repo_owner=primary.get("repo_owner", ""),
+            repo_name=primary.get("repo_name", ""),
+            default_branch=primary.get("branch") or "main",
+            clone_token=clone_token,
+            user_env_vars=user_env_vars,
+            timeout_seconds=sandbox_timeout_seconds,
+            repositories=repositories,
+        )
+
+        # Stream stdout until the build completes. Redaction covers the clone
+        # token and every build secret value (global + environment) so neither
+        # reaches the failure message, the callback payload, or D1.
+        redact_values = (clone_token, *((user_env_vars or {}).values()))
+        build_logs = await _stream_build_logs(
+            handle.modal_sandbox,
+            redact_values=redact_values,
+        )
+        if not build_logs.complete:
+            exit_code = handle.modal_sandbox.returncode
+            if build_logs.error:
+                raise BuildError(f"Build sandbox exited without completing: {build_logs.error}")
+            raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
+
+        # Registration fails closed on these (design §7.3) — surface the real
+        # cause here instead of an opaque callback rejection. Missing fields
+        # mean the base image bakes a runtime too old for environment builds.
+        if not build_logs.member_shas or not build_logs.runtime_version:
+            raise BuildError(
+                "build completed without member_shas/runtime_version — "
+                "base image runtime predates environment builds"
+            )
+
+        # Snapshot the running sandbox's filesystem
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(
+            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+        )
+        provider_image_id = image.object_id
+
+        sandbox_terminated = await _terminate_build_sandbox(handle, build_id, "snapshot_complete")
+
+        build_duration = time.time() - start_time
+
+        log.info(
+            "environment_build.success",
+            build_id=build_id,
+            environment_id=environment_id,
+            provider_image_id=provider_image_id,
+            runtime_version=build_logs.runtime_version,
+            build_duration_s=round(build_duration, 1),
+        )
+
+        if callback_url:
+            await _callback_with_retry(
+                callback_url,
+                {
+                    "build_id": build_id,
+                    "provider_image_id": provider_image_id,
+                    "member_shas": build_logs.member_shas,
+                    "runtime_version": build_logs.runtime_version,
+                    "build_duration_seconds": round(build_duration, 2),
+                },
+            )
+
+    except Exception as e:
+        build_duration = time.time() - start_time
+        if handle is not None and not sandbox_terminated:
+            sandbox_terminated = await _terminate_build_sandbox(handle, build_id, "build_failed")
+
+        log.error(
+            "environment_build.failed",
+            build_id=build_id,
+            environment_id=environment_id,
+            error=str(e),
+            build_duration_s=round(build_duration, 1),
+        )
+
+        if callback_url:
+            base_url = callback_url.rsplit("/", 1)[0]
+            failure_url = f"{base_url}/build-failed"
+            await _callback_with_retry(
+                failure_url,
+                {
+                    "build_id": build_id,
+                    "error": str(e),
+                },
+            )
+    finally:
+        if handle is not None and not sandbox_terminated:
+            await _terminate_build_sandbox(handle, build_id, "cleanup")
+
+
 # ---------------------------------------------------------------------------
 # Scheduler: cron-based rebuild logic
 # ---------------------------------------------------------------------------
@@ -367,6 +539,11 @@ STALE_BUILD_THRESHOLD_SECONDS = build_function_timeout_seconds(MAX_BUILD_TIMEOUT
 
 # Cleanup threshold: failed builds older than this are deleted
 FAILED_BUILD_CLEANUP_SECONDS = 86400  # 24 hours
+
+# Environment builds triggered per tick, at most — cheap storm insurance since
+# there is no global build-concurrency cap; the next tick picks up the rest
+# (design §7.3).
+ENVIRONMENT_TRIGGER_CAP_PER_TICK = 4
 
 
 async def _api_get(
@@ -521,6 +698,178 @@ def _should_rebuild(
     return False
 
 
+def _parse_runtime_version_number(runtime_version: str) -> int | None:
+    """Numeric prefix of a SANDBOX_VERSION ("v53-list-native" → 53), or None."""
+    match = re.match(r"^v(\d+)", runtime_version)
+    return int(match.group(1)) if match else None
+
+
+def _should_rebuild_environment(
+    environment: dict,
+    all_images: list[dict],
+    min_runtime_version: int | None,
+    clone_token: str,
+) -> bool:
+    """
+    Rebuild triggers for one environment (design §7.3), cheapest first:
+
+    1. no ready image matches the environment's current members fingerprint
+       (covers created/edited environments and failed builds);
+    3. the matching ready image's runtime_version is below the compatibility
+       floor, or unparseable (fail closed);
+    2. any member's remote branch tip drifted from the image's recorded
+       member_shas (needs one ls-remote per member, so it runs last).
+
+    Trigger 4 (provider-side snapshot expiry) is inert on modal 1.4.3 —
+    snapshots do not expire there; it activates with the snapshot-TTL
+    follow-up.
+    """
+    environment_id = environment.get("id", "")
+    fingerprint = environment.get("membersFingerprint", "")
+
+    environment_images = [img for img in all_images if img.get("environment_id") == environment_id]
+
+    # Per-environment concurrency 1: skip while a build is in flight. The
+    # trigger route enforces this too; checking here saves the HTTP call.
+    if any(img.get("status") == "building" for img in environment_images):
+        log.info("scheduler.environment_skip_building", environment_id=environment_id)
+        return False
+
+    matching_ready = [
+        img
+        for img in environment_images
+        if img.get("status") == "ready" and img.get("members_fingerprint") == fingerprint
+    ]
+    if not matching_ready:
+        log.info("scheduler.environment_no_ready_image", environment_id=environment_id)
+        return True
+
+    latest_ready = matching_ready[0]  # status endpoint orders by created_at DESC
+
+    version = _parse_runtime_version_number(latest_ready.get("runtime_version") or "")
+    if min_runtime_version is not None and (version is None or version < min_runtime_version):
+        log.info(
+            "scheduler.environment_runtime_below_floor",
+            environment_id=environment_id,
+            runtime_version=latest_ready.get("runtime_version"),
+            min_runtime_version=min_runtime_version,
+        )
+        return True
+
+    try:
+        recorded_shas = json.loads(latest_ready.get("member_shas") or "[]")
+    except json.JSONDecodeError:
+        recorded_shas = None
+    if not isinstance(recorded_shas, list):
+        log.warn("scheduler.environment_malformed_member_shas", environment_id=environment_id)
+        return True
+    recorded_by_repo = {
+        (str(m.get("repoOwner", "")).lower(), str(m.get("repoName", "")).lower()): m.get(
+            "baseSha", ""
+        )
+        for m in recorded_shas
+        if isinstance(m, dict)
+    }
+
+    for member in environment.get("repositories", []):
+        repo_owner = member.get("repoOwner", "")
+        repo_name = member.get("repoName", "")
+        base_branch = member.get("baseBranch", "")
+        if not repo_owner or not repo_name or not base_branch:
+            continue
+        remote_sha = _git_ls_remote_sha(
+            repo_owner, repo_name, f"refs/heads/{base_branch}", clone_token
+        )
+        if not remote_sha:
+            # Lookup failure is not a drift signal — rebuilding on transient
+            # git errors would storm every tick.
+            continue
+        if recorded_by_repo.get((repo_owner.lower(), repo_name.lower())) != remote_sha:
+            log.info(
+                "scheduler.environment_sha_mismatch",
+                environment_id=environment_id,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                remote_sha=remote_sha[:12],
+            )
+            return True
+
+    return False
+
+
+async def _rebuild_environment_images_pass(control_plane_url: str, clone_token: str) -> int:
+    """
+    Environments pass (design §7.3): same skeleton as the repo pass — GET
+    enabled environments + status, evaluate the rebuild triggers, POST
+    triggers (capped per tick), then mark-stale and cleanup.
+    """
+    enabled_data = await _api_get(f"{control_plane_url}/environment-images/enabled")
+    environments: list[dict] = enabled_data.get("environments", [])
+    min_runtime_version = enabled_data.get("minRuntimeVersion")
+
+    builds_triggered = 0
+    if environments:
+        status_data = await _api_get(f"{control_plane_url}/environment-images/status")
+        all_images: list[dict] = status_data.get("images", [])
+
+        for environment in environments:
+            environment_id = environment.get("id", "")
+            if not environment_id:
+                continue
+            if builds_triggered >= ENVIRONMENT_TRIGGER_CAP_PER_TICK:
+                log.info(
+                    "scheduler.environment_trigger_cap_reached",
+                    cap=ENVIRONMENT_TRIGGER_CAP_PER_TICK,
+                )
+                break
+
+            if not _should_rebuild_environment(
+                environment, all_images, min_runtime_version, clone_token
+            ):
+                continue
+
+            try:
+                await _api_post(
+                    f"{control_plane_url}/environment-images/trigger/{environment_id}",
+                )
+                builds_triggered += 1
+                log.info(
+                    "scheduler.environment_build_triggered",
+                    environment_id=environment_id,
+                )
+            except Exception as e:
+                log.error(
+                    "scheduler.environment_trigger_error",
+                    environment_id=environment_id,
+                    error=str(e),
+                )
+
+    try:
+        result = await _api_post(
+            f"{control_plane_url}/environment-images/mark-stale",
+            {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS},
+        )
+        stale_count = result.get("markedFailed", 0)
+        if stale_count:
+            log.info("scheduler.environment_stale_marked", count=stale_count)
+    except Exception as e:
+        log.warn("scheduler.environment_mark_stale_error", error=str(e))
+
+    try:
+        result = await _api_post(
+            f"{control_plane_url}/environment-images/cleanup",
+            {"max_age_seconds": FAILED_BUILD_CLEANUP_SECONDS},
+        )
+        deleted = result.get("deleted", 0)
+        reaped = result.get("reapedSuperseded", 0)
+        if deleted or reaped:
+            log.info("scheduler.environment_cleanup", deleted=deleted, reaped_superseded=reaped)
+    except Exception as e:
+        log.warn("scheduler.environment_cleanup_error", error=str(e))
+
+    return builds_triggered
+
+
 @app.function(
     image=function_image,
     schedule=modal.Cron("*/30 * * * *"),
@@ -536,6 +885,7 @@ async def rebuild_repo_images():
     4. If SHA differs from latest ready image, trigger a build
     5. Mark stale builds as failed
     6. Clean up old failed D1 rows
+    7. Run the environments pass (same skeleton, per-member drift checks)
     """
     control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
     if not control_plane_url:
@@ -545,6 +895,7 @@ async def rebuild_repo_images():
     log.info("scheduler.start")
     start_time = time.time()
     builds_triggered = 0
+    environment_builds_triggered = 0
 
     try:
         # 1. Get enabled repos
@@ -624,9 +975,20 @@ async def rebuild_repo_images():
     except Exception as e:
         log.error("scheduler.error", error=str(e))
 
+    # Environments pass — isolated so a repo-pass failure never starves it
+    # and vice versa.
+    try:
+        clone_token = resolve_clone_token() or ""
+        environment_builds_triggered = await _rebuild_environment_images_pass(
+            control_plane_url, clone_token
+        )
+    except Exception as e:
+        log.error("scheduler.environment_pass_error", error=str(e))
+
     duration_s = round(time.time() - start_time, 1)
     log.info(
         "scheduler.done",
         builds_triggered=builds_triggered,
+        environment_builds_triggered=environment_builds_triggered,
         duration_s=duration_s,
     )

@@ -4,10 +4,14 @@
  * Split from ./environments so each routes file stays focused.
  */
 
-import { EnvironmentStore } from "../db/environments";
+import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { SecretsValidationError, normalizeKey, validateKey } from "../db/secrets-validation";
+import {
+  scheduleEnvironmentImageBuildOnSave,
+  supersedeEnvironmentImagesForSecretsChange,
+} from "../environment-images/save-hooks";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -21,6 +25,23 @@ import {
 import type { Env } from "../types";
 
 const logger = createLogger("router:environment-secrets");
+
+/**
+ * Post-mutation hook (design §7.4): supersede every live image — their baked
+ * secrets are now outdated — then kick a rebuild for prebuild-enabled
+ * environments. The supersede is awaited so a failure surfaces to the caller;
+ * the rebuild is detached and best-effort.
+ */
+async function invalidateImagesAfterSecretsChange(
+  env: Env,
+  environment: EnvironmentRow,
+  ctx: RequestContext
+): Promise<void> {
+  await supersedeEnvironmentImagesForSecretsChange(env, environment.id, ctx);
+  if (environment.prebuild_enabled === 1) {
+    scheduleEnvironmentImageBuildOnSave(env, environment.id, ctx);
+  }
+}
 
 /**
  * Require both D1 and the secrets encryption key, returning the resolved key so
@@ -86,7 +107,8 @@ async function handleSetEnvironmentSecrets(
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(env.DB);
-  if (!(await store.getById(id))) return error("Environment not found", 404);
+  const environment = await store.getById(id);
+  if (!environment) return error("Environment not found", 404);
 
   const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
   if (body instanceof Response) return body;
@@ -106,6 +128,7 @@ async function handleSetEnvironmentSecrets(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
+    await invalidateImagesAfterSecretsChange(env, environment, ctx);
     return json({
       status: "updated",
       environmentId: id,
@@ -152,6 +175,10 @@ async function handleDeleteEnvironmentSecret(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
+    const environment = await new EnvironmentStore(env.DB).getById(id);
+    if (environment) {
+      await invalidateImagesAfterSecretsChange(env, environment, ctx);
+    }
     return json({ status: "deleted", environmentId: id, key: normalizedKey });
   } catch (e) {
     if (e instanceof SecretsValidationError) return error(e.message, 400);
@@ -184,7 +211,8 @@ async function handleImportEnvironmentSecrets(
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(env.DB);
-  if (!(await store.getById(id))) return error("Environment not found", 404);
+  const environment = await store.getById(id);
+  if (!environment) return error("Environment not found", 404);
 
   const body = await parseJsonBody<{ repoOwner?: string; repoName?: string; keys?: unknown }>(
     request
@@ -229,6 +257,7 @@ async function handleImportEnvironmentSecrets(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
+    await invalidateImagesAfterSecretsChange(env, environment, ctx);
     return json({
       status: "imported",
       environmentId: id,
