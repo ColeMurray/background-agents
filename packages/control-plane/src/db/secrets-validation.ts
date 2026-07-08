@@ -154,14 +154,17 @@ export function mergeSecretSources(
 }
 
 /**
- * Cap enforcement mode. `warn` logs an oversized payload and proceeds (today's
- * behavior plus telemetry); `enforce` rejects the spawn/build. Staged warn-first
- * per the rollout plan, flipped to `enforce` before the Phase-1 gate.
+ * Cap enforcement mode. `warn` logs an oversized payload and proceeds (the
+ * warn-staged rollout behavior plus telemetry); `enforce` rejects the
+ * spawn/build. Defaults to `enforce` (D§6.4's ship-enforced spec) now that the
+ * Phase-1 gate has passed the warn window; set `SECRETS_CAP_ENFORCEMENT=warn`
+ * on the worker to fall back without a code revert. Fail-closed: only the
+ * literal `warn` opts out, so an unset or garbled value still enforces.
  */
 export type SecretsCapMode = "warn" | "enforce";
 
 export function parseSecretsCapMode(value: string | undefined): SecretsCapMode {
-  return value === "enforce" ? "enforce" : "warn";
+  return value === "warn" ? "warn" : "enforce";
 }
 
 /** Thrown in `enforce` mode when a merged payload exceeds the combined cap. */

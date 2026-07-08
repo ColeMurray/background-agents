@@ -182,14 +182,14 @@ describe("mergeSecretSources", () => {
 });
 
 describe("parseSecretsCapMode", () => {
-  it("returns enforce only for the literal 'enforce'", () => {
-    expect(parseSecretsCapMode("enforce")).toBe("enforce");
+  it("returns warn only for the literal 'warn'", () => {
+    expect(parseSecretsCapMode("warn")).toBe("warn");
   });
 
-  it("defaults to warn for unset or unknown values", () => {
-    expect(parseSecretsCapMode(undefined)).toBe("warn");
-    expect(parseSecretsCapMode("warn")).toBe("warn");
-    expect(parseSecretsCapMode("ENFORCE")).toBe("warn");
+  it("defaults to enforce for unset or unknown values (fail-closed)", () => {
+    expect(parseSecretsCapMode(undefined)).toBe("enforce");
+    expect(parseSecretsCapMode("enforce")).toBe("enforce");
+    expect(parseSecretsCapMode("WARN")).toBe("enforce");
   });
 });
 
