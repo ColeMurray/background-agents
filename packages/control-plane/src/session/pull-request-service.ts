@@ -1,4 +1,8 @@
-import { generateBranchName, type SessionArtifact } from "@open-inspect/shared";
+import {
+  generateBranchName,
+  RepositoryPairValidationError,
+  type SessionArtifact,
+} from "@open-inspect/shared";
 import type { Logger } from "../logger";
 import { resolveHeadBranchForPr, sanitizeBranchName } from "../source-control/branch-resolution";
 import {
@@ -9,8 +13,13 @@ import {
   type GitPushSpec,
 } from "../source-control";
 import { findPrArtifactForRepo } from "./pr-artifacts";
-import type { SessionRepositoryRow } from "./repository";
-import { resolveSessionRepositoryTarget, type RepoIdentity } from "./repository-target";
+import {
+  AmbiguousRepositoryTargetError,
+  RepositoryNotMemberError,
+  resolveSessionRepositoryTarget,
+  type RepoIdentity,
+  type SessionRepositoryEntry,
+} from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
 
 /**
@@ -76,7 +85,7 @@ export class PullRequestCreationClaims {
  */
 export interface PullRequestRepository {
   getSession(): SessionRow | null;
-  getSessionRepositories(): SessionRepositoryRow[];
+  getSessionRepositories(): SessionRepositoryEntry[];
   updateSessionBranch(sessionId: string, branchName: string): void;
   updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void;
   listArtifacts(): ArtifactRow[];
@@ -132,20 +141,24 @@ export class SessionPullRequestService {
     // Re-resolved here even though the handler already validated the target:
     // this is a sandbox-auth security boundary, so the service must not
     // trust its caller (defense in depth).
-    const resolution = resolveSessionRepositoryTarget({
-      requested: input,
-      scalarRepo: { repoOwner: session.repo_owner, repoName: session.repo_name },
-      memberRows: this.deps.repository.getSessionRepositories(),
-    });
-    if (!resolution.ok) {
-      return {
-        kind: "error",
-        status: resolution.reason === "not_member" ? 403 : 400,
-        error: resolution.error,
-      };
+    let target: SessionRepositoryEntry;
+    try {
+      target = resolveSessionRepositoryTarget(input, this.deps.repository.getSessionRepositories());
+    } catch (error) {
+      if (error instanceof RepositoryNotMemberError) {
+        return { kind: "error", status: 403, error: error.message };
+      }
+      if (
+        error instanceof AmbiguousRepositoryTargetError ||
+        error instanceof RepositoryPairValidationError
+      ) {
+        return { kind: "error", status: 400, error: error.message };
+      }
+      throw error;
     }
-    const { memberRow, isPrimary } = resolution;
-    const targetRepo = { repoOwner: resolution.repoOwner, repoName: resolution.repoName };
+    const memberRow = target.row;
+    const isPrimary = target.isPrimary;
+    const targetRepo = { repoOwner: target.repoOwner, repoName: target.repoName };
 
     this.deps.log.info("Creating PR", {
       user_id: input.promptingUserId,

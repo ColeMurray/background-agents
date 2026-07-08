@@ -29,6 +29,7 @@ import {
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
+import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -397,9 +398,23 @@ export class SessionRepository {
     }
   }
 
-  getSessionRepositories(): SessionRepositoryRow[] {
+  getSessionRepositoryRows(): SessionRepositoryRow[] {
     const result = this.sql.exec(`SELECT * FROM session_repositories ORDER BY position`);
     return this.rows<SessionRepositoryRow>(result);
+  }
+
+  /**
+   * The session's repositories (see buildSessionRepositories for the
+   * scalar-mirror fallback). Empty only for sessions without a repository
+   * context.
+   */
+  getSessionRepositories(): SessionRepositoryEntry[] {
+    const session = this.getSession();
+    if (!session?.repo_owner || !session.repo_name) return [];
+    return buildSessionRepositories(
+      { repoOwner: session.repo_owner, repoName: session.repo_name },
+      this.getSessionRepositoryRows()
+    );
   }
 
   updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void {

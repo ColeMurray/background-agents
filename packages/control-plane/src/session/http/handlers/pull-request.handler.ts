@@ -1,7 +1,12 @@
+import { RepositoryPairValidationError } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
-import type { SessionRepositoryRow } from "../../repository";
-import { resolveSessionRepositoryTarget } from "../../repository-target";
+import {
+  AmbiguousRepositoryTargetError,
+  RepositoryNotMemberError,
+  resolveSessionRepositoryTarget,
+  type SessionRepositoryEntry,
+} from "../../repository-target";
 import type { ParticipantRow, SessionRow } from "../../types";
 import { z } from "zod";
 
@@ -26,7 +31,7 @@ type ResolveAuthForPrResult =
 
 export interface PullRequestHandlerDeps {
   getSession: () => SessionRow | null;
-  getSessionRepositories: () => SessionRepositoryRow[];
+  getSessionRepositories: () => SessionRepositoryEntry[];
   getPromptingParticipantForPR: () => Promise<PromptingParticipantResult>;
   resolveAuthForPR: (participant: ParticipantRow) => Promise<ResolveAuthForPrResult>;
   getSessionUrl: (session: SessionRow) => string;
@@ -67,16 +72,23 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       // Membership is a security boundary (this route is reachable with
       // sandbox auth): naming a repo outside the session is 403, an
       // ambiguous or half-specified target is 400.
-      const target = resolveSessionRepositoryTarget({
-        requested: { repoOwner: body.repoOwner, repoName: body.repoName },
-        scalarRepo: { repoOwner: session.repo_owner, repoName: session.repo_name },
-        memberRows: deps.getSessionRepositories(),
-      });
-      if (!target.ok) {
-        return Response.json(
-          { error: target.error },
-          { status: target.reason === "not_member" ? 403 : 400 }
+      let target: SessionRepositoryEntry;
+      try {
+        target = resolveSessionRepositoryTarget(
+          { repoOwner: body.repoOwner, repoName: body.repoName },
+          deps.getSessionRepositories()
         );
+      } catch (error) {
+        if (error instanceof RepositoryNotMemberError) {
+          return Response.json({ error: error.message }, { status: 403 });
+        }
+        if (
+          error instanceof AmbiguousRepositoryTargetError ||
+          error instanceof RepositoryPairValidationError
+        ) {
+          return Response.json({ error: error.message }, { status: 400 });
+        }
+        throw error;
       }
 
       const promptingParticipantResult = await deps.getPromptingParticipantForPR();

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionRepositoryRow } from "../../repository";
+import { buildSessionRepositories, type SessionRepositoryEntry } from "../../repository-target";
 import type { ParticipantRow, SessionRow } from "../../types";
 import { createPullRequestHandler } from "./pull-request.handler";
 
@@ -69,7 +70,17 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
-  const getSessionRepositories = vi.fn<() => SessionRepositoryRow[]>(() => []);
+  let repositoryRows: SessionRepositoryRow[] = [];
+  // Mirrors SessionRepository.getSessionRepositories: members derive from the
+  // session scalars plus whatever rows the test seeds.
+  const getSessionRepositories = vi.fn<() => SessionRepositoryEntry[]>(() => {
+    const session = getSession();
+    if (!session?.repo_owner || !session.repo_name) return [];
+    return buildSessionRepositories(
+      { repoOwner: session.repo_owner, repoName: session.repo_name },
+      repositoryRows
+    );
+  });
   const getPromptingParticipantForPR = vi.fn();
   const resolveAuthForPR = vi.fn();
   const getSessionUrl = vi.fn();
@@ -88,6 +99,9 @@ function createHandler() {
     handler,
     getSession,
     getSessionRepositories,
+    setRepositoryRows: (rows: SessionRepositoryRow[]) => {
+      repositoryRows = rows;
+    },
     getPromptingParticipantForPR,
     resolveAuthForPR,
     getSessionUrl,
@@ -344,7 +358,7 @@ describe("createPullRequestHandler", () => {
     function createMultiRepoHandler() {
       const harness = createHandler();
       harness.getSession.mockReturnValue(createSession());
-      harness.getSessionRepositories.mockReturnValue([
+      harness.setRepositoryRows([
         createRepositoryRow(0, "acme", "repo"),
         createRepositoryRow(1, "acme", "backend"),
       ]);
@@ -432,7 +446,7 @@ describe("createPullRequestHandler", () => {
 
     it("defaults to the sole member when the target is omitted", async () => {
       const harness = createMultiRepoHandler();
-      harness.getSessionRepositories.mockReturnValue([createRepositoryRow(0, "acme", "repo")]);
+      harness.setRepositoryRows([createRepositoryRow(0, "acme", "repo")]);
 
       const response = await postPr(harness.handler, { title: "PR", body: "desc" });
 

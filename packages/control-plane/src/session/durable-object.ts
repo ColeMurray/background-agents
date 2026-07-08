@@ -586,7 +586,7 @@ export class SessionDO extends DurableObject<Env> {
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
       getSessionRepositories: () =>
-        this.repository.getSessionRepositories().map((row) => ({
+        this.repository.getSessionRepositoryRows().map((row) => ({
           repoOwner: row.repo_owner,
           repoName: row.repo_name,
           baseBranch: row.base_branch,
@@ -1706,44 +1706,27 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Member repositories for SessionState, in position order. Sessions that
-   * predate the session_repositories table get a one-entry list synthesized
-   * from the scalar columns. Rows written before per-repo git state existed
-   * have null git columns while the scalars are set, so the primary entry is
-   * overlaid with the session scalars.
+   * Member repositories for SessionState, in position order (see
+   * buildSessionRepositories for the scalar-mirror fallback). Members synthesized
+   * from the scalars — and member rows written before per-repo git state
+   * existed, whose git columns are null while the scalars are set — have the
+   * primary entry overlaid with the session scalars.
    */
   private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
     const prUrlForRepo = this.getPrUrlLookup();
-    const rows = this.repository.getSessionRepositories();
-    if (rows.length > 0) {
-      return rows.map((row, index) => ({
-        position: row.position,
-        repoOwner: row.repo_owner,
-        repoName: row.repo_name,
-        repoId: row.repo_id,
-        baseBranch: row.base_branch,
-        branchName: row.branch_name ?? (index === 0 ? (session?.branch_name ?? null) : null),
-        baseSha: row.base_sha ?? (index === 0 ? (session?.base_sha ?? null) : null),
-        currentSha: row.current_sha ?? (index === 0 ? (session?.current_sha ?? null) : null),
-        prUrl: prUrlForRepo(row.repo_owner, row.repo_name, index === 0),
-      }));
-    }
-    if (session?.repo_owner && session.repo_name) {
-      return [
-        {
-          position: 0,
-          repoOwner: session.repo_owner,
-          repoName: session.repo_name,
-          repoId: session.repo_id ?? null,
-          baseBranch: session.base_branch ?? "main",
-          branchName: session.branch_name ?? null,
-          baseSha: session.base_sha ?? null,
-          currentSha: session.current_sha ?? null,
-          prUrl: prUrlForRepo(session.repo_owner, session.repo_name, true),
-        },
-      ];
-    }
-    return [];
+    return this.repository.getSessionRepositories().map((member) => ({
+      position: member.position,
+      repoOwner: member.repoOwner,
+      repoName: member.repoName,
+      repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
+      baseBranch: member.row ? member.row.base_branch : (session?.base_branch ?? "main"),
+      branchName:
+        member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
+      baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),
+      currentSha:
+        member.row?.current_sha ?? (member.isPrimary ? (session?.current_sha ?? null) : null),
+      prUrl: prUrlForRepo(member.repoOwner, member.repoName, member.isPrimary),
+    }));
   }
 
   /** Per-repo PR URL lookup over the session's PR artifacts. */
