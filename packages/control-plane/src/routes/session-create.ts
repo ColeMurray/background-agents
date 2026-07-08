@@ -5,6 +5,7 @@ import {
 } from "@open-inspect/shared";
 import { encryptTokenPair, generateId } from "../auth/crypto";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
+import { EnvironmentStore } from "../db/environments";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -79,7 +80,10 @@ async function handleCreateSession(
   if (body.environmentId) {
     // Snapshot the environment's members and resolve them like any other list
     // (design §7.6); environment_id records provenance on the session.
-    const envInputs = await resolveEnvironmentTarget(env.DB, body.environmentId);
+    const envInputs = await resolveEnvironmentTarget(
+      new EnvironmentStore(env.DB),
+      body.environmentId
+    );
     repositories = await resolveSessionRepositories(env, envInputs, ctx, logger);
     environmentId = body.environmentId;
   } else if (body.repositories) {

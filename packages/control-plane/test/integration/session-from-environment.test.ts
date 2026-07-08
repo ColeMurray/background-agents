@@ -69,7 +69,7 @@ describe("sessions from environments", () => {
     it("returns the environment's members as resolution inputs in position order", async () => {
       await seedEnvironment("env_fs", "Full Stack", [WEB, API]);
 
-      const inputs = await resolveEnvironmentTarget(env.DB, "env_fs");
+      const inputs = await resolveEnvironmentTarget(new EnvironmentStore(env.DB), "env_fs");
 
       expect(inputs).toEqual([
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -78,7 +78,9 @@ describe("sessions from environments", () => {
     });
 
     it("raises 404 for a missing environment", async () => {
-      await expect(resolveEnvironmentTarget(env.DB, "env_missing")).rejects.toMatchObject({
+      await expect(
+        resolveEnvironmentTarget(new EnvironmentStore(env.DB), "env_missing")
+      ).rejects.toMatchObject({
         status: 404,
       });
     });

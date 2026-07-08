@@ -2,7 +2,7 @@ import type { CreateSessionRequest, RepositoryRef } from "@open-inspect/shared";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
-import { EnvironmentStore } from "../db/environments";
+import type { EnvironmentStore } from "../db/environments";
 import { createRouteSourceControlProvider, HttpError, type RequestContext } from "../routes/shared";
 
 /**
@@ -24,10 +24,9 @@ export type SessionRepositoryResolutionInput = NonNullable<
  * Raises HttpError(404) when the environment does not exist.
  */
 export async function resolveEnvironmentTarget(
-  db: D1Database,
+  store: EnvironmentStore,
   environmentId: string
 ): Promise<SessionRepositoryResolutionInput[]> {
-  const store = new EnvironmentStore(db);
   const environment = await store.getById(environmentId);
   if (!environment) {
     throw new HttpError(`Environment not found: ${environmentId}`, 404);
