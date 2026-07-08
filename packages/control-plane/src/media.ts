@@ -7,6 +7,15 @@ export const VIDEO_UPLOAD_LIMIT_PER_SESSION = 20;
 export const VIDEO_MAX_DURATION_MS = 90_000;
 export const VIDEO_TIMESTAMP_TOLERANCE_MS = 1_000;
 
+// User-attached prompt media (images/videos attached in the chat composer).
+export const PROMPT_UPLOAD_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const PROMPT_UPLOAD_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+export const PROMPT_UPLOAD_LIMIT_PER_SESSION = 100;
+export const PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION = 500 * 1024 * 1024;
+// Uploads never referenced by a prompt after this long are pruned (R2 object +
+// record) the next time the session records an upload.
+export const PROMPT_UPLOAD_UNREFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
+
 const SCREENSHOT_EXTENSIONS = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -84,6 +93,78 @@ export function detectVideoFileType(bytes: Uint8Array): VideoFileType | null {
   }
 
   return null;
+}
+
+export type PromptUploadFileType = {
+  kind: "image" | "video";
+  mimeType:
+    | SupportedScreenshotMimeType
+    | "image/gif"
+    | SupportedVideoMimeType
+    | "video/quicktime"
+    | "video/webm";
+  extension: string;
+};
+
+const PROMPT_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+]);
+
+export function isSupportedPromptUploadMimeType(value: string): boolean {
+  return PROMPT_UPLOAD_MIME_TYPES.has(value);
+}
+
+/**
+ * Detect user-attached prompt media by magic bytes. Broader than the agent
+ * screenshot/recording detectors: users attach gifs, QuickTime screen
+ * recordings (.mov), and webm clips, which the sandbox handles via ffmpeg.
+ */
+export function detectPromptUploadFileType(bytes: Uint8Array): PromptUploadFileType | null {
+  const image = detectScreenshotFileType(bytes);
+  if (image) {
+    return { kind: "image", mimeType: image.mimeType, extension: image.extension };
+  }
+
+  // GIF87a / GIF89a
+  if (
+    bytes.length >= 6 &&
+    hasPrefix(bytes, [0x47, 0x49, 0x46, 0x38]) &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return { kind: "image", mimeType: "image/gif", extension: "gif" };
+  }
+
+  const video = detectVideoFileType(bytes);
+  if (video) {
+    return { kind: "video", mimeType: video.mimeType, extension: video.extension };
+  }
+
+  // QuickTime container: ftyp brand "qt  "
+  if (
+    bytes.length >= 12 &&
+    hasPrefix(bytes.slice(4, 8), [0x66, 0x74, 0x79, 0x70]) &&
+    String.fromCharCode(...bytes.slice(8, 12)) === "qt  "
+  ) {
+    return { kind: "video", mimeType: "video/quicktime", extension: "mov" };
+  }
+
+  // EBML header (webm/mkv). Served as webm; ffmpeg reads either container.
+  if (bytes.length >= 4 && hasPrefix(bytes, [0x1a, 0x45, 0xdf, 0xa3])) {
+    return { kind: "video", mimeType: "video/webm", extension: "webm" };
+  }
+
+  return null;
+}
+
+export function buildPromptUploadObjectKey(sessionId: string, uploadId: string): string {
+  return `sessions/${sessionId}/uploads/${uploadId}`;
 }
 
 export function buildMediaObjectKey(

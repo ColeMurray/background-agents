@@ -28,7 +28,16 @@ interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+  attachments?: PromptAttachment[];
+}
+
+interface PromptAttachment {
+  type: string;
+  name: string;
+  url?: string;
+  content?: string;
+  mimeType?: string;
+  uploadId?: string;
 }
 
 interface MessageQueueDeps {
@@ -103,10 +112,11 @@ export class SessionMessageQueue {
       status: "pending",
       createdAt: now,
     });
+    this.markAttachmentUploadsReferenced(data.attachments, messageId);
 
     await this.deps.setSessionStatus("active");
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now);
+    this.writeUserMessageEvent(participant, data.content, messageId, now, data.attachments);
 
     const position = this.deps.repository.getPendingOrProcessingCount();
 
@@ -302,12 +312,41 @@ export class SessionMessageQueue {
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
 
+  /** Tie referenced uploads to their message so the DO's TTL prune keeps them. */
+  private markAttachmentUploadsReferenced(
+    attachments: PromptAttachment[] | undefined,
+    messageId: string
+  ): void {
+    const uploadIds =
+      attachments?.flatMap((attachment) =>
+        attachment && typeof attachment === "object" && attachment.uploadId
+          ? [attachment.uploadId]
+          : []
+      ) ?? [];
+    if (uploadIds.length > 0) {
+      this.deps.repository.markUploadsReferenced(uploadIds, messageId);
+    }
+  }
+
   writeUserMessageEvent(
     participant: ParticipantRow,
     content: string,
     messageId: string,
-    now: number
+    now: number,
+    attachments?: PromptAttachment[]
   ): void {
+    // Metadata only — base64 payloads would bloat the events table and every
+    // broadcast, and DO SQLite rows cap at 2 MB.
+    const attachmentMeta = attachments
+      ?.filter((attachment) => attachment && typeof attachment === "object")
+      .map(({ type, name, mimeType, uploadId, url }) => ({
+        type,
+        name,
+        ...(mimeType ? { mimeType } : {}),
+        ...(uploadId ? { uploadId } : {}),
+        ...(url ? { url } : {}),
+      }));
+
     const userMessageEvent: SandboxEvent = {
       type: "user_message",
       content,
@@ -318,6 +357,7 @@ export class SessionMessageQueue {
         name: participant.scm_name || participant.scm_login || participant.user_id,
         avatar: getAvatarUrl(participant.scm_login, this.deps.scmProvider),
       },
+      ...(attachmentMeta && attachmentMeta.length > 0 ? { attachments: attachmentMeta } : {}),
     };
     this.deps.repository.createEvent({
       id: generateId(),
@@ -390,10 +430,11 @@ export class SessionMessageQueue {
       status: "pending",
       createdAt: now,
     });
+    this.markAttachmentUploadsReferenced(data.attachments, messageId);
 
     await this.deps.setSessionStatus("active");
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now);
+    this.writeUserMessageEvent(participant, data.content, messageId, now, data.attachments);
 
     const queuePosition = this.deps.repository.getPendingOrProcessingCount();
 

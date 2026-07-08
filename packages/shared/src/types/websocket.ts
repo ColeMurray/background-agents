@@ -7,6 +7,10 @@ export const attachmentSchema = z.object({
   url: z.string().optional(),
   content: z.string().optional(),
   mimeType: z.string().optional(),
+  // References a file uploaded to the control plane's media bucket
+  // (/sessions/:id/uploads/:uploadId). The sandbox resolves it with its
+  // session-scoped auth token; web clients stream it through their proxy route.
+  uploadId: z.string().optional(),
 });
 
 export type Attachment = z.infer<typeof attachmentSchema>;

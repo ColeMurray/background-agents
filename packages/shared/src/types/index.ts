@@ -384,6 +384,20 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
         avatar: z.string().optional(),
       })
       .optional(),
+    // Attachment metadata only — never the base64 payload, which would bloat
+    // the events table and every broadcast. uploadId lets clients stream the
+    // file back through the session uploads route.
+    attachments: z
+      .array(
+        z.object({
+          type: z.string(),
+          name: z.string(),
+          mimeType: z.string().optional(),
+          uploadId: z.string().optional(),
+          url: z.string().optional(),
+        })
+      )
+      .optional(),
   }),
 ]);
 

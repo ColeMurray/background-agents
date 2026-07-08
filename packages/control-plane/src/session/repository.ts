@@ -12,6 +12,7 @@ import type {
   EventRow,
   ArtifactRow,
   SandboxRow,
+  UploadRow,
 } from "./types";
 import type {
   SessionStatus,
@@ -161,6 +162,18 @@ export interface CreateMessageData {
   attachments?: string | null;
   callbackContext?: string | null;
   status: MessageStatus;
+  createdAt: number;
+}
+
+/**
+ * Data for creating an upload record (user prompt attachment).
+ */
+export interface CreateUploadData {
+  id: string;
+  kind: string;
+  mimeType: string;
+  sizeBytes: number;
+  objectKey: string;
   createdAt: number;
 }
 
@@ -748,6 +761,64 @@ export class SessionRepository {
       data.status,
       data.createdAt
     );
+  }
+
+  // === UPLOADS (user prompt attachments in the media bucket) ===
+
+  createUpload(data: CreateUploadData): void {
+    this.sql.exec(
+      `INSERT INTO uploads (id, kind, mime_type, size_bytes, object_key, message_id, created_at)
+       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+      data.id,
+      data.kind,
+      data.mimeType,
+      data.sizeBytes,
+      data.objectKey,
+      data.createdAt
+    );
+  }
+
+  getUploadTotals(): { count: number; totalBytes: number } {
+    const result = this.sql.exec(
+      `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes FROM uploads`
+    );
+    const rows = result.toArray() as Array<{ count: number; total_bytes: number }>;
+    return { count: rows[0]?.count ?? 0, totalBytes: rows[0]?.total_bytes ?? 0 };
+  }
+
+  /** Tie uploads to the prompt that references them so they survive pruning. */
+  markUploadsReferenced(uploadIds: string[], messageId: string): void {
+    if (uploadIds.length === 0) return;
+    const placeholders = uploadIds.map(() => "?").join(", ");
+    this.sql.exec(
+      `UPDATE uploads SET message_id = ? WHERE id IN (${placeholders}) AND message_id IS NULL`,
+      messageId,
+      ...uploadIds
+    );
+  }
+
+  /**
+   * Remove upload records that were never referenced by a prompt before the
+   * cutoff, returning them so the caller can delete the R2 objects.
+   */
+  takeStaleUnreferencedUploads(cutoff: number): UploadRow[] {
+    const result = this.sql.exec(
+      `SELECT * FROM uploads WHERE message_id IS NULL AND created_at < ?`,
+      cutoff
+    );
+    const stale = result.toArray() as unknown as UploadRow[];
+    if (stale.length > 0) {
+      const placeholders = stale.map(() => "?").join(", ");
+      this.sql.exec(
+        `DELETE FROM uploads WHERE id IN (${placeholders})`,
+        ...stale.map((upload) => upload.id)
+      );
+    }
+    return stale;
+  }
+
+  deleteUpload(uploadId: string): void {
+    this.sql.exec(`DELETE FROM uploads WHERE id = ?`, uploadId);
   }
 
   updateMessageToProcessing(messageId: string, startedAt: number): void {

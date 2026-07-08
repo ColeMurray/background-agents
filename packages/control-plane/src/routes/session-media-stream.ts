@@ -133,7 +133,7 @@ async function handleMediaGet(
   return new Response(object.body, { headers });
 }
 
-function parseByteRangeHeader(
+export function parseByteRangeHeader(
   rangeHeader: string,
   size: number
 ): { start: number; end: number; length: number } | Response {

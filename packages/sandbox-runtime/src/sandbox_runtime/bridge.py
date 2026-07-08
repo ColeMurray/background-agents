@@ -11,11 +11,14 @@ This module handles:
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
+import mimetypes
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import tempfile
 import time
@@ -702,6 +705,7 @@ class AgentBridge:
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
+        attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
@@ -726,11 +730,18 @@ class AgentBridge:
             if not self.opencode_session_id:
                 await self._create_opencode_session()
 
+            # Resolve uploadId references (web composer attachments stored in the
+            # control plane's media bucket) into inline base64 content.
+            attachments = await self._hydrate_upload_attachments(attachments)
+
+            # Turn any attached videos into sampled still frames the model can view.
+            attachments = await self._expand_video_attachments(attachments)
+
             had_error = False
             error_message = None
             emitted_output = False
             async for event in self._stream_opencode_response_sse(
-                message_id, content, model, reasoning_effort
+                message_id, content, model, reasoning_effort, attachments
             ):
                 if event.get("type") == "error":
                     had_error = True
@@ -922,12 +933,329 @@ class AgentBridge:
     }
     ANTHROPIC_ADAPTIVE_EFFORTS: ClassVar[set[str]] = {"low", "medium", "high", "xhigh", "max"}
 
+    # Video frame extraction (so the model can "view" attached recordings).
+    VIDEO_EXTENSIONS: ClassVar[set[str]] = {"mp4", "mov", "webm", "m4v", "avi", "mkv"}
+    MAX_VIDEO_FRAMES: ClassVar[int] = 8
+    MAX_VIDEO_BYTES: ClassVar[int] = 100 * 1024 * 1024  # 100 MB
+    VIDEO_DOWNLOAD_TIMEOUT: ClassVar[float] = 120.0
+    MAX_IMAGE_BYTES: ClassVar[int] = 10 * 1024 * 1024  # 10 MB
+
+    async def _hydrate_upload_attachments(
+        self, attachments: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        """Inline attachments that reference a control-plane upload.
+
+        Web composer attachments arrive as ``{type, name, mimeType, uploadId}``
+        with the payload stored in the control plane's media bucket (Durable
+        Object messages can't carry multi-megabyte base64). Each referenced
+        upload is fetched with the sandbox auth token and inlined as base64
+        ``content`` so the existing image/video handling applies unchanged.
+        A failed download drops that attachment rather than failing the prompt.
+        """
+        if not attachments:
+            return attachments
+
+        hydrated: list[dict[str, Any]] = []
+        for attachment in attachments:
+            if (
+                not isinstance(attachment, dict)
+                or not attachment.get("uploadId")
+                or attachment.get("content")
+            ):
+                hydrated.append(attachment)
+                continue
+
+            upload_id = attachment["uploadId"]
+            name = attachment.get("name") or "attachment"
+            max_bytes = (
+                self.MAX_VIDEO_BYTES
+                if self._is_video_attachment(attachment)
+                else self.MAX_IMAGE_BYTES
+            )
+            data = await self._download_upload(upload_id, max_bytes)
+            if data is None:
+                self.log.warn(
+                    "prompt.upload_fetch_failed",
+                    attachment_name=name,
+                    upload_id=upload_id,
+                )
+                continue
+
+            inlined = {key: value for key, value in attachment.items() if key != "uploadId"}
+            inlined["content"] = base64.b64encode(data).decode("ascii")
+            hydrated.append(inlined)
+            self.log.info(
+                "prompt.upload_fetched",
+                attachment_name=name,
+                upload_id=upload_id,
+                size_bytes=len(data),
+            )
+        return hydrated
+
+    async def _download_upload(self, upload_id: str, max_bytes: int) -> bytes | None:
+        """Fetch a session upload from the control plane, bounded by ``max_bytes``."""
+        url = f"{self.control_plane_url.rstrip('/')}/sessions/{self.session_id}/uploads/{upload_id}"
+        try:
+            async with (
+                httpx.AsyncClient(follow_redirects=True) as client,
+                client.stream(
+                    "GET",
+                    url,
+                    timeout=self.VIDEO_DOWNLOAD_TIMEOUT,
+                    headers={"Authorization": f"Bearer {self.auth_token}"},
+                ) as response,
+            ):
+                if response.status_code != 200:
+                    self.log.warn("prompt.upload_http_status", status=response.status_code)
+                    return None
+                total = 0
+                chunks: list[bytes] = []
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        self.log.warn("prompt.upload_too_large", bytes=total)
+                        return None
+                    chunks.append(chunk)
+                return b"".join(chunks) if chunks else None
+        except httpx.HTTPError as e:
+            self.log.warn("prompt.upload_download_error", exc=e)
+            return None
+
+    def _is_video_attachment(self, attachment: dict[str, Any]) -> bool:
+        """True if an attachment is a video (by mime type or filename extension)."""
+        mime = attachment.get("mimeType") or attachment.get("mime") or ""
+        if isinstance(mime, str) and mime.startswith("video/"):
+            return True
+        name = attachment.get("name") or ""
+        url = attachment.get("url") or ""
+        for candidate in (name, url):
+            guessed = mimetypes.guess_type(candidate)[0] or ""
+            if guessed.startswith("video/"):
+                return True
+            ext = candidate.rsplit(".", 1)[-1].split("?")[0].lower() if "." in candidate else ""
+            if ext in self.VIDEO_EXTENSIONS:
+                return True
+        return False
+
+    async def _expand_video_attachments(
+        self, attachments: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        """Replace video attachments with extracted still frames.
+
+        Agents can't watch video, so for each video attachment we download it and use ffmpeg to
+        sample a bounded set of frames, which are emitted as image attachments.
+        Non-video attachments pass through unchanged. On any failure the video is
+        dropped (the prompt's attachment note still tells the agent it exists).
+        """
+        if not attachments:
+            return attachments
+
+        expanded: list[dict[str, Any]] = []
+        for attachment in attachments:
+            if isinstance(attachment, dict) and self._is_video_attachment(attachment):
+                expanded.extend(await self._video_to_frame_attachments(attachment))
+            else:
+                expanded.append(attachment)
+        return expanded
+
+    async def _video_to_frame_attachments(self, attachment: dict[str, Any]) -> list[dict[str, Any]]:
+        name = attachment.get("name") or "video"
+        url = attachment.get("url")
+        content = attachment.get("content")
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="linear_video_"))
+        try:
+            video_path = tmpdir / "input"
+            if content:
+                try:
+                    video_path.write_bytes(base64.b64decode(content))
+                except (ValueError, OSError) as e:
+                    self.log.warn("prompt.video_decode_failed", attachment_name=name, exc=e)
+                    return []
+            elif url:
+                if not await self._download_to_file(url, video_path, self.MAX_VIDEO_BYTES):
+                    self.log.warn("prompt.video_download_failed", attachment_name=name)
+                    return []
+            else:
+                return []
+
+            frames = await self._extract_video_frames(video_path, tmpdir, self.MAX_VIDEO_FRAMES)
+            if not frames:
+                self.log.warn("prompt.video_no_frames", attachment_name=name)
+                return []
+
+            attachments: list[dict[str, Any]] = []
+            for index, frame in enumerate(frames, start=1):
+                encoded = base64.b64encode(frame.read_bytes()).decode("ascii")
+                attachments.append(
+                    {
+                        "type": "image",
+                        "name": f"{name} — frame {index}/{len(frames)}",
+                        "mimeType": "image/jpeg",
+                        "content": encoded,
+                    }
+                )
+            self.log.info("prompt.video_frames", attachment_name=name, frame_count=len(attachments))
+            return attachments
+        except Exception as e:  # never let media handling break the prompt
+            self.log.warn("prompt.video_expand_failed", attachment_name=name, exc=e)
+            return []
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    async def _download_to_file(self, url: str, dest: Path, max_bytes: int) -> bool:
+        """Stream a URL to a file, aborting if it exceeds ``max_bytes``."""
+        try:
+            async with (
+                httpx.AsyncClient(follow_redirects=True) as client,
+                client.stream("GET", url, timeout=self.VIDEO_DOWNLOAD_TIMEOUT) as response,
+            ):
+                if response.status_code != 200:
+                    self.log.warn("prompt.video_http_status", status=response.status_code)
+                    return False
+                total = 0
+                with dest.open("wb") as handle:
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            self.log.warn("prompt.video_too_large", bytes=total)
+                            return False
+                        handle.write(chunk)
+            return dest.exists() and dest.stat().st_size > 0
+        except (httpx.HTTPError, OSError) as e:
+            self.log.warn("prompt.video_download_error", exc=e)
+            return False
+
+    async def _extract_video_frames(
+        self, video_path: Path, out_dir: Path, max_frames: int
+    ) -> list[Path]:
+        """Sample up to ``max_frames`` evenly spaced frames with ffmpeg."""
+        duration = await self._probe_video_duration(video_path)
+        # Spread frames across the whole clip when we know its duration.
+        vf = f"fps={max_frames / duration:.6f}" if duration and duration > 0 else "fps=1"
+
+        pattern = str(out_dir / "frame_%03d.jpg")
+        cmd = [
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vf",
+            vf,
+            "-frames:v",
+            str(max_frames),
+            "-q:v",
+            "4",
+            pattern,
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+        except FileNotFoundError:
+            self.log.warn("prompt.ffmpeg_missing")
+            return []
+        if proc.returncode != 0:
+            self.log.warn("prompt.ffmpeg_failed", stderr=stderr.decode("utf-8", "ignore")[:500])
+            return []
+        return sorted(out_dir.glob("frame_*.jpg"))
+
+    async def _probe_video_duration(self, video_path: Path) -> float | None:
+        """Return the video duration in seconds via ffprobe, or None if unavailable."""
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return None
+            return float(stdout.decode().strip())
+        except (FileNotFoundError, ValueError, OSError):
+            return None
+
+    def _build_attachment_parts(
+        self, attachments: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]]:
+        """Convert prompt attachments into OpenCode file parts.
+
+        OpenCode accepts file parts shaped as
+        ``{"type": "file", "mime": <mimetype>, "filename": <name>, "url": <url>}``
+        where ``url`` may be a ``data:`` URL or an http(s) URL. Image attachments
+        arrive from the Linear bot as base64 ``content`` plus a ``mimeType``; we
+        encode those as data URLs so OpenCode forwards them to the (multimodal)
+        model. Attachments that already carry a fetchable ``url`` are passed
+        through as-is. Attachments with neither are skipped.
+        """
+        if not attachments:
+            return []
+
+        parts: list[dict[str, Any]] = []
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+
+            # Videos are expanded into frames upstream; never forward raw video to
+            # the model (Claude can't view it). Guard here in case expansion was skipped.
+            if self._is_video_attachment(attachment):
+                continue
+
+            name = attachment.get("name") or "attachment"
+            mime = attachment.get("mimeType") or attachment.get("mime")
+            content = attachment.get("content")
+            url = attachment.get("url")
+
+            if content:
+                resolved_mime = mime or "application/octet-stream"
+                file_url = f"data:{resolved_mime};base64,{content}"
+                source = "content"
+            elif url:
+                resolved_mime = mime or mimetypes.guess_type(url)[0] or "application/octet-stream"
+                file_url = url
+                source = "url"
+            else:
+                self.log.warn("prompt.attachment_skipped", attachment_name=name)
+                continue
+
+            parts.append(
+                {
+                    "type": "file",
+                    "mime": resolved_mime,
+                    "filename": name,
+                    "url": file_url,
+                }
+            )
+            self.log.info(
+                "prompt.attachment",
+                attachment_name=name,
+                attachment_mime=resolved_mime,
+                attachment_source=source,
+            )
+
+        return parts
+
     def _build_prompt_request_body(
         self,
         content: str,
         model: str | None,
         opencode_message_id: str | None = None,
         reasoning_effort: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Build request body for OpenCode prompt requests.
 
@@ -938,8 +1266,12 @@ class AgentBridge:
                                  When provided, OpenCode uses this as the user message ID,
                                  and assistant responses will have parentID pointing to it.
             reasoning_effort: Optional reasoning effort level (e.g., "high", "max")
+            attachments: Optional list of attachment dicts (type/name/url/content/mimeType)
+                         to forward as OpenCode file parts.
         """
-        request_body: dict[str, Any] = {"parts": [{"type": "text", "text": content}]}
+        parts: list[dict[str, Any]] = [{"type": "text", "text": content}]
+        parts.extend(self._build_attachment_parts(attachments))
+        request_body: dict[str, Any] = {"parts": parts}
 
         if opencode_message_id:
             request_body["messageID"] = opencode_message_id
@@ -1030,6 +1362,7 @@ class AgentBridge:
         content: str,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -1050,7 +1383,7 @@ class AgentBridge:
 
         opencode_message_id = OpenCodeIdentifier.ascending("message")
         request_body = self._build_prompt_request_body(
-            content, model, opencode_message_id, reasoning_effort
+            content, model, opencode_message_id, reasoning_effort, attachments
         )
 
         sse_url = f"{self.opencode_base_url}/event"

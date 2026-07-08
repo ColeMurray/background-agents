@@ -10,6 +10,7 @@ export const SessionInternalPaths = {
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
   createMediaArtifact: "/internal/create-media-artifact",
+  uploads: "/internal/uploads",
   participants: "/internal/participants",
   events: "/internal/events",
   artifacts: "/internal/artifacts",

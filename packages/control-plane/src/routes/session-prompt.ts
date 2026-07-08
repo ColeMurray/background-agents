@@ -25,7 +25,14 @@ async function handleSessionPrompt(
     source?: string;
     model?: string;
     reasoningEffort?: string;
-    attachments?: Array<{ type: string; name: string; url?: string }>;
+    attachments?: Array<{
+      type: string;
+      name: string;
+      url?: string;
+      content?: string;
+      mimeType?: string;
+      uploadId?: string;
+    }>;
     callbackContext?: CallbackContext;
   };
 

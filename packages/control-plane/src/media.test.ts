@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMediaObjectKey,
+  buildPromptUploadObjectKey,
+  detectPromptUploadFileType,
   detectScreenshotFileType,
   detectVideoFileType,
+  isSupportedPromptUploadMimeType,
   isSupportedScreenshotMimeType,
   isSupportedVideoMimeType,
   parseDimensions,
@@ -42,6 +45,76 @@ describe("media helpers", () => {
       mimeType: "video/mp4",
       extension: "mp4",
     });
+  });
+
+  it("builds session-scoped prompt upload object keys", () => {
+    expect(buildPromptUploadObjectKey("session-1", "upload-1")).toBe(
+      "sessions/session-1/uploads/upload-1"
+    );
+  });
+
+  it("accepts the prompt upload mime types", () => {
+    for (const mimeType of [
+      "image/png",
+      "image/jpeg",
+      "image/webp",
+      "image/gif",
+      "video/mp4",
+      "video/quicktime",
+      "video/webm",
+    ]) {
+      expect(isSupportedPromptUploadMimeType(mimeType)).toBe(true);
+    }
+    expect(isSupportedPromptUploadMimeType("application/pdf")).toBe(false);
+    expect(isSupportedPromptUploadMimeType("image/svg+xml")).toBe(false);
+  });
+
+  it("detects prompt upload images including gif", () => {
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    expect(detectPromptUploadFileType(png)).toEqual({
+      kind: "image",
+      mimeType: "image/png",
+      extension: "png",
+    });
+
+    const gif89 = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01]);
+    expect(detectPromptUploadFileType(gif89)).toEqual({
+      kind: "image",
+      mimeType: "image/gif",
+      extension: "gif",
+    });
+
+    const gif87 = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01]);
+    expect(detectPromptUploadFileType(gif87)?.mimeType).toBe("image/gif");
+  });
+
+  it("detects prompt upload videos including mov and webm", () => {
+    expect(detectPromptUploadFileType(MP4_SIGNATURE)).toEqual({
+      kind: "video",
+      mimeType: "video/mp4",
+      extension: "mp4",
+    });
+
+    const mov = Uint8Array.from([
+      0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20,
+    ]);
+    expect(detectPromptUploadFileType(mov)).toEqual({
+      kind: "video",
+      mimeType: "video/quicktime",
+      extension: "mov",
+    });
+
+    const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x01]);
+    expect(detectPromptUploadFileType(webm)).toEqual({
+      kind: "video",
+      mimeType: "video/webm",
+      extension: "webm",
+    });
+  });
+
+  it("rejects unsupported prompt upload bytes", () => {
+    expect(detectPromptUploadFileType(Uint8Array.from([0x25, 0x50, 0x44, 0x46]))).toBeNull();
+    expect(detectPromptUploadFileType(new Uint8Array(0))).toBeNull();
   });
 
   it("parses required video metadata", () => {

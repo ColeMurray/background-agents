@@ -17,11 +17,14 @@ import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   isValidReasoningEffort,
+  type Attachment,
   type ModelCategory,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { usePromptAttachments, ATTACHMENT_ACCEPT } from "@/hooks/use-prompt-attachments";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
+import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import {
   SidebarIcon,
@@ -29,6 +32,7 @@ import {
   ModelIcon,
   BranchIcon,
   ChevronDownIcon,
+  PaperclipIcon,
   SendIcon,
 } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
@@ -67,10 +71,15 @@ export default function Home() {
   );
   const [selectedBranch, setSelectedBranch] = useState<string>("");
   const [prompt, setPrompt] = useState("");
+  const promptAttachments = usePromptAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  // Synchronous re-entry guard: React state doesn't commit fast enough to
+  // stop a double-click or repeated Cmd+Enter from submitting twice while the
+  // session create and attachment uploads are awaited.
+  const submitInFlightRef = useRef(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingConfigRef = useRef<{ target: string; model: string; branch: string } | null>(null);
@@ -260,14 +269,25 @@ export default function Home() {
     }
   };
 
+  const handleAddFiles = (files: Iterable<File>) => {
+    promptAttachments.addFiles(files);
+    // Attaching a file signals intent to send just like typing does.
+    if (!pendingSessionId && !isCreatingSession && sessionTarget) {
+      createSessionForWarming();
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim()) return;
+    if (submitInFlightRef.current || promptAttachments.isUploading) return;
+    const hasAttachments = promptAttachments.attachments.length > 0;
+    if (!prompt.trim() && !hasAttachments) return;
     if (!sessionTarget) {
       setError("Please select a repository");
       return;
     }
 
+    submitInFlightRef.current = true;
     setCreating(true);
     setError("");
 
@@ -283,17 +303,38 @@ export default function Home() {
         return;
       }
 
+      let attachments: Attachment[] | undefined;
+      if (hasAttachments) {
+        try {
+          attachments = await promptAttachments.uploadAll(sessionId);
+        } catch {
+          // uploadAll surfaces the error in the composer; keep the draft intact.
+          setCreating(false);
+          return;
+        }
+      }
+
+      const trimmed = prompt.trim();
+      // Nothing survived to send (e.g. the only attachment failed to upload).
+      // Don't post an empty "See the attached files." with no attachments.
+      if (!trimmed && (!attachments || attachments.length === 0)) {
+        setCreating(false);
+        return;
+      }
+
       const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: prompt,
+          content: trimmed || "See the attached files.",
           model: selectedModel,
           reasoningEffort,
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
         }),
       });
 
       if (res.ok) {
+        promptAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         router.push(`/session/${sessionId}`);
       } else {
@@ -304,6 +345,8 @@ export default function Home() {
     } catch (_error) {
       setError("Failed to create session");
       setCreating(false);
+    } finally {
+      submitInFlightRef.current = false;
     }
   };
 
@@ -325,6 +368,13 @@ export default function Home() {
       setReasoningEffort={setReasoningEffort}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
+      attachments={{
+        items: promptAttachments.attachments,
+        error: promptAttachments.attachmentError,
+        isUploading: promptAttachments.isUploading,
+        onAdd: handleAddFiles,
+        onRemove: promptAttachments.removeAttachment,
+      }}
       creating={creating}
       isCreatingSession={isCreatingSession}
       error={error}
@@ -351,6 +401,7 @@ function HomeContent({
   setReasoningEffort,
   prompt,
   handlePromptChange,
+  attachments,
   creating,
   isCreatingSession,
   error,
@@ -373,6 +424,13 @@ function HomeContent({
   setReasoningEffort: (value: string | undefined) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
+  attachments: {
+    items: ReturnType<typeof usePromptAttachments>["attachments"];
+    error: string | null;
+    isUploading: boolean;
+    onAdd: (files: Iterable<File>) => void;
+    onRemove: (id: string) => void;
+  };
   creating: boolean;
   isCreatingSession: boolean;
   error: string;
@@ -381,6 +439,37 @@ function HomeContent({
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  // Freeze the draft while a session-create/upload/submit is in flight so the
+  // set that gets uploaded and sent can't diverge from what the user submitted.
+  const attachmentsLocked = creating || attachments.isUploading;
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!attachmentsLocked && e.target.files?.length) {
+      attachments.onAdd(e.target.files);
+    }
+    // Allow re-selecting the same file after removing it.
+    e.target.value = "";
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (attachmentsLocked) return;
+    const files = e.clipboardData?.files;
+    if (files?.length) {
+      e.preventDefault();
+      attachments.onAdd(files);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    if (attachmentsLocked) return;
+    if (e.dataTransfer?.files?.length) {
+      attachments.onAdd(e.dataTransfer.files);
+    }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -452,7 +541,27 @@ function HomeContent({
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
-              <div className="border border-border bg-input">
+              <div
+                className={`border bg-input ${isDraggingOver ? "border-accent" : "border-border"}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDraggingOver(true);
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setIsDraggingOver(false);
+                  }
+                }}
+                onDrop={handleDrop}
+              >
+                {/* Pending attachment previews */}
+                <AttachmentPreviewStrip
+                  items={attachments.items}
+                  error={attachments.error}
+                  onRemove={attachments.onRemove}
+                  disabled={attachmentsLocked}
+                />
+
                 {/* Text input area */}
                 <div className="relative">
                   <textarea
@@ -460,6 +569,7 @@ function HomeContent({
                     value={prompt}
                     onChange={(e) => handlePromptChange(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
                     placeholder="What do you want to build?"
                     disabled={creating}
                     className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
@@ -467,12 +577,38 @@ function HomeContent({
                   />
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                    {attachments.isUploading && (
+                      <span className="text-xs text-muted-foreground">Uploading...</span>
+                    )}
                     {isCreatingSession && (
                       <span className="text-xs text-accent">Warming sandbox...</span>
                     )}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept={ATTACHMENT_ACCEPT}
+                      multiple
+                      className="hidden"
+                      onChange={handleFileInputChange}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={attachmentsLocked}
+                      className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                      title="Attach images or videos"
+                      aria-label="Attach images or videos"
+                    >
+                      <PaperclipIcon className="w-5 h-5" />
+                    </button>
                     <button
                       type="submit"
-                      disabled={!prompt.trim() || creating || !sessionTarget}
+                      disabled={
+                        (!prompt.trim() && attachments.items.length === 0) ||
+                        creating ||
+                        attachments.isUploading ||
+                        !sessionTarget
+                      }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
                       aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}

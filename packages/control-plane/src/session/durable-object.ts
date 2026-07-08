@@ -84,6 +84,7 @@ import {
   type ChildSessionsHandler,
 } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
+import { createUploadsHandler, type UploadsHandler } from "./http/handlers/uploads.handler";
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
@@ -157,6 +158,8 @@ export class SessionDO extends DurableObject<Env> {
   private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox handler (lazily initialized)
   private _sandboxHandler: SandboxHandler | null = null;
+  // Uploads handler (lazily initialized)
+  private _uploadsHandler: UploadsHandler | null = null;
   // WebSocket token handler (lazily initialized)
   private _wsTokenHandler: WsTokenHandler | null = null;
   // Session lifecycle handler (lazily initialized)
@@ -179,6 +182,7 @@ export class SessionDO extends DurableObject<Env> {
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
+    recordUpload: (request) => this.uploadsHandler.recordUpload(request),
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
@@ -423,6 +427,18 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._sandboxHandler;
+  }
+
+  private get uploadsHandler(): UploadsHandler {
+    if (!this._uploadsHandler) {
+      this._uploadsHandler = createUploadsHandler({
+        repository: this.repository,
+        getSession: () => this.getSession(),
+        getLog: () => this.log,
+      });
+    }
+
+    return this._uploadsHandler;
   }
 
   private get wsTokenHandler(): WsTokenHandler {
@@ -1315,7 +1331,14 @@ export class SessionDO extends DurableObject<Env> {
       content: string;
       model?: string;
       reasoningEffort?: string;
-      attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+      attachments?: Array<{
+        type: string;
+        name: string;
+        url?: string;
+        content?: string;
+        mimeType?: string;
+        uploadId?: string;
+      }>;
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, data);

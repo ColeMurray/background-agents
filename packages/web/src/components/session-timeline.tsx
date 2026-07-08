@@ -15,7 +15,7 @@ import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
+import { CheckIcon, CopyIcon, ErrorIcon, FileIcon } from "@/components/ui/icons";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -333,13 +333,80 @@ function StatusRow({
   );
 }
 
+type UserMessageAttachment = {
+  type: string;
+  name: string;
+  mimeType?: string;
+  uploadId?: string;
+  url?: string;
+};
+
+function UserMessageAttachments({
+  attachments,
+  sessionId,
+}: {
+  attachments: UserMessageAttachment[];
+  sessionId: string;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2 mt-3">
+      {attachments.map((attachment, index) => {
+        const key = attachment.uploadId ?? `${attachment.name}-${index}`;
+        const src = attachment.uploadId
+          ? `/api/sessions/${sessionId}/uploads/${attachment.uploadId}`
+          : null;
+
+        if (src && attachment.mimeType?.startsWith("image/")) {
+          return (
+            <img
+              key={key}
+              src={src}
+              alt={attachment.name}
+              title={attachment.name}
+              className="max-h-48 max-w-full border border-border object-contain"
+            />
+          );
+        }
+
+        if (src && attachment.mimeType?.startsWith("video/")) {
+          return (
+            <video
+              key={key}
+              src={src}
+              controls
+              preload="metadata"
+              title={attachment.name}
+              className="max-h-48 max-w-full border border-border"
+            />
+          );
+        }
+
+        // No streamable reference (e.g. attachments from integrations) — show a chip.
+        return (
+          <span
+            key={key}
+            className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground border border-border bg-muted"
+            title={attachment.name}
+          >
+            <FileIcon className="w-3.5 h-3.5" />
+            {attachment.name}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function UserMessageEvent({
   event,
+  sessionId,
   currentParticipantId,
   copied,
   onCopyContent,
 }: EventRendererProps) {
-  if (event.type !== "user_message" || !event.content) return null;
+  if (event.type !== "user_message") return null;
+  const attachments = event.attachments ?? [];
+  if (!event.content && attachments.length === 0) return null;
 
   const isCurrentUser =
     event.author?.participantId && currentParticipantId
@@ -364,7 +431,12 @@ function UserMessageEvent({
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
-      <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+      {event.content && (
+        <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+      )}
+      {attachments.length > 0 && (
+        <UserMessageAttachments attachments={attachments} sessionId={sessionId} />
+      )}
     </MessageFrame>
   );
 }

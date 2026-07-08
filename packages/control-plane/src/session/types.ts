@@ -84,6 +84,16 @@ export interface MessageRow {
   completed_at: number | null;
 }
 
+export interface UploadRow {
+  id: string;
+  kind: string; // 'image' | 'video'
+  mime_type: string;
+  size_bytes: number;
+  object_key: string;
+  message_id: string | null; // Set once a prompt references this upload
+  created_at: number;
+}
+
 export interface EventRow {
   id: string;
   type: EventType;

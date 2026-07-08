@@ -21,7 +21,9 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { usePromptAttachments } from "@/hooks/use-prompt-attachments";
 import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
+import type { Attachment } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { ComboboxGroup } from "@/components/ui/combobox";
 
@@ -162,6 +164,7 @@ function SessionPageContent() {
   );
 
   const [prompt, setPrompt] = useState("");
+  const promptAttachments = usePromptAttachments();
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
@@ -169,6 +172,10 @@ function SessionPageContent() {
   );
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Synchronous re-entry guard: React state (isUploading) doesn't commit fast
+  // enough to stop a double-click or repeated Cmd+Enter from submitting twice
+  // while uploadAll() is awaited.
+  const submitInFlightRef = useRef(false);
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
   const modelItems = useMemo<ComboboxGroup[]>(
@@ -208,14 +215,45 @@ function SessionPageContent() {
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim() || isProcessing) return;
+    const hasAttachments = promptAttachments.attachments.length > 0;
+    if (
+      submitInFlightRef.current ||
+      (!prompt.trim() && !hasAttachments) ||
+      isProcessing ||
+      promptAttachments.isUploading
+    ) {
+      return;
+    }
 
-    sendPrompt(prompt, selectedModel, reasoningEffort);
-    setPrompt("");
-    // Revalidate sidebar so this session bubbles to the top
-    mutate(isUnarchivedSessionListKey);
+    submitInFlightRef.current = true;
+    try {
+      let attachments: Attachment[] | undefined;
+      if (hasAttachments) {
+        try {
+          attachments = await promptAttachments.uploadAll(sessionId);
+        } catch {
+          // uploadAll surfaces the error in the composer; keep the draft intact.
+          return;
+        }
+      }
+
+      const trimmed = prompt.trim();
+      // Nothing survived to send (e.g. the only attachment failed to upload).
+      // Don't post an empty "See the attached files." with no attachments.
+      if (!trimmed && (!attachments || attachments.length === 0)) {
+        return;
+      }
+
+      sendPrompt(trimmed || "See the attached files.", selectedModel, reasoningEffort, attachments);
+      setPrompt("");
+      promptAttachments.clearAttachments();
+      // Revalidate sidebar so this session bubbles to the top
+      mutate(isUnarchivedSessionListKey);
+    } finally {
+      submitInFlightRef.current = false;
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -253,6 +291,7 @@ function SessionPageContent() {
       artifacts={artifacts}
       currentParticipantId={currentParticipantId}
       prompt={prompt}
+      promptAttachments={promptAttachments}
       isProcessing={isProcessing}
       selectedModel={selectedModel}
       reasoningEffort={reasoningEffort}
@@ -290,6 +329,7 @@ function SessionContent({
   artifacts,
   currentParticipantId,
   prompt,
+  promptAttachments,
   isProcessing,
   selectedModel,
   reasoningEffort,
@@ -323,6 +363,7 @@ function SessionContent({
   artifacts: ReturnType<typeof useSessionSocket>["artifacts"];
   currentParticipantId: string | null;
   prompt: string;
+  promptAttachments: ReturnType<typeof usePromptAttachments>;
   isProcessing: boolean;
   selectedModel: string;
   reasoningEffort: string | undefined;
@@ -505,6 +546,13 @@ function SessionContent({
           onChange: handleInputChange,
           onKeyDown: handleKeyDown,
           onStopExecution: stopExecution,
+        }}
+        attachments={{
+          items: promptAttachments.attachments,
+          error: promptAttachments.attachmentError,
+          isUploading: promptAttachments.isUploading,
+          onAdd: promptAttachments.addFiles,
+          onRemove: promptAttachments.removeAttachment,
         }}
         model={{
           selectedModel,

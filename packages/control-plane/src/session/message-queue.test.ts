@@ -85,6 +85,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | null }) {
   const repository = {
     createMessage: vi.fn(),
+    markUploadsReferenced: vi.fn(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
@@ -188,9 +189,74 @@ describe("SessionMessageQueue", () => {
     expect(h.setSessionStatus).toHaveBeenCalledWith("active");
   });
 
+  it("stores attachments and embeds content-free metadata in the user_message event", async () => {
+    const h = buildQueue();
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "look at this",
+      attachments: [
+        {
+          type: "image",
+          name: "shot.png",
+          mimeType: "image/png",
+          uploadId: "up-1",
+        },
+        {
+          type: "image",
+          name: "inline.png",
+          mimeType: "image/png",
+          content: "aGVsbG8=",
+        },
+      ],
+    });
+
+    // Full attachments (including any inline content) go to the message row…
+    expect(h.repository.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: JSON.stringify([
+          { type: "image", name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
+          { type: "image", name: "inline.png", mimeType: "image/png", content: "aGVsbG8=" },
+        ]),
+      })
+    );
+
+    // …but the broadcast/persisted event carries metadata only.
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({
+        type: "user_message",
+        attachments: [
+          { type: "image", name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
+          { type: "image", name: "inline.png", mimeType: "image/png" },
+        ],
+      }),
+    });
+    const storedEvent = JSON.parse(h.repository.createEvent.mock.calls[0][0].data as string);
+    expect(storedEvent.attachments).toEqual([
+      { type: "image", name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
+      { type: "image", name: "inline.png", mimeType: "image/png" },
+    ]);
+  });
+
+  it("omits attachments from the user_message event when none are sent", async () => {
+    const h = buildQueue();
+
+    await h.queue.handlePromptMessage({} as WebSocket, { content: "hello" });
+
+    const broadcastCall = h.broadcast.mock.calls.find(
+      ([message]) =>
+        (message as { type: string; event?: { type?: string } }).type === "sandbox_event" &&
+        (message as { event?: { type?: string } }).event?.type === "user_message"
+    );
+    expect(broadcastCall).toBeDefined();
+    expect((broadcastCall?.[0] as { event: Record<string, unknown> }).event).not.toHaveProperty(
+      "attachments"
+    );
+  });
+
   it("dispatches prompt command when sandbox socket exists", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-42" }));
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
@@ -209,7 +275,7 @@ describe("SessionMessageQueue", () => {
 
   it("marks processing message failed and broadcasts synthetic completion on stop", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-9" });
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
