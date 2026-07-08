@@ -108,6 +108,7 @@ export interface Env {
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
   EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail (default: 5400000 = 90 min)
+  SECRETS_CAP_ENFORCEMENT?: string; // "warn" (default) logs oversized secret payloads; "enforce" fails spawn/build
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")

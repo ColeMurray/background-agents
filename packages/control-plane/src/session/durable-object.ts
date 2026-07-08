@@ -66,7 +66,13 @@ import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-req
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
-import { mergeSecrets } from "../db/secrets-validation";
+import {
+  auditSecretsMerge,
+  mergeSecretSources,
+  parseSecretsCapMode,
+} from "../db/secrets-validation";
+import { buildLaunchUnitSecretSources } from "./launch-unit-secrets";
+import type { SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
@@ -676,8 +682,10 @@ export class SessionDO extends DurableObject<Env> {
       };
     }
 
-    // Token absence short-circuits to false so a misconfigured deployment
-    // never installs a tool that would 503 on every call.
+    // Session-scoped gate: resolved from the primary member (the scalar mirror
+    // this lookup is called with) — see resolveSessionScopedSettings for the
+    // per-feature scope rules. Token absence short-circuits to false so a
+    // misconfigured deployment never installs a tool that would 503 on every call.
     let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
     if (this.env.DB) {
       const tokenPresent = !!this.env.SLACK_BOT_TOKEN;
@@ -1810,34 +1818,57 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
-    const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
+    const globalStore = new GlobalSecretsStore(this.env.DB, encryptionKey);
     const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    let repoSecrets: Record<string, string> = {};
-    if (session.repo_owner && session.repo_name) {
-      const repoId = await this.ensureRepoId(session);
-      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
-    }
+    const repoStore = new RepoSecretsStore(this.env.DB, encryptionKey);
+    const sources = await buildLaunchUnitSecretSources({
+      environmentId: null, // PR-9: session.environment_id
+      globalSecrets,
+      members: this.repository.getSessionRepositories(),
+      loadMemberSecrets: (member) => this.loadMemberRepoSecrets(session, member, repoStore),
+    });
 
-    // Merge: repo overrides global
-    const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
-    const globalCount = Object.keys(globalSecrets).length;
-    const repoCount = Object.keys(repoSecrets).length;
-    const mergedCount = Object.keys(merged).length;
+    const merge = mergeSecretSources(sources);
+    auditSecretsMerge({
+      merge,
+      mode: parseSecretsCapMode(this.env.SECRETS_CAP_ENFORCEMENT),
+      log: this.log,
+      context: { session_id: session.id },
+    });
 
+    const mergedCount = Object.keys(merge.merged).length;
     if (mergedCount > 0) {
-      const logLevel = exceedsLimit ? "warn" : "info";
-      this.log[logLevel]("Secrets merged for sandbox", {
-        global_count: globalCount,
-        repo_count: repoCount,
+      this.log.info("Secrets merged for sandbox", {
+        source_count: sources.length,
         merged_count: mergedCount,
-        payload_bytes: totalBytes,
-        exceeds_limit: exceedsLimit,
+        payload_bytes: merge.totalBytes,
+        exceeds_limit: merge.exceedsLimit,
       });
     }
 
-    return mergedCount === 0 ? undefined : merged;
+    return mergedCount === 0 ? undefined : merge.merged;
+  }
+
+  /**
+   * Decrypt one member repo's secrets — the injected leaf loader for
+   * buildLaunchUnitSecretSources. The member row carries the repo id; a
+   * synthesized primary (legacy scalar row) resolves it lazily via ensureRepoId.
+   * A member without a resolvable id (a secondary with a null row id) can't be
+   * keyed, so it contributes nothing.
+   */
+  private async loadMemberRepoSecrets(
+    session: SessionRow,
+    member: SessionRepositoryEntry,
+    repoStore: RepoSecretsStore
+  ): Promise<Record<string, string>> {
+    const repoId =
+      member.row?.repo_id ?? (member.isPrimary ? await this.ensureRepoId(session) : null);
+    if (repoId === null) {
+      return {};
+    }
+    return repoStore.getDecryptedSecrets(repoId);
   }
 
   /**
