@@ -17,6 +17,7 @@ import {
   resolveAppName,
   sandboxEventSchema,
   timingSafeEqual,
+  type Attachment,
 } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
@@ -1331,14 +1332,7 @@ export class SessionDO extends DurableObject<Env> {
       content: string;
       model?: string;
       reasoningEffort?: string;
-      attachments?: Array<{
-        type: string;
-        name: string;
-        url?: string;
-        content?: string;
-        mimeType?: string;
-        uploadId?: string;
-      }>;
+      attachments?: Attachment[];
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, data);

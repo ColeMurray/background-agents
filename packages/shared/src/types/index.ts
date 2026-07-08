@@ -359,7 +359,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   // unknown union members, so this member must exist before runtimes emit it.
   z.object({
     type: z.literal("warning"),
-    scope: z.enum(["sync", "setup", "start", "assembly", "secrets"]),
+    scope: z.enum(["sync", "setup", "start", "assembly", "secrets", "media"]),
     message: z.string(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),

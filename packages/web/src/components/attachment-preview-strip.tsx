@@ -25,7 +25,12 @@ function AttachmentPreview({
         />
       ) : (
         <>
-          <video src={attachment.previewUrl} muted className="w-full h-full object-cover" />
+          <video
+            src={attachment.previewUrl}
+            muted
+            preload="metadata"
+            className="w-full h-full object-cover"
+          />
           <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <PlayIcon className="w-5 h-5 text-white drop-shadow" />
           </span>

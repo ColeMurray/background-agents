@@ -81,6 +81,9 @@ describe("createUploadsHandler", () => {
 
     expect(response.status).toBe(429);
     expect(repository.createUpload).not.toHaveBeenCalled();
+    expect(repository.takeStaleUnreferencedUploads).toHaveBeenCalledWith(
+      NOW - PROMPT_UPLOAD_UNREFERENCED_TTL_MS
+    );
   });
 
   it("rejects when the upload would exceed the per-session byte cap", async () => {
@@ -92,6 +95,37 @@ describe("createUploadsHandler", () => {
 
     expect(response.status).toBe(429);
     expect(repository.createUpload).not.toHaveBeenCalled();
+  });
+
+  it("prunes stale uploads before enforcing quota totals", async () => {
+    const staleUpload: UploadRow = {
+      id: "old-1",
+      kind: "image",
+      mime_type: "image/png",
+      size_bytes: 1024,
+      object_key: "sessions/sess-1/uploads/old-1",
+      message_id: null,
+      created_at: NOW - PROMPT_UPLOAD_UNREFERENCED_TTL_MS - 1,
+    };
+    const { handler, repository } = buildHandler({ stale: [staleUpload] });
+    const order: string[] = [];
+    repository.takeStaleUnreferencedUploads.mockImplementation(() => {
+      order.push("prune");
+      return [staleUpload];
+    });
+    repository.getUploadTotals.mockImplementation(() => {
+      order.push("totals");
+      return { count: PROMPT_UPLOAD_LIMIT_PER_SESSION - 1, totalBytes: 0 };
+    });
+
+    const response = await handler.recordUpload(uploadRequest(VALID_BODY));
+
+    expect(response.status).toBe(200);
+    expect(order).toEqual(["prune", "totals"]);
+    expect(await response.json()).toEqual({
+      status: "ok",
+      staleObjectKeys: ["sessions/sess-1/uploads/old-1"],
+    });
   });
 
   it("records the upload and returns pruned stale object keys", async () => {

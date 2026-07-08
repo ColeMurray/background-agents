@@ -21,7 +21,10 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { usePromptAttachments } from "@/hooks/use-prompt-attachments";
+import {
+  DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+  usePromptAttachments,
+} from "@/hooks/use-prompt-attachments";
 import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
 import type { Attachment } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -241,12 +244,17 @@ function SessionPageContent() {
 
       const trimmed = prompt.trim();
       // Nothing survived to send (e.g. the only attachment failed to upload).
-      // Don't post an empty "See the attached files." with no attachments.
+      // Don't post the attachment-only fallback message with no attachments.
       if (!trimmed && (!attachments || attachments.length === 0)) {
         return;
       }
 
-      sendPrompt(trimmed || "See the attached files.", selectedModel, reasoningEffort, attachments);
+      sendPrompt(
+        trimmed || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+        selectedModel,
+        reasoningEffort,
+        attachments
+      );
       setPrompt("");
       promptAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top

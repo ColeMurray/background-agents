@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { ActionBar } from "@/components/action-bar";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
@@ -8,6 +8,7 @@ import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { ModelIcon, PaperclipIcon, SendIcon, StopIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-prompt-attachments";
 import type { Artifact } from "@/types/session";
 
@@ -51,39 +52,19 @@ export function SessionPromptComposer({
   model,
 }: SessionPromptComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
-
   const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
   const sendDisabled = !hasContent || prompt.isProcessing || attachments.isUploading;
   // While an upload is in flight the draft must not change, or the set that
   // gets sent could diverge from what was uploaded.
   const attachmentsLocked = attachments.isUploading;
-
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!attachmentsLocked && e.target.files?.length) {
-      attachments.onAdd(e.target.files);
-    }
-    // Allow re-selecting the same file after removing it.
-    e.target.value = "";
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    if (attachmentsLocked) return;
-    const files = e.clipboardData?.files;
-    if (files?.length) {
-      e.preventDefault();
-      attachments.onAdd(files);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingOver(false);
-    if (attachmentsLocked) return;
-    if (e.dataTransfer?.files?.length) {
-      attachments.onAdd(e.dataTransfer.files);
-    }
-  };
+  const {
+    isDraggingOver,
+    handleFileInputChange,
+    handlePaste,
+    handleDrop,
+    handleDragOver,
+    handleDragLeave,
+  } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
 
   return (
     <footer className="border-t border-border-muted flex-shrink-0">
@@ -102,15 +83,8 @@ export function SessionPromptComposer({
         {/* Input container */}
         <div
           className={`border bg-input ${isDraggingOver ? "border-accent" : "border-border"}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDraggingOver(true);
-          }}
-          onDragLeave={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-              setIsDraggingOver(false);
-            }
-          }}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
           {/* Pending attachment previews */}

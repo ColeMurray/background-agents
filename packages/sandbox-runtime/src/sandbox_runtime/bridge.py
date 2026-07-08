@@ -25,7 +25,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, NoReturn
+from typing import Any, ClassVar, NoReturn, cast
 
 import httpx
 import websockets
@@ -509,6 +509,10 @@ class AgentBridge:
                 continue
             await self._send_event({"type": "warning", **entry})
 
+    async def _send_media_warning(self, message: str) -> None:
+        """Surface non-fatal media handling failures to the user timeline."""
+        await self._send_event({"type": "warning", "scope": "media", "message": message})
+
     async def _send_event(self, event: dict[str, Any]) -> None:
         """Send event to control plane, buffering if WS is unavailable."""
         event_type = event.get("type", "unknown")
@@ -955,15 +959,15 @@ class AgentBridge:
         if not attachments:
             return attachments
 
-        hydrated: list[dict[str, Any]] = []
-        for attachment in attachments:
+        dropped = object()
+
+        async def hydrate_one(attachment: dict[str, Any]) -> dict[str, Any] | object:
             if (
                 not isinstance(attachment, dict)
                 or not attachment.get("uploadId")
                 or attachment.get("content")
             ):
-                hydrated.append(attachment)
-                continue
+                return attachment
 
             upload_id = attachment["uploadId"]
             name = attachment.get("name") or "attachment"
@@ -979,18 +983,23 @@ class AgentBridge:
                     attachment_name=name,
                     upload_id=upload_id,
                 )
-                continue
+                await self._send_media_warning(
+                    f"Attachment {name} could not be fetched and was skipped."
+                )
+                return dropped
 
             inlined = {key: value for key, value in attachment.items() if key != "uploadId"}
             inlined["content"] = base64.b64encode(data).decode("ascii")
-            hydrated.append(inlined)
             self.log.info(
                 "prompt.upload_fetched",
                 attachment_name=name,
                 upload_id=upload_id,
                 size_bytes=len(data),
             )
-        return hydrated
+            return inlined
+
+        results = await asyncio.gather(*(hydrate_one(attachment) for attachment in attachments))
+        return cast("list[dict[str, Any]]", [result for result in results if result is not dropped])
 
     async def _download_upload(self, upload_id: str, max_bytes: int) -> bytes | None:
         """Fetch a session upload from the control plane, bounded by ``max_bytes``."""
@@ -1050,20 +1059,20 @@ class AgentBridge:
         if not attachments:
             return attachments
 
-        expanded: list[dict[str, Any]] = []
-        for attachment in attachments:
+        async def expand_one(attachment: dict[str, Any]) -> list[dict[str, Any]]:
             if isinstance(attachment, dict) and self._is_video_attachment(attachment):
-                expanded.extend(await self._video_to_frame_attachments(attachment))
-            else:
-                expanded.append(attachment)
-        return expanded
+                return await self._video_to_frame_attachments(attachment)
+            return [attachment]
+
+        groups = await asyncio.gather(*(expand_one(attachment) for attachment in attachments))
+        return [attachment for group in groups for attachment in group]
 
     async def _video_to_frame_attachments(self, attachment: dict[str, Any]) -> list[dict[str, Any]]:
         name = attachment.get("name") or "video"
         url = attachment.get("url")
         content = attachment.get("content")
 
-        tmpdir = Path(tempfile.mkdtemp(prefix="linear_video_"))
+        tmpdir = Path(tempfile.mkdtemp(prefix="prompt_video_"))
         try:
             video_path = tmpdir / "input"
             if content:
@@ -1071,17 +1080,29 @@ class AgentBridge:
                     video_path.write_bytes(base64.b64decode(content))
                 except (ValueError, OSError) as e:
                     self.log.warn("prompt.video_decode_failed", attachment_name=name, exc=e)
+                    await self._send_media_warning(
+                        f"Video attachment {name} could not be decoded and was skipped."
+                    )
                     return []
             elif url:
                 if not await self._download_to_file(url, video_path, self.MAX_VIDEO_BYTES):
                     self.log.warn("prompt.video_download_failed", attachment_name=name)
+                    await self._send_media_warning(
+                        f"Video attachment {name} could not be downloaded and was skipped."
+                    )
                     return []
             else:
+                await self._send_media_warning(
+                    f"Video attachment {name} could not be processed and was skipped."
+                )
                 return []
 
             frames = await self._extract_video_frames(video_path, tmpdir, self.MAX_VIDEO_FRAMES)
             if not frames:
                 self.log.warn("prompt.video_no_frames", attachment_name=name)
+                await self._send_media_warning(
+                    f"Video attachment {name} could not be sampled and was skipped."
+                )
                 return []
 
             attachments: list[dict[str, Any]] = []
@@ -1099,6 +1120,9 @@ class AgentBridge:
             return attachments
         except Exception as e:  # never let media handling break the prompt
             self.log.warn("prompt.video_expand_failed", attachment_name=name, exc=e)
+            await self._send_media_warning(
+                f"Video attachment {name} could not be processed and was skipped."
+            )
             return []
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)

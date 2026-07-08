@@ -23,7 +23,7 @@ export interface UploadsHandler {
 
 interface RecordUploadBody {
   uploadId: string;
-  kind: string;
+  kind: "image" | "video";
   mimeType: string;
   sizeBytes: number;
   objectKey: string;
@@ -72,6 +72,17 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         return Response.json({ error: "Invalid upload record body" }, { status: 400 });
       }
 
+      const timestamp = now();
+      const stale = deps.repository.takeStaleUnreferencedUploads(
+        timestamp - PROMPT_UPLOAD_UNREFERENCED_TTL_MS
+      );
+      if (stale.length > 0) {
+        deps.getLog().info("uploads.pruned_stale", {
+          count: stale.length,
+          total_bytes: stale.reduce((sum, upload) => sum + upload.size_bytes, 0),
+        });
+      }
+
       const totals = deps.repository.getUploadTotals();
       if (totals.count >= PROMPT_UPLOAD_LIMIT_PER_SESSION) {
         return Response.json(
@@ -83,7 +94,6 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         return Response.json({ error: "Session upload storage limit exceeded" }, { status: 429 });
       }
 
-      const timestamp = now();
       deps.repository.createUpload({
         id: raw.uploadId,
         kind: raw.kind,
@@ -92,16 +102,6 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         objectKey: raw.objectKey,
         createdAt: timestamp,
       });
-
-      const stale = deps.repository.takeStaleUnreferencedUploads(
-        timestamp - PROMPT_UPLOAD_UNREFERENCED_TTL_MS
-      );
-      if (stale.length > 0) {
-        deps.getLog().info("uploads.pruned_stale", {
-          count: stale.length,
-          total_bytes: stale.reduce((sum, upload) => sum + upload.size_bytes, 0),
-        });
-      }
 
       return Response.json({
         status: "ok",

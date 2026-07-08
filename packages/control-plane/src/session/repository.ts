@@ -170,7 +170,7 @@ export interface CreateMessageData {
  */
 export interface CreateUploadData {
   id: string;
-  kind: string;
+  kind: "image" | "video";
   mimeType: string;
   sizeBytes: number;
   objectKey: string;

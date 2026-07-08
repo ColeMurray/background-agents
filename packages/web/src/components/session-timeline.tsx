@@ -311,18 +311,26 @@ function StatusRow({
   time,
   children,
 }: {
-  tone: "muted" | "success" | "destructive";
+  tone: "muted" | "success" | "destructive" | "warning";
   time: string;
   children: ReactNode;
 }) {
   const dotClassName =
-    tone === "success" ? "bg-success" : tone === "destructive" ? "bg-destructive" : "bg-accent";
+    tone === "success"
+      ? "bg-success"
+      : tone === "destructive"
+        ? "bg-destructive"
+        : tone === "warning"
+          ? "bg-warning"
+          : "bg-accent";
   const textClassName =
     tone === "success"
       ? "text-success"
       : tone === "destructive"
         ? "text-destructive"
-        : "text-muted-foreground";
+        : tone === "warning"
+          ? "text-warning"
+          : "text-muted-foreground";
 
   return (
     <div className={`flex items-center gap-2 text-sm ${textClassName}`}>
@@ -333,13 +341,8 @@ function StatusRow({
   );
 }
 
-type UserMessageAttachment = {
-  type: string;
-  name: string;
-  mimeType?: string;
-  uploadId?: string;
-  url?: string;
-};
+type UserMessageEventData = Extract<SandboxEvent, { type: "user_message" }>;
+type UserMessageAttachment = NonNullable<UserMessageEventData["attachments"]>[number];
 
 function UserMessageAttachments({
   attachments,
@@ -519,6 +522,16 @@ function ErrorEvent({ event }: EventRendererProps) {
   );
 }
 
+function WarningEvent({ event }: EventRendererProps) {
+  if (event.type !== "warning") return null;
+
+  return (
+    <StatusRow tone="warning" time={formatEventTime(event)}>
+      {event.message}
+    </StatusRow>
+  );
+}
+
 function ExecutionCompleteEvent({ event }: EventRendererProps) {
   if (event.type !== "execution_complete") return null;
 
@@ -550,6 +563,7 @@ const eventRenderers: Partial<
   git_sync: GitSyncEvent,
   artifact: ArtifactEvent,
   error: ErrorEvent,
+  warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
 };
 

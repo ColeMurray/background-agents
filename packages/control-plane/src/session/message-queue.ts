@@ -6,6 +6,7 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
+  type Attachment,
 } from "@open-inspect/shared";
 import type {
   ClientInfo,
@@ -28,16 +29,7 @@ interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: PromptAttachment[];
-}
-
-interface PromptAttachment {
-  type: string;
-  name: string;
-  url?: string;
-  content?: string;
-  mimeType?: string;
-  uploadId?: string;
+  attachments?: Attachment[];
 }
 
 interface MessageQueueDeps {
@@ -314,7 +306,7 @@ export class SessionMessageQueue {
 
   /** Tie referenced uploads to their message so the DO's TTL prune keeps them. */
   private markAttachmentUploadsReferenced(
-    attachments: PromptAttachment[] | undefined,
+    attachments: Attachment[] | undefined,
     messageId: string
   ): void {
     const uploadIds =
@@ -333,7 +325,7 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: PromptAttachment[]
+    attachments?: Attachment[]
   ): void {
     // Metadata only — base64 payloads would bloat the events table and every
     // broadcast, and DO SQLite rows cap at 2 MB.

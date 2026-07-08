@@ -106,6 +106,9 @@ async def test_expand_video_attachments_drops_video_without_source(bridge: Agent
         [{"type": "url", "name": "rec.mp4", "mimeType": "video/mp4"}]
     )
     assert result == []
+    assert bridge._event_buffer[-1]["type"] == "warning"
+    assert bridge._event_buffer[-1]["scope"] == "media"
+    assert "rec.mp4" in bridge._event_buffer[-1]["message"]
 
 
 async def test_expand_video_attachments_handles_none(bridge: AgentBridge) -> None:
@@ -180,6 +183,9 @@ async def test_hydrate_upload_attachments_drops_failed_download(
     assert result == [
         {"type": "image", "name": "ok.png", "mimeType": "image/png", "content": "QQ=="}
     ]
+    assert bridge._event_buffer[-1]["type"] == "warning"
+    assert bridge._event_buffer[-1]["scope"] == "media"
+    assert "gone.png" in bridge._event_buffer[-1]["message"]
 
 
 async def test_hydrate_upload_attachments_keeps_existing_content(

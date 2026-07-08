@@ -20,6 +20,7 @@ export const MAX_ATTACHMENTS = 6;
 export const MAX_VIDEO_ATTACHMENTS = 2;
 
 export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES, ...VIDEO_MIME_TYPES].join(",");
+export const DEFAULT_ATTACHMENT_ONLY_MESSAGE = "See the attached files.";
 
 function attachmentKind(file: File): "image" | "video" | null {
   if (IMAGE_MIME_TYPES.has(file.type)) return "image";
@@ -56,42 +57,46 @@ export function usePromptAttachments() {
   const addFiles = useCallback((files: Iterable<File>) => {
     setAttachmentError(null);
     const errors: string[] = [];
+    const current = attachmentsRef.current;
+    const additions: PendingAttachment[] = [];
+    let attachmentCount = current.length;
+    let videoCount = current.filter((attachment) => attachment.kind === "video").length;
 
-    setAttachments((prev) => {
-      const next = [...prev];
-      for (const file of files) {
-        const kind = attachmentKind(file);
-        if (!kind) {
-          errors.push(`${file.name || "File"} is not a supported image or video`);
-          continue;
-        }
-        if (next.length >= MAX_ATTACHMENTS) {
-          errors.push(`You can attach up to ${MAX_ATTACHMENTS} files per message`);
-          break;
-        }
-        if (
-          kind === "video" &&
-          next.filter((a) => a.kind === "video").length >= MAX_VIDEO_ATTACHMENTS
-        ) {
-          errors.push(`You can attach up to ${MAX_VIDEO_ATTACHMENTS} videos per message`);
-          continue;
-        }
-        const maxBytes = kind === "image" ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
-        if (file.size > maxBytes) {
-          errors.push(
-            `${file.name || "File"} is too large (${kind}s must be under ${formatMegabytes(maxBytes)})`
-          );
-          continue;
-        }
-        next.push({
-          id: crypto.randomUUID(),
-          file,
-          previewUrl: URL.createObjectURL(file),
-          kind,
-        });
+    for (const file of files) {
+      const kind = attachmentKind(file);
+      if (!kind) {
+        errors.push(`${file.name || "File"} is not a supported image or video`);
+        continue;
       }
-      return next;
-    });
+      if (attachmentCount >= MAX_ATTACHMENTS) {
+        errors.push(`You can attach up to ${MAX_ATTACHMENTS} files per message`);
+        break;
+      }
+      if (kind === "video" && videoCount >= MAX_VIDEO_ATTACHMENTS) {
+        errors.push(`You can attach up to ${MAX_VIDEO_ATTACHMENTS} videos per message`);
+        continue;
+      }
+      const maxBytes = kind === "image" ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
+      if (file.size > maxBytes) {
+        errors.push(
+          `${file.name || "File"} is too large (${kind}s must be under ${formatMegabytes(maxBytes)})`
+        );
+        continue;
+      }
+
+      additions.push({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        kind,
+      });
+      attachmentCount += 1;
+      if (kind === "video") videoCount += 1;
+    }
+
+    if (additions.length > 0) {
+      setAttachments((prev) => [...prev, ...additions]);
+    }
 
     if (errors.length > 0) {
       setAttachmentError(errors[0]);

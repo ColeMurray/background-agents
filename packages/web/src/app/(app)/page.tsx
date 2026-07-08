@@ -21,7 +21,12 @@ import {
   type ModelCategory,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { usePromptAttachments, ATTACHMENT_ACCEPT } from "@/hooks/use-prompt-attachments";
+import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
+import {
+  usePromptAttachments,
+  ATTACHMENT_ACCEPT,
+  DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+} from "@/hooks/use-prompt-attachments";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
@@ -316,7 +321,7 @@ export default function Home() {
 
       const trimmed = prompt.trim();
       // Nothing survived to send (e.g. the only attachment failed to upload).
-      // Don't post an empty "See the attached files." with no attachments.
+      // Don't post the attachment-only fallback message with no attachments.
       if (!trimmed && (!attachments || attachments.length === 0)) {
         setCreating(false);
         return;
@@ -326,7 +331,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: trimmed || "See the attached files.",
+          content: trimmed || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
           model: selectedModel,
           reasoningEffort,
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
@@ -440,36 +445,17 @@ function HomeContent({
   const { isOpen, toggle } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
   // Freeze the draft while a session-create/upload/submit is in flight so the
   // set that gets uploaded and sent can't diverge from what the user submitted.
   const attachmentsLocked = creating || attachments.isUploading;
-
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!attachmentsLocked && e.target.files?.length) {
-      attachments.onAdd(e.target.files);
-    }
-    // Allow re-selecting the same file after removing it.
-    e.target.value = "";
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    if (attachmentsLocked) return;
-    const files = e.clipboardData?.files;
-    if (files?.length) {
-      e.preventDefault();
-      attachments.onAdd(files);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingOver(false);
-    if (attachmentsLocked) return;
-    if (e.dataTransfer?.files?.length) {
-      attachments.onAdd(e.dataTransfer.files);
-    }
-  };
+  const {
+    isDraggingOver,
+    handleFileInputChange,
+    handlePaste,
+    handleDrop,
+    handleDragOver,
+    handleDragLeave,
+  } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -543,15 +529,8 @@ function HomeContent({
 
               <div
                 className={`border bg-input ${isDraggingOver ? "border-accent" : "border-border"}`}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDraggingOver(true);
-                }}
-                onDragLeave={(e) => {
-                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                    setIsDraggingOver(false);
-                  }
-                }}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
               >
                 {/* Pending attachment previews */}
