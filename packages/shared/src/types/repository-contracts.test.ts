@@ -5,6 +5,7 @@ import {
   MAX_AUTOMATION_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
+  prArtifactBelongsToRepo,
   sandboxEventSchema,
   serverMessageSchema,
   sessionRepositoriesInputSchema,
@@ -236,5 +237,24 @@ describe("toRepositoryRef", () => {
     expect(() =>
       toRepositoryRef({ repoOwner: "acme", repoName: "app", repoId: null, baseBranch: null })
     ).toThrow(/not resolved/);
+  });
+});
+
+describe("prArtifactBelongsToRepo", () => {
+  const web = { repoOwner: "acme", repoName: "web" };
+  const api = { repoOwner: "acme", repoName: "api" };
+
+  it("attributes an identity-less artifact to the primary only", () => {
+    expect(prArtifactBelongsToRepo(null, web, true)).toBe(true);
+    expect(prArtifactBelongsToRepo(null, api, false)).toBe(false);
+  });
+
+  it("matches on identity regardless of primary flag", () => {
+    expect(prArtifactBelongsToRepo(web, web, false)).toBe(true);
+    expect(prArtifactBelongsToRepo(web, api, true)).toBe(false);
+  });
+
+  it("compares identity case-insensitively", () => {
+    expect(prArtifactBelongsToRepo({ repoOwner: "Acme", repoName: "Web" }, web, false)).toBe(true);
   });
 });

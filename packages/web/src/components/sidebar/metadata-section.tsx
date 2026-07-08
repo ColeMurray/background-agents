@@ -9,7 +9,7 @@ import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { SessionRepositoryState } from "@open-inspect/shared";
+import { prArtifactBelongsToRepo, type SessionRepositoryState } from "@open-inspect/shared";
 import {
   ClockIcon,
   SparkleIcon,
@@ -44,9 +44,10 @@ interface MetadataSectionProps {
 }
 
 /**
- * The PR artifact belonging to a member repo. Mirrors the control-plane
- * findPrArtifactForRepo: identity-less artifact metadata (written before
- * multi-repo support) belongs to the primary.
+ * The PR artifact belonging to a member repo. The ownership convention
+ * (identity-less artifact → primary; case-insensitive match) lives in shared
+ * prArtifactBelongsToRepo — the same helper the control-plane prUrl projection
+ * uses; here we only supply the identity parsed from the UI artifact metadata.
  */
 function findPrArtifactForRepo(
   artifacts: Artifact[],
@@ -56,8 +57,8 @@ function findPrArtifactForRepo(
   return artifacts.find((artifact) => {
     if (artifact.type !== "pr") return false;
     const { repoOwner, repoName } = artifact.metadata ?? {};
-    if (!repoOwner || !repoName) return isPrimary;
-    return repoOwner === repo.repoOwner && repoName === repo.repoName;
+    const artifactRepo = repoOwner && repoName ? { repoOwner, repoName } : null;
+    return prArtifactBelongsToRepo(artifactRepo, repo, isPrimary);
   });
 }
 

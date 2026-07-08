@@ -507,6 +507,26 @@ export interface SessionListRepository {
 }
 
 /**
+ * Whether a PR artifact belongs to a given session member. Artifacts written
+ * before multi-repo support carry no repo identity (`artifactRepo === null`)
+ * and by construction belong to the session's primary. Identity is compared
+ * case-insensitively, matching repo-identity comparison elsewhere. This is the
+ * single home of that convention — the control-plane per-repo prUrl projection
+ * (findPrArtifactForRepo) and the web per-repo PR chips both go through here.
+ */
+export function prArtifactBelongsToRepo(
+  artifactRepo: { repoOwner: string; repoName: string } | null,
+  targetRepo: { repoOwner: string; repoName: string },
+  targetIsPrimary: boolean
+): boolean {
+  if (!artifactRepo) return targetIsPrimary;
+  return (
+    artifactRepo.repoOwner.toLowerCase() === targetRepo.repoOwner.toLowerCase() &&
+    artifactRepo.repoName.toLowerCase() === targetRepo.repoName.toLowerCase()
+  );
+}
+
+/**
  * One repository entry on a create/update request. Identifiers are normalized
  * (trim + lowercase) by the schema, matching normalizeOptionalRepositoryPair —
  * the list-entry twin of that scalar helper.

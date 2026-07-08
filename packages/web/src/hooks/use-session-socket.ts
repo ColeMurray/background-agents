@@ -228,12 +228,18 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
 }
 
 /**
- * Apply a `session_branch` update. In a multi-repo session the message names
- * the member whose branch changed (repoOwner/repoName); we update that member's
- * `branchName` in `state.repositories` and mirror to the scalar `branchName`
- * only when it names the primary (position 0). An absent identity names the
- * session's sole repo (the primary), so it mirrors to the scalar too. Sessions
- * without a hydrated member list stay scalar-only, exactly as before.
+ * Apply a `session_branch` update, keeping `state.repositories` and the scalar
+ * `branchName` in sync. The invariant is explicit rather than a sole/primary
+ * guess:
+ *
+ * - No hydrated member list → scalar-only, exactly as before.
+ * - Exactly one member → the update names the sole repo (the primary): update
+ *   it and mirror the scalar.
+ * - Multi-repo (`length > 1`) → the message MUST name its member
+ *   (repoOwner/repoName); an unscoped or unknown-member update is anomalous
+ *   (multi-repo runtimes always echo identity) and is ignored rather than
+ *   attributed to the primary. The scalar mirrors only when the named member is
+ *   the primary (position 0).
  */
 function applySessionBranchUpdate(
   prev: SessionState,
@@ -242,29 +248,37 @@ function applySessionBranchUpdate(
   repoName: string | undefined
 ): SessionState {
   const repositories = prev.repositories;
+
   if (!repositories || repositories.length === 0) {
     return { ...prev, branchName };
   }
 
-  const targetIndex =
-    repoOwner && repoName
-      ? repositories.findIndex((r) => r.repoOwner === repoOwner && r.repoName === repoName)
-      : 0; // absent identity → the session's sole/primary repo
+  if (repositories.length === 1) {
+    return {
+      ...prev,
+      repositories: [{ ...repositories[0], branchName }],
+      branchName,
+    };
+  }
 
+  // Multi-repo: require identity; ignore an update we can't attribute.
+  if (!repoOwner || !repoName) {
+    return prev;
+  }
+  const targetIndex = repositories.findIndex(
+    (repo) => repo.repoOwner === repoOwner && repo.repoName === repoName
+  );
   if (targetIndex === -1) {
-    // Branch update for a repo not in the member list — leave state untouched
-    // rather than clobber the scalar branch.
     return prev;
   }
 
   const updatedRepositories = repositories.map((repo, index) =>
     index === targetIndex ? { ...repo, branchName } : repo
   );
-  const isPrimary = targetIndex === 0;
   return {
     ...prev,
     repositories: updatedRepositories,
-    ...(isPrimary ? { branchName } : {}),
+    ...(targetIndex === 0 ? { branchName } : {}),
   };
 }
 
