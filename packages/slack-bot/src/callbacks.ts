@@ -10,7 +10,8 @@ import {
   timingSafeEqual,
 } from "@open-inspect/shared";
 import { Hono, type Context } from "hono";
-import type { Env, CompletionCallback, ToolCallCallback } from "./types";
+import { z } from "zod";
+import type { Env } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText, truncateError } from "./completion/blocks";
 import { createLogger } from "./logger";
@@ -59,47 +60,56 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/**
- * Validate callback payload shape.
- */
-function isValidPayload(payload: unknown): payload is CompletionCallback {
-  if (!isPlainRecord(payload)) return false;
-  const p = payload;
-  return (
-    typeof p.sessionId === "string" &&
-    typeof p.messageId === "string" &&
-    typeof p.success === "boolean" &&
-    typeof p.timestamp === "number" &&
-    typeof p.signature === "string" &&
-    isPlainRecord(p.context) &&
-    typeof p.context.channel === "string" &&
-    typeof p.context.threadTs === "string"
-  );
-}
+const completionCallbackSchema = z
+  .object({
+    sessionId: z.string(),
+    messageId: z.string(),
+    success: z.boolean(),
+    error: z.string().optional(),
+    timestamp: z.number(),
+    signature: z.string(),
+    context: z
+      .object({
+        channel: z.string(),
+        threadTs: z.string(),
+        repoFullName: z.string().optional(),
+        model: z.string().optional(),
+        reasoningEffort: z.string().optional(),
+        reactionMessageTs: z.string().optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
 
-function isValidSlackCallbackContext(context: unknown): boolean {
-  return (
-    isPlainRecord(context) &&
-    context.source === "slack" &&
-    typeof context.channel === "string" &&
-    typeof context.threadTs === "string"
-  );
-}
+type CompletionCallbackPayload = z.infer<typeof completionCallbackSchema>;
 
-/**
- * Validate tool-call callback payload shape.
- */
-function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
-  if (!isPlainRecord(payload)) return false;
-  const p = payload;
+const toolCallCallbackSchema = z
+  .object({
+    sessionId: z.string(),
+    tool: z.string(),
+    args: z.record(z.string(), z.unknown()),
+    callId: z.string(),
+    timestamp: z.number(),
+    signature: z.string(),
+    context: z
+      .object({
+        source: z.literal("slack"),
+        channel: z.string(),
+        threadTs: z.string(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+type ToolCallCallbackPayload = z.infer<typeof toolCallCallbackSchema>;
+
+function isSignedCallbackPayload(
+  payload: unknown
+): payload is Record<string, unknown> & { signature: string; sessionId?: string } {
   return (
-    typeof p.sessionId === "string" &&
-    typeof p.tool === "string" &&
-    isPlainRecord(p.args) &&
-    typeof p.callId === "string" &&
-    typeof p.timestamp === "number" &&
-    typeof p.signature === "string" &&
-    isValidSlackCallbackContext(p.context)
+    isPlainRecord(payload) &&
+    typeof payload.signature === "string" &&
+    (payload.sessionId === undefined || typeof payload.sessionId === "string")
   );
 }
 
@@ -165,24 +175,10 @@ function isValidAutomationSkipPayload(payload: unknown): payload is AutomationSk
  */
 async function rejectInvalidCallback(
   c: Context<{ Bindings: Env }>,
-  payload: unknown,
-  isValid: (p: unknown) => boolean,
+  payload: { signature: string; sessionId?: string },
   opts: { path: string; traceId: string; startTime: number }
 ): Promise<Response | null> {
   const { path, traceId, startTime } = opts;
-
-  if (!isValid(payload)) {
-    log.warn("http.request", {
-      trace_id: traceId,
-      http_method: "POST",
-      http_path: path,
-      http_status: 400,
-      outcome: "rejected",
-      reject_reason: "invalid_payload",
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: "invalid payload" }, 400);
-  }
 
   if (!c.env.INTERNAL_CALLBACK_SECRET) {
     log.error("http.request", {
@@ -197,10 +193,7 @@ async function rejectInvalidCallback(
     return c.json({ error: "not configured" }, 500);
   }
 
-  const authentic = await verifyCallbackSignature(
-    payload as { signature: string },
-    c.env.INTERNAL_CALLBACK_SECRET
-  );
+  const authentic = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
   if (!authentic) {
     log.warn("http.request", {
       trace_id: traceId,
@@ -209,13 +202,31 @@ async function rejectInvalidCallback(
       http_status: 401,
       outcome: "rejected",
       reject_reason: "invalid_signature",
-      session_id: (payload as { sessionId?: string }).sessionId,
+      session_id: payload.sessionId,
       duration_ms: Date.now() - startTime,
     });
     return c.json({ error: "unauthorized" }, 401);
   }
 
   return null;
+}
+
+function rejectInvalidPayload(
+  c: Context<{ Bindings: Env }>,
+  path: string,
+  traceId: string,
+  startTime: number
+): Response {
+  log.warn("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: path,
+    http_status: 400,
+    outcome: "rejected",
+    reject_reason: "invalid_payload",
+    duration_ms: Date.now() - startTime,
+  });
+  return c.json({ error: "invalid payload" }, 400);
 }
 
 export const callbacksRouter = new Hono<{ Bindings: Env }>();
@@ -228,14 +239,18 @@ callbacksRouter.post("/complete", async (c) => {
   // Use trace_id from control-plane if present, otherwise generate one
   const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
   const payload = await c.req.json();
+  const parsed = completionCallbackSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/complete", traceId, startTime);
+  }
+  const valid = parsed.data;
 
-  const rejection = await rejectInvalidCallback(c, payload, isValidPayload, {
+  const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/complete",
     traceId,
     startTime,
   });
   if (rejection) return rejection;
-  const valid = payload as CompletionCallback;
 
   // Process in background
   c.executionCtx.waitUntil(handleCompletionCallback(valid, c.env, traceId));
@@ -276,13 +291,18 @@ callbacksRouter.post("/tool_call", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  const rejection = await rejectInvalidCallback(c, payload, isValidToolCallPayload, {
+  const parsed = toolCallCallbackSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/tool_call", traceId, startTime);
+  }
+  const valid = parsed.data;
+
+  const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/tool_call",
     traceId,
     startTime,
   });
   if (rejection) return rejection;
-  const valid = payload as ToolCallCallback;
 
   c.executionCtx.waitUntil(handleToolCallCallback(valid, c.env, traceId));
 
@@ -316,7 +336,11 @@ callbacksRouter.post("/automation-complete", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  const rejection = await rejectInvalidCallback(c, payload, isValidAutomationCompletePayload, {
+  if (!isValidAutomationCompletePayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/automation-complete", traceId, startTime);
+  }
+
+  const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/automation-complete",
     traceId,
     startTime,
@@ -346,7 +370,11 @@ callbacksRouter.post("/automation-skip", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  const rejection = await rejectInvalidCallback(c, payload, isValidAutomationSkipPayload, {
+  if (!isValidAutomationSkipPayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/automation-skip", traceId, startTime);
+  }
+
+  const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/automation-skip",
     traceId,
     startTime,
@@ -359,7 +387,7 @@ callbacksRouter.post("/automation-skip", async (c) => {
 });
 
 async function handleToolCallCallback(
-  payload: ToolCallCallback,
+  payload: ToolCallCallbackPayload,
   env: Env,
   traceId?: string
 ): Promise<void> {
@@ -394,7 +422,7 @@ async function handleToolCallCallback(
  * Handle completion callback - fetch events and post to Slack.
  */
 async function handleCompletionCallback(
-  payload: CompletionCallback,
+  payload: CompletionCallbackPayload,
   env: Env,
   traceId?: string
 ): Promise<void> {
@@ -456,7 +484,20 @@ async function handleCompletionCallback(
     }
 
     // Build and post completion message
-    const blocks = buildCompletionBlocks(sessionId, agentResponse, context, env.WEB_APP_URL);
+    const blocks = buildCompletionBlocks(
+      sessionId,
+      agentResponse,
+      {
+        source: "slack",
+        channel: context.channel,
+        threadTs: context.threadTs,
+        repoFullName: context.repoFullName ?? "",
+        model: context.model ?? "",
+        reasoningEffort: context.reasoningEffort,
+        reactionMessageTs: context.reactionMessageTs,
+      },
+      env.WEB_APP_URL
+    );
 
     await postMessage(env.SLACK_BOT_TOKEN, context.channel, getFallbackText(agentResponse), {
       thread_ts: context.threadTs,

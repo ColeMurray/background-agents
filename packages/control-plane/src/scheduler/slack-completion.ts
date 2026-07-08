@@ -9,16 +9,20 @@
  * with no actor to address.
  */
 
+import { z } from "zod";
+
+const slackRunMetadataSchema = z.object({
+  channel: z.string(),
+  messageTs: z.string(),
+});
+
 /**
  * Slack coordinates captured at trigger time, serialized into the invocation's
  * `trigger_metadata` column (slack-origin firings only; legacy rows carry the
  * same JSON in the run's frozen `trigger_run_metadata`). `messageTs` is the
  * triggering message, used to clear the `eyes` reaction on completion.
  */
-export interface SlackRunMetadata {
-  channel: string;
-  messageTs: string;
-}
+export type SlackRunMetadata = z.infer<typeof slackRunMetadataSchema>;
 
 /**
  * Parse serialized trigger metadata as slack coordinates — null when absent
@@ -28,7 +32,8 @@ export interface SlackRunMetadata {
 export function parseSlackTriggerMetadata(raw: string | null | undefined): SlackRunMetadata | null {
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as SlackRunMetadata;
+    const parsed = slackRunMetadataSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
