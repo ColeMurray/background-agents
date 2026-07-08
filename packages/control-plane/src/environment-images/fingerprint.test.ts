@@ -1,24 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { computeMembersFingerprint } from "./fingerprint";
+import { computeRepositoriesFingerprint } from "./fingerprint";
 import { MIN_COMPATIBLE_RUNTIME_VERSION, parseRuntimeVersionNumber } from "./model";
 
-const members = [
+const repositories = [
   { repoOwner: "Acme", repoName: "Web", baseBranch: "main" },
   { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
 ];
 
-describe("computeMembersFingerprint", () => {
+describe("computeRepositoriesFingerprint", () => {
   it("is deterministic", async () => {
-    const first = await computeMembersFingerprint(members);
-    const second = await computeMembersFingerprint(members);
+    const first = await computeRepositoriesFingerprint(repositories);
+    const second = await computeRepositoriesFingerprint(repositories);
     expect(first).toBe(second);
     expect(first).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("is case-insensitive on owner/name", async () => {
-    const upper = await computeMembersFingerprint(members);
-    const lower = await computeMembersFingerprint(
-      members.map((m) => ({
+    const upper = await computeRepositoriesFingerprint(repositories);
+    const lower = await computeRepositoriesFingerprint(
+      repositories.map((m) => ({
         ...m,
         repoOwner: m.repoOwner.toLowerCase(),
         repoName: m.repoName.toLowerCase(),
@@ -28,23 +28,23 @@ describe("computeMembersFingerprint", () => {
   });
 
   it("is case-sensitive on branch names (git refs are)", async () => {
-    const main = await computeMembersFingerprint(members);
-    const casedBranch = await computeMembersFingerprint([
-      { ...members[0], baseBranch: "Main" },
-      members[1],
+    const main = await computeRepositoriesFingerprint(repositories);
+    const casedBranch = await computeRepositoriesFingerprint([
+      { ...repositories[0], baseBranch: "Main" },
+      repositories[1],
     ]);
     expect(main).not.toBe(casedBranch);
   });
 
-  it("is order-sensitive (members are position-ordered)", async () => {
-    const forward = await computeMembersFingerprint(members);
-    const reversed = await computeMembersFingerprint([...members].reverse());
+  it("is order-sensitive (repositories are position-ordered)", async () => {
+    const forward = await computeRepositoriesFingerprint(repositories);
+    const reversed = await computeRepositoriesFingerprint([...repositories].reverse());
     expect(forward).not.toBe(reversed);
   });
 
-  it("changes when the member set changes", async () => {
-    const two = await computeMembersFingerprint(members);
-    const one = await computeMembersFingerprint(members.slice(0, 1));
+  it("changes when the repository set changes", async () => {
+    const two = await computeRepositoriesFingerprint(repositories);
+    const one = await computeRepositoriesFingerprint(repositories.slice(0, 1));
     expect(two).not.toBe(one);
   });
 });

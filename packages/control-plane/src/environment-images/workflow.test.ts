@@ -68,7 +68,7 @@ function plannedBuild(overrides: Record<string, unknown> = {}): PlannedEnvironme
       buildId: "envimg-env_1-1-abcd",
       environmentId: "env_1",
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-      membersFingerprint: "fp-1",
+      repositoriesFingerprint: "fp-1",
       callbackUrl: "https://worker.test/environment-images/build-complete",
       buildTimeoutMs: 1800_000,
       correlation: { trace_id: "t", request_id: "r" },
@@ -86,7 +86,7 @@ function vercelPlannedBuild(): PlannedEnvironmentImageBuild {
       buildId: "envimg-env_1-1-abcd",
       environmentId: "env_1",
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-      membersFingerprint: "fp-1",
+      repositoriesFingerprint: "fp-1",
       callbackUrl: "https://worker.test/environment-images/build-complete",
       buildTimeoutMs: 1800_000,
       correlation: { trace_id: "t", request_id: "r" },
@@ -118,7 +118,7 @@ function createWorkflow(options: {
     options.resolveTarget ??
     vi.fn().mockResolvedValue({
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-      membersFingerprint: "fp-1",
+      repositoriesFingerprint: "fp-1",
     });
   const createCallbackAuth =
     options.createCallbackAuth ?? vi.fn().mockResolvedValue({ kind: "none" });
@@ -144,7 +144,7 @@ function validCompletion(overrides: Record<string, unknown> = {}) {
   return {
     buildId: "envimg-env_1-1-abcd",
     providerImageId: "im-modal-1",
-    memberShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+    repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
     runtimeVersion: "v53-list-native-runtime",
     buildDurationMs: 12_500,
     ...overrides,
@@ -169,7 +169,7 @@ describe("EnvironmentImageBuildWorkflow", () => {
         id: result.buildId,
         environmentId: "env_1",
         provider: "modal",
-        membersFingerprint: "fp-1",
+        repositoriesFingerprint: "fp-1",
       });
       expect(adapter.startBuild).toHaveBeenCalledTimes(1);
     });
@@ -225,7 +225,7 @@ describe("EnvironmentImageBuildWorkflow", () => {
           planBuild: vi.fn(),
           resolveTarget: vi.fn().mockResolvedValue({
             repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-            membersFingerprint: "fp-1",
+            repositoriesFingerprint: "fp-1",
           }),
           createCallbackAuth: vi.fn().mockResolvedValue({ kind: "none" }),
         } as unknown as ConstructorParameters<typeof EnvironmentImageBuildWorkflow>[4]
@@ -335,8 +335,8 @@ describe("EnvironmentImageBuildWorkflow", () => {
 
     it.each([
       ["missing provider_image_id", { providerImageId: undefined }],
-      ["missing member_shas", { memberShas: undefined }],
-      ["empty member_shas", { memberShas: [] }],
+      ["missing repository_shas", { repositoryShas: undefined }],
+      ["empty repository_shas", { repositoryShas: [] }],
       ["missing runtime_version", { runtimeVersion: undefined }],
       ["unparseable runtime_version", { runtimeVersion: "53-no-prefix" }],
       ["negative duration", { buildDurationMs: -1 }],

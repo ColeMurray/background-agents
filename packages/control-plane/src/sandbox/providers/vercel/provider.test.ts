@@ -615,7 +615,7 @@ describe("VercelSandboxProvider", () => {
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
-    // Primary member mirrors into the scalar identity; the list drives the
+    // Primary repository mirrors into the scalar identity; the list drives the
     // list-native runtime.
     expect(createCall.env).toEqual(
       expect.objectContaining({

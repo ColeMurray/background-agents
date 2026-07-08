@@ -1779,7 +1779,7 @@ class SandboxSupervisor:
 
         git_sync_success = False
         head_sha = ""
-        member_shas: list[dict[str, str]] = []
+        repository_shas: list[dict[str, str]] = []
         opencode_ready = False
         try:
             # Refuse to boot on an untrusted repository config — unsafe or
@@ -1820,13 +1820,13 @@ class SandboxSupervisor:
                         ),
                     )
             if image_build_mode and git_sync_success and self.repositories:
-                # member_shas is the cross-language provenance document
+                # repository_shas is the cross-language provenance document
                 # ([{repoOwner, repoName, baseSha}]): parsed from this event by
                 # the Modal build orchestrator, echoed through the
                 # build-complete callback, stored in environment_images, and
                 # compared against `git ls-remote` by the rebuild cron. The
                 # scalar head_sha stays for the single-repo repo-image path.
-                member_shas = [
+                repository_shas = [
                     {
                         "repoOwner": repo.owner,
                         "repoName": repo.name,
@@ -1834,9 +1834,11 @@ class SandboxSupervisor:
                     }
                     for repo in self.repositories
                 ]
-                head_sha = member_shas[0]["baseSha"]
+                head_sha = repository_shas[0]["baseSha"]
                 if head_sha:
-                    self.log.info("git.sync_complete", head_sha=head_sha, member_shas=member_shas)
+                    self.log.info(
+                        "git.sync_complete", head_sha=head_sha, repository_shas=repository_shas
+                    )
             self.git_sync_complete.set()
 
             # Phase 2: Setup hooks, members in position order, only for fresh
@@ -1909,7 +1911,7 @@ class SandboxSupervisor:
                     reported = await repo_image_callback.report_success(
                         base_sha=head_sha,
                         build_duration_seconds=time.time() - startup_start,
-                        member_shas=member_shas,
+                        repository_shas=repository_shas,
                         runtime_version=runtime_version,
                     )
                     if not reported:

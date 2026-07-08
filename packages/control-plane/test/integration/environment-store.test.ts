@@ -120,10 +120,10 @@ describe("EnvironmentStore", () => {
       .run();
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO environment_images (id, environment_id, members_fingerprint, member_shas, runtime_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'ready', ?)"
+        "INSERT INTO environment_images (id, environment_id, repositories_fingerprint, repository_shas, runtime_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'ready', ?)"
       ).bind("img_ready", row.id, "fp", "[]", "v3", now),
       env.DB.prepare(
-        "INSERT INTO environment_images (id, environment_id, members_fingerprint, member_shas, runtime_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'failed', ?)"
+        "INSERT INTO environment_images (id, environment_id, repositories_fingerprint, repository_shas, runtime_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'failed', ?)"
       ).bind("img_failed", row.id, "fp", "[]", "v3", now),
     ]);
 

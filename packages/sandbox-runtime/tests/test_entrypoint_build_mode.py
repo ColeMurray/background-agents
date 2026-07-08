@@ -208,8 +208,8 @@ class TestImageBuildMode:
         assert sync_calls[0].kwargs["head_sha"] == "abc123def456"
 
     @pytest.mark.asyncio
-    async def test_build_mode_reports_member_shas_per_repo(self, build_env, tmp_path):
-        """Multi-repo builds report one member sha per repository, in position order."""
+    async def test_build_mode_reports_repository_shas_per_repo(self, build_env, tmp_path):
+        """Multi-repo builds report one sha per repository, in position order."""
         env = {
             **build_env,
             "SESSION_CONFIG": json.dumps(
@@ -262,7 +262,7 @@ class TestImageBuildMode:
         ]
         assert len(sync_calls) == 1
         assert sync_calls[0].kwargs["head_sha"] == "aaa111"
-        assert sync_calls[0].kwargs["member_shas"] == [
+        assert sync_calls[0].kwargs["repository_shas"] == [
             {"repoOwner": "acme", "repoName": "web", "baseSha": "aaa111"},
             {"repoOwner": "acme", "repoName": "api", "baseSha": "bbb222"},
         ]
@@ -305,7 +305,9 @@ class TestImageBuildMode:
         callback.report_success.assert_awaited_once_with(
             base_sha="abc123def456",
             build_duration_seconds=ANY,
-            member_shas=[{"repoOwner": "acme", "repoName": "my-repo", "baseSha": "abc123def456"}],
+            repository_shas=[
+                {"repoOwner": "acme", "repoName": "my-repo", "baseSha": "abc123def456"}
+            ],
             runtime_version="v99-test",
         )
         callback.report_failure.assert_not_called()

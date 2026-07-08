@@ -1,33 +1,33 @@
 /**
- * Members fingerprint — the identity of an environment's buildable repo set.
+ * Repositories fingerprint — the identity of an environment's buildable repo set.
  *
  * A fingerprint is a SHA-256 over the ordered (owner, name, base_branch)
- * triples of an environment's members (design §7.3). It is computed
- * control-plane-side only: at build registration (from the member set the
+ * triples of an environment's repositories (design §7.3). It is computed
+ * control-plane-side only: at build registration (from the repository set the
  * build was handed) and at spawn matching (from the session's own snapshot,
  * PR-11) — never by the data plane, so the algorithm has exactly one home.
  */
 
-export interface FingerprintMemberInput {
+export interface FingerprintRepositoryInput {
   repoOwner: string;
   repoName: string;
   baseBranch: string;
 }
 
 /**
- * Order-sensitive by design: members are position-ordered and setup hooks run
- * in that order, so a reordered environment is a different build. Owner/name
+ * Order-sensitive by design: repositories are position-ordered and setup hooks
+ * run in that order, so a reordered environment is a different build. Owner/name
  * are lowercased to match repo-identity comparisons elsewhere; branch names
  * stay case-sensitive (git refs are).
  */
-export async function computeMembersFingerprint(
-  members: FingerprintMemberInput[]
+export async function computeRepositoriesFingerprint(
+  repositories: FingerprintRepositoryInput[]
 ): Promise<string> {
   const canonical = JSON.stringify(
-    members.map((member) => [
-      member.repoOwner.toLowerCase(),
-      member.repoName.toLowerCase(),
-      member.baseBranch,
+    repositories.map((repo) => [
+      repo.repoOwner.toLowerCase(),
+      repo.repoName.toLowerCase(),
+      repo.baseBranch,
     ])
   );
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));

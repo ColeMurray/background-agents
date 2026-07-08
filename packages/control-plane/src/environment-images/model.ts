@@ -3,7 +3,7 @@
  *
  * Environment images generalize repo images to a prebuildable repository set:
  * the artifact is provider-opaque exactly like a repo image, but the build
- * unit is an environment, drift is tracked per member (`member_shas`), and
+ * unit is an environment, drift is tracked per repository (`repository_shas`), and
  * spawn selection is gated by the runtime version baked at build time.
  */
 import type { RepoImageProvider } from "../repo-images/model";
@@ -18,15 +18,15 @@ export type EnvironmentImageProvider = RepoImageProvider;
 export type EnvironmentImageBuildStatus = "building" | "ready" | "failed" | "superseded";
 
 /**
- * One member's clone provenance at build time.
+ * One repository's clone provenance at build time.
  *
  * This is a single cross-language document shape: produced by the sandbox
  * runtime, echoed through build callbacks, stored verbatim in
- * `environment_images.member_shas`, and compared against `git ls-remote` by
+ * `environment_images.repository_shas`, and compared against `git ls-remote` by
  * the rebuild cron. Keep the field names in sync with
  * `sandbox_runtime/entrypoint.py` rather than remapping at each boundary.
  */
-export interface EnvironmentImageMemberSha {
+export interface EnvironmentImageRepositorySha {
   repoOwner: string;
   repoName: string;
   baseSha: string;

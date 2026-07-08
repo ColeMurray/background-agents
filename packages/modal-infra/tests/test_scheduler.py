@@ -181,7 +181,7 @@ def _environment(fingerprint="fp-current", repositories=None):
     return {
         "id": "env_1",
         "name": "Flagship",
-        "membersFingerprint": fingerprint,
+        "repositoriesFingerprint": fingerprint,
         "repositories": repositories
         or [
             {"repoOwner": "acme", "repoName": "web", "baseBranch": "main"},
@@ -195,8 +195,8 @@ def _environment_image(**overrides):
         "id": "envimg-1",
         "environment_id": "env_1",
         "status": "ready",
-        "members_fingerprint": "fp-current",
-        "member_shas": json.dumps(
+        "repositories_fingerprint": "fp-current",
+        "repository_shas": json.dumps(
             [
                 {"repoOwner": "acme", "repoName": "web", "baseSha": "sha-web"},
                 {"repoOwner": "acme", "repoName": "api", "baseSha": "sha-api"},
@@ -222,8 +222,8 @@ class TestShouldRebuildEnvironment:
         assert _should_rebuild_environment(_environment(), [], 53, "") is True
 
     def test_rebuild_when_fingerprint_mismatch(self):
-        """Trigger 1: ready image for an older member set → rebuild."""
-        images = [_environment_image(members_fingerprint="fp-old")]
+        """Trigger 1: ready image for an older repository set → rebuild."""
+        images = [_environment_image(repositories_fingerprint="fp-old")]
         assert _should_rebuild_environment(_environment(), images, 53, "") is True
 
     def test_skip_when_building(self):
@@ -241,13 +241,13 @@ class TestShouldRebuildEnvironment:
         images = [_environment_image(runtime_version="not-a-version")]
         assert _should_rebuild_environment(_environment(), images, 53, "") is True
 
-    def test_rebuild_when_member_shas_malformed(self):
+    def test_rebuild_when_repository_shas_malformed(self):
         """Malformed provenance means drift is undetectable → rebuild."""
-        images = [_environment_image(member_shas="not-json")]
+        images = [_environment_image(repository_shas="not-json")]
         assert _should_rebuild_environment(_environment(), images, 53, "") is True
 
-    def test_rebuild_when_member_branch_drifts(self):
-        """Trigger 2: any member's branch tip moved → rebuild."""
+    def test_rebuild_when_repository_branch_drifts(self):
+        """Trigger 2: any repository's branch tip moved → rebuild."""
         images = [_environment_image()]
         with patch(
             "src.scheduler.image_builder._git_ls_remote_sha",
@@ -255,7 +255,7 @@ class TestShouldRebuildEnvironment:
         ):
             assert _should_rebuild_environment(_environment(), images, 53, "") is True
 
-    def test_skip_when_all_members_match(self):
+    def test_skip_when_all_repositories_match(self):
         """All shas match, runtime fine, fingerprint matches → skip."""
         images = [_environment_image()]
         with patch(

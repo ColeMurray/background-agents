@@ -101,7 +101,7 @@ export interface TriggerVercelRepoImageBuildResult {
 export interface TriggerVercelEnvironmentImageBuildConfig {
   buildId: string;
   environmentId: string;
-  /** Members in position order ([0] = primary), cloned at their base branches. */
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   callbackUrl: string;
   callbackToken: string;
@@ -342,8 +342,8 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   /**
    * Trigger a Vercel environment-image build (design §7.3). Same lifecycle as
-   * the repo-image build; the SESSION_CONFIG carries the member list so the
-   * list-native runtime clones and sets up every member.
+   * the repo-image build; the SESSION_CONFIG carries the repository list so the
+   * list-native runtime clones and sets up every repository.
    */
   async triggerEnvironmentImageBuild(
     config: TriggerVercelEnvironmentImageBuildConfig

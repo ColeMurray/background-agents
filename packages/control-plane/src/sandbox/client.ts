@@ -152,7 +152,7 @@ export interface BuildEnvironmentImageRequest {
   environmentId: string;
   buildId: string;
   callbackUrl: string;
-  /** Members in position order ([0] = primary), cloned at their base branches. */
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   userEnvVars?: Record<string, string>;
   /**

@@ -583,9 +583,9 @@ async def api_build_environment_image(
     """
     Kick off an async environment image build (design §7.3). Returns immediately.
 
-    Spawns a build_environment_image worker that clones every member repo,
+    Spawns a build_environment_image worker that clones every repository in the environment,
     runs their setup hooks sequentially, snapshots the filesystem, and POSTs
-    the result (member_shas + runtime_version) to callback_url.
+    the result (repository_shas + runtime_version) to callback_url.
 
     POST body:
     {

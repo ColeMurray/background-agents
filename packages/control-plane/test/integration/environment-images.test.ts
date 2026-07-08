@@ -15,13 +15,13 @@ import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
 import { EnvironmentImageStore } from "../../src/db/environment-images";
 import { EnvironmentStore } from "../../src/db/environments";
-import { computeMembersFingerprint } from "../../src/environment-images/fingerprint";
+import { computeRepositoriesFingerprint } from "../../src/environment-images/fingerprint";
 import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../src/environment-images/model";
 import { cleanD1Tables } from "./cleanup";
 
 const BASE = "https://test.local";
 const RUNTIME_VERSION = "v53-list-native-runtime";
-const MEMBER_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
+const REPOSITORY_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
 
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
@@ -63,21 +63,21 @@ async function seedImageRow(row: {
   environmentId: string;
   status: string;
   providerImageId?: string | null;
-  membersFingerprint?: string;
+  repositoriesFingerprint?: string;
   createdAt?: number;
 }): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO environment_images
-       (id, environment_id, provider, provider_image_id, members_fingerprint,
-        member_shas, runtime_version, status, created_at)
+       (id, environment_id, provider, provider_image_id, repositories_fingerprint,
+        repository_shas, runtime_version, status, created_at)
      VALUES (?, ?, 'modal', ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       row.id,
       row.environmentId,
       row.providerImageId ?? null,
-      row.membersFingerprint ?? "fp-seeded",
-      JSON.stringify(MEMBER_SHAS),
+      row.repositoriesFingerprint ?? "fp-seeded",
+      JSON.stringify(REPOSITORY_SHAS),
       RUNTIME_VERSION,
       row.status,
       row.createdAt ?? Date.now()
@@ -111,7 +111,7 @@ describe("Environment images", () => {
         id: "envimg-new",
         environmentId,
         provider: "modal",
-        membersFingerprint: "fp-new",
+        repositoriesFingerprint: "fp-new",
       });
       expect(await store.getActiveBuild(environmentId, "modal")).toEqual({ id: "envimg-new" });
 
@@ -119,7 +119,7 @@ describe("Environment images", () => {
         "envimg-new",
         "modal",
         "im-new",
-        MEMBER_SHAS,
+        REPOSITORY_SHAS,
         RUNTIME_VERSION,
         12_500
       );
@@ -137,7 +137,7 @@ describe("Environment images", () => {
       expect(readyRow?.status).toBe("ready");
       expect(readyRow?.provider_image_id).toBe("im-new");
       expect(readyRow?.runtime_version).toBe(RUNTIME_VERSION);
-      expect(JSON.parse(readyRow?.member_shas as string)).toEqual(MEMBER_SHAS);
+      expect(JSON.parse(readyRow?.repository_shas as string)).toEqual(REPOSITORY_SHAS);
       expect(readyRow?.build_duration_seconds).toBe(12.5);
       expect((await getRow("envimg-old"))?.status).toBe("superseded");
       expect(await store.getActiveBuild(environmentId, "modal")).toBeNull();
@@ -164,7 +164,7 @@ describe("Environment images", () => {
         "envimg-late",
         "modal",
         "im-late",
-        MEMBER_SHAS,
+        REPOSITORY_SHAS,
         RUNTIME_VERSION,
         10_000
       );
@@ -199,7 +199,7 @@ describe("Environment images", () => {
         environmentId,
         status: "ready",
         providerImageId: "im",
-        membersFingerprint: "fp-x",
+        repositoriesFingerprint: "fp-x",
       });
 
       expect(await store.hasReadyImageForFingerprint(environmentId, "modal", "fp-x")).toBe(true);
@@ -226,7 +226,7 @@ describe("Environment images", () => {
       const body = (await response.json()) as {
         environments: Array<{
           id: string;
-          membersFingerprint: string;
+          repositoriesFingerprint: string;
           repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
         }>;
         minRuntimeVersion: number;
@@ -238,8 +238,8 @@ describe("Environment images", () => {
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ]);
-      expect(body.environments[0].membersFingerprint).toBe(
-        await computeMembersFingerprint(body.environments[0].repositories)
+      expect(body.environments[0].repositoriesFingerprint).toBe(
+        await computeRepositoriesFingerprint(body.environments[0].repositories)
       );
     });
 
@@ -342,7 +342,7 @@ describe("Environment images", () => {
         id: buildId,
         environmentId,
         provider: "modal",
-        membersFingerprint: "fp-cb",
+        repositoriesFingerprint: "fp-cb",
       });
     }
 
@@ -356,7 +356,7 @@ describe("Environment images", () => {
         body: JSON.stringify({
           build_id: "cb-build",
           provider_image_id: "im-cb",
-          member_shas: MEMBER_SHAS,
+          repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 42.5,
         }),
@@ -367,7 +367,7 @@ describe("Environment images", () => {
       expect(row?.status).toBe("ready");
       expect(row?.provider_image_id).toBe("im-cb");
       expect(row?.runtime_version).toBe(RUNTIME_VERSION);
-      expect(JSON.parse(row?.member_shas as string)).toEqual(MEMBER_SHAS);
+      expect(JSON.parse(row?.repository_shas as string)).toEqual(REPOSITORY_SHAS);
     });
 
     it("rejects callbacks without internal auth", async () => {
@@ -380,7 +380,7 @@ describe("Environment images", () => {
         body: JSON.stringify({
           build_id: "cb-noauth",
           provider_image_id: "im",
-          member_shas: MEMBER_SHAS,
+          repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 1,
         }),
@@ -393,8 +393,11 @@ describe("Environment images", () => {
     it.each([
       ["missing runtime_version", { runtime_version: undefined }],
       ["unparseable runtime_version", { runtime_version: "53-no-prefix" }],
-      ["missing member_shas", { member_shas: undefined }],
-      ["member_shas entry without baseSha", { member_shas: [{ repoOwner: "a", repoName: "b" }] }],
+      ["missing repository_shas", { repository_shas: undefined }],
+      [
+        "repository_shas entry without baseSha",
+        { repository_shas: [{ repoOwner: "a", repoName: "b" }] },
+      ],
     ])("fails registration closed on %s", async (_label, overrides) => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-invalid");
@@ -405,7 +408,7 @@ describe("Environment images", () => {
         body: JSON.stringify({
           build_id: "cb-invalid",
           provider_image_id: "im",
-          member_shas: MEMBER_SHAS,
+          repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 1,
           ...overrides,
@@ -444,7 +447,7 @@ describe("Environment images", () => {
         body: JSON.stringify({
           build_id: "cb-late",
           provider_image_id: "im-late-orphan",
-          member_shas: MEMBER_SHAS,
+          repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 30,
         }),
@@ -466,7 +469,7 @@ describe("Environment images", () => {
         body: JSON.stringify({
           build_id: "cb-unknown",
           provider_image_id: "im",
-          member_shas: MEMBER_SHAS,
+          repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 1,
         }),

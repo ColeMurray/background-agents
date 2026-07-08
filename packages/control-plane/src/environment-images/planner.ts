@@ -24,10 +24,10 @@ import { resolveSandboxSettings } from "../session/integration-settings-resoluti
 import { createSourceControlProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
 import { EnvironmentImageEnvironmentNotFoundError, EnvironmentImagePlanningError } from "./errors";
-import { computeMembersFingerprint } from "./fingerprint";
+import { computeRepositoriesFingerprint } from "./fingerprint";
 import type { EnvironmentImageProvider } from "./model";
 import type {
-  EnvironmentImageBuildMember,
+  EnvironmentImageBuildRepository,
   EnvironmentImageCloneAuth,
   PlannedEnvironmentImageBuild,
 } from "./types";
@@ -39,10 +39,10 @@ export type PlannedCallbackAuth =
   | { kind: "none" }
   | { kind: "bearer_token"; token: string; tokenHash: string; expiresAt: number };
 
-/** Members + fingerprint, resolved before a build row exists. */
+/** Repositories + fingerprint, resolved before a build row exists. */
 export interface ResolvedEnvironmentBuildTarget {
-  repositories: EnvironmentImageBuildMember[];
-  membersFingerprint: string;
+  repositories: EnvironmentImageBuildRepository[];
+  repositoriesFingerprint: string;
 }
 
 /**
@@ -55,8 +55,8 @@ export interface ResolvedEnvironmentBuildTarget {
  * concurrent secret change always sees a row to supersede and the build's
  * now-stale secrets can never reach a still-selectable image (§7.4).
  * Build-time secrets are the same set the environment's sessions get —
- * global + environment, member repos never inherit (§6.4 build/session
- * parity) — and the build timeout honors the primary member's sandbox
+ * global + environment, repo-scoped secrets never inherit (§6.4 build/session
+ * parity) — and the build timeout honors the primary repository's sandbox
  * settings.
  */
 export class EnvironmentImageBuildPlanner {
@@ -72,14 +72,14 @@ export class EnvironmentImageBuildPlanner {
       throw new EnvironmentImageEnvironmentNotFoundError(environmentId);
     }
 
-    const memberRows = await store.getRepositoriesForEnvironment(environmentId);
-    if (memberRows.length === 0) {
+    const repositoryRows = await store.getRepositoriesForEnvironment(environmentId);
+    if (repositoryRows.length === 0) {
       // Unreachable through the schema (environments require >= 1 repository);
       // defensive against direct store writes.
       throw new EnvironmentImagePlanningError(`Environment has no repositories: ${environmentId}`);
     }
 
-    const repositories: EnvironmentImageBuildMember[] = memberRows.map((row) => ({
+    const repositories: EnvironmentImageBuildRepository[] = repositoryRows.map((row) => ({
       repoOwner: row.repo_owner,
       repoName: row.repo_name,
       baseBranch: row.base_branch,
@@ -87,7 +87,7 @@ export class EnvironmentImageBuildPlanner {
 
     return {
       repositories,
-      membersFingerprint: await computeMembersFingerprint(repositories),
+      repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
     };
   }
 
@@ -113,7 +113,7 @@ export class EnvironmentImageBuildPlanner {
     target: ResolvedEnvironmentBuildTarget;
     callbackAuth: PlannedCallbackAuth;
   }): Promise<PlannedEnvironmentImageBuild> {
-    const { repositories, membersFingerprint } = params.target;
+    const { repositories, repositoriesFingerprint } = params.target;
     const primary = repositories[0];
     const callbackAuth = params.callbackAuth;
 
@@ -127,7 +127,7 @@ export class EnvironmentImageBuildPlanner {
       buildId: params.buildId,
       environmentId: params.environmentId,
       repositories,
-      membersFingerprint,
+      repositoriesFingerprint,
       callbackUrl: params.callbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
       userEnvVars,

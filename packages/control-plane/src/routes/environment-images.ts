@@ -12,10 +12,10 @@ import { EnvironmentImageStore } from "../db/environment-images";
 import { EnvironmentStore } from "../db/environments";
 import { createLogger } from "../logger";
 import { EnvironmentImageError } from "../environment-images/errors";
-import { computeMembersFingerprint } from "../environment-images/fingerprint";
+import { computeRepositoriesFingerprint } from "../environment-images/fingerprint";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
-  type EnvironmentImageMemberSha,
+  type EnvironmentImageRepositorySha,
 } from "../environment-images/model";
 import { createEnvironmentImageBuildWorkflowFromEnv } from "../environment-images/workflow";
 import type {
@@ -39,7 +39,7 @@ interface EnvironmentImageBuildCompleteBody {
   build_id?: unknown;
   provider_image_id?: unknown;
   provider_session_id?: unknown;
-  member_shas?: unknown;
+  repository_shas?: unknown;
   runtime_version?: unknown;
   build_duration_seconds?: unknown;
 }
@@ -172,18 +172,20 @@ function optionalStringField(value: unknown, fallback: string): string {
 }
 
 /**
- * Parse the member_shas document ([{repoOwner, repoName, baseSha}], the
+ * Parse the repository_shas document ([{repoOwner, repoName, baseSha}], the
  * single cross-language shape produced by the runtime). Malformed entries are
  * a 400 — deeper requirements (non-empty) are the workflow's fail-close.
  */
-function parseMemberShas(value: unknown): EnvironmentImageMemberSha[] | undefined | Response {
+function parseRepositoryShas(
+  value: unknown
+): EnvironmentImageRepositorySha[] | undefined | Response {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) return error("member_shas must be an array", 400);
+  if (!Array.isArray(value)) return error("repository_shas must be an array", 400);
 
-  const members: EnvironmentImageMemberSha[] = [];
+  const shas: EnvironmentImageRepositorySha[] = [];
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      return error("member_shas entries must be objects", 400);
+      return error("repository_shas entries must be objects", 400);
     }
     const { repoOwner, repoName, baseSha } = entry as Record<string, unknown>;
     if (
@@ -194,11 +196,11 @@ function parseMemberShas(value: unknown): EnvironmentImageMemberSha[] | undefine
       typeof baseSha !== "string" ||
       baseSha.length === 0
     ) {
-      return error("member_shas entries require repoOwner, repoName, and baseSha", 400);
+      return error("repository_shas entries require repoOwner, repoName, and baseSha", 400);
     }
-    members.push({ repoOwner, repoName, baseSha });
+    shas.push({ repoOwner, repoName, baseSha });
   }
-  return members;
+  return shas;
 }
 
 function buildCompleteCommand(
@@ -215,8 +217,8 @@ function buildCompleteCommand(
     buildDurationMs = body.build_duration_seconds * MS_PER_SECOND;
   }
 
-  const memberShas = parseMemberShas(body.member_shas);
-  if (memberShas instanceof Response) return memberShas;
+  const repositoryShas = parseRepositoryShas(body.repository_shas);
+  if (repositoryShas instanceof Response) return repositoryShas;
 
   return {
     buildId,
@@ -228,7 +230,7 @@ function buildCompleteCommand(
       typeof body.provider_session_id === "string" && body.provider_session_id.length > 0
         ? body.provider_session_id
         : undefined,
-    memberShas,
+    repositoryShas,
     runtimeVersion:
       typeof body.runtime_version === "string" && body.runtime_version.length > 0
         ? body.runtime_version
@@ -359,7 +361,7 @@ async function handleTriggerBuild(
 /**
  * GET /environment-images/status[?environment_id=...]
  * Image rows (non-superseded) for the cron and the settings UI. Rows are
- * returned verbatim (snake_case columns; member_shas is a JSON document).
+ * returned verbatim (snake_case columns; repository_shas is a JSON document).
  */
 async function handleGetStatus(
   request: Request,
@@ -393,7 +395,7 @@ async function handleGetStatus(
 
 /**
  * GET /environment-images/enabled
- * Prebuild-enabled environments with their current members and fingerprint,
+ * Prebuild-enabled environments with their current repositories and fingerprint,
  * plus the runtime floor — everything the cron's trigger checks need, so the
  * fingerprint algorithm never leaves the control plane (design §7.3).
  */
@@ -420,7 +422,7 @@ async function handleGetEnabledEnvironments(
 
     const payload = await Promise.all(
       enabled.map(async (row) => {
-        const members = (repositoriesById.get(row.id) ?? []).map((repo) => ({
+        const repositories = (repositoriesById.get(row.id) ?? []).map((repo) => ({
           repoOwner: repo.repo_owner,
           repoName: repo.repo_name,
           baseBranch: repo.base_branch,
@@ -428,8 +430,8 @@ async function handleGetEnabledEnvironments(
         return {
           id: row.id,
           name: row.name,
-          membersFingerprint: await computeMembersFingerprint(members),
-          repositories: members,
+          repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+          repositories,
         };
       })
     );

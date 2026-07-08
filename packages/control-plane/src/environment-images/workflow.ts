@@ -22,7 +22,7 @@ import {
 } from "./errors";
 import {
   parseRuntimeVersionNumber,
-  type EnvironmentImageMemberSha,
+  type EnvironmentImageRepositorySha,
   type EnvironmentImageProvider,
   type EnvironmentImageProviderImageRef,
   type SupersededEnvironmentImage,
@@ -70,7 +70,7 @@ export interface AcceptEnvironmentBuildFailedCommand {
 /** Fields common to both callback modes; provider_image adds the artifact id. */
 interface ValidatedEnvironmentBuildCompletion {
   buildId: string;
-  memberShas: EnvironmentImageMemberSha[];
+  repositoryShas: EnvironmentImageRepositorySha[];
   runtimeVersion: string;
   buildDurationMs: number;
 }
@@ -120,7 +120,7 @@ export class EnvironmentImageBuildWorkflow {
   /**
    * Save-hook variant (design §7.3 "saving an environment triggers an
    * immediate build"): skips the build when a ready image already matches the
-   * current member set — that is the cron's trigger-1 check evaluated
+   * current repository set — that is the cron's trigger-1 check evaluated
    * eagerly. Unconditional rebuild reasons (sha drift, runtime floor) remain
    * the cron's job.
    */
@@ -167,7 +167,7 @@ export class EnvironmentImageBuildWorkflow {
         (await this.store.hasReadyImageForFingerprint(
           environmentId,
           provider,
-          target.membersFingerprint
+          target.repositoriesFingerprint
         ))
       ) {
         return { type: "up_to_date" };
@@ -202,7 +202,7 @@ export class EnvironmentImageBuildWorkflow {
         id: buildId,
         environmentId,
         provider,
-        membersFingerprint: target.membersFingerprint,
+        repositoriesFingerprint: target.repositoriesFingerprint,
         ...callbackAuthRegistration(callbackAuth),
       });
 
@@ -230,7 +230,7 @@ export class EnvironmentImageBuildWorkflow {
       logger.info("environment_image.build_triggered", {
         build_id: buildId,
         environment_id: environmentId,
-        members_fingerprint: planned.plan.membersFingerprint,
+        repositories_fingerprint: planned.plan.repositoriesFingerprint,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
@@ -393,7 +393,7 @@ export class EnvironmentImageBuildWorkflow {
         validated.buildId,
         provider,
         providerImageId,
-        validated.memberShas,
+        validated.repositoryShas,
         validated.runtimeVersion,
         validated.buildDurationMs
       );
@@ -518,7 +518,7 @@ export class EnvironmentImageBuildWorkflow {
         input.buildId,
         provider,
         finalized.providerImageId,
-        input.memberShas,
+        input.repositoryShas,
         input.runtimeVersion,
         input.buildDurationMs
       );
@@ -747,8 +747,8 @@ export class EnvironmentImageBuildWorkflow {
   private validateCompletion(
     completion: CompleteEnvironmentImageBuildCallback
   ): ValidatedEnvironmentBuildCompletion {
-    if (!completion.memberShas || completion.memberShas.length === 0) {
-      throw new EnvironmentImageInvalidCallbackError("member_shas is required");
+    if (!completion.repositoryShas || completion.repositoryShas.length === 0) {
+      throw new EnvironmentImageInvalidCallbackError("repository_shas is required");
     }
     if (
       typeof completion.runtimeVersion !== "string" ||
@@ -772,7 +772,7 @@ export class EnvironmentImageBuildWorkflow {
 
     return {
       buildId: completion.buildId,
-      memberShas: completion.memberShas,
+      repositoryShas: completion.repositoryShas,
       runtimeVersion: completion.runtimeVersion,
       buildDurationMs: completion.buildDurationMs,
     };

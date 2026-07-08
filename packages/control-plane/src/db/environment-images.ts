@@ -2,7 +2,7 @@ import { timingSafeEqual } from "@open-inspect/shared";
 import type {
   EnvironmentImageBuildStatus,
   EnvironmentImageCallbackBuild,
-  EnvironmentImageMemberSha,
+  EnvironmentImageRepositorySha,
   EnvironmentImageProvider,
   MarkEnvironmentImageReadyResult,
   SupersededEnvironmentImage,
@@ -26,7 +26,7 @@ export interface EnvironmentImageBuild {
   id: string;
   environmentId: string;
   provider: EnvironmentImageProvider;
-  membersFingerprint: string;
+  repositoriesFingerprint: string;
   callbackTokenHash?: string;
   callbackTokenExpiresAt?: number;
 }
@@ -36,8 +36,8 @@ export interface EnvironmentImage {
   environment_id: string;
   provider: EnvironmentImageProvider;
   provider_image_id: string | null;
-  members_fingerprint: string;
-  member_shas: string; // JSON EnvironmentImageMemberSha[]
+  repositories_fingerprint: string;
+  repository_shas: string; // JSON EnvironmentImageRepositorySha[]
   runtime_version: string;
   status: EnvironmentImageBuildStatus;
   build_duration_seconds: number | null;
@@ -80,8 +80,8 @@ export class EnvironmentImageStore {
            id,
            environment_id,
            provider,
-           members_fingerprint,
-           member_shas,
+           repositories_fingerprint,
+           repository_shas,
            runtime_version,
            status,
            callback_token_hash,
@@ -94,7 +94,7 @@ export class EnvironmentImageStore {
         build.id,
         build.environmentId,
         build.provider,
-        build.membersFingerprint,
+        build.repositoriesFingerprint,
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
         Date.now()
@@ -233,19 +233,19 @@ export class EnvironmentImageStore {
       .first<{ id: string }>();
   }
 
-  /** Save-hook short-circuit: a ready image already matches the current member set. */
+  /** Save-hook short-circuit: a ready image already matches the current repository set. */
   async hasReadyImageForFingerprint(
     environmentId: string,
     provider: EnvironmentImageProvider,
-    membersFingerprint: string
+    repositoriesFingerprint: string
   ): Promise<boolean> {
     const row = await this.db
       .prepare(
         `SELECT 1 AS present FROM environment_images
-         WHERE environment_id = ? AND provider = ? AND status = 'ready' AND members_fingerprint = ?
+         WHERE environment_id = ? AND provider = ? AND status = 'ready' AND repositories_fingerprint = ?
          LIMIT 1`
       )
-      .bind(environmentId, provider, membersFingerprint)
+      .bind(environmentId, provider, repositoriesFingerprint)
       .first<{ present: number }>();
     return row !== null;
   }
@@ -278,7 +278,7 @@ export class EnvironmentImageStore {
     buildId: string,
     provider: EnvironmentImageProvider,
     providerImageId: string,
-    memberShas: EnvironmentImageMemberSha[],
+    repositoryShas: EnvironmentImageRepositorySha[],
     runtimeVersion: string,
     buildDurationMs: number
   ): Promise<MarkEnvironmentImageReadyResult> {
@@ -300,7 +300,7 @@ export class EnvironmentImageStore {
     const updateResult = await this.db
       .prepare(
         `UPDATE environment_images
-         SET status = 'ready', provider_image_id = ?, member_shas = ?, runtime_version = ?, build_duration_seconds = ?
+         SET status = 'ready', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?
          WHERE id = ? AND provider = ? AND status = 'building'
            AND NOT EXISTS (
              SELECT 1 FROM environment_images newer
@@ -315,7 +315,7 @@ export class EnvironmentImageStore {
       )
       .bind(
         providerImageId,
-        JSON.stringify(memberShas),
+        JSON.stringify(repositoryShas),
         runtimeVersion,
         buildDurationMs / MS_PER_SECOND,
         buildId,
@@ -335,7 +335,7 @@ export class EnvironmentImageStore {
           provider,
           providerImageId,
           providerSessionId: build.provider_session_id,
-          memberShas,
+          repositoryShas,
           runtimeVersion,
           buildDurationMs,
           environmentId: build.environment_id,
@@ -393,7 +393,7 @@ export class EnvironmentImageStore {
     provider: EnvironmentImageProvider;
     providerImageId: string;
     providerSessionId: string | null;
-    memberShas: EnvironmentImageMemberSha[];
+    repositoryShas: EnvironmentImageRepositorySha[];
     runtimeVersion: string;
     buildDurationMs: number;
     environmentId: string;
@@ -405,7 +405,7 @@ export class EnvironmentImageStore {
     const result = await this.db
       .prepare(
         `UPDATE environment_images
-         SET status = 'superseded', provider_image_id = ?, member_shas = ?, runtime_version = ?, build_duration_seconds = ?
+         SET status = 'superseded', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?
          WHERE id = ? AND provider = ? AND status = 'building'
            AND EXISTS (
              SELECT 1 FROM environment_images newer
@@ -420,7 +420,7 @@ export class EnvironmentImageStore {
       )
       .bind(
         params.providerImageId,
-        JSON.stringify(params.memberShas),
+        JSON.stringify(params.repositoryShas),
         params.runtimeVersion,
         params.buildDurationMs / MS_PER_SECOND,
         params.buildId,

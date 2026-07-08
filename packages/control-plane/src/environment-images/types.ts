@@ -1,14 +1,14 @@
 import type { CorrelationContext } from "../logger";
 import type {
-  EnvironmentImageMemberSha,
+  EnvironmentImageRepositorySha,
   EnvironmentImageProviderImageRef,
   SupersededEnvironmentImage,
 } from "./model";
 
 export type EnvironmentImageWorkflowContext = CorrelationContext;
 
-/** One environment member as handed to a build, in position order ([0] = primary). */
-export interface EnvironmentImageBuildMember {
+/** One environment repository as handed to a build, in position order ([0] = primary). */
+export interface EnvironmentImageBuildRepository {
   repoOwner: string;
   repoName: string;
   baseBranch: string;
@@ -19,7 +19,7 @@ export interface EnvironmentImageBuildMember {
  * (design §7.3): a second trigger while a build is in flight reports the
  * existing build instead of stacking another. `up_to_date` is returned only
  * by the save-hook variant, when a ready image already matches the current
- * member set.
+ * repository set.
  */
 export type TriggerEnvironmentImageBuildResult =
   | { type: "triggered"; buildId: string }
@@ -40,8 +40,8 @@ export type EnvironmentImageWorkflowResult =
 interface BaseEnvironmentImageBuildPlan {
   buildId: string;
   environmentId: string;
-  repositories: EnvironmentImageBuildMember[];
-  membersFingerprint: string;
+  repositories: EnvironmentImageBuildRepository[];
+  repositoriesFingerprint: string;
   callbackUrl: string;
   buildTimeoutMs: number;
   userEnvVars?: Record<string, string>;
@@ -98,7 +98,7 @@ export interface EnvironmentImageBuildStartCallbacks {
 
 /**
  * Wire form of the build-complete callback after route-level parsing.
- * member_shas and runtime_version are reported by the build itself
+ * repository_shas and runtime_version are reported by the build itself
  * (design §7.3) — registration fails closed when either is missing or
  * unparseable, because an unversioned image must never pass the floor check.
  */
@@ -106,7 +106,7 @@ export interface CompleteEnvironmentImageBuildCallback {
   buildId: string;
   providerImageId?: string;
   providerSessionId?: string;
-  memberShas?: EnvironmentImageMemberSha[];
+  repositoryShas?: EnvironmentImageRepositorySha[];
   runtimeVersion?: string;
   buildDurationMs?: number;
 }

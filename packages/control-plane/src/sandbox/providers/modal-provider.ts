@@ -53,7 +53,7 @@ export interface ModalRepoImageBuildProvider {
 export interface TriggerModalEnvironmentImageBuildConfig {
   buildId: string;
   environmentId: string;
-  /** Members in position order ([0] = primary), cloned at their base branches. */
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   callbackUrl: string;
   userEnvVars?: Record<string, string>;

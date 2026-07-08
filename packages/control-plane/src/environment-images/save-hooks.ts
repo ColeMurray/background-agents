@@ -3,7 +3,7 @@
  *
  * Saving an environment triggers an immediate prebuild instead of waiting for
  * the cron, and a secret change additionally invalidates every live image
- * before the new build starts — spawn matching sees members through the
+ * before the new build starts — spawn matching sees repositories through the
  * fingerprint but cannot see secrets, so without write-side invalidation a
  * failed or in-flight rebuild would leave revoked values baked in a
  * still-selectable image.

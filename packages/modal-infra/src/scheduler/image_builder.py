@@ -181,7 +181,7 @@ class BuildLogResult:
     """What the build runtime reported through its structured log stream."""
 
     head_sha: str = ""
-    member_shas: list[dict] = field(default_factory=list)
+    repository_shas: list[dict] = field(default_factory=list)
     runtime_version: str = ""
     complete: bool = False
     error: str | None = None
@@ -192,8 +192,8 @@ async def _stream_build_logs(sandbox, redact_values: Iterable[str] = ()) -> Buil
     Stream sandbox stdout and extract build results.
 
     The entrypoint logs structured JSON lines. We look for:
-    - event="git.sync_complete" with "head_sha" (single-repo) and "member_shas"
-      (per-member provenance, [{repoOwner, repoName, baseSha}])
+    - event="git.sync_complete" with "head_sha" (single-repo) and "repository_shas"
+      (per-repository provenance, [{repoOwner, repoName, baseSha}])
     - event="image_build.complete" with "runtime_version" to know the build
       finished and which runtime it baked
     - setup/supervisor errors to preserve the actual build failure
@@ -217,8 +217,8 @@ async def _stream_build_logs(sandbox, redact_values: Iterable[str] = ()) -> Buil
                 if event == "git.sync_complete":
                     if entry.get("head_sha"):
                         result.head_sha = entry["head_sha"]
-                    if isinstance(entry.get("member_shas"), list):
-                        result.member_shas = entry["member_shas"]
+                    if isinstance(entry.get("repository_shas"), list):
+                        result.repository_shas = entry["repository_shas"]
                 elif event == "image_build.complete":
                     if isinstance(entry.get("runtime_version"), str):
                         result.runtime_version = entry["runtime_version"]
@@ -394,10 +394,10 @@ async def build_environment_image(
 
     Generalizes build_repo_image to a repository set: the build sandbox gets
     SESSION_CONFIG.repositories and the list-native runtime clones every
-    member and runs each member's setup.sh sequentially, fatally. The success
-    callback carries what only the build knows — per-member clone provenance
-    (member_shas) and the baked runtime_version — while the members
-    fingerprint stays control-plane-side on the registered row.
+    repository and runs each repo's setup.sh sequentially, fatally. The
+    success callback carries what only the build knows — per-repository clone
+    provenance (repository_shas) and the baked runtime_version — while the
+    repositories fingerprint stays control-plane-side on the registered row.
 
     Args:
         environment_id: Environment the image belongs to (env_<id>)
@@ -465,9 +465,9 @@ async def build_environment_image(
         # Registration fails closed on these (design §7.3) — surface the real
         # cause here instead of an opaque callback rejection. Missing fields
         # mean the base image bakes a runtime too old for environment builds.
-        if not build_logs.member_shas or not build_logs.runtime_version:
+        if not build_logs.repository_shas or not build_logs.runtime_version:
             raise BuildError(
-                "build completed without member_shas/runtime_version — "
+                "build completed without repository_shas/runtime_version — "
                 "base image runtime predates environment builds"
             )
 
@@ -496,7 +496,7 @@ async def build_environment_image(
                 {
                     "build_id": build_id,
                     "provider_image_id": provider_image_id,
-                    "member_shas": build_logs.member_shas,
+                    "repository_shas": build_logs.repository_shas,
                     "runtime_version": build_logs.runtime_version,
                     "build_duration_seconds": round(build_duration, 2),
                 },
@@ -713,19 +713,19 @@ def _should_rebuild_environment(
     """
     Rebuild triggers for one environment (design §7.3), cheapest first:
 
-    1. no ready image matches the environment's current members fingerprint
+    1. no ready image matches the environment's current repositories fingerprint
        (covers created/edited environments and failed builds);
     3. the matching ready image's runtime_version is below the compatibility
        floor, or unparseable (fail closed);
-    2. any member's remote branch tip drifted from the image's recorded
-       member_shas (needs one ls-remote per member, so it runs last).
+    2. any repository's remote branch tip drifted from the image's recorded
+       repository_shas (needs one ls-remote per repository, so it runs last).
 
     Trigger 4 (provider-side snapshot expiry) is inert on modal 1.4.3 —
     snapshots do not expire there; it activates with the snapshot-TTL
     follow-up.
     """
     environment_id = environment.get("id", "")
-    fingerprint = environment.get("membersFingerprint", "")
+    fingerprint = environment.get("repositoriesFingerprint", "")
 
     environment_images = [img for img in all_images if img.get("environment_id") == environment_id]
 
@@ -738,7 +738,7 @@ def _should_rebuild_environment(
     matching_ready = [
         img
         for img in environment_images
-        if img.get("status") == "ready" and img.get("members_fingerprint") == fingerprint
+        if img.get("status") == "ready" and img.get("repositories_fingerprint") == fingerprint
     ]
     if not matching_ready:
         log.info("scheduler.environment_no_ready_image", environment_id=environment_id)
@@ -757,11 +757,11 @@ def _should_rebuild_environment(
         return True
 
     try:
-        recorded_shas = json.loads(latest_ready.get("member_shas") or "[]")
+        recorded_shas = json.loads(latest_ready.get("repository_shas") or "[]")
     except json.JSONDecodeError:
         recorded_shas = None
     if not isinstance(recorded_shas, list):
-        log.warn("scheduler.environment_malformed_member_shas", environment_id=environment_id)
+        log.warn("scheduler.environment_malformed_repository_shas", environment_id=environment_id)
         return True
     recorded_by_repo = {
         (str(m.get("repoOwner", "")).lower(), str(m.get("repoName", "")).lower()): m.get(
@@ -771,10 +771,10 @@ def _should_rebuild_environment(
         if isinstance(m, dict)
     }
 
-    for member in environment.get("repositories", []):
-        repo_owner = member.get("repoOwner", "")
-        repo_name = member.get("repoName", "")
-        base_branch = member.get("baseBranch", "")
+    for repo in environment.get("repositories", []):
+        repo_owner = repo.get("repoOwner", "")
+        repo_name = repo.get("repoName", "")
+        base_branch = repo.get("baseBranch", "")
         if not repo_owner or not repo_name or not base_branch:
             continue
         remote_sha = _git_ls_remote_sha(
@@ -885,7 +885,7 @@ async def rebuild_repo_images():
     4. If SHA differs from latest ready image, trigger a build
     5. Mark stale builds as failed
     6. Clean up old failed D1 rows
-    7. Run the environments pass (same skeleton, per-member drift checks)
+    7. Run the environments pass (same skeleton, per-repository drift checks)
     """
     control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
     if not control_plane_url:
