@@ -155,4 +155,62 @@ describe("session runtime proxy routes", () => {
     await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it("forwards the create-PR repo target to the runtime", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ prNumber: 7 });
+    });
+    const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "PR",
+          body: "desc",
+          baseBranch: "main",
+          headBranch: "feature/x",
+          repoOwner: "acme",
+          repoName: "backend",
+        }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.createPr);
+    await expect(requests[0].json()).resolves.toEqual({
+      title: "PR",
+      body: "desc",
+      baseBranch: "main",
+      headBranch: "feature/x",
+      repoOwner: "acme",
+      repoName: "backend",
+    });
+  });
+
+  it("rejects a non-string create-PR repo target without forwarding", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "PR", body: "desc", repoOwner: 42, repoName: "backend" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "repoOwner must be a string" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

@@ -1,5 +1,7 @@
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
+import type { SessionRepositoryRow } from "../../repository";
+import { resolveSessionRepositoryTarget } from "../../repository-target";
 import type { ParticipantRow, SessionRow } from "../../types";
 import { z } from "zod";
 
@@ -8,6 +10,8 @@ const createPrRequestSchema = z.object({
   body: z.string(),
   baseBranch: z.string().optional(),
   headBranch: z.string().optional(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
 });
 
 type CreatePrRequest = z.infer<typeof createPrRequestSchema>;
@@ -22,6 +26,7 @@ type ResolveAuthForPrResult =
 
 export interface PullRequestHandlerDeps {
   getSession: () => SessionRow | null;
+  getSessionRepositories: () => SessionRepositoryRow[];
   getPromptingParticipantForPR: () => Promise<PromptingParticipantResult>;
   resolveAuthForPR: (participant: ParticipantRow) => Promise<ResolveAuthForPrResult>;
   getSessionUrl: (session: SessionRow) => string;
@@ -59,6 +64,21 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         );
       }
 
+      // Membership is a security boundary (this route is reachable with
+      // sandbox auth): naming a repo outside the session is 403, an
+      // ambiguous or half-specified target is 400.
+      const target = resolveSessionRepositoryTarget({
+        requested: { repoOwner: body.repoOwner, repoName: body.repoName },
+        scalarRepo: { repoOwner: session.repo_owner, repoName: session.repo_name },
+        memberRows: deps.getSessionRepositories(),
+      });
+      if (!target.ok) {
+        return Response.json(
+          { error: target.error },
+          { status: target.reason === "not_member" ? 403 : 400 }
+        );
+      }
+
       const promptingParticipantResult = await deps.getPromptingParticipantForPR();
       if (!promptingParticipantResult.participant) {
         return Response.json(
@@ -73,9 +93,16 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         return Response.json({ error: authResolution.error }, { status: authResolution.status });
       }
 
+      // Base-branch defaulting happens in the service (requested > target
+      // repo's base branch > repo default), so the raw request value passes
+      // through untouched.
       const result = await deps.createPullRequest({
-        ...body,
-        baseBranch: body.baseBranch || session.base_branch || undefined,
+        title: body.title,
+        body: body.body,
+        baseBranch: body.baseBranch,
+        headBranch: body.headBranch,
+        repoOwner: target.repoOwner,
+        repoName: target.repoName,
         promptingUserId: promptingParticipant.user_id,
         promptingAuth: authResolution.auth,
         sessionUrl: deps.getSessionUrl(session),

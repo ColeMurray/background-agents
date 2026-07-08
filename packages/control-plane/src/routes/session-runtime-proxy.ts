@@ -94,6 +94,14 @@ async function handleCreatePR(
     return error("headBranch must be a string");
   }
 
+  if (body.repoOwner != null && typeof body.repoOwner !== "string") {
+    return error("repoOwner must be a string");
+  }
+
+  if (body.repoName != null && typeof body.repoName !== "string") {
+    return error("repoName must be a string");
+  }
+
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.createPr, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -102,6 +110,8 @@ async function handleCreatePR(
       body: body.body,
       baseBranch: body.baseBranch,
       headBranch: body.headBranch,
+      repoOwner: body.repoOwner,
+      repoName: body.repoName,
     }),
   });
 }
