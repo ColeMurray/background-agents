@@ -23,8 +23,6 @@ import {
 } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 
-export type { SecretMetadata } from "./secrets-validation";
-
 const log = createLogger("environment-secrets");
 
 export class EnvironmentSecretsStore {

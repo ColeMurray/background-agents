@@ -10,8 +10,6 @@
 
 import type { Environment, EnvironmentRepository } from "@open-inspect/shared";
 
-// ─── Internal row types ──────────────────────────────────────────────────────
-
 export interface EnvironmentRow {
   id: string;
   name: string;
@@ -35,8 +33,6 @@ export type EnvironmentRepositoryInsert = Pick<
   EnvironmentRepositoryRow,
   "position" | "repo_owner" | "repo_name" | "repo_id" | "base_branch"
 >;
-
-// ─── Mappers ─────────────────────────────────────────────────────────────────
 
 export function toEnvironmentRepository(row: EnvironmentRepositoryRow): EnvironmentRepository {
   return {
@@ -65,8 +61,6 @@ export function toEnvironment(
 
 export class EnvironmentStore {
   constructor(private readonly db: D1Database) {}
-
-  // --- Environment CRUD ---
 
   bindEnvironmentInsert(row: EnvironmentRow): D1PreparedStatement {
     return this.db
@@ -211,8 +205,6 @@ export class EnvironmentStore {
     const envDelete = results[results.length - 1];
     return (envDelete?.meta?.changes ?? 0) > 0;
   }
-
-  // --- Repository selection (environment_repositories: single source of truth) ---
 
   async getRepositoriesForEnvironment(environmentId: string): Promise<EnvironmentRepositoryRow[]> {
     const result = await this.db

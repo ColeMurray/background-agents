@@ -28,6 +28,7 @@ import { reposRoutes } from "./routes/repos";
 import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { environmentRoutes } from "./routes/environments";
+import { environmentSecretsRoutes } from "./routes/environment-secrets";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
@@ -315,6 +316,7 @@ const routes: Route[] = [
 
   // Environments (Phase-2 launch unit; internal-HMAC only, web BFF proxied)
   ...environmentRoutes,
+  ...environmentSecretsRoutes,
 
   // Model preferences
   ...modelPreferencesRoutes,
