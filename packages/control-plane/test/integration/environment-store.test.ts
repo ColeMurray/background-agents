@@ -154,4 +154,22 @@ describe("EnvironmentStore", () => {
     expect(await store.delete(row.id)).toBe(true);
     expect(await store.delete(row.id)).toBe(false);
   });
+
+  it("never inserts orphan repository rows when the parent is gone (no-FK guard)", async () => {
+    const store = new EnvironmentStore(env.DB);
+    // Stands in for the delete-between-check-and-batch race: updating a missing
+    // environment must not leave orphan environment_repositories rows behind.
+    const result = await store.update(
+      "env_missing",
+      { name: "x" },
+      repos(["acme", "web", 1, "main"])
+    );
+    expect(result).toBeNull();
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM environment_repositories WHERE environment_id = ?"
+    )
+      .bind("env_missing")
+      .first<{ c: number }>();
+    expect(count?.c).toBe(0);
+  });
 });
