@@ -81,12 +81,13 @@ async def test_unexpected_reader_error_is_logged_once() -> None:
     """A non-overflow reader failure ends forwarding after logging it once."""
     sup = _make_supervisor()
     sup.log = MagicMock()
-    stream = _ScriptedStream([b"one\n", RuntimeError("transport closed")])
+    err = RuntimeError("transport closed")
+    stream = _ScriptedStream([b"one\n", err])
 
     lines = await _collect(sup, stream)
 
     assert lines == ["one"]
-    sup.log.warn.assert_called_once()
+    sup.log.warn.assert_called_once_with("test.forward_error", exc=err)
 
 
 async def test_clean_eof_forwards_all_lines() -> None:
