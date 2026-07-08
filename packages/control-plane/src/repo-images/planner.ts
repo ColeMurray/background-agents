@@ -1,7 +1,11 @@
 import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
-import { mergeSecrets } from "../db/secrets-validation";
+import {
+  auditSecretsMerge,
+  mergeSecretSources,
+  parseSecretsCapMode,
+} from "../db/secrets-validation";
 import { createLogger, type CorrelationContext } from "../logger";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import {
@@ -228,21 +232,30 @@ export class RepoImageBuildPlanner {
       });
     }
 
-    const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
-    if (Object.keys(merged).length === 0) return undefined;
+    const merge = mergeSecretSources([
+      { label: "global", secrets: globalSecrets },
+      { label: `${params.repoOwner}/${params.repoName}`, secrets: repoSecrets },
+    ]);
+    auditSecretsMerge({
+      merge,
+      mode: parseSecretsCapMode(this.env.SECRETS_CAP_ENFORCEMENT),
+      log: logger,
+      context: { repo_owner: params.repoOwner, repo_name: params.repoName },
+    });
 
-    const logLevel = exceedsLimit ? "warn" : "info";
-    logger[logLevel]("repo_image.secrets_loaded", {
+    if (Object.keys(merge.merged).length === 0) return undefined;
+
+    logger.info("repo_image.secrets_loaded", {
       global_count: Object.keys(globalSecrets).length,
       repo_count: Object.keys(repoSecrets).length,
-      merged_count: Object.keys(merged).length,
-      payload_bytes: totalBytes,
-      exceeds_limit: exceedsLimit,
+      merged_count: Object.keys(merge.merged).length,
+      payload_bytes: merge.totalBytes,
+      exceeds_limit: merge.exceedsLimit,
       repo_owner: params.repoOwner,
       repo_name: params.repoName,
     });
 
-    return merged;
+    return merge.merged;
   }
 
   private async resolveCloneAuth(params: {

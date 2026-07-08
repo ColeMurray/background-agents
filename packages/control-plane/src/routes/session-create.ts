@@ -15,10 +15,7 @@ import {
   resolveGitHubEnrichment,
   resolveProviderIdentity,
 } from "../session/identity";
-import {
-  resolveCodeServerEnabled,
-  resolveSandboxSettings,
-} from "../session/integration-settings-resolution";
+import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { CreateSessionResponse, Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
@@ -176,11 +173,14 @@ async function handleCreateSession(
       ? body.reasoningEffort
       : null;
 
-  // Resolve code-server integration setting and sandbox settings for this repo
-  const [codeServerEnabled, sandboxSettings] = await Promise.all([
-    resolveCodeServerEnabled(env.DB, repoOwner, repoName),
-    resolveSandboxSettings(env.DB, repoOwner, repoName),
-  ]);
+  // Session-scoped integration settings resolve from the primary member (design
+  // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
+  // two are the same repo by the row-0-mirrors-scalars invariant.
+  const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
+  const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+    env.DB,
+    scopeMembers
+  );
 
   const sessionId = generateId();
 
