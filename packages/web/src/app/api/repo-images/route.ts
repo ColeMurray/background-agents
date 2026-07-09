@@ -5,6 +5,11 @@ import { controlPlaneFetch } from "@/lib/control-plane";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 export async function GET() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   if (!supportsRepoImages()) {
     return NextResponse.json(
       {
@@ -13,11 +18,6 @@ export async function GET() {
       },
       { status: 501 }
     );
-  }
-
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {

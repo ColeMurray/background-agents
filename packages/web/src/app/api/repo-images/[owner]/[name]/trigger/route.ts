@@ -9,6 +9,11 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ owner: string; name: string }> }
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   if (!supportsRepoImages()) {
     return NextResponse.json(
       {
@@ -17,11 +22,6 @@ export async function POST(
       },
       { status: 501 }
     );
-  }
-
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { owner, name } = await params;

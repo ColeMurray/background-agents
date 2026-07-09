@@ -10,6 +10,11 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
  * rows are per-environment detail: /api/environments/[id]/images.
  */
 export async function GET() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   if (!supportsRepoImages()) {
     return NextResponse.json(
       {
@@ -18,11 +23,6 @@ export async function GET() {
       },
       { status: 501 }
     );
-  }
-
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
