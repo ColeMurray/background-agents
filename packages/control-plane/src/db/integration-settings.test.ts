@@ -1070,6 +1070,49 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("round-trips an environment-targeted routing rule", async () => {
+      await store.setGlobal("slack", {
+        defaults: {
+          routingRules: [
+            { keyword: "FullStack", target: "env_abc123", targetType: "environment" },
+            { keyword: "api", target: "acme/api" },
+          ],
+        },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.routingRules).toEqual([
+        { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
+        { keyword: "api", target: "acme/api" },
+      ]);
+    });
+
+    it("rejects an environment-targeted rule whose target is not an env_ id", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: {
+            routingRules: [{ keyword: "fullstack", target: "acme/web", targetType: "environment" }],
+          },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects an unknown routing rule targetType", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: {
+            routingRules: [
+              {
+                keyword: "fullstack",
+                target: "acme/web",
+                targetType: "team" as unknown as "repository",
+              },
+            ],
+          },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("rejects a routing rule keyword longer than the maximum", async () => {
       await expect(
         store.setGlobal("slack", {

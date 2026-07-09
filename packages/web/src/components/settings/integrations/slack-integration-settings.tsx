@@ -8,6 +8,8 @@ import {
   MAX_SLACK_ROUTING_RULES,
   MODEL_OPTIONS,
   type EnrichedRepository,
+  type Environment,
+  type ListEnvironmentsResponse,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
@@ -15,6 +17,8 @@ import {
   type SlackRoutingRule,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { ENVIRONMENTS_KEY } from "@/hooks/use-environments";
+import { environmentOptionValue, parseTargetSelectValue } from "@/lib/session-target";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
@@ -23,7 +27,9 @@ import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -104,6 +110,7 @@ export function SlackIntegrationSettings() {
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
     useSWR<RepoListResponse>(REPO_SETTINGS_KEY);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
+  const { data: environmentsData } = useSWR<ListEnvironmentsResponse>(ENVIRONMENTS_KEY);
 
   if (globalLoading || repoSettingsLoading) {
     return <IntegrationSettingsSkeleton />;
@@ -112,6 +119,7 @@ export function SlackIntegrationSettings() {
   const settings = globalData?.settings;
   const repoOverrides = repoSettingsData?.repos ?? [];
   const availableRepos = reposData?.repos ?? [];
+  const availableEnvironments = environmentsData?.environments ?? [];
 
   return (
     <div>
@@ -134,7 +142,11 @@ export function SlackIntegrationSettings() {
 
       <GlobalSettingsSection settings={settings} />
 
-      <RoutingRulesSection settings={settings} availableRepos={availableRepos} />
+      <RoutingRulesSection
+        settings={settings}
+        availableRepos={availableRepos}
+        availableEnvironments={availableEnvironments}
+      />
 
       <Section
         title="Repository overrides"
@@ -537,6 +549,7 @@ interface DraftRoutingRule {
   /** Stable key for list rendering; not persisted. */
   id: number;
   keyword: string;
+  /** Select value: a repo fullName or an `env:<id>` environment value. */
   target: string;
 }
 
@@ -547,16 +560,28 @@ function toDraftRoutingRules(rules: SlackRoutingRule[] | undefined): DraftRoutin
   return (rules ?? []).map((rule) => ({
     id: draftRoutingRuleIdCounter++,
     keyword: rule.keyword,
-    target: rule.target,
+    target: rule.targetType === "environment" ? environmentOptionValue(rule.target) : rule.target,
   }));
+}
+
+/** Map a draft row back to the stored rule shape: env: values split into target + targetType. */
+function toStoredRoutingRule(draft: DraftRoutingRule): SlackRoutingRule {
+  const keyword = draft.keyword.trim();
+  const value = draft.target.trim();
+  const parsed = value ? parseTargetSelectValue(value, null) : null;
+  return parsed?.kind === "environment"
+    ? { keyword, target: parsed.environmentId, targetType: "environment" }
+    : { keyword, target: value };
 }
 
 function RoutingRulesSection({
   settings,
   availableRepos,
+  availableEnvironments,
 }: {
   settings: SlackGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
+  availableEnvironments: Environment[];
 }) {
   const [rules, setRules] = useState<DraftRoutingRule[]>(() =>
     toDraftRoutingRules(settings?.defaults?.routingRules)
@@ -592,9 +617,9 @@ function RoutingRulesSection({
   };
 
   const handleSave = async () => {
-    const trimmed = rules.map((r) => ({ keyword: r.keyword.trim(), target: r.target.trim() }));
+    const trimmed = rules.map(toStoredRoutingRule);
     if (trimmed.some((r) => !r.keyword || !r.target)) {
-      toast.error("Every routing rule needs a keyword and a target repository.");
+      toast.error("Every routing rule needs a keyword and a target.");
       return;
     }
     if (trimmed.length > MAX_SLACK_ROUTING_RULES) {
@@ -635,25 +660,32 @@ function RoutingRulesSection({
     }
   };
 
+  const repoItems = availableRepos.map((r) => (
+    <SelectItem key={r.fullName} value={r.fullName.toLowerCase()}>
+      {r.fullName}
+    </SelectItem>
+  ));
+
   return (
     <Section
       title="Routing rules"
-      description="Map keywords to repositories. When a Slack message contains a keyword, the agent is routed to that repository before falling back to channel association or automatic detection."
+      description="Map keywords to repositories or environments. When a Slack message contains a keyword, the agent is routed to that target before falling back to channel association or automatic detection."
     >
       {rules.length > 0 ? (
         <div className="space-y-3 mb-4">
           {rules.map((rule) => {
-            const target = rule.target.trim().toLowerCase();
-            const staleTarget = target !== "" && !accessibleRepos.has(target);
+            const rawTarget = rule.target.trim();
+            const parsedTarget = rawTarget ? parseTargetSelectValue(rawTarget, null) : null;
+            const isEnvironmentTarget = parsedTarget?.kind === "environment";
+            const selectValue = isEnvironmentTarget ? rawTarget : rawTarget.toLowerCase();
+            const staleTarget =
+              rawTarget !== "" &&
+              (isEnvironmentTarget
+                ? !availableEnvironments.some((e) => e.id === parsedTarget.environmentId)
+                : !accessibleRepos.has(selectValue));
             const duplicateKeyword =
               rule.keyword.trim() !== "" &&
               (keywordCounts.get(rule.keyword.trim().toLowerCase()) ?? 0) > 1;
-
-            // A target that is no longer accessible must still render so the user
-            // can see and re-point it (Radix Select needs a matching item).
-            const targetOptions = staleTarget
-              ? [...availableRepos.map((r) => r.fullName), rule.target]
-              : availableRepos.map((r) => r.fullName);
 
             return (
               <div key={rule.id}>
@@ -668,16 +700,39 @@ function RoutingRulesSection({
                   <span className="text-muted-foreground" aria-hidden="true">
                     &rarr;
                   </span>
-                  <Select value={target} onValueChange={(v) => updateRule(rule.id, { target: v })}>
-                    <SelectTrigger className="flex-1" aria-label="Routing target repository">
-                      <SelectValue placeholder="Select a repository..." />
+                  <Select
+                    value={selectValue}
+                    onValueChange={(v) => updateRule(rule.id, { target: v })}
+                  >
+                    <SelectTrigger className="flex-1" aria-label="Routing target">
+                      <SelectValue placeholder="Select a target..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {targetOptions.map((fullName) => (
-                        <SelectItem key={fullName} value={fullName.toLowerCase()}>
-                          {fullName}
-                        </SelectItem>
-                      ))}
+                      {availableEnvironments.length > 0 ? (
+                        <>
+                          <SelectGroup>
+                            <SelectLabel>Environments</SelectLabel>
+                            {availableEnvironments.map((environment) => (
+                              <SelectItem
+                                key={environment.id}
+                                value={environmentOptionValue(environment.id)}
+                              >
+                                {environment.name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                          <SelectGroup>
+                            <SelectLabel>Repositories</SelectLabel>
+                            {repoItems}
+                          </SelectGroup>
+                        </>
+                      ) : (
+                        repoItems
+                      )}
+                      {/* A target that is no longer available must still render so
+                          the user can see and re-point it (Radix Select needs a
+                          matching item). */}
+                      {staleTarget && <SelectItem value={selectValue}>{rawTarget}</SelectItem>}
                     </SelectContent>
                   </Select>
                   <Button variant="destructive" size="sm" onClick={() => removeRule(rule.id)}>
@@ -686,16 +741,22 @@ function RoutingRulesSection({
                 </div>
                 {(staleTarget || duplicateKeyword) && (
                   <div className="mt-1 ml-1 space-y-0.5">
-                    {staleTarget && (
-                      <p className="text-xs text-warning">
-                        <code>{rule.target}</code> is not in your accessible repositories — this
-                        rule is ignored until access is restored.
-                      </p>
-                    )}
+                    {staleTarget &&
+                      (isEnvironmentTarget ? (
+                        <p className="text-xs text-warning">
+                          This environment no longer exists — this rule is ignored until it points
+                          at a valid target.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-warning">
+                          <code>{rule.target}</code> is not in your accessible repositories — this
+                          rule is ignored until access is restored.
+                        </p>
+                      ))}
                     {duplicateKeyword && (
                       <p className="text-xs text-warning">
                         This keyword is used by more than one rule — matching messages will ask
-                        which repository to use.
+                        which target to use.
                       </p>
                     )}
                   </div>
@@ -707,7 +768,7 @@ function RoutingRulesSection({
       ) : (
         <p className="text-sm text-muted-foreground mb-4">
           No routing rules yet. Add one to route messages containing a keyword to a specific
-          repository.
+          repository or environment.
         </p>
       )}
 

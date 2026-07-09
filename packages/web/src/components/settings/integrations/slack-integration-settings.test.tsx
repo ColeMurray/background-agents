@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { MAX_SLACK_ROUTING_RULES } from "@open-inspect/shared";
 import type {
+  Environment,
   SlackGlobalConfig,
   SlackRepoSettings,
   EnrichedRepository,
@@ -45,6 +46,7 @@ function setupSWR(opts: {
   global?: SlackGlobalConfig | null;
   repos?: RepoSettingsEntry[];
   availableRepos?: EnrichedRepository[];
+  environments?: Environment[];
   globalLoading?: boolean;
   reposLoading?: boolean;
 }) {
@@ -67,8 +69,26 @@ function setupSWR(opts: {
         isLoading: false,
       };
     }
+    if (key === "/api/environments") {
+      return {
+        data: { environments: opts.environments ?? [], total: opts.environments?.length ?? 0 },
+        isLoading: false,
+      };
+    }
     return { data: undefined, isLoading: false };
   });
+}
+
+function environment(id: string, name: string): Environment {
+  return {
+    id,
+    name,
+    description: null,
+    prebuildEnabled: false,
+    createdAt: 1,
+    updatedAt: 1,
+    repositories: [{ repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" }],
+  };
 }
 
 function repo(fullName: string): EnrichedRepository {
@@ -438,7 +458,7 @@ describe("SlackIntegrationSettings", () => {
       const section = routingSection();
       await user.click(within(section).getByRole("button", { name: /add rule/i }));
       await user.type(within(section).getByRole("textbox", { name: /keyword/i }), "Frontend");
-      await user.click(within(section).getByRole("combobox", { name: /target repository/i }));
+      await user.click(within(section).getByRole("combobox", { name: /routing target/i }));
       await user.click(await screen.findByRole("option", { name: "acme/web" }));
       await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
 
@@ -579,6 +599,72 @@ describe("SlackIntegrationSettings", () => {
 
       const section = routingSection();
       expect(within(section).getByText(/not in your accessible repositories/i)).toBeInTheDocument();
+    });
+
+    it("adds an environment-targeted rule and saves it with targetType", async () => {
+      const user = userEvent.setup();
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+        availableRepos: [repo("acme/web")],
+        environments: [environment("env_abc123", "full-stack")],
+      });
+      fetchMock.mockResolvedValue(okJson({}));
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      await user.click(within(section).getByRole("button", { name: /add rule/i }));
+      await user.type(within(section).getByRole("textbox", { name: /keyword/i }), "fullstack");
+      await user.click(within(section).getByRole("combobox", { name: /routing target/i }));
+      await user.click(await screen.findByRole("option", { name: "full-stack" }));
+      await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+        settings: SlackGlobalConfig;
+      };
+      expect(body.settings.defaults?.routingRules).toEqual([
+        { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
+      ]);
+    });
+
+    it("renders a stored environment rule showing the environment name", () => {
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            routingRules: [
+              { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
+            ],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+        environments: [environment("env_abc123", "full-stack")],
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      expect(within(section).getByText("full-stack")).toBeInTheDocument();
+      expect(within(section).queryByText(/no longer exists/i)).not.toBeInTheDocument();
+    });
+
+    it("warns when a rule targets an environment that no longer exists", () => {
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            routingRules: [
+              { keyword: "fullstack", target: "env_deleted", targetType: "environment" },
+            ],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+        environments: [environment("env_abc123", "full-stack")],
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      expect(within(section).getByText(/environment no longer exists/i)).toBeInTheDocument();
     });
 
     it("warns when the same keyword is used by more than one rule", () => {

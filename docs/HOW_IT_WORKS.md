@@ -62,7 +62,9 @@ which settings apply. The agent sees all clones side by side and can make coordi
 them; pushes and pull requests are per-repository, so one session can produce PRs in several
 repositories. The session sidebar lists every repository with its branch and any PR created for it.
 
-Bot-created sessions (Slack, GitHub, Linear) remain single-repository.
+Bot-created sessions (GitHub, Linear) remain single-repository. Slack sessions are single-repository
+by default, but a Slack routing rule (Settings › Integrations › Slack) can target an environment,
+launching the full multi-repository workspace from a keyword.
 
 ### Session Lifecycle
 

@@ -30,13 +30,14 @@ const FALLBACK_REPOS: RepoConfig[] = [];
  * This is shorter than the control plane's 5-minute cache because
  * the slack-bot might be restarted more frequently.
  */
-const LOCAL_CACHE_TTL_MS = 60 * 1000;
+export const LOCAL_CACHE_TTL_MS = 60 * 1000;
 
 /**
- * Expiration for the shared KV caches (repos, routing rules, watched channels),
- * in seconds — the unit Cloudflare KV's `expirationTtl` expects.
+ * Expiration for the shared KV caches (repos, routing rules, environments,
+ * watched channels), in seconds — the unit Cloudflare KV's `expirationTtl`
+ * expects.
  */
-const KV_CACHE_TTL_SECONDS = 300;
+export const KV_CACHE_TTL_SECONDS = 300;
 
 /**
  * Local in-memory cache for repos.
@@ -87,7 +88,11 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
  * binding and falling back to URL-based fetch. Centralizes the internal-auth
  * headers and binding-vs-URL switch shared by every control-plane read.
  */
-async function controlPlaneFetch(env: Env, path: string, traceId?: string): Promise<Response> {
+export async function controlPlaneFetch(
+  env: Env,
+  path: string,
+  traceId?: string
+): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: "application/json",
     ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),

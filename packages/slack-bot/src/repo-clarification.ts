@@ -11,6 +11,7 @@
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { plainTextOption } from "./slack-options";
+import { targetValue, type SlackSessionTarget } from "./targets";
 import type {
   SlackActionsBlock,
   SlackButtonElement,
@@ -102,49 +103,73 @@ function buildRepoPickerAccessory(
   };
 }
 
+/** Short button text for a target: the repo displayName or environment name. */
+function targetDisplayName(target: SlackSessionTarget): string {
+  return target.kind === "environment" ? target.environment.name : target.repo.displayName;
+}
+
 /**
- * One-click buttons for the classifier's ranked alternatives, capped at
- * MAX_REPO_QUICK_PICKS. Each carries the repo id and routes through the same
- * selection handler as the picker.
+ * Unambiguous fallback button text when two targets share a display name: the
+ * repo's fullName, or the environment name tagged as an environment.
  */
-export function buildRepoQuickPickButtons(alternatives: RepoConfig[]): SlackButtonElement[] {
+function targetDisambiguatedName(target: SlackSessionTarget): string {
+  return target.kind === "environment"
+    ? `${target.environment.name} (environment)`
+    : target.repo.fullName;
+}
+
+/**
+ * One-click buttons for the classifier's ranked alternatives — repositories or
+ * environments — capped at MAX_REPO_QUICK_PICKS. Each carries the target's
+ * value (repo id or `env:<id>`) and routes through the same selection handler
+ * as the picker.
+ */
+export function buildTargetQuickPickButtons(
+  alternatives: SlackSessionTarget[]
+): SlackButtonElement[] {
   const picks = alternatives.slice(0, MAX_REPO_QUICK_PICKS);
   const ambiguousNames = duplicateDisplayNames(picks);
 
-  return picks.map((repo, index) => ({
+  return picks.map((target, index) => ({
     type: "button",
     action_id: quickPickActionId(index),
-    // Two repos can share a displayName (e.g. the same repo name under different
-    // owners); fall back to the unambiguous fullName for the colliding picks.
-    text: plainTextOption(ambiguousNames.has(repo.displayName) ? repo.fullName : repo.displayName),
-    value: repo.id,
+    // Two targets can share a display name (e.g. the same repo name under
+    // different owners, or an environment named after a repo); fall back to an
+    // unambiguous form for the colliding picks.
+    text: plainTextOption(
+      ambiguousNames.has(targetDisplayName(target))
+        ? targetDisambiguatedName(target)
+        : targetDisplayName(target)
+    ),
+    value: targetValue(target),
   }));
 }
 
-/** Display names that appear more than once across the given repos. */
-function duplicateDisplayNames(repos: RepoConfig[]): Set<string> {
+/** Display names that appear more than once across the given targets. */
+function duplicateDisplayNames(targets: SlackSessionTarget[]): Set<string> {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
-  for (const repo of repos) {
-    if (seen.has(repo.displayName)) {
-      duplicates.add(repo.displayName);
+  for (const target of targets) {
+    const name = targetDisplayName(target);
+    if (seen.has(name)) {
+      duplicates.add(name);
     }
-    seen.add(repo.displayName);
+    seen.add(name);
   }
   return duplicates;
 }
 
 /**
  * Blocks for the clarification message: the classifier's reasoning, its ranked
- * alternatives as quick-pick buttons (when any), and a searchable picker over
- * every repo as the fallback.
+ * alternatives (repositories or environments) as quick-pick buttons (when
+ * any), and a searchable picker over every repo as the fallback.
  */
 export function buildRepoClarificationBlocks(
   reasoning: string,
-  alternatives: RepoConfig[] | undefined,
+  alternatives: SlackSessionTarget[] | undefined,
   repos: RepoConfig[]
 ): Array<SlackSectionBlock | SlackActionsBlock> {
-  const quickPicks = alternatives?.length ? buildRepoQuickPickButtons(alternatives) : [];
+  const quickPicks = alternatives?.length ? buildTargetQuickPickButtons(alternatives) : [];
   const usesInlinePicker = repos.length > 0 && repos.length <= MAX_REPO_SUGGESTION_OPTIONS;
 
   const blocks: Array<SlackSectionBlock | SlackActionsBlock> = [
