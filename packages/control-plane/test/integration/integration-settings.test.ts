@@ -26,6 +26,20 @@ describe("Integration settings API", () => {
       });
       expect(response.status).toBe(401);
     });
+
+    it("returns 401 on environment-level settings routes without auth header", async () => {
+      for (const method of ["GET", "PUT", "DELETE"] as const) {
+        const response = await SELF.fetch(
+          "https://test.local/integration-settings/sandbox/environments/env_1",
+          {
+            method,
+            headers: { "Content-Type": "application/json" },
+            ...(method === "PUT" ? { body: JSON.stringify({ settings: {} }) } : {}),
+          }
+        );
+        expect(response.status).toBe(401);
+      }
+    });
   });
 
   describe("unknown integration ID", () => {
