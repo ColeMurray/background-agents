@@ -60,46 +60,37 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-const completionCallbackSchema = z
-  .object({
-    sessionId: z.string(),
-    messageId: z.string(),
-    success: z.boolean(),
-    error: z.string().optional(),
-    timestamp: z.number(),
-    signature: z.string(),
-    context: z
-      .object({
-        channel: z.string(),
-        threadTs: z.string(),
-        repoFullName: z.string().optional(),
-        model: z.string().optional(),
-        reasoningEffort: z.string().optional(),
-        reactionMessageTs: z.string().optional(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
+const slackCallbackContextSchema = z.looseObject({
+  source: z.literal("slack"),
+  channel: z.string(),
+  threadTs: z.string(),
+  repoFullName: z.string(),
+  model: z.string(),
+  reasoningEffort: z.string().optional(),
+  reactionMessageTs: z.string().optional(),
+});
+
+const completionCallbackSchema = z.looseObject({
+  sessionId: z.string(),
+  messageId: z.string(),
+  success: z.boolean(),
+  error: z.string().optional(),
+  timestamp: z.number(),
+  signature: z.string(),
+  context: slackCallbackContextSchema,
+});
 
 type CompletionCallbackPayload = z.infer<typeof completionCallbackSchema>;
 
-const toolCallCallbackSchema = z
-  .object({
-    sessionId: z.string(),
-    tool: z.string(),
-    args: z.record(z.string(), z.unknown()),
-    callId: z.string(),
-    timestamp: z.number(),
-    signature: z.string(),
-    context: z
-      .object({
-        source: z.literal("slack"),
-        channel: z.string(),
-        threadTs: z.string(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
+const toolCallCallbackSchema = z.looseObject({
+  sessionId: z.string(),
+  tool: z.string(),
+  args: z.record(z.string(), z.unknown()),
+  callId: z.string(),
+  timestamp: z.number(),
+  signature: z.string(),
+  context: slackCallbackContextSchema,
+});
 
 type ToolCallCallbackPayload = z.infer<typeof toolCallCallbackSchema>;
 
@@ -484,20 +475,7 @@ async function handleCompletionCallback(
     }
 
     // Build and post completion message
-    const blocks = buildCompletionBlocks(
-      sessionId,
-      agentResponse,
-      {
-        source: "slack",
-        channel: context.channel,
-        threadTs: context.threadTs,
-        repoFullName: context.repoFullName ?? "",
-        model: context.model ?? "",
-        reasoningEffort: context.reasoningEffort,
-        reactionMessageTs: context.reactionMessageTs,
-      },
-      env.WEB_APP_URL
-    );
+    const blocks = buildCompletionBlocks(sessionId, agentResponse, context, env.WEB_APP_URL);
 
     await postMessage(env.SLACK_BOT_TOKEN, context.channel, getFallbackText(agentResponse), {
       thread_ts: context.threadTs,

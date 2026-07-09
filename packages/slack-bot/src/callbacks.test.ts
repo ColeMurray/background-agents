@@ -125,6 +125,21 @@ describe("POST /callbacks/tool_call", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
+  it("rejects signed tool calls with partial Slack context", async () => {
+    const payload = await makeToolCallPayload({
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+      },
+    });
+    const { response, ctx } = await postToolCall(payload);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid payload" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed JSON payloads", async () => {
     const ctx = makeCtx();
     const response = await makeApp().fetch(
@@ -313,7 +328,15 @@ describe("POST /callbacks/complete", () => {
   }
 
   it("rejects a partial completion payload", async () => {
-    const payload = await signPayload(completeCallbackData({ context: { channel: "C123" } }));
+    const payload = await signPayload(
+      completeCallbackData({
+        context: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "111.222",
+        },
+      })
+    );
     const { response, ctx } = await postCallback("/callbacks/complete", payload);
 
     expect(response.status).toBe(400);
