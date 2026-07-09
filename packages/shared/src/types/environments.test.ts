@@ -4,6 +4,7 @@ import {
   isEnvironmentId,
   updateEnvironmentInputSchema,
   MAX_ENVIRONMENT_NAME_LENGTH,
+  MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,
 } from "./index";
 
 describe("isEnvironmentId", () => {
@@ -85,6 +86,35 @@ describe("createEnvironmentInputSchema", () => {
       }).success
     ).toBe(false);
   });
+
+  it("accepts channel associations, trimming ids", () => {
+    const parsed = createEnvironmentInputSchema.parse({
+      name: "X",
+      channelAssociations: [" C0123ABC "],
+      repositories: [{ repoOwner: "a", repoName: "b" }],
+    });
+    expect(parsed.channelAssociations).toEqual(["C0123ABC"]);
+  });
+
+  it("rejects empty channel ids and oversized association lists", () => {
+    expect(
+      createEnvironmentInputSchema.safeParse({
+        name: "X",
+        channelAssociations: ["   "],
+        repositories: [{ repoOwner: "a", repoName: "b" }],
+      }).success
+    ).toBe(false);
+    expect(
+      createEnvironmentInputSchema.safeParse({
+        name: "X",
+        channelAssociations: Array.from(
+          { length: MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS + 1 },
+          (_, i) => `C${i}`
+        ),
+        repositories: [{ repoOwner: "a", repoName: "b" }],
+      }).success
+    ).toBe(false);
+  });
 });
 
 describe("updateEnvironmentInputSchema", () => {
@@ -98,5 +128,11 @@ describe("updateEnvironmentInputSchema", () => {
 
   it("accepts a null description to clear it", () => {
     expect(updateEnvironmentInputSchema.parse({ description: null }).description).toBeNull();
+  });
+
+  it("accepts an empty channelAssociations array to clear the set", () => {
+    expect(updateEnvironmentInputSchema.parse({ channelAssociations: [] })).toEqual({
+      channelAssociations: [],
+    });
   });
 });

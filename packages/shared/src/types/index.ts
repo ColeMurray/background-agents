@@ -1262,6 +1262,8 @@ export const automationRepositoriesInputSchema = repositoriesInputSchema;
 export const MAX_ENVIRONMENT_NAME_LENGTH = 200;
 /** Maximum characters in an environment's description. */
 export const MAX_ENVIRONMENT_DESCRIPTION_LENGTH = 2000;
+/** Maximum Slack channel associations per environment. */
+export const MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS = 50;
 
 /**
  * Shape check for stable environment ids (`env_` + generated suffix). Loose on
@@ -1283,10 +1285,21 @@ export function isEnvironmentId(value: string): boolean {
  */
 export const environmentRepositoriesInputSchema = sessionRepositoriesInputSchema;
 
+/**
+ * Slack channel ids associated with an environment (mirrors
+ * RepoMetadata.channelAssociations). Ids are opaque Slack identifiers, so the
+ * schema checks only basic hygiene; `undefined` on update leaves the set
+ * untouched, an array replaces it wholesale (empty clears).
+ */
+const environmentChannelAssociationsSchema = z
+  .array(z.string().trim().min(1).max(64))
+  .max(MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS);
+
 export const createEnvironmentInputSchema = z.object({
   name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH),
   description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
   prebuildEnabled: z.boolean().optional(),
+  channelAssociations: environmentChannelAssociationsSchema.optional(),
   repositories: environmentRepositoriesInputSchema,
 });
 
@@ -1294,6 +1307,7 @@ export const updateEnvironmentInputSchema = z.object({
   name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH).optional(),
   description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
   prebuildEnabled: z.boolean().optional(),
+  channelAssociations: environmentChannelAssociationsSchema.optional(),
   repositories: environmentRepositoriesInputSchema.optional(),
 });
 
@@ -1320,6 +1334,11 @@ export interface Environment {
   prebuildEnabled: boolean;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Slack channel ids associated with this environment (classifier
+   * channel-association stage). Absent when the environment has none.
+   */
+  channelAssociations?: string[];
   /** Ordered repositories; [0] is the primary (sandbox/code-server settings source). */
   repositories: EnvironmentRepository[];
 }

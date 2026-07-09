@@ -1,8 +1,9 @@
 /**
- * Deterministic routing-rule target resolution: matched keyword rules →
- * launchable {@link SlackSessionTarget}s. Owns the environment fetch and
- * target-kind dispatch so the classifier only chooses between deterministic
- * routing, channel association, and LLM classification.
+ * Deterministic target resolution for the classifier's rule-based stages:
+ * matched keyword rules and channel associations → launchable
+ * {@link SlackSessionTarget}s. Owns the environment fetch and target-kind
+ * dispatch so the classifier only chooses between deterministic routing,
+ * channel association, and LLM classification.
  */
 
 import { matchRoutingRules } from "@open-inspect/shared";
@@ -56,4 +57,27 @@ export async function resolveRoutingRuleTargets(
   }
 
   return [...targets.values()];
+}
+
+/**
+ * Resolve the targets associated with a Slack channel: environments and
+ * repositories whose channel-association lists name the channel (environments
+ * first, matching the web picker's grouping). The environments fetch fails
+ * open to an empty list, so an outage degrades to repository-only matching.
+ */
+export async function resolveChannelTargets(
+  env: Env,
+  channelId: string,
+  repos: RepoConfig[],
+  traceId?: string
+): Promise<SlackSessionTarget[]> {
+  const environments = await getAvailableEnvironments(env, traceId);
+  return [
+    ...environments
+      .filter((environment) => environment.channelAssociations?.includes(channelId))
+      .map((environment): SlackSessionTarget => ({ kind: "environment", environment })),
+    ...repos
+      .filter((repo) => repo.channelAssociations?.includes(channelId))
+      .map((repo): SlackSessionTarget => ({ kind: "repository", repo })),
+  ];
 }

@@ -64,7 +64,9 @@ repositories. The session sidebar lists every repository with its branch and any
 
 Bot-created sessions (GitHub, Linear) remain single-repository. Slack sessions are single-repository
 by default, but a Slack routing rule (Settings › Integrations › Slack) can target an environment,
-launching the full multi-repository workspace from a keyword.
+launching the full multi-repository workspace from a keyword. An environment can also be associated
+with Slack channels (`channelAssociations` on the environments API, like repository metadata):
+messages in an associated channel route to the environment without needing a keyword.
 
 ### Session Lifecycle
 

@@ -294,18 +294,6 @@ export async function getRepoById(
 }
 
 /**
- * Find repositories associated with a Slack channel.
- */
-export async function getReposByChannel(
-  env: Env,
-  channelId: string,
-  traceId?: string
-): Promise<RepoConfig[]> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.filter((r) => r.channelAssociations?.includes(channelId));
-}
-
-/**
  * Build a description string for all available repos.
  * Used in the classification prompt.
  */

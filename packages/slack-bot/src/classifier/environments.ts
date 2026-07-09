@@ -1,11 +1,11 @@
 /**
- * Environment fetching from the control plane, for routing rules that target a
- * saved environment.
+ * Environment fetching from the control plane, for routing rules and channel
+ * associations that target a saved environment.
  *
  * A cached resource (in-memory → control plane → KV, **fail open to an empty
  * list**) so an environments-fetch problem never blocks classification —
- * rules targeting an environment are simply skipped, like rules targeting an
- * inaccessible repository.
+ * rules and channel associations targeting an environment are simply skipped,
+ * like rules targeting an inaccessible repository.
  */
 
 import type { Environment, ListEnvironmentsResponse } from "@open-inspect/shared";

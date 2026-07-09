@@ -7,8 +7,8 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
-import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./repos";
-import { resolveRoutingRuleTargets } from "./routing";
+import { getAvailableRepos, buildRepoDescriptions } from "./repos";
+import { resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText, type ConfidenceLevel } from "@open-inspect/shared";
 import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
@@ -230,6 +230,53 @@ export class RepoClassifier {
   }
 
   /**
+   * Route on the channel's associated targets (resolution lives in
+   * {@link resolveChannelTargets}).
+   *
+   * Returns a high-confidence result when the channel is associated with
+   * exactly one target. Several associated repositories fall through (`null`)
+   * to the LLM, which already sees channel associations as a prompt signal —
+   * but the LLM cannot pick an environment until environments join its
+   * candidate set (Phase B), so a multi-target set that includes an
+   * environment asks the user instead of silently dropping it.
+   */
+  private async classifyByChannelAssociations(
+    channelId: string,
+    repos: RepoConfig[],
+    traceId?: string
+  ): Promise<ClassificationResult | null> {
+    const targets = await resolveChannelTargets(this.env, channelId, repos, traceId);
+
+    if (targets.length === 1) {
+      const target = targets[0];
+      log.info("classifier.channel_association_match", {
+        trace_id: traceId,
+        channel_id: channelId,
+        target_id: targetId(target),
+      });
+      return {
+        target,
+        confidence: "high",
+        // Reasoning renders as mrkdwn; the label is user text.
+        reasoning: `Channel is associated with ${target.kind} ${escapeMrkdwnText(targetLabel(target))}`,
+        needsClarification: false,
+      };
+    }
+
+    if (targets.length > 1 && targets.some((target) => target.kind === "environment")) {
+      return {
+        target: null,
+        confidence: "medium",
+        reasoning: "This channel is associated with several targets; asking which one to use.",
+        alternatives: targets,
+        needsClarification: true,
+      };
+    }
+
+    return null;
+  }
+
+  /**
    * Classify which repository a message refers to.
    */
   async classify(
@@ -260,6 +307,16 @@ export class RepoClassifier {
       return routed;
     }
 
+    // Channel associations are the second deterministic stage. Like routing
+    // rules, they run before the single-repo shortcut so a channel associated
+    // with an environment stays reachable in one-repo workspaces.
+    const channelRouted = context?.channelId
+      ? await this.classifyByChannelAssociations(context.channelId, repos, traceId)
+      : null;
+    if (channelRouted) {
+      return channelRouted;
+    }
+
     // If only one repo, skip classification
     if (repos.length === 1) {
       return {
@@ -268,19 +325,6 @@ export class RepoClassifier {
         reasoning: "Only one repository is available.",
         needsClarification: false,
       };
-    }
-
-    // Check for channel-specific repos first
-    if (context?.channelId) {
-      const channelRepos = await getReposByChannel(this.env, context.channelId, traceId);
-      if (channelRepos.length === 1) {
-        return {
-          target: { kind: "repository", repo: channelRepos[0] },
-          confidence: "high",
-          reasoning: `Channel is associated with repository ${channelRepos[0].fullName}`,
-          needsClarification: false,
-        };
-      }
     }
 
     // Use LLM for classification

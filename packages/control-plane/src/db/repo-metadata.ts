@@ -1,4 +1,5 @@
 import type { RepoMetadata } from "@open-inspect/shared";
+import { parseJsonStringArray } from "./json-columns";
 
 /** D1 batch() supports at most 100 statements per call. */
 const D1_BATCH_LIMIT = 100;
@@ -20,24 +21,14 @@ export interface ImageBuildEnabledRepo {
   repoName: string;
 }
 
-function parseJsonArray(value: string | null): string[] | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function toMetadata(row: RepoMetadataRow): RepoMetadata {
   const metadata: RepoMetadata = {};
   if (row.description != null) metadata.description = row.description;
-  const aliases = parseJsonArray(row.aliases);
+  const aliases = parseJsonStringArray(row.aliases);
   if (aliases) metadata.aliases = aliases;
-  const channelAssociations = parseJsonArray(row.channel_associations);
+  const channelAssociations = parseJsonStringArray(row.channel_associations);
   if (channelAssociations) metadata.channelAssociations = channelAssociations;
-  const keywords = parseJsonArray(row.keywords);
+  const keywords = parseJsonStringArray(row.keywords);
   if (keywords) metadata.keywords = keywords;
   return metadata;
 }

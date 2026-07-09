@@ -5,14 +5,12 @@ const {
   mockMessagesCreate,
   mockGetAvailableRepos,
   mockBuildRepoDescriptions,
-  mockGetReposByChannel,
   mockGetRoutingRules,
   mockGetAvailableEnvironments,
 } = vi.hoisted(() => ({
   mockMessagesCreate: vi.fn(),
   mockGetAvailableRepos: vi.fn(),
   mockBuildRepoDescriptions: vi.fn(),
-  mockGetReposByChannel: vi.fn(),
   mockGetRoutingRules: vi.fn(),
   mockGetAvailableEnvironments: vi.fn(),
 }));
@@ -32,7 +30,6 @@ vi.mock("@anthropic-ai/sdk", () => ({
 vi.mock("./repos", () => ({
   getAvailableRepos: mockGetAvailableRepos,
   buildRepoDescriptions: mockBuildRepoDescriptions,
-  getReposByChannel: mockGetReposByChannel,
   getRoutingRules: mockGetRoutingRules,
 }));
 
@@ -100,7 +97,6 @@ describe("RepoClassifier", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetAvailableRepos.mockResolvedValue(TEST_REPOS);
-    mockGetReposByChannel.mockResolvedValue([]);
     mockGetRoutingRules.mockResolvedValue([]);
     mockGetAvailableEnvironments.mockResolvedValue([]);
     mockBuildRepoDescriptions.mockResolvedValue("- acme/prod\n- acme/web");
@@ -285,7 +281,10 @@ describe("RepoClassifier", () => {
 
     it("takes precedence over a channel association", async () => {
       // Channel maps to acme/prod, but an explicit keyword maps to acme/web.
-      mockGetReposByChannel.mockResolvedValue([TEST_REPOS[0]]); // acme/prod
+      mockGetAvailableRepos.mockResolvedValue([
+        { ...TEST_REPOS[0], channelAssociations: ["C123"] },
+        TEST_REPOS[1],
+      ]);
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
 
       const classifier = new RepoClassifier(TEST_ENV);
@@ -395,6 +394,131 @@ describe("RepoClassifier", () => {
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
       expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("channel associations", () => {
+    it("routes to the repository associated with the channel, without the LLM", async () => {
+      mockGetAvailableRepos.mockResolvedValue([
+        { ...TEST_REPOS[0], channelAssociations: ["C123"] },
+        TEST_REPOS[1],
+      ]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("anything", { channelId: "C123" });
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.confidence).toBe("high");
+      expect(result.reasoning).toContain("associated with repository acme/prod");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("routes to the environment associated with the channel", async () => {
+      const environment = { ...TEST_ENVIRONMENT, channelAssociations: ["C123"] };
+      mockGetAvailableEnvironments.mockResolvedValue([environment]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("anything", { channelId: "C123" });
+
+      expect(result.target).toEqual({ kind: "environment", environment });
+      expect(result.confidence).toBe("high");
+      expect(result.reasoning).toContain("associated with environment full-stack");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("escapes the environment name in the mrkdwn reasoning", async () => {
+      mockGetAvailableEnvironments.mockResolvedValue([
+        { ...TEST_ENVIRONMENT, name: "<!channel> & co", channelAssociations: ["C123"] },
+      ]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("anything", { channelId: "C123" });
+
+      expect(result.reasoning).toContain("&lt;!channel&gt; &amp; co");
+      expect(result.reasoning).not.toContain("<!channel>");
+    });
+
+    it("routes an environment association even when only one repository is available", async () => {
+      // The single-repo shortcut must not shadow the channel's environment.
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+      const environment = { ...TEST_ENVIRONMENT, channelAssociations: ["C123"] };
+      mockGetAvailableEnvironments.mockResolvedValue([environment]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("anything", { channelId: "C123" });
+
+      expect(result.target).toEqual({ kind: "environment", environment });
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("asks for clarification when the channel maps to a repo and an environment", async () => {
+      const associatedRepo = { ...TEST_REPOS[0], channelAssociations: ["C123"] };
+      mockGetAvailableRepos.mockResolvedValue([associatedRepo, TEST_REPOS[1]]);
+      const environment = { ...TEST_ENVIRONMENT, channelAssociations: ["C123"] };
+      mockGetAvailableEnvironments.mockResolvedValue([environment]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("anything", { channelId: "C123" });
+
+      expect(result.target).toBeNull();
+      expect(result.needsClarification).toBe(true);
+      expect(result.alternatives).toEqual([
+        { kind: "environment", environment },
+        { kind: "repository", repo: associatedRepo },
+      ]);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("falls through to the LLM when several repositories share the channel", async () => {
+      // The LLM sees channel associations as a prompt signal and can arbitrate
+      // between repositories — only environments force a clarification.
+      mockGetAvailableRepos.mockResolvedValue(
+        TEST_REPOS.map((repo) => ({ ...repo, channelAssociations: ["C123"] }))
+      );
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_c",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/web",
+              confidence: "high",
+              reasoning: "Mentions the web app.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("web app issue", { channelId: "C123" });
+
+      expect(classifiedRepoFullName(result)).toBe("acme/web");
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+
+    it("does not consult environments for messages outside a channel context", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_d",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/web",
+              confidence: "high",
+              reasoning: "Mentions the web app.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      await classifier.classify("web app issue");
+
+      expect(mockGetAvailableEnvironments).not.toHaveBeenCalled();
     });
   });
 });

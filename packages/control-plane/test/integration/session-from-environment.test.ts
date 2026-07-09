@@ -30,7 +30,15 @@ interface RepoSpec {
 async function seedEnvironment(id: string, name: string, repos: RepoSpec[]): Promise<void> {
   const now = Date.now();
   await new EnvironmentStore(env.DB).create(
-    { id, name, description: null, prebuild_enabled: 0, created_at: now, updated_at: now },
+    {
+      id,
+      name,
+      description: null,
+      prebuild_enabled: 0,
+      channel_associations: null,
+      created_at: now,
+      updated_at: now,
+    },
     repos.map((repo, position) => ({
       position,
       repo_owner: repo.repoOwner,

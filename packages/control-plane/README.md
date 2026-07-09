@@ -122,17 +122,17 @@ can be launched from. `POST /sessions` accepts exactly one of the scalar repo fi
 (`repoOwner`/`repoName`), a `repositories` list (ad-hoc multi-repository session), or an
 `environmentId`.
 
-| Endpoint                           | Method | Description                                        |
-| ---------------------------------- | ------ | -------------------------------------------------- |
-| `/environments`                    | GET    | List environments                                  |
-| `/environments`                    | POST   | Create environment                                 |
-| `/environments/:id`                | GET    | Get environment with repositories                  |
-| `/environments/:id`                | PUT    | Update (name, description, repositories, prebuild) |
-| `/environments/:id`                | DELETE | Delete environment (sessions keep their snapshot)  |
-| `/environments/:id/secrets`        | GET    | List environment secret keys                       |
-| `/environments/:id/secrets`        | PUT    | Upsert environment secrets                         |
-| `/environments/:id/secrets/:key`   | DELETE | Delete an environment secret                       |
-| `/environments/:id/secrets/import` | POST   | Copy selected keys from a repository of the env    |
+| Endpoint                           | Method | Description                                                                     |
+| ---------------------------------- | ------ | ------------------------------------------------------------------------------- |
+| `/environments`                    | GET    | List environments                                                               |
+| `/environments`                    | POST   | Create environment                                                              |
+| `/environments/:id`                | GET    | Get environment with repositories                                               |
+| `/environments/:id`                | PUT    | Update name, description, repositories, prebuild, or Slack channel associations |
+| `/environments/:id`                | DELETE | Delete environment (sessions keep their snapshot)                               |
+| `/environments/:id/secrets`        | GET    | List environment secret keys                                                    |
+| `/environments/:id/secrets`        | PUT    | Upsert environment secrets                                                      |
+| `/environments/:id/secrets/:key`   | DELETE | Delete an environment secret                                                    |
+| `/environments/:id/secrets/import` | POST   | Copy selected keys from a repository of the env                                 |
 
 Environment image builds (prebuilds of the whole environment) are managed via
 `/environment-images/status`, `/environment-images/trigger/:id`, and the build callback routes,
@@ -249,7 +249,8 @@ sessions index, repo metadata, and encrypted secrets:
 
 - `session_repositories`: a session's ordered repository list (position 0 = primary; single-repo
   sessions also mirror the primary onto the session row's scalar columns).
-- `environments`: named repository sets (name, description, prebuild flag).
+- `environments`: named repository sets (name, description, prebuild flag, Slack channel
+  associations).
 - `environment_repositories`: the environment's ordered repository list with per-repository base
   branch.
 - `environment_secrets`: environment-scoped secrets, mirroring `repo_secrets` (same encryption key
