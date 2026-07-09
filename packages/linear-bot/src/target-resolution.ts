@@ -23,7 +23,7 @@ import { createLogger } from "./logger";
 
 const log = createLogger("target-resolution");
 
-/** A resolved session launch target: a repository or a saved environment. */
+/** A resolved session target: a repository or a saved environment. */
 export type SessionTarget =
   | { kind: "repository"; owner: string; name: string; fullName: string }
   | { kind: "environment"; environment: Environment };

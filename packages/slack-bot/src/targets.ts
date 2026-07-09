@@ -1,5 +1,5 @@
 /**
- * Session launch targets for the Slack bot.
+ * Session targets for the Slack bot.
  *
  * Every surface that picks "what to work on" — routing rules, clarification
  * quick-picks, the repository picker — resolves to a {@link SlackSessionTarget}:

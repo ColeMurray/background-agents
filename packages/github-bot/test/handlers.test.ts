@@ -106,7 +106,7 @@ function getControlPlaneFetch(env: Env) {
 
 /**
  * Locate control-plane calls by URL rather than index — handlers make a
- * launch-target metadata lookup before creating the session.
+ * session-target metadata lookup before creating the session.
  */
 function findCallBody(cpFetch: ReturnType<typeof vi.fn>, urlPattern: RegExp) {
   const call = cpFetch.mock.calls.find(([url]) => urlPattern.test(String(url)));

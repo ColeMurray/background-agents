@@ -1,5 +1,5 @@
 /**
- * Session launch-target resolution for the GitHub bot (design §13.2).
+ * Session-target resolution for the GitHub bot (design §13.2).
  *
  * A repository may name a default environment
  * (`repo_metadata.default_environment_id`) so sessions triggered from it open
@@ -183,7 +183,7 @@ async function senderAuthorizedForEnvironment(
 }
 
 /**
- * Resolve the launch target for a session triggered from a repository: the
+ * Resolve the session target for a session triggered from a repository: the
  * repo's default environment when one is configured, still exists, contains
  * the trigger repo, and the sender is authorized for all of its repositories;
  * otherwise the repo itself.

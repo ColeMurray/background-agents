@@ -139,9 +139,9 @@ export type SlackBotCallbackContext = SlackCallbackContext;
  */
 export interface ThreadSession {
   sessionId: string;
-  /** Launch-target id: the repo id ("owner/name") or environment id ("env_…"). */
+  /** Session-target id: the repo id ("owner/name") or environment id ("env_…"). */
   repoId: string;
-  /** Launch-target display label: the repo fullName or environment name. */
+  /** Session-target display label: the repo fullName or environment name. */
   repoFullName: string;
   model: string;
   reasoningEffort?: string;

@@ -148,7 +148,7 @@ people to request the GitHub App bot through the PR reviewer picker.
 **Review Comment:** Same as issue comment, but the prompt additionally includes `filePath`,
 `diffHunk`, and `commentId` for thread-specific context and reply threading.
 
-### Session Launch Target
+### Session Target
 
 Sessions are repo-bound by default: they open the webhook payload's repository. A repository can opt
 into launching a saved environment instead by setting `defaultEnvironmentId` in its repo metadata
