@@ -9,7 +9,10 @@ import type { Automation } from "@open-inspect/shared";
 import { AutomationsList } from "./automations-list";
 
 expect.extend(matchers);
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 vi.mock("next/link", () => ({
   default: ({ children, ...props }: ComponentProps<"a">) => <a {...props}>{children}</a>,
@@ -78,6 +81,25 @@ describe("AutomationsList repository labels", () => {
       }),
     ]);
     expect(screen.getByText("No repository")).toBeInTheDocument();
+  });
+});
+
+describe("AutomationsList schedule metadata", () => {
+  it("shows how long remains until the next scheduled run", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00Z"));
+
+    render(
+      <AutomationsList
+        automations={[makeAutomation({ nextRunAt: Date.now() + 2 * 60 * 60 * 1000 })]}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.getByText("Next: in 2h")).toBeInTheDocument();
   });
 });
 
