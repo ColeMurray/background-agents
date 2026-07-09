@@ -122,6 +122,81 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Grandchild session")).toBeInTheDocument();
   });
 
+  it("shows an empty state for an unmatched search and restores sessions when cleared", async () => {
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText("Search sessions...");
+    fireEvent.change(searchInput, { target: { value: "missing" } });
+
+    expect(screen.getByText("No matching sessions")).toBeInTheDocument();
+    expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: "" } });
+
+    expect(screen.getByText("Session 1")).toBeInTheDocument();
+    expect(screen.queryByText("No matching sessions")).not.toBeInTheDocument();
+  });
+
+  it("keeps the genuine empty-session state distinct from empty search results", () => {
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Search sessions..."), {
+      target: { value: "missing" },
+    });
+
+    expect(screen.getByText("No sessions yet")).toBeInTheDocument();
+    expect(screen.queryByText("No matching sessions")).not.toBeInTheDocument();
+  });
+
+  it("keeps the session-loading failure distinct from empty search results", async () => {
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fetcher: async () => {
+            throw new Error("Failed to load sessions");
+          },
+          shouldRetryOnError: false,
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Unable to load sessions")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search sessions..."), {
+      target: { value: "missing" },
+    });
+
+    expect(screen.getByText("Unable to load sessions")).toBeInTheDocument();
+    expect(screen.queryByText("No matching sessions")).not.toBeInTheDocument();
+  });
+
   it("loads the next page when scrolled near the bottom", async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
     const secondPage = Array.from({ length: 5 }, (_, index) => createSession(index + 51));
