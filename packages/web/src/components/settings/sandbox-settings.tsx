@@ -33,6 +33,12 @@ interface RepoSettingsResponse {
   settings: SandboxSettings | null;
 }
 
+interface EnvironmentSettingsResponse {
+  integrationId: string;
+  environmentId: string;
+  settings: SandboxSettings | null;
+}
+
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function isValidPort(value: string): boolean {
@@ -63,18 +69,18 @@ function isValidBuildTimeout(value: string): boolean {
 const numOrUndef = (v: number | null | undefined): number | undefined =>
   typeof v === "number" ? v : undefined;
 
-/** Value to show in the input: own repo override, else inherited global (display only). */
+/** Value to show in the input: the scope's own override, else the inherited base (display only). */
 function resourceDisplayValue(
   isGlobal: boolean,
-  globalDefaults: SandboxSettings | undefined,
-  repoSettings: SandboxSettings | null | undefined,
+  baseDefaults: SandboxSettings | undefined,
+  scopeOverrides: SandboxSettings | null | undefined,
   field: ResourceField
 ): number | undefined {
   if (!isGlobal) {
-    const own = repoSettings?.[field];
+    const own = scopeOverrides?.[field];
     if (own !== undefined) return numOrUndef(own); // own override (null → blank)
   }
-  return numOrUndef(globalDefaults?.[field]);
+  return numOrUndef(baseDefaults?.[field]);
 }
 
 /**
@@ -94,34 +100,56 @@ function resourcePayloadValue(
   return prior; // not edited: keep existing override, or undefined → don't pin
 }
 
-function SandboxSettingsEditor({
+export function SandboxSettingsEditor({
   scope,
   owner,
   name,
+  environmentId,
 }: {
-  scope: "global" | "repo";
+  scope: "global" | "repo" | "environment";
+  /**
+   * At repo scope: the repo being edited. At environment scope: the
+   * environment's primary repository, whose resolved settings are the
+   * inherited layer beneath the environment's overrides (design §13.5).
+   */
   owner?: string;
   name?: string;
+  environmentId?: string;
 }) {
   const isGlobal = scope === "global";
   const globalApiUrl = "/api/integration-settings/sandbox";
+  const repoApiUrl = `/api/integration-settings/sandbox/repos/${owner}/${name}`;
   const apiUrl = isGlobal
     ? globalApiUrl
-    : `/api/integration-settings/sandbox/repos/${owner}/${name}`;
+    : scope === "repo"
+      ? repoApiUrl
+      : `/api/integration-settings/sandbox/environments/${environmentId}`;
 
-  const { data, mutate, isLoading } = useSWR<GlobalSettingsResponse | RepoSettingsResponse>(
-    apiUrl,
-    fetcher
-  );
+  const { data, mutate, isLoading } = useSWR<
+    GlobalSettingsResponse | RepoSettingsResponse | EnvironmentSettingsResponse
+  >(apiUrl, fetcher);
   const { data: globalData, isLoading: isLoadingGlobal } = useSWR<GlobalSettingsResponse>(
     isGlobal ? null : globalApiUrl,
     fetcher
   );
+  // At environment scope the primary repo's own overrides sit between the
+  // global defaults and the environment's, so they are part of the inherited
+  // display values.
+  const { data: primaryRepoData, isLoading: isLoadingPrimaryRepo } = useSWR<RepoSettingsResponse>(
+    scope === "environment" && owner && name ? repoApiUrl : null,
+    fetcher
+  );
 
-  const globalDefaults = isGlobal
+  // The defaults layer beneath this scope's own overrides (at global scope,
+  // the stored defaults themselves — global inherits from nothing).
+  const baseDefaults: SandboxSettings | undefined = isGlobal
     ? (data as GlobalSettingsResponse | undefined)?.settings?.defaults
-    : globalData?.settings?.defaults;
-  const repoSettings = isGlobal ? undefined : (data as RepoSettingsResponse | undefined)?.settings;
+    : scope === "environment"
+      ? { ...globalData?.settings?.defaults, ...primaryRepoData?.settings }
+      : globalData?.settings?.defaults;
+  const scopeOverrides = isGlobal
+    ? undefined
+    : (data as RepoSettingsResponse | EnvironmentSettingsResponse | undefined)?.settings;
 
   const currentPorts: number[] = isGlobal
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? [])
@@ -144,22 +172,22 @@ function SandboxSettingsEditor({
     : (data as RepoSettingsResponse)?.settings?.buildTimeoutSeconds;
 
   const currentMaxConcurrentChildSessions: number = isGlobal
-    ? (globalDefaults?.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
-    : (repoSettings?.maxConcurrentChildSessions ??
-      globalDefaults?.maxConcurrentChildSessions ??
+    ? (baseDefaults?.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
+    : (scopeOverrides?.maxConcurrentChildSessions ??
+      baseDefaults?.maxConcurrentChildSessions ??
       DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS);
 
   const currentMaxTotalChildSessions: number = isGlobal
-    ? (globalDefaults?.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS)
-    : (repoSettings?.maxTotalChildSessions ??
-      globalDefaults?.maxTotalChildSessions ??
+    ? (baseDefaults?.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS)
+    : (scopeOverrides?.maxTotalChildSessions ??
+      baseDefaults?.maxTotalChildSessions ??
       DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
 
-  const currentCpuCores = resourceDisplayValue(isGlobal, globalDefaults, repoSettings, "cpuCores");
+  const currentCpuCores = resourceDisplayValue(isGlobal, baseDefaults, scopeOverrides, "cpuCores");
   const currentMemoryMib = resourceDisplayValue(
     isGlobal,
-    globalDefaults,
-    repoSettings,
+    baseDefaults,
+    scopeOverrides,
     "memoryMib"
   );
 
@@ -282,13 +310,13 @@ function SandboxSettingsEditor({
         ? Number(trimmedCodeServerPort)
         : isGlobal
           ? DEFAULT_CODE_SERVER_PORT
-          : (globalDefaults?.codeServerPort ?? DEFAULT_CODE_SERVER_PORT);
+          : (baseDefaults?.codeServerPort ?? DEFAULT_CODE_SERVER_PORT);
     const effectiveTerminalPort =
       trimmedTerminalPort !== ""
         ? Number(trimmedTerminalPort)
         : isGlobal
           ? DEFAULT_TERMINAL_PORT
-          : (globalDefaults?.terminalPort ?? DEFAULT_TERMINAL_PORT);
+          : (baseDefaults?.terminalPort ?? DEFAULT_TERMINAL_PORT);
     const configuredPorts: ConfiguredSandboxPort[] = [
       ...ports.map((port) => ({ port, label: "tunnel port" })),
       { port: effectiveCodeServerPort, label: "code server port" },
@@ -325,24 +353,24 @@ function SandboxSettingsEditor({
       if (
         isGlobal ||
         maxConcurrentChildSessions !== null ||
-        repoSettings?.maxConcurrentChildSessions !== undefined
+        scopeOverrides?.maxConcurrentChildSessions !== undefined
       ) {
         settingsPayload.maxConcurrentChildSessions = Number(resolvedMaxConcurrentChildSessions);
       }
       if (
         isGlobal ||
         maxTotalChildSessions !== null ||
-        repoSettings?.maxTotalChildSessions !== undefined
+        scopeOverrides?.maxTotalChildSessions !== undefined
       ) {
         settingsPayload.maxTotalChildSessions = Number(resolvedMaxTotalChildSessions);
       }
-      const cpu = resourcePayloadValue(isGlobal, cpuCores, trimmedCpu, repoSettings?.cpuCores);
+      const cpu = resourcePayloadValue(isGlobal, cpuCores, trimmedCpu, scopeOverrides?.cpuCores);
       if (cpu !== undefined) settingsPayload.cpuCores = cpu;
       const memory = resourcePayloadValue(
         isGlobal,
         memoryMib,
         trimmedMemory,
-        repoSettings?.memoryMib
+        scopeOverrides?.memoryMib
       );
       if (memory !== undefined) settingsPayload.memoryMib = memory;
       const body = isGlobal
@@ -395,12 +423,12 @@ function SandboxSettingsEditor({
     memoryMib,
     maxConcurrentChildSessions,
     maxTotalChildSessions,
-    repoSettings?.maxConcurrentChildSessions,
-    repoSettings?.maxTotalChildSessions,
-    repoSettings?.cpuCores,
-    repoSettings?.memoryMib,
-    globalDefaults?.codeServerPort,
-    globalDefaults?.terminalPort,
+    scopeOverrides?.maxConcurrentChildSessions,
+    scopeOverrides?.maxTotalChildSessions,
+    scopeOverrides?.cpuCores,
+    scopeOverrides?.memoryMib,
+    baseDefaults?.codeServerPort,
+    baseDefaults?.terminalPort,
   ]);
 
   const hasPortChanges =
@@ -440,7 +468,7 @@ function SandboxSettingsEditor({
     hasTerminalPortChange ||
     hasBuildTimeoutChange;
 
-  if (isLoading || isLoadingGlobal) {
+  if (isLoading || isLoadingGlobal || isLoadingPrimaryRepo) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
   }
 
@@ -651,11 +679,11 @@ function SandboxSettingsEditor({
           htmlFor="sandbox-build-timeout"
           className="block text-sm font-medium text-foreground mb-1.5"
         >
-          Repo Image Build Timeout
+          Image Build Timeout
         </label>
         <p className="text-xs text-muted-foreground mb-2">
-          How long a pre-built repo image may take to build (clone + setup), in seconds. Raise it
-          for large repos with slow setup. Leave blank for the default (
+          How long a pre-built image may take to build (clone + setup), in seconds. Raise it for
+          large repositories with slow setup. Leave blank for the default (
           {DEFAULT_BUILD_TIMEOUT_SECONDS}s). Builds only — sessions are unaffected.
         </p>
         <div className="max-w-sm">

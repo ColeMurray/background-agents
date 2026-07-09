@@ -13,6 +13,7 @@ import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
 import { EnvironmentForm, type EnvironmentFormValues } from "./environment-form";
+import { EnvironmentIntegrationSettings } from "./environment-integration-settings";
 import { EnvironmentSecretsImport } from "./environment-secrets-import";
 import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
 import { SecretsEditor } from "@/components/secrets-editor";
@@ -30,7 +31,7 @@ interface EnvironmentImageRow {
 type View =
   | { mode: "list" }
   | { mode: "create" }
-  | { mode: "edit"; environmentId: string; tab: "configuration" | "secrets" };
+  | { mode: "edit"; environmentId: string; tab: "configuration" | "secrets" | "overrides" };
 
 export function EnvironmentsSettings() {
   const { environments, loading } = useEnvironments();
@@ -208,7 +209,7 @@ export function EnvironmentsSettings() {
         </p>
 
         <div className="flex items-center gap-1 border-b border-border-muted mb-4">
-          {(["configuration", "secrets"] as const).map((tab) => (
+          {(["configuration", "secrets", "overrides"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setView({ ...view, tab })}
@@ -233,7 +234,7 @@ export function EnvironmentsSettings() {
             onCancel={() => setView({ mode: "list" })}
             submitting={submitting}
           />
-        ) : (
+        ) : view.tab === "secrets" ? (
           <div>
             <p className="text-xs text-muted-foreground">
               Sessions launched from this environment get global secrets plus these — repository
@@ -242,6 +243,18 @@ export function EnvironmentsSettings() {
             </p>
             <SecretsEditor scope="environment" environmentId={environment.id} />
             <EnvironmentSecretsImport
+              environmentId={environment.id}
+              repositories={environment.repositories}
+            />
+            <div className="mt-4">
+              <Button variant="outline" size="xs" onClick={() => setView({ mode: "list" })}>
+                Back to environments
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <EnvironmentIntegrationSettings
               environmentId={environment.id}
               repositories={environment.repositories}
             />

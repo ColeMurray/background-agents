@@ -281,6 +281,19 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
   });
 }
 
+/**
+ * Integrations that accept environment-level setting overrides — the top layer
+ * of the resolution chain (global defaults → primary-repo overrides →
+ * environment overrides). Limited to the settings the session-scoped
+ * resolution consumes; bot-scoped integrations (github, linear) resolve from
+ * the trigger repo before a session exists, and slack is global/per-repo only.
+ * The environment-level shape is the integration's repo (override) shape.
+ */
+export const ENVIRONMENT_SETTINGS_INTEGRATION_IDS = ["sandbox", "code-server"] as const;
+
+export type EnvironmentSettingsIntegrationId =
+  (typeof ENVIRONMENT_SETTINGS_INTEGRATION_IDS)[number];
+
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;

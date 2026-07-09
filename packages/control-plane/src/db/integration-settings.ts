@@ -2,11 +2,13 @@ import {
   isEnvironmentId,
   isValidModel,
   isValidReasoningEffort,
+  ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
   DEFAULT_MENTIONS_POLICY,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
   normalizeRoutingRules,
+  type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
@@ -33,6 +35,15 @@ const VALID_INTEGRATION_IDS = new Set<string>(INTEGRATION_DEFINITIONS.map((d) =>
 
 export function isValidIntegrationId(id: string): id is IntegrationId {
   return VALID_INTEGRATION_IDS.has(id);
+}
+
+const ENVIRONMENT_SETTINGS_INTEGRATIONS = new Set<string>(ENVIRONMENT_SETTINGS_INTEGRATION_IDS);
+
+/** Whether an integration accepts environment-level setting overrides (design §13.5). */
+export function supportsEnvironmentSettings(
+  id: IntegrationId
+): id is EnvironmentSettingsIntegrationId {
+  return ENVIRONMENT_SETTINGS_INTEGRATIONS.has(id);
 }
 
 export class IntegrationSettingsStore {
@@ -155,15 +166,73 @@ export class IntegrationSettingsStore {
     }));
   }
 
+  /**
+   * Environment-level overrides (design §13.5) — the top layer of the
+   * resolution chain, in the integration's override (repo) shape. Only the
+   * session-scoped integrations accept this level; see
+   * {@link supportsEnvironmentSettings}.
+   */
+  async getEnvironmentSettings<K extends EnvironmentSettingsIntegrationId>(
+    integrationId: K,
+    environmentId: string
+  ): Promise<IntegrationSettingsMap[K]["repo"] | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT settings FROM integration_environment_settings WHERE integration_id = ? AND environment_id = ?"
+      )
+      .bind(integrationId, environmentId)
+      .first<{ settings: string }>();
+
+    if (!row) return null;
+    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    return this.normalizeStoredRepoSettings(integrationId, settings);
+  }
+
+  async setEnvironmentSettings<K extends EnvironmentSettingsIntegrationId>(
+    integrationId: K,
+    environmentId: string,
+    settings: IntegrationSettingsMap[K]["repo"]
+  ): Promise<void> {
+    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
+
+    const now = Date.now();
+    await this.db
+      .prepare(
+        `INSERT INTO integration_environment_settings (integration_id, environment_id, settings, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(integration_id, environment_id) DO UPDATE SET
+           settings = excluded.settings,
+           updated_at = excluded.updated_at`
+      )
+      .bind(integrationId, environmentId, JSON.stringify(normalized), now, now)
+      .run();
+  }
+
+  async deleteEnvironmentSettings<K extends EnvironmentSettingsIntegrationId>(
+    integrationId: K,
+    environmentId: string
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        "DELETE FROM integration_environment_settings WHERE integration_id = ? AND environment_id = ?"
+      )
+      .bind(integrationId, environmentId)
+      .run();
+  }
+
   async getResolvedConfig<K extends IntegrationId>(
     integrationId: K,
-    repo: string
+    repo: string,
+    environmentId?: string | null
   ): Promise<
     ResolvedIntegrationConfig<NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>>
   > {
-    const [globalSettings, repoSettings] = await Promise.all([
+    const [globalSettings, repoSettings, environmentSettings] = await Promise.all([
       this.getGlobal(integrationId),
       this.getRepoSettings(integrationId, repo),
+      environmentId && supportsEnvironmentSettings(integrationId)
+        ? this.getEnvironmentSettings(integrationId, environmentId)
+        : null,
     ]);
 
     // undefined → null (all repos), [] → [] (disabled), [...] → [...] (allowlist)
@@ -171,13 +240,15 @@ export class IntegrationSettingsStore {
       globalSettings?.enabledRepos !== undefined ? globalSettings.enabledRepos : null;
 
     const defaults = globalSettings?.defaults ?? {};
-    const overrides = repoSettings ?? {};
 
-    // Generic merge: repo overrides win, undefined keys don't clobber defaults
+    // Generic merge, later layers win, undefined keys don't clobber:
+    // global defaults → repo overrides → environment overrides (design §13.5).
     const settings: Record<string, unknown> = { ...defaults };
-    for (const [key, value] of Object.entries(overrides)) {
-      if (value !== undefined) {
-        settings[key] = value;
+    for (const overrides of [repoSettings ?? {}, environmentSettings ?? {}]) {
+      for (const [key, value] of Object.entries(overrides)) {
+        if (value !== undefined) {
+          settings[key] = value;
+        }
       }
     }
 

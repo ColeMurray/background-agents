@@ -138,6 +138,15 @@ Environment image builds (prebuilds of the whole environment) are managed via
 `/environment-images/status`, `/environment-images/trigger/:id`, and the build callback routes,
 mirroring the repo-image endpoints.
 
+Environments can also carry integration-setting overrides — the top layer of the resolution chain
+(global defaults → primary-repo overrides → environment overrides), applied to sessions launched
+from the environment and to its image builds. Only the session-scoped integrations (`sandbox`,
+`code-server`) accept this level:
+
+| Endpoint                                        | Method         | Description                         |
+| ----------------------------------------------- | -------------- | ----------------------------------- |
+| `/integration-settings/:id/environments/:envId` | GET/PUT/DELETE | Environment-level setting overrides |
+
 ### Automations
 
 | Endpoint                          | Method | Description                                                             |
@@ -261,6 +270,9 @@ sessions index, repo metadata, and encrypted secrets:
   and caps).
 - `environment_images`: prebuilt environment image builds — provider artifact id, per-repository
   SHAs, a repositories fingerprint for spawn matching, and the runtime version floor check.
+- `integration_environment_settings`: environment-level integration-setting overrides (sandbox,
+  code-server), the top layer above `integration_settings` (global) and `integration_repo_settings`
+  (per-repo).
 
 Automations:
 

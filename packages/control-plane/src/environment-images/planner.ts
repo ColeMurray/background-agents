@@ -57,7 +57,7 @@ export interface ResolvedEnvironmentBuildTarget {
  * Build-time secrets are the same set the environment's sessions get —
  * global + environment, repo-scoped secrets never inherit (§6.4 build/session
  * parity) — and the build timeout honors the primary repository's sandbox
- * settings.
+ * settings with the environment's own overrides layered on top (§13.5).
  */
 export class EnvironmentImageBuildPlanner {
   constructor(
@@ -118,7 +118,12 @@ export class EnvironmentImageBuildPlanner {
     const callbackAuth = params.callbackAuth;
 
     const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
-      resolveSandboxSettings(this.env.DB, primary.repoOwner, primary.repoName),
+      resolveSandboxSettings(
+        this.env.DB,
+        primary.repoOwner,
+        primary.repoName,
+        params.environmentId
+      ),
       this.loadUserEnvVars(params.environmentId),
       this.resolveCloneAuth(params.environmentId),
     ]);

@@ -64,6 +64,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       userId: parentUserId,
       repoOwner: context.repoOwner,
       repoName: context.repoName,
+      environmentId: "env_parent",
     }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
     countActiveChildren: vi.fn().mockResolvedValue(0),
@@ -323,10 +324,13 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "Maximum concurrent children (2) reached",
     });
+    // Children resolve limits from the parent's settings scope, including its
+    // environment override layer (design §13.5).
     expect(integrationSettingsMocks.resolveSandboxSettings).toHaveBeenCalledWith(
       expect.any(Object),
       "acme",
-      "web-app"
+      "web-app",
+      "env_parent"
     );
   });
 

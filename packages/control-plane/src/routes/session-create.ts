@@ -191,11 +191,13 @@ async function handleCreateSession(
 
   // Session-scoped integration settings resolve from the primary member (design
   // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
-  // two are the same repo by the row-0-mirrors-scalars invariant.
+  // two are the same repo by the row-0-mirrors-scalars invariant. Launching
+  // from a saved environment layers its overrides on top (design §13.5).
   const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
   const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
     env.DB,
-    scopeMembers
+    scopeMembers,
+    environmentId
   );
 
   const sessionId = generateId();

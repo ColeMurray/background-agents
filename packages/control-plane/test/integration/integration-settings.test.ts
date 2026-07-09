@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
 } from "@open-inspect/shared";
 import { generateInternalToken } from "../../src/auth/internal";
+import { EnvironmentStore } from "../../src/db/environments";
 import { cleanD1Tables } from "./cleanup";
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -726,6 +727,138 @@ describe("Integration settings API", () => {
       expect(response.status).toBe(400);
       const body = await response.json<{ error: string }>();
       expect(body.error).toContain("enabled must be a boolean");
+    });
+  });
+
+  describe("environment-level settings (design §13.5)", () => {
+    async function seedEnvironment(id: string): Promise<void> {
+      const store = new EnvironmentStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        {
+          id,
+          name: `Env ${id}`,
+          description: null,
+          prebuild_enabled: 0,
+          channel_associations: null,
+          created_at: now,
+          updated_at: now,
+        },
+        [{ position: 0, repo_owner: "acme", repo_name: "web", repo_id: 1, base_branch: "main" }]
+      );
+    }
+
+    it("PUT + GET + DELETE round-trip for sandbox environment overrides", async () => {
+      const headers = await authHeaders();
+      await seedEnvironment("env_settings1");
+
+      const putRes = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/environments/env_settings1",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { buildTimeoutSeconds: 2400, terminalEnabled: true } }),
+        }
+      );
+      expect(putRes.status).toBe(200);
+
+      const getRes = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/environments/env_settings1",
+        { headers }
+      );
+      expect(getRes.status).toBe(200);
+      const body = await getRes.json<{
+        integrationId: string;
+        environmentId: string;
+        settings: { buildTimeoutSeconds: number; terminalEnabled: boolean };
+      }>();
+      expect(body.integrationId).toBe("sandbox");
+      expect(body.environmentId).toBe("env_settings1");
+      expect(body.settings).toEqual({ buildTimeoutSeconds: 2400, terminalEnabled: true });
+
+      const deleteRes = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/environments/env_settings1",
+        { method: "DELETE", headers }
+      );
+      expect(deleteRes.status).toBe(200);
+
+      const afterDelete = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/environments/env_settings1",
+        { headers }
+      );
+      const afterDeleteBody = await afterDelete.json<{ settings: unknown }>();
+      expect(afterDeleteBody.settings).toBeNull();
+    });
+
+    it("returns 404 for an environment that does not exist", async () => {
+      const headers = await authHeaders();
+      const response = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/environments/env_missing",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { terminalEnabled: true } }),
+        }
+      );
+      expect(response.status).toBe(404);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("Environment not found");
+    });
+
+    it("returns 400 for integrations without environment-level support", async () => {
+      const headers = await authHeaders();
+      await seedEnvironment("env_settings2");
+
+      const response = await SELF.fetch(
+        "https://test.local/integration-settings/github/environments/env_settings2",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { autoReviewOnOpen: false } }),
+        }
+      );
+      expect(response.status).toBe(400);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("does not support environment-level settings");
+    });
+
+    it("rejects invalid sandbox settings with 400", async () => {
+      const headers = await authHeaders();
+      await seedEnvironment("env_settings3");
+
+      const response = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/environments/env_settings3",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { tunnelPorts: [70000] } }),
+        }
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it("cascades settings deletion when the environment is deleted", async () => {
+      const headers = await authHeaders();
+      await seedEnvironment("env_settings4");
+
+      const putRes = await SELF.fetch(
+        "https://test.local/integration-settings/code-server/environments/env_settings4",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { enabled: true } }),
+        }
+      );
+      expect(putRes.status).toBe(200);
+
+      await new EnvironmentStore(env.DB).delete("env_settings4");
+
+      const row = await env.DB.prepare(
+        "SELECT settings FROM integration_environment_settings WHERE environment_id = ?"
+      )
+        .bind("env_settings4")
+        .first();
+      expect(row).toBeNull();
     });
   });
 });
