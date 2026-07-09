@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, useEffect, useState } from "react";
 import { MAX_AUTOMATION_REPOSITORIES, type AutomationRepositoryInput } from "@open-inspect/shared";
-import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import { parseRepoFullName, type SessionTarget } from "@/lib/session-target";
 
 /**
@@ -67,11 +66,9 @@ export interface UseAutomationTargetsOptions {
    */
   repositoryRequired: boolean;
   repos: Array<{ fullName: string; defaultBranch: string }>;
-  environments: Array<{ id: string; name: string }>;
-  loadingEnvironments: boolean;
 }
 
-export interface AutomationTargetSelection {
+export interface UseAutomationTargetsResult {
   /** Lowercase repository full names of the selection, in target order. */
   selectedRepoNames: string[];
   /** Environment ids of the selection, in target order. */
@@ -81,8 +78,6 @@ export interface AutomationTargetSelection {
   usesSingleRepository: boolean;
   /** Owner/name of the sole selected repository, for the branch fetch. */
   selectedRepository: { owner: string; name: string } | null;
-  /** Trigger-button label for the current selection. */
-  repositoryLabel: string;
   multipleSelectionEnabled: boolean;
   baseBranch: string;
   setBaseBranch: (branch: string) => void;
@@ -100,21 +95,19 @@ export interface AutomationTargetSelection {
 /**
  * Owns the automation form's target selection: the session-target list and its
  * hydration, single/multi selection mode, every selection transition, base
- * branch state coupled to those transitions, and the label/payload
- * derivations. The form renders from the derived views and never mutates the
- * selection directly.
+ * branch state coupled to those transitions, and the payload derivation. The
+ * form renders from the derived views and never mutates the selection
+ * directly.
  */
 export function useAutomationTargets(
   options: UseAutomationTargetsOptions
-): AutomationTargetSelection {
+): UseAutomationTargetsResult {
   const {
     initialRepositories,
     initialEnvironmentIds,
     multiRepoAllowed,
     repositoryRequired,
     repos,
-    environments,
-    loadingEnvironments,
   } = options;
 
   // The fan-out selection as one ordered list of session targets; repositories
@@ -286,40 +279,12 @@ export function useAutomationTargets(
     [baseBranch, initialRepositories, selectedRepoNames, usesSingleRepository]
   );
 
-  const environmentName = (environmentId: string) =>
-    environments.find((environment) => environment.id === environmentId)?.name ??
-    (loadingEnvironments ? "Loading..." : environmentId);
-  const repositoryLabel = (() => {
-    if (targetCount === 0) return NO_REPOSITORY_LABEL;
-    if (selectedRepoNames.length === 1 && selectedEnvironmentIds.length === 0) {
-      return findRepo(selectedRepoName)?.fullName ?? selectedRepoName;
-    }
-    if (selectedEnvironmentIds.length === 1 && selectedRepoNames.length === 0) {
-      return environmentName(selectedEnvironmentIds[0]);
-    }
-    const parts: string[] = [];
-    if (selectedRepoNames.length > 0) {
-      parts.push(
-        selectedRepoNames.length === 1 ? "1 repository" : `${selectedRepoNames.length} repositories`
-      );
-    }
-    if (selectedEnvironmentIds.length > 0) {
-      parts.push(
-        selectedEnvironmentIds.length === 1
-          ? "1 environment"
-          : `${selectedEnvironmentIds.length} environments`
-      );
-    }
-    return parts.join(" + ");
-  })();
-
   return {
     selectedRepoNames,
     selectedEnvironmentIds,
     targetCount,
     usesSingleRepository,
     selectedRepository,
-    repositoryLabel,
     multipleSelectionEnabled,
     baseBranch,
     setBaseBranch,

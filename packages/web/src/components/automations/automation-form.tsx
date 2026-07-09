@@ -168,7 +168,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     targetCount,
     usesSingleRepository,
     selectedRepository,
-    repositoryLabel,
     multipleSelectionEnabled,
     baseBranch,
     setBaseBranch,
@@ -183,8 +182,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     multiRepoAllowed,
     repositoryRequired,
     repos,
-    environments,
-    loadingEnvironments,
   });
   // Branch options for the sole selected repository (the only branch-pickable shape).
   const { branches, loading: loadingBranches } = useBranches(
@@ -333,6 +330,38 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     if (!query) return environments;
     return environments.filter((environment) => environment.name.toLowerCase().includes(query));
   }, [environments, repositoryRequired, repoQuery]);
+  const environmentName = (environmentId: string) =>
+    environments.find((environment) => environment.id === environmentId)?.name ??
+    (loadingEnvironments ? "Loading..." : environmentId);
+  // Trigger-button label for the current selection, in the repos list's
+  // display casing (the selection stores lowercase keys).
+  const repositoryLabel = (() => {
+    if (targetCount === 0) return NO_REPOSITORY_LABEL;
+    if (selectedRepoNames.length === 1 && selectedEnvironmentIds.length === 0) {
+      const selectedRepoName = selectedRepoNames[0];
+      return (
+        repos.find((repo) => repo.fullName.toLowerCase() === selectedRepoName)?.fullName ??
+        selectedRepoName
+      );
+    }
+    if (selectedEnvironmentIds.length === 1 && selectedRepoNames.length === 0) {
+      return environmentName(selectedEnvironmentIds[0]);
+    }
+    const parts: string[] = [];
+    if (selectedRepoNames.length > 0) {
+      parts.push(
+        selectedRepoNames.length === 1 ? "1 repository" : `${selectedRepoNames.length} repositories`
+      );
+    }
+    if (selectedEnvironmentIds.length > 0) {
+      parts.push(
+        selectedEnvironmentIds.length === 1
+          ? "1 environment"
+          : `${selectedEnvironmentIds.length} environments`
+      );
+    }
+    return parts.join(" + ");
+  })();
   const reasoningConfig = getReasoningConfig(resolvedModel);
 
   return (
