@@ -269,6 +269,87 @@ describe("environment binding", () => {
     });
   });
 
+  it("replaces a repository with an environment in single-select mode", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, repositories: singleRepository }}
+      />
+    );
+
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: /Fullstack/ }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1"],
+      repositories: [],
+    });
+  });
+
+  it("hydrates a mixed repository + environment selection in edit mode", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          ...scheduleBase,
+          repositories: singleRepository,
+          environmentIds: ["env_1"],
+        }}
+      />
+    );
+
+    expect(screen.getByText("1 repository + 1 environment")).toBeInTheDocument();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1"],
+      repositories: [
+        { repoOwner: "open-inspect", repoName: "background-agents", baseBranch: "main" },
+      ],
+    });
+  });
+
+  it("keeps the repository when collapsing a mixed selection to single-select", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={scheduleBase}
+      />
+    );
+
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
+    // Environment first: the collapse still prefers the repository target.
+    fireEvent.click(screen.getByLabelText(/Fullstack/));
+    fireEvent.click(screen.getByLabelText("open-inspect/background-agents"));
+    fireEvent.click(screen.getByRole("button", { name: "Select One" }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: [],
+      repositories: [
+        { repoOwner: "open-inspect", repoName: "background-agents", baseBranch: "main" },
+      ],
+    });
+  });
+
   it("fans out repositories and environments together in multi-select mode", () => {
     environmentsValue = [fullstackEnvironment];
     const onSubmit = vi.fn();
