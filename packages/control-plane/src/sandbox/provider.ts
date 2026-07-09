@@ -66,9 +66,13 @@ export interface CreateSandboxConfig {
   opencodeSessionId?: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
-  /** Opaque provider image ID of a pre-built repo image */
+  /**
+   * Opaque provider image ID of a pre-built image — a repo image for
+   * single-repo sessions, an environment image for environment sessions.
+   * Both boot through the same provider plumbing (FROM_REPO_IMAGE flags).
+   */
   repoImageId?: string | null;
-  /** Git SHA the repo image was built from */
+  /** Git SHA the image was built from (the primary repository's for environment images) */
   repoImageSha?: string | null;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS on Modal. */
   timeoutSeconds?: number;
