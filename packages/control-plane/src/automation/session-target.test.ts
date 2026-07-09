@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveAutomationLaunchTarget } from "./launch-target";
+import { resolveAutomationSessionTarget } from "./session-target";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { HttpError, type RequestContext } from "../routes/shared";
 import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
@@ -76,13 +76,13 @@ function run(overrides?: Partial<AutomationRunRow>): AutomationRunRow {
   };
 }
 
-describe("resolveAutomationLaunchTarget", () => {
+describe("resolveAutomationSessionTarget", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("returns the run's firing-time snapshot for repository runs", async () => {
-    const target = await resolveAutomationLaunchTarget(env, automation(), run(), ctx, log);
+    const target = await resolveAutomationSessionTarget(env, automation(), run(), ctx, log);
 
     expect(target).toEqual({
       repoOwner: "acme",
@@ -95,7 +95,7 @@ describe("resolveAutomationLaunchTarget", () => {
   });
 
   it("returns null fields for repo-less runs", async () => {
-    const target = await resolveAutomationLaunchTarget(
+    const target = await resolveAutomationSessionTarget(
       env,
       automation(),
       run({ repo_owner: null, repo_name: null, repo_id: null, base_branch: null }),
@@ -124,7 +124,7 @@ describe("resolveAutomationLaunchTarget", () => {
     vi.mocked(resolveEnvironmentTarget).mockResolvedValue(environmentInputs);
     vi.mocked(resolveSessionRepositories).mockResolvedValue(repositories);
 
-    const target = await resolveAutomationLaunchTarget(
+    const target = await resolveAutomationSessionTarget(
       env,
       automation({ environment_id: "env_1" }),
       // The environment child is repo-less; its target comes from the binding.
@@ -151,7 +151,7 @@ describe("resolveAutomationLaunchTarget", () => {
     );
 
     await expect(
-      resolveAutomationLaunchTarget(
+      resolveAutomationSessionTarget(
         env,
         automation({ environment_id: "env_gone" }),
         run(),

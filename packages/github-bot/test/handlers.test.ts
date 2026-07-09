@@ -986,7 +986,7 @@ describe("default environment targets", () => {
    * Point the metadata lookup at a default environment and control what the
    * environment fetch returns (null → 404, as for a deleted environment).
    */
-  function mockLaunchTarget(
+  function mockSessionTarget(
     env: Env,
     opts: {
       metadata?: { defaultEnvironmentId?: string } | null;
@@ -1031,7 +1031,7 @@ describe("default environment targets", () => {
   it("launches the default environment when it contains the trigger repo", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, {
+    mockSessionTarget(env, {
       metadata: { defaultEnvironmentId: "env_abc" },
       environment: fullstackEnvironment,
     });
@@ -1064,7 +1064,7 @@ describe("default environment targets", () => {
     }));
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, {
+    mockSessionTarget(env, {
       metadata: { defaultEnvironmentId: "env_abc" },
       environment: fullstackEnvironment,
     });
@@ -1091,7 +1091,7 @@ describe("default environment targets", () => {
     );
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, {
+    mockSessionTarget(env, {
       metadata: { defaultEnvironmentId: "env_abc" },
       environment: fullstackEnvironment,
     });
@@ -1114,7 +1114,7 @@ describe("default environment targets", () => {
     });
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, {
+    mockSessionTarget(env, {
       metadata: { defaultEnvironmentId: "env_abc" },
       environment: fullstackEnvironment,
     });
@@ -1132,7 +1132,7 @@ describe("default environment targets", () => {
   it("falls back to the repo when the environment no longer exists", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, {
+    mockSessionTarget(env, {
       metadata: { defaultEnvironmentId: "env_gone" },
       environment: null,
     });
@@ -1153,7 +1153,7 @@ describe("default environment targets", () => {
   it("falls back to the repo when the environment lacks the trigger repo", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, {
+    mockSessionTarget(env, {
       metadata: { defaultEnvironmentId: "env_abc" },
       environment: {
         ...fullstackEnvironment,
@@ -1181,7 +1181,7 @@ describe("default environment targets", () => {
   it("falls back to the repo when the metadata lookup fails", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, { metadataStatus: 500 });
+    mockSessionTarget(env, { metadataStatus: 500 });
 
     const result = await handleIssueComment(env, log, issueCommentPayload, "trace-env-meta");
 
@@ -1198,7 +1198,7 @@ describe("default environment targets", () => {
   it("membership check is case-insensitive", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
-    mockLaunchTarget(env, {
+    mockSessionTarget(env, {
       metadata: { defaultEnvironmentId: "env_abc" },
       environment: {
         ...fullstackEnvironment,

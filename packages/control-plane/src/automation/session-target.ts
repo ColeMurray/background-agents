@@ -11,7 +11,7 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
  * init input. Scalar fields mirror `repositories[0]` when the list is present
  * (the row-0-mirrors-scalars invariant initializeSession asserts).
  */
-export interface AutomationLaunchTarget {
+export interface AutomationSessionTarget {
   repoOwner: string | null;
   repoName: string | null;
   repoId: number | null;
@@ -22,7 +22,7 @@ export interface AutomationLaunchTarget {
 
 /**
  * Resolve what an automation run's session opens (design §13.3) — the
- * launch-time counterpart of ./repository's firing-time resolution:
+ * session-creation counterpart of ./repository's firing-time resolution:
  *
  * - Environment-bound automation: the environment's full workspace, resolved
  *   here so the session snapshots the member list (§7.6), exactly like the
@@ -32,13 +32,13 @@ export interface AutomationLaunchTarget {
  *   repo-less runs); the automation row's selection may already have been
  *   edited past it.
  */
-export async function resolveAutomationLaunchTarget(
+export async function resolveAutomationSessionTarget(
   env: Env,
   automation: AutomationRow,
   run: AutomationRunRow,
   ctx: RequestContext,
   log: Logger
-): Promise<AutomationLaunchTarget> {
+): Promise<AutomationSessionTarget> {
   if (automation.environment_id) {
     const environmentInputs = await resolveEnvironmentTarget(
       new EnvironmentStore(env.DB),

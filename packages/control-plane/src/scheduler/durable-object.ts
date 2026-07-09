@@ -49,7 +49,7 @@ import type { Env } from "../types";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveAutomationRepositories } from "../automation/repository";
-import { resolveAutomationLaunchTarget } from "../automation/launch-target";
+import { resolveAutomationSessionTarget } from "../automation/session-target";
 import type { RequestContext } from "../routes/shared";
 
 /** Max automations to process per tick (backpressure). */
@@ -1218,9 +1218,9 @@ export class SchedulerDO extends DurableObject<Env> {
 
     // What the session opens — the run's repository snapshot or, for
     // environment-bound automations, the environment's workspace. All target
-    // semantics live in resolveAutomationLaunchTarget; a resolution failure
+    // semantics live in resolveAutomationSessionTarget; a resolution failure
     // throws into launchChild's failure path.
-    const target = await resolveAutomationLaunchTarget(this.env, automation, run, ctx, this.log);
+    const target = await resolveAutomationSessionTarget(this.env, automation, run, ctx, this.log);
 
     // Session-scoped integration settings resolve from the primary member
     // (design §6.2) — same rule as handleCreateSession.

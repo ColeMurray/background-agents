@@ -78,7 +78,7 @@ type RepositorySelectionRequest =
 
 /**
  * Thrown by {@link parseRepositorySelection} and {@link parseEnvironmentBinding}
- * when the launch-target payload is invalid. Route handlers catch it and answer
+ * when the session-target payload is invalid. Route handlers catch it and answer
  * 400 — the parsers stay free of HTTP concerns (mirrors
  * normalizeOptionalRepositoryPair / RepositoryPairValidationError).
  */
