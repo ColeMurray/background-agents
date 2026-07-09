@@ -28,6 +28,8 @@ export interface SecretsWriteResult {
 /**
  * Normalize keys, validate every entry, and enforce the combined-value byte
  * cap. Returns the normalized key → plaintext record ready for encryption.
+ * Rejects inputs where two raw keys normalize to the same key (e.g. `foo`
+ * and `FOO`) rather than letting the last one silently win.
  */
 export function prepareSecretsForWrite(secrets: Record<string, string>): Record<string, string> {
   const normalized: Record<string, string> = {};
@@ -36,6 +38,9 @@ export function prepareSecretsForWrite(secrets: Record<string, string>): Record<
     const key = normalizeKey(rawKey);
     validateKey(key);
     validateValue(value);
+    if (key in normalized) {
+      throw new SecretsValidationError(`Duplicate secret key '${key}' after normalization`);
+    }
     totalValueBytes += new TextEncoder().encode(value).length;
     normalized[key] = value;
   }
