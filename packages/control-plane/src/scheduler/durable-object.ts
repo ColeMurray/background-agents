@@ -20,7 +20,6 @@ import {
   type SlackAutomationEvent,
   type SlackCallbackContext,
   type TriggerConfig,
-  type RepositoryRef,
 } from "@open-inspect/shared";
 import { z } from "zod";
 import {
@@ -50,8 +49,7 @@ import type { Env } from "../types";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveAutomationRepositories } from "../automation/repository";
-import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
-import { EnvironmentStore } from "../db/environments";
+import { resolveAutomationLaunchTarget } from "../automation/launch-target";
 import type { RequestContext } from "../routes/shared";
 
 /** Max automations to process per tick (backpressure). */
@@ -1218,31 +1216,19 @@ export class SchedulerDO extends DurableObject<Env> {
       metrics: createRequestMetrics(),
     };
 
-    // Environment-bound automations launch their single child as an
-    // environment session (design §13.3): the member list resolves at launch
-    // and snapshots into the session (§7.6), exactly like the session-create
-    // route. A resolution failure throws into launchChild's failure path.
-    let repositories: RepositoryRef[] | undefined;
-    if (automation.environment_id) {
-      const envInputs = await resolveEnvironmentTarget(
-        new EnvironmentStore(this.env.DB),
-        automation.environment_id
-      );
-      repositories = await resolveSessionRepositories(this.env, envInputs, ctx, this.log);
-    }
-
-    // The scalar mirror: the environment's primary member, or — for repo runs —
-    // the child's firing-time snapshot (resolved by startInvocation; the
-    // automation row's selection may already have been edited past it).
-    const primary = repositories?.[0];
-    const repoOwner = primary?.repoOwner ?? run.repo_owner;
-    const repoName = primary?.repoName ?? run.repo_name;
-    const repoId = primary?.repoId ?? run.repo_id;
-    const baseBranch = primary?.baseBranch ?? run.base_branch;
+    // What the session opens — the run's repository snapshot or, for
+    // environment-bound automations, the environment's workspace. All target
+    // semantics live in resolveAutomationLaunchTarget; a resolution failure
+    // throws into launchChild's failure path.
+    const target = await resolveAutomationLaunchTarget(this.env, automation, run, ctx, this.log);
 
     // Session-scoped integration settings resolve from the primary member
     // (design §6.2) — same rule as handleCreateSession.
-    const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
+    const scopeMembers =
+      target.repositories ??
+      (target.repoOwner && target.repoName
+        ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
+        : []);
     const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
       this.env.DB,
       scopeMembers
@@ -1252,12 +1238,7 @@ export class SchedulerDO extends DurableObject<Env> {
       this.env,
       {
         sessionId,
-        repoOwner,
-        repoName,
-        repoId,
-        defaultBranch: baseBranch,
-        repositories,
-        environmentId: automation.environment_id,
+        ...target,
         title: `[Auto] ${automation.name}`,
         model: automation.model,
         reasoningEffort: automation.reasoning_effort,

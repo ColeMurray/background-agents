@@ -1,0 +1,66 @@
+import type { RepositoryRef } from "@open-inspect/shared";
+import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
+import type { Env } from "../types";
+import type { Logger } from "../logger";
+import type { RequestContext } from "../routes/shared";
+import { EnvironmentStore } from "../db/environments";
+import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
+
+/**
+ * The repository fields of a run's SessionInitInput, ready to spread into the
+ * init input. Scalar fields mirror `repositories[0]` when the list is present
+ * (the row-0-mirrors-scalars invariant initializeSession asserts).
+ */
+export interface AutomationLaunchTarget {
+  repoOwner: string | null;
+  repoName: string | null;
+  repoId: number | null;
+  defaultBranch: string | null;
+  repositories?: RepositoryRef[];
+  environmentId: string | null;
+}
+
+/**
+ * Resolve what an automation run's session opens (design §13.3) — the
+ * launch-time counterpart of ./repository's firing-time resolution:
+ *
+ * - Environment-bound automation: the environment's full workspace, resolved
+ *   here so the session snapshots the member list (§7.6), exactly like the
+ *   session-create route. Throws HttpError when the environment is gone or a
+ *   member fails to resolve — the caller's launch-failure path owns it.
+ * - Otherwise: the child's firing-time repository snapshot (null fields for
+ *   repo-less runs); the automation row's selection may already have been
+ *   edited past it.
+ */
+export async function resolveAutomationLaunchTarget(
+  env: Env,
+  automation: AutomationRow,
+  run: AutomationRunRow,
+  ctx: RequestContext,
+  log: Logger
+): Promise<AutomationLaunchTarget> {
+  if (automation.environment_id) {
+    const environmentInputs = await resolveEnvironmentTarget(
+      new EnvironmentStore(env.DB),
+      automation.environment_id
+    );
+    const repositories = await resolveSessionRepositories(env, environmentInputs, ctx, log);
+    const primary = repositories[0];
+    return {
+      repoOwner: primary.repoOwner,
+      repoName: primary.repoName,
+      repoId: primary.repoId,
+      defaultBranch: primary.baseBranch,
+      repositories,
+      environmentId: automation.environment_id,
+    };
+  }
+
+  return {
+    repoOwner: run.repo_owner,
+    repoName: run.repo_name,
+    repoId: run.repo_id,
+    defaultBranch: run.base_branch,
+    environmentId: null,
+  };
+}
