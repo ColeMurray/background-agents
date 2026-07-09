@@ -36,12 +36,14 @@ import {
   SettingsIcon,
   AutomationsIcon,
   BranchIcon,
+  BoxIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { APP_SHORT_NAME } from "@/lib/site-config";
 import { formatRepoLabel, formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useEnvironments } from "@/hooks/use-environments";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -219,8 +221,13 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         if (!searchQuery) return true;
         const query = searchQuery.toLowerCase();
         const title = session.title?.toLowerCase() || "";
-        const repo = formatRepoLabel(session.repoOwner, session.repoName).toLowerCase();
-        return title.includes(query) || repo.includes(query);
+        if (title.includes(query)) return true;
+        // Match against every member of the repository set, not just the
+        // primary; scalar fallback covers pre-multi-repo sessions.
+        const repoLabels = session.repositories?.length
+          ? session.repositories.map((repo) => formatRepoLabel(repo.repoOwner, repo.repoName))
+          : [formatRepoLabel(session.repoOwner, session.repoName)];
+        return repoLabels.some((label) => label.toLowerCase().includes(query));
       });
 
     // Sort by updatedAt descending
@@ -659,6 +666,12 @@ function SessionListItem({
     session.repoName,
     session.repositories
   );
+  // Environment provenance chip: resolved by name so a deleted environment
+  // (or one still loading) simply drops the chip instead of showing a raw id.
+  const { environments } = useEnvironments();
+  const environmentName = session.environmentId
+    ? environments.find((environment) => environment.id === session.environmentId)?.name
+    : undefined;
   const displayTitle = session.title || repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
@@ -862,6 +875,13 @@ function SessionListItem({
               <span>{relativeTime}</span>
               <span>·</span>
               <span className="truncate">{repoInfo}</span>
+              {environmentName && (
+                <>
+                  <span>·</span>
+                  <BoxIcon className="w-3 h-3 flex-shrink-0" />
+                  <span className="truncate">{environmentName}</span>
+                </>
+              )}
               {isOrphanChild && (
                 <>
                   <span>·</span>
