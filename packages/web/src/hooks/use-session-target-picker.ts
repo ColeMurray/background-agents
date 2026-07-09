@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
 import useSWR from "swr";
 import type { Environment } from "@open-inspect/shared";
 import type { ComboboxGroup, ComboboxOption } from "@/components/ui/combobox";
@@ -23,7 +24,10 @@ import {
   parseTargetSelectValue,
 } from "@/lib/session-target";
 
-const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
+// Holds the picker's last-selected target as a select value — a repo fullName
+// or an `env:<id>` environment value. The key literal predates environments
+// (it stored only repo names) and is kept so stored repo values keep working.
+const LAST_SELECTED_TARGET_STORAGE_KEY = "open-inspect-last-selected-repo";
 
 interface EnvironmentImageStatusRow {
   environment_id: string;
@@ -84,8 +88,9 @@ export interface SessionTargetSelection {
  * via `pickerProps`; the page keeps model, prompt, and warming.
  */
 export function useSessionTargetPicker(): SessionTargetSelection {
+  const { status: sessionStatus } = useSession();
   const { repos, loading: loadingRepos } = useRepos();
-  const { environments } = useEnvironments();
+  const { environments, loading: loadingEnvironments } = useEnvironments();
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, setSelectedBranch] = useState<string>("");
 
@@ -111,15 +116,35 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     return statusByEnvironment;
   }, [environmentImagesData]);
 
-  // Auto-select repo when repos load
+  // Restore the last-selected target once data loads. This effect commits a
+  // target exactly once (the guard blocks any later correction), so a stored
+  // environment must not fall through to the repo default while environments
+  // are still loading — wait for the fetch to settle before deciding.
   useEffect(() => {
     if (sessionTarget) return;
+    // Both data hooks gate their fetch on the auth session, and report
+    // loading=false while it resolves — deciding in that window would read
+    // empty lists as authoritative (e.g. classify a stored environment as
+    // deleted, or lock in "no repository").
+    if (sessionStatus === "loading") return;
+
+    const storedValue = localStorage.getItem(LAST_SELECTED_TARGET_STORAGE_KEY);
+    const storedTarget = storedValue ? parseTargetSelectValue(storedValue, null) : null;
+
+    if (storedTarget?.kind === "environment") {
+      if (loadingEnvironments) return;
+      if (environments.some((environment) => environment.id === storedTarget.environmentId)) {
+        setSessionTarget(storedTarget);
+        return;
+      }
+      // The stored environment was deleted — fall through to the repo default.
+    }
 
     if (repos.length > 0) {
-      const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
-      const hasLastSelectedRepo = repos.some((repo) => repo.fullName === lastSelectedRepo);
-      const defaultRepo =
-        (hasLastSelectedRepo ? lastSelectedRepo : repos[0].fullName) ?? repos[0].fullName;
+      // A stored `env:<id>` value never matches a fullName, so a deleted
+      // environment lands on repos[0] here like any other stale value.
+      const hasStoredRepo = repos.some((repo) => repo.fullName === storedValue);
+      const defaultRepo = (hasStoredRepo ? storedValue : repos[0].fullName) ?? repos[0].fullName;
       setSessionTarget({ kind: "repo", repoFullName: defaultRepo });
       const repo = repos.find((r) => r.fullName === defaultRepo);
       if (repo) setSelectedBranch(repo.defaultBranch);
@@ -129,11 +154,13 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     if (!loadingRepos) {
       setSessionTarget({ kind: "none" });
     }
-  }, [loadingRepos, repos, sessionTarget]);
+  }, [sessionStatus, loadingRepos, repos, loadingEnvironments, environments, sessionTarget]);
 
+  // Persist launchable, restorable selections: repos and environments. Ad-hoc
+  // lists and "no repository" keep whatever was stored before them.
   useEffect(() => {
-    if (sessionTarget?.kind !== "repo") return;
-    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, sessionTarget.repoFullName);
+    if (sessionTarget?.kind !== "repo" && sessionTarget?.kind !== "environment") return;
+    localStorage.setItem(LAST_SELECTED_TARGET_STORAGE_KEY, getTargetSelectValue(sessionTarget));
   }, [sessionTarget]);
 
   const onTargetSelectValueChange = useCallback(
