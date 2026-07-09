@@ -6,8 +6,7 @@
  */
 
 import { matchRoutingRules } from "@open-inspect/shared";
-import type { RepoConfig } from "../types";
-import type { Env } from "../types";
+import type { Env, RepoConfig } from "../types";
 import { targetValue, type SlackSessionTarget } from "../targets";
 import { getRoutingRules } from "./repos";
 import { getAvailableEnvironments } from "./environments";

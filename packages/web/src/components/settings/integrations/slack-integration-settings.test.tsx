@@ -49,6 +49,7 @@ function setupSWR(opts: {
   environments?: Environment[];
   globalLoading?: boolean;
   reposLoading?: boolean;
+  environmentsLoading?: boolean;
 }) {
   useSWRMock.mockImplementation((key: string) => {
     if (key === "/api/integration-settings/slack") {
@@ -70,6 +71,9 @@ function setupSWR(opts: {
       };
     }
     if (key === "/api/environments") {
+      if (opts.environmentsLoading) {
+        return { data: undefined, isLoading: true };
+      }
       return {
         data: { environments: opts.environments ?? [], total: opts.environments?.length ?? 0 },
         isLoading: false,
@@ -644,6 +648,26 @@ describe("SlackIntegrationSettings", () => {
 
       const section = routingSection();
       expect(within(section).getByText("full-stack")).toBeInTheDocument();
+      expect(within(section).queryByText(/no longer exists/i)).not.toBeInTheDocument();
+    });
+
+    it("does not warn about a stored environment rule while environments are loading", () => {
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            routingRules: [
+              { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
+            ],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+        environmentsLoading: true,
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
       expect(within(section).queryByText(/no longer exists/i)).not.toBeInTheDocument();
     });
 

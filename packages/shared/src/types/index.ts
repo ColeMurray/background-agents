@@ -1264,6 +1264,17 @@ export const MAX_ENVIRONMENT_NAME_LENGTH = 200;
 export const MAX_ENVIRONMENT_DESCRIPTION_LENGTH = 2000;
 
 /**
+ * Shape check for stable environment ids (`env_` + generated suffix). Loose on
+ * the suffix alphabet — ids are opaque and the generator may change — while
+ * rejecting obviously-wrong values like display names or "owner/name" pairs.
+ * The single stance on id shape: everything that gates on "is this an
+ * environment id" (e.g. routing-rule validation) goes through this.
+ */
+export function isEnvironmentId(value: string): boolean {
+  return /^env_[A-Za-z0-9_-]+$/.test(value);
+}
+
+/**
  * An environment's repositories share the session list contract: non-empty,
  * deduplicated by owner/name AND by repoName (checkout paths are
  * /workspace/{repoName}, so a name collision is rejected), and capped at

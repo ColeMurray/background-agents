@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vitest";
-import type { RepoConfig, SlackSessionTarget } from "./types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Env, RepoConfig, SlackSessionTarget } from "./types";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
+
+const { mockGetAvailableRepos, mockGetEnvironmentById } = vi.hoisted(() => ({
+  mockGetAvailableRepos: vi.fn(),
+  mockGetEnvironmentById: vi.fn(),
+}));
+
+vi.mock("./classifier/repos", async (importOriginal) => ({
+  ...((await importOriginal()) as object),
+  getAvailableRepos: mockGetAvailableRepos,
+}));
+
+vi.mock("./classifier/environments", () => ({
+  getEnvironmentById: mockGetEnvironmentById,
+}));
+
 import { filterReposByQuery } from "./classifier/repos";
 import {
   MAX_REPO_QUICK_PICKS,
@@ -10,6 +25,7 @@ import {
   buildTargetQuickPickButtons,
   baseActionId,
   quickPickActionId,
+  resolveTargetValue,
 } from "./repo-clarification";
 
 function repo(fullName: string, displayName?: string): RepoConfig {
@@ -138,6 +154,35 @@ describe("buildTargetQuickPickButtons", () => {
     ]);
 
     expect(buttons.map((button) => button.text.text)).toEqual(["acme/web", "web (environment)"]);
+  });
+});
+
+describe("resolveTargetValue", () => {
+  const env = {} as Env;
+  const target = repoTarget("acme/web");
+  const envTarget = environmentTarget("env_abc123", "full-stack");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAvailableRepos.mockResolvedValue([target.kind === "repository" ? target.repo : null]);
+    mockGetEnvironmentById.mockResolvedValue(undefined);
+  });
+
+  it("resolves a repository value against the live repo list", async () => {
+    expect(await resolveTargetValue(env, "acme/web")).toEqual(target);
+  });
+
+  it("resolves an env: value against the live environments", async () => {
+    mockGetEnvironmentById.mockResolvedValue(
+      envTarget.kind === "environment" ? envTarget.environment : null
+    );
+    expect(await resolveTargetValue(env, "env:env_abc123")).toEqual(envTarget);
+    expect(mockGetEnvironmentById).toHaveBeenCalledWith(env, "env_abc123", undefined);
+  });
+
+  it("returns null for a repository or environment that no longer exists", async () => {
+    expect(await resolveTargetValue(env, "acme/gone")).toBeNull();
+    expect(await resolveTargetValue(env, "env:env_deleted")).toBeNull();
   });
 });
 

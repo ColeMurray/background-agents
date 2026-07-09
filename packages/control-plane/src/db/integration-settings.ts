@@ -1,4 +1,5 @@
 import {
+  isEnvironmentId,
   isValidModel,
   isValidReasoningEffort,
   INTEGRATION_DEFINITIONS,
@@ -424,12 +425,14 @@ export class IntegrationSettingsStore {
       }
       if (targetType === "environment") {
         // The stable environment id, never the rename-able display name.
-        if (typeof target !== "string" || !/^env_[A-Za-z0-9]+$/.test(target.trim())) {
+        if (typeof target !== "string" || !isEnvironmentId(target.trim())) {
           throw new IntegrationSettingsValidationError(
             "routing rule target must be an environment id (env_…) when targetType is environment"
           );
         }
-      } else if (typeof target !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(target.trim())) {
+        // The owner segment excludes ":" (GitHub forbids it) so a repository
+        // target can never collide with the bots' "env:<id>" value encoding.
+      } else if (typeof target !== "string" || !/^[^/\s:]+\/[^/\s]+$/.test(target.trim())) {
         throw new IntegrationSettingsValidationError(
           "routing rule target must be a repository in owner/name form"
         );

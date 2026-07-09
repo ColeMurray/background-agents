@@ -18,7 +18,7 @@ import {
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ENVIRONMENTS_KEY } from "@/hooks/use-environments";
-import { environmentOptionValue, parseTargetSelectValue } from "@/lib/session-target";
+import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/session-target";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
@@ -120,6 +120,10 @@ export function SlackIntegrationSettings() {
   const repoOverrides = repoSettingsData?.repos ?? [];
   const availableRepos = reposData?.repos ?? [];
   const availableEnvironments = environmentsData?.environments ?? [];
+  // Stale-target warnings must not fire while a list is still loading — an
+  // empty-because-loading list is not an authoritative "target is gone".
+  const reposLoaded = reposData !== undefined;
+  const environmentsLoaded = environmentsData !== undefined;
 
   return (
     <div>
@@ -146,6 +150,8 @@ export function SlackIntegrationSettings() {
         settings={settings}
         availableRepos={availableRepos}
         availableEnvironments={availableEnvironments}
+        reposLoaded={reposLoaded}
+        environmentsLoaded={environmentsLoaded}
       />
 
       <Section
@@ -568,9 +574,9 @@ function toDraftRoutingRules(rules: SlackRoutingRule[] | undefined): DraftRoutin
 function toStoredRoutingRule(draft: DraftRoutingRule): SlackRoutingRule {
   const keyword = draft.keyword.trim();
   const value = draft.target.trim();
-  const parsed = value ? parseTargetSelectValue(value, null) : null;
-  return parsed?.kind === "environment"
-    ? { keyword, target: parsed.environmentId, targetType: "environment" }
+  const environmentId = parseEnvironmentOptionValue(value);
+  return environmentId
+    ? { keyword, target: environmentId, targetType: "environment" }
     : { keyword, target: value };
 }
 
@@ -578,10 +584,15 @@ function RoutingRulesSection({
   settings,
   availableRepos,
   availableEnvironments,
+  reposLoaded,
+  environmentsLoaded,
 }: {
   settings: SlackGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
   availableEnvironments: Environment[];
+  /** False while the list is loading — suppresses stale-target warnings. */
+  reposLoaded: boolean;
+  environmentsLoaded: boolean;
 }) {
   const [rules, setRules] = useState<DraftRoutingRule[]>(() =>
     toDraftRoutingRules(settings?.defaults?.routingRules)
@@ -675,14 +686,14 @@ function RoutingRulesSection({
         <div className="space-y-3 mb-4">
           {rules.map((rule) => {
             const rawTarget = rule.target.trim();
-            const parsedTarget = rawTarget ? parseTargetSelectValue(rawTarget, null) : null;
-            const isEnvironmentTarget = parsedTarget?.kind === "environment";
+            const environmentId = parseEnvironmentOptionValue(rawTarget);
+            const isEnvironmentTarget = environmentId !== null;
             const selectValue = isEnvironmentTarget ? rawTarget : rawTarget.toLowerCase();
             const staleTarget =
               rawTarget !== "" &&
               (isEnvironmentTarget
-                ? !availableEnvironments.some((e) => e.id === parsedTarget.environmentId)
-                : !accessibleRepos.has(selectValue));
+                ? environmentsLoaded && !availableEnvironments.some((e) => e.id === environmentId)
+                : reposLoaded && !accessibleRepos.has(selectValue));
             const duplicateKeyword =
               rule.keyword.trim() !== "" &&
               (keywordCounts.get(rule.keyword.trim().toLowerCase()) ?? 0) > 1;
@@ -732,7 +743,13 @@ function RoutingRulesSection({
                       {/* A target that is no longer available must still render so
                           the user can see and re-point it (Radix Select needs a
                           matching item). */}
-                      {staleTarget && <SelectItem value={selectValue}>{rawTarget}</SelectItem>}
+                      {staleTarget && (
+                        <SelectItem value={selectValue}>
+                          {isEnvironmentTarget
+                            ? `Deleted environment (${environmentId})`
+                            : rawTarget}
+                        </SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                   <Button variant="destructive" size="sm" onClick={() => removeRule(rule.id)}>

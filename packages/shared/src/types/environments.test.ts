@@ -1,9 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   createEnvironmentInputSchema,
+  isEnvironmentId,
   updateEnvironmentInputSchema,
   MAX_ENVIRONMENT_NAME_LENGTH,
 } from "./index";
+
+describe("isEnvironmentId", () => {
+  it("accepts env_-prefixed ids, staying loose on the suffix alphabet", () => {
+    expect(isEnvironmentId("env_a1b2c3")).toBe(true);
+    expect(isEnvironmentId("env_A1-b2_c3")).toBe(true);
+  });
+
+  it("rejects names, owner/name pairs, and bare prefixes", () => {
+    expect(isEnvironmentId("full-stack")).toBe(false);
+    expect(isEnvironmentId("acme/web")).toBe(false);
+    expect(isEnvironmentId("env_")).toBe(false);
+    expect(isEnvironmentId("env:env_a1b2")).toBe(false);
+  });
+});
 
 describe("createEnvironmentInputSchema", () => {
   it("parses a valid environment and normalizes member identifiers", () => {

@@ -330,7 +330,9 @@ export async function buildRepoDescriptions(env: Env, traceId?: string): Promise
 }
 
 /**
- * Clear local caches (for testing or forced refresh).
+ * Clear this module's in-memory caches — repos and routing rules (for testing
+ * or forced refresh). Environments have their own clear in
+ * classifier/environments.ts.
  */
 export function clearLocalCache(): void {
   localCache = null;

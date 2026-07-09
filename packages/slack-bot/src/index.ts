@@ -21,13 +21,12 @@ import {
   type CreateSessionResponse,
   type SendPromptResponse,
 } from "@open-inspect/shared";
-import { resolveUserNames } from "@open-inspect/shared";
+import { escapeMrkdwnText, resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import {
   branchPreferenceRepo,
   buildSessionTargetRequestFields,
-  resolveTargetValue,
   targetId,
   targetLabel,
   type SlackSessionTarget,
@@ -46,6 +45,7 @@ import {
   baseActionId,
   getRepoClarificationOptions,
   buildRepoClarificationBlocks,
+  resolveTargetValue,
 } from "./repo-clarification";
 import { getResolvedUserPreferences } from "./user-preferences";
 import { getAvailableModels, getSlackDefaultModel } from "./app-home/models";
@@ -968,7 +968,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
   // We have a confident target match - acknowledge and start session
   const { target } = result;
-  const label = targetLabel(target);
+  const label = escapeMrkdwnText(targetLabel(target));
   const threadKey = threadTs || ts;
 
   // Post initial acknowledgment
@@ -1161,7 +1161,7 @@ async function handleTargetSelection(
     return;
   }
 
-  const label = targetLabel(target);
+  const label = escapeMrkdwnText(targetLabel(target));
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
 
   // Post acknowledgment

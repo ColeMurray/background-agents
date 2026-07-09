@@ -8,8 +8,17 @@ import {
   getTargetConfigKey,
   getTargetSelectValue,
   isSessionTargetLaunchable,
+  parseEnvironmentOptionValue,
   parseTargetSelectValue,
 } from "./session-target";
+
+describe("parseEnvironmentOptionValue", () => {
+  it("round-trips environmentOptionValue and returns null for anything else", () => {
+    expect(parseEnvironmentOptionValue(environmentOptionValue("env_a1"))).toBe("env_a1");
+    expect(parseEnvironmentOptionValue("acme/web")).toBeNull();
+    expect(parseEnvironmentOptionValue(NO_REPOSITORY_OPTION_VALUE)).toBeNull();
+  });
+});
 
 describe("buildSessionTargetRequestFields", () => {
   it("emits exactly one target mode per kind (createSessionRequestSchema exclusivity)", () => {

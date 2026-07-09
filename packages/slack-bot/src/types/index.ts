@@ -57,6 +57,11 @@ export interface ThreadContext {
   previousMessages?: string[];
 }
 
+import type { ConfidenceLevel } from "@open-inspect/shared";
+// targets.ts is a pure leaf (types + policy functions, no I/O), so the types
+// barrel can depend on it without a cycle.
+import type { SlackSessionTarget } from "../targets";
+
 /**
  * Result of target classification. Unlike the shared repo-only
  * `ClassificationResult` (still used by the Linear bot), the Slack bot
@@ -72,9 +77,7 @@ export interface ClassificationResult {
 }
 
 export type { ConfidenceLevel, Environment } from "@open-inspect/shared";
-export type { SlackSessionTarget, SlackTargetRef } from "../targets";
-import type { ConfidenceLevel } from "@open-inspect/shared";
-import type { SlackSessionTarget } from "../targets";
+export type { SlackSessionTarget } from "../targets";
 
 /**
  * Slack event types.

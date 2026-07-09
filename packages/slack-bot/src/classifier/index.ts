@@ -9,8 +9,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
 import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./repos";
 import { resolveRoutingRuleTargets } from "./routing";
-import type { ConfidenceLevel } from "@open-inspect/shared";
-import { targetLabel, targetValue, type SlackSessionTarget } from "../targets";
+import { escapeMrkdwnText, type ConfidenceLevel } from "@open-inspect/shared";
+import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
@@ -208,13 +208,14 @@ export class RepoClassifier {
       const { target, keyword } = resolved[0];
       log.info("classifier.routing_rule_match", {
         trace_id: traceId,
-        target_id: targetValue(target),
+        target_id: targetId(target),
         keyword,
       });
       return {
         target,
         confidence: "high",
-        reasoning: `Matched routing rule "${keyword}" → ${targetLabel(target)}`,
+        // Reasoning renders as mrkdwn; keyword and label are both user text.
+        reasoning: `Matched routing rule "${escapeMrkdwnText(keyword)}" → ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
       };
     }

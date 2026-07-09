@@ -8,13 +8,11 @@
  *
  * This module owns the target-kind policy (value encoding, labels, launch
  * request fields, branch-preference applicability) so the message handler
- * stays orchestration-only.
+ * stays orchestration-only. It is a pure leaf — no I/O — so anything,
+ * including the types barrel, can import it.
  */
 
-import { escapeMrkdwnText, type Environment, type RepoConfig } from "@open-inspect/shared";
-import type { Env } from "./types";
-import { getAvailableRepos } from "./classifier/repos";
-import { getEnvironmentById } from "./classifier/environments";
+import type { Environment, RepoConfig } from "@open-inspect/shared";
 
 export type SlackSessionTarget =
   | { kind: "repository"; repo: RepoConfig }
@@ -53,35 +51,14 @@ export function parseTargetValue(value: string): SlackTargetRef {
 }
 
 /**
- * Resolve a Slack option/button value to a launchable target against the live
- * lists, or null when it no longer exists (deleted environment, repo access
- * revoked, stale message).
- */
-export async function resolveTargetValue(
-  env: Env,
-  value: string,
-  traceId?: string
-): Promise<SlackSessionTarget | null> {
-  const ref = parseTargetValue(value);
-  if (ref.kind === "environment") {
-    const environment = await getEnvironmentById(env, ref.environmentId, traceId);
-    return environment ? { kind: "environment", environment } : null;
-  }
-  const repos = await getAvailableRepos(env, traceId);
-  const repo = repos.find((r) => r.id === ref.repoId);
-  return repo ? { kind: "repository", repo } : null;
-}
-
-/**
- * Canonical label for Slack `mrkdwn` text and callback contexts: the repo
- * fullName, or the environment name escaped for literal display. Environment
- * names are arbitrary user text (a name like `<!channel>` must never become a
- * live broadcast mention); repo fullNames are charset-constrained by GitHub.
+ * Canonical display label: the repo fullName or the environment name, **raw**.
+ * Environment names are arbitrary user text — every `mrkdwn` render site must
+ * escape this with `escapeMrkdwnText` (a name like `<!channel>` must never
+ * become a live broadcast mention). Stored records (thread sessions, callback
+ * contexts) carry the raw label so the encoding stays a render concern.
  */
 export function targetLabel(target: SlackSessionTarget): string {
-  return target.kind === "environment"
-    ? escapeMrkdwnText(target.environment.name)
-    : target.repo.fullName;
+  return target.kind === "environment" ? target.environment.name : target.repo.fullName;
 }
 
 /** Stable id for storage: the repo id ("owner/name") or environment id ("env_…"). */

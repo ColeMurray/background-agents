@@ -311,6 +311,21 @@ describe("RepoClassifier", () => {
       expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 
+    it("escapes the environment name in the mrkdwn reasoning", async () => {
+      mockGetRoutingRules.mockResolvedValue([
+        { keyword: "deploy", target: "env_abc123", targetType: "environment" },
+      ]);
+      mockGetAvailableEnvironments.mockResolvedValue([
+        { ...TEST_ENVIRONMENT, name: "<!channel> & co" },
+      ]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("deploy the app");
+
+      expect(result.reasoning).toContain("&lt;!channel&gt; &amp; co");
+      expect(result.reasoning).not.toContain("<!channel>");
+    });
+
     it("does not fetch environments when no matched rule targets one", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
 

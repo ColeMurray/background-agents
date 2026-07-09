@@ -9,9 +9,10 @@
  */
 
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
+import { getEnvironmentById } from "./classifier/environments";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { plainTextOption } from "./slack-options";
-import { targetValue, type SlackSessionTarget } from "./targets";
+import { parseTargetValue, targetValue, type SlackSessionTarget } from "./targets";
 import type {
   SlackActionsBlock,
   SlackButtonElement,
@@ -65,6 +66,27 @@ function toRepoSelectOption(repo: RepoConfig): SlackSelectOption {
     description: plainTextOption(repo.description),
     value: repo.id,
   };
+}
+
+/**
+ * Resolve a selected option/button value back to a launchable target against
+ * the live lists, or null when it no longer exists (deleted environment, repo
+ * access revoked, stale message). Lives here because this module mints the
+ * values it resolves.
+ */
+export async function resolveTargetValue(
+  env: Env,
+  value: string,
+  traceId?: string
+): Promise<SlackSessionTarget | null> {
+  const ref = parseTargetValue(value);
+  if (ref.kind === "environment") {
+    const environment = await getEnvironmentById(env, ref.environmentId, traceId);
+    return environment ? { kind: "environment", environment } : null;
+  }
+  const repos = await getAvailableRepos(env, traceId);
+  const repo = repos.find((r) => r.id === ref.repoId);
+  return repo ? { kind: "repository", repo } : null;
 }
 
 /**

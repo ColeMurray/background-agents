@@ -1097,6 +1097,16 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("rejects a repository target whose owner contains a colon", async () => {
+      // "env:foo/bar" must not be storable as a repository — it would collide
+      // with the bots' env:<id> option-value encoding.
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "frontend", target: "env:foo/bar" }] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("rejects an unknown routing rule targetType", async () => {
       await expect(
         store.setGlobal("slack", {

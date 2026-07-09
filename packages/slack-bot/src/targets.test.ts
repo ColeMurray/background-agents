@@ -1,24 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Env, Environment, RepoConfig } from "./types";
-
-const { mockGetAvailableRepos, mockGetEnvironmentById } = vi.hoisted(() => ({
-  mockGetAvailableRepos: vi.fn(),
-  mockGetEnvironmentById: vi.fn(),
-}));
-
-vi.mock("./classifier/repos", () => ({
-  getAvailableRepos: mockGetAvailableRepos,
-}));
-
-vi.mock("./classifier/environments", () => ({
-  getEnvironmentById: mockGetEnvironmentById,
-}));
-
+import { describe, expect, it } from "vitest";
+import type { Environment, RepoConfig } from "./types";
 import {
   branchPreferenceRepo,
   buildSessionTargetRequestFields,
   parseTargetValue,
-  resolveTargetValue,
   targetId,
   targetLabel,
   targetValue,
@@ -67,16 +52,14 @@ describe("target values", () => {
 });
 
 describe("targetLabel", () => {
-  it("returns the repo fullName as-is", () => {
+  it("returns the raw fullName or environment name — escaping is a render concern", () => {
     expect(targetLabel(repoTarget)).toBe("acme/web");
-  });
-
-  it("escapes environment names for mrkdwn so they cannot inject mentions", () => {
     const hostile: SlackSessionTarget = {
       kind: "environment",
-      environment: { ...ENVIRONMENT, name: "<!channel> & <@U123>" },
+      environment: { ...ENVIRONMENT, name: "<!channel> & co" },
     };
-    expect(targetLabel(hostile)).toBe("&lt;!channel&gt; &amp; &lt;@U123&gt;");
+    // Stored records carry the raw name; mrkdwn render sites escape it.
+    expect(targetLabel(hostile)).toBe("<!channel> & co");
   });
 });
 
@@ -107,30 +90,5 @@ describe("branchPreferenceRepo", () => {
   it("returns the repo for repository targets and null for environments", () => {
     expect(branchPreferenceRepo(repoTarget)).toBe(REPO);
     expect(branchPreferenceRepo(environmentTarget)).toBeNull();
-  });
-});
-
-describe("resolveTargetValue", () => {
-  const env = {} as Env;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockGetAvailableRepos.mockResolvedValue([REPO]);
-    mockGetEnvironmentById.mockResolvedValue(undefined);
-  });
-
-  it("resolves a repository value against the live repo list", async () => {
-    expect(await resolveTargetValue(env, "acme/web")).toEqual(repoTarget);
-  });
-
-  it("resolves an env: value against the live environments", async () => {
-    mockGetEnvironmentById.mockResolvedValue(ENVIRONMENT);
-    expect(await resolveTargetValue(env, "env:env_abc123")).toEqual(environmentTarget);
-    expect(mockGetEnvironmentById).toHaveBeenCalledWith(env, "env_abc123", undefined);
-  });
-
-  it("returns null for a repository or environment that no longer exists", async () => {
-    expect(await resolveTargetValue(env, "acme/gone")).toBeNull();
-    expect(await resolveTargetValue(env, "env:env_deleted")).toBeNull();
   });
 });
