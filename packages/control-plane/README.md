@@ -112,6 +112,29 @@ for that provider.
 | `/repos/:owner/:name/secrets`      | PUT    | Upsert secrets       |
 | `/repos/:owner/:name/secrets/:key` | DELETE | Delete a secret      |
 
+### Environments
+
+An environment is a named, ordered repository set (1–10 repositories, first = primary) that sessions
+can be launched from. `POST /sessions` accepts exactly one of the scalar repo fields
+(`repoOwner`/`repoName`), a `repositories` list (ad-hoc multi-repository session), or an
+`environmentId`.
+
+| Endpoint                           | Method | Description                                        |
+| ---------------------------------- | ------ | -------------------------------------------------- |
+| `/environments`                    | GET    | List environments                                  |
+| `/environments`                    | POST   | Create environment                                 |
+| `/environments/:id`                | GET    | Get environment with repositories                  |
+| `/environments/:id`                | PUT    | Update (name, description, repositories, prebuild) |
+| `/environments/:id`                | DELETE | Delete environment (sessions keep their snapshot)  |
+| `/environments/:id/secrets`        | GET    | List environment secret keys                       |
+| `/environments/:id/secrets`        | PUT    | Upsert environment secrets                         |
+| `/environments/:id/secrets/:key`   | DELETE | Delete an environment secret                       |
+| `/environments/:id/secrets/import` | POST   | Copy selected keys from a repository of the env    |
+
+Environment image builds (prebuilds of the whole environment) are managed via
+`/environment-images/status`, `/environment-images/trigger/:id`, and the build callback routes,
+mirroring the repo-image endpoints.
+
 ### Automations
 
 | Endpoint                          | Method | Description                                                             |
@@ -216,9 +239,22 @@ Each session gets its own SQLite database with:
 
 See `src/session/schema.ts` for full schema.
 
-## D1 Schema (automations)
+## D1 Schema (sessions, environments, automations)
 
-Automations live in the shared D1 database (migrations in `terraform/d1/migrations/`):
+Shared state lives in the D1 database (migrations in `terraform/d1/migrations/`). Beyond the
+sessions index, repo metadata, and encrypted secrets:
+
+- `session_repositories`: a session's ordered repository list (position 0 = primary; single-repo
+  sessions also mirror the primary onto the session row's scalar columns).
+- `environments`: named repository sets (name, description, prebuild flag).
+- `environment_repositories`: the environment's ordered repository list with per-repository base
+  branch.
+- `environment_secrets`: environment-scoped secrets, mirroring `repo_secrets` (same encryption key
+  and caps).
+- `environment_images`: prebuilt environment image builds — provider artifact id, per-repository
+  SHAs, a repositories fingerprint for spawn matching, and the runtime version floor check.
+
+Automations:
 
 - `automations`: trigger, schedule, model, instructions, failure counter. The repository selection
   lives in `automation_repositories`, not on this row.

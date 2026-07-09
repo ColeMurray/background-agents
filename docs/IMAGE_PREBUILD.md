@@ -1,9 +1,16 @@
 # Pre-Built Images
 
 Pre-built images make your sessions start faster. Instead of cloning your repository and installing
-dependencies every time you create a session, Open-Inspect keeps a ready-to-go repo image artifact
-for your repo that's refreshed automatically. New sessions start from that artifact and only need to
-pull the latest commits — typically cutting startup from minutes to seconds.
+dependencies every time you create a session, Open-Inspect keeps a ready-to-go image artifact that's
+refreshed automatically. New sessions start from that artifact and only need to pull the latest
+commits — typically cutting startup from minutes to seconds.
+
+Images come in two flavors:
+
+- **Repository images** — one repository, enabled per-repo under **Settings > Images**.
+- **Environment images** — a prebuilt of an entire [environment](HOW_IT_WORKS.md#environments) (an
+  ordered set of up to 10 repositories), enabled per-environment under **Settings > Environments**.
+  See [Environment Images](#environment-images) below.
 
 ---
 
@@ -24,9 +31,11 @@ last few minutes of changes.
 
 ## Getting Started
 
-Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "vercel"`, or `sandbox_provider = "opencomputer"`. Daytona deployments use
-persistent sandboxes instead, so the Images settings page is disabled for that backend.
+Pre-built images (repository and environment) are available when the deployment uses
+`sandbox_provider = "modal"`, `sandbox_provider = "vercel"`, or `sandbox_provider = "opencomputer"`.
+The artifact is stored per provider as a Modal image, Vercel snapshot, or OpenComputer checkpoint.
+Daytona deployments use persistent sandboxes instead, so the image settings are disabled for that
+backend.
 
 ### Enable for a Repository
 
@@ -113,6 +122,60 @@ start.
 
 ---
 
+## Environment Images
+
+An [environment](HOW_IT_WORKS.md#environments) can be prebuilt as a unit, so sessions launched from
+it start with **all** of its repositories cloned and set up.
+
+### Enabling
+
+1. Open **Settings > Environments** and create or edit an environment
+2. Turn on the **prebuild** toggle
+3. Saving the environment triggers the first build immediately; you can also click the rebuild
+   button on the environment row at any time
+
+The environments list shows the same status indicators as repository images (Ready / Building /
+Failed with the error message), and the new-session picker annotates prebuild-enabled environments
+with "prebuilt" or "prebuild building".
+
+### How environment builds work
+
+A build clones every repository in the environment at its configured base branch and runs each
+repository's `.openinspect/setup.sh` **sequentially, in position order**. A failing setup script
+fails the whole build, and the error names the repository. Build-time secrets are exactly what the
+environment's sessions get: global + environment secrets
+([launch-unit scoping](SECRETS.md#which-secrets-a-session-receives)).
+
+### When environment images rebuild
+
+The same 30-minute scheduler that refreshes repository images checks each prebuild-enabled
+environment and rebuilds when any of the following holds:
+
+- **No current image** — the environment was just created, its repository set or a base branch was
+  edited, or the previous build failed
+- **New commits** — any repository's base branch has moved since the ready image was built
+- **Outdated runtime** — the image was built on a sandbox runtime older than the current
+  compatibility floor
+
+In addition, **changing the environment's secrets immediately retires the existing ready image and
+triggers a rebuild**, so rotated values can't keep serving from an old image. The scheduler starts a
+bounded number of environment builds per tick; anything beyond the cap is picked up on the next
+tick.
+
+### What sessions get
+
+A session launched from the environment boots from the ready image when the image matches the
+session's own repository snapshot (same repositories, same order, same base branches) — setup
+scripts are skipped and each repository just syncs to its latest commits. If there's no matching
+ready image (still building, failed, or the environment was edited after the session was created),
+the session falls back to the normal startup flow — you're never blocked on a build.
+
+**Ad-hoc multi-repository sessions never use prebuilt images.** Picking "Multiple repositories" in
+the new-session picker always does a full clone + setup for each repository. If you use the same set
+regularly, save it as an environment and enable prebuilds.
+
+---
+
 ## Troubleshooting
 
 ### Build keeps failing
@@ -123,7 +186,9 @@ Check the error message shown in the Images settings page. Common causes:
   script for commands that might not work in the sandbox environment (Debian Linux with Node.js,
   Python, and common dev tools).
 - **Timeout** — Builds have a 30-minute limit. If your setup takes longer, look for ways to optimize
-  it (e.g., use faster package managers, reduce dependencies).
+  it (e.g., use faster package managers, reduce dependencies). Environment builds run one setup
+  script per repository, so large environments approach the limit sooner; the timeout for an
+  environment build comes from the **primary** (first) repository's build-timeout setting.
 
 The system automatically retries on the next scheduled run, so transient failures (network issues,
 temporary service outages) resolve themselves.

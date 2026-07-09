@@ -146,10 +146,21 @@ Sessions start near-instantly through multiple layers of warming:
 
 - **Filesystem snapshots** — After each prompt, sandbox state is saved; follow-up sessions restore
   instead of re-cloning
-- **Pre-built repo images** — Toggle per-repo in Settings; rebuilt every 30 minutes with latest
-  commits and dependencies
+- **Pre-built images** — Toggle per-repo (Settings > Images) or per-environment (Settings >
+  Environments); rebuilt every 30 minutes with latest commits and dependencies
 - **Proactive warming** — Sandbox begins spinning up as soon as you start typing, before you hit
   Enter
+
+### Multi-Repository Sessions & Environments
+
+One session can work across several repositories in a single sandbox:
+
+- **Ad-hoc sets** — Pick up to 10 repositories in the new-session picker; each is cloned side by
+  side and the agent can make coordinated changes and open a PR per repository
+- **Environments** — Save a repository set as a named environment with its own secrets scope and
+  optional prebuilt images, then launch it from the picker like any repository
+- See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#environments) for the model and
+  [docs/IMAGE_PREBUILD.md](docs/IMAGE_PREBUILD.md#environment-images) for environment prebuilds
 
 ### Multiplayer Sessions
 
@@ -225,8 +236,8 @@ Every session runs in an isolated sandbox backend with a full development enviro
 - **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels. URLs are available
   in-sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs
   ([details](docs/HOW_IT_WORKS.md#tunnel-urls-inside-the-sandbox))
-- **Repo secrets:** AES-256-GCM encrypted, scoped per-repo or globally, injected as env vars at
-  spawn time. Supports bulk `.env` paste import
+- **Secrets:** AES-256-GCM encrypted, scoped globally, per-repo, or per-environment, injected as env
+  vars at spawn time. Supports bulk `.env` paste import
 
 ### Sub-Task Spawning
 
