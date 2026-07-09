@@ -480,6 +480,142 @@ describe("useSessionSocket", () => {
     expect(mutateMock).not.toHaveBeenCalled();
   });
 
+  it("routes a repo-scoped session_branch to the matching member, mirroring the scalar only for the primary", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    const multiRepoState = createSessionState({
+      branchName: "open-inspect/session-1",
+      repositories: [
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          repoId: 1,
+          baseBranch: "main",
+          branchName: "open-inspect/session-1",
+          baseSha: null,
+          currentSha: null,
+          prUrl: null,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "api",
+          repoId: 2,
+          baseBranch: "main",
+          branchName: null,
+          baseSha: null,
+          currentSha: null,
+          prUrl: null,
+        },
+      ],
+    });
+
+    act(() => {
+      socket.open();
+      socket.receive({ ...createSubscribedMessage(), state: multiRepoState });
+    });
+
+    // Secondary push: update the member, leave the scalar (primary) branch alone.
+    act(() => {
+      socket.receive({
+        type: "session_branch",
+        branchName: "open-inspect/session-1-api",
+        repoOwner: "acme",
+        repoName: "api",
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.repositories?.[1].branchName).toBe(
+        "open-inspect/session-1-api"
+      );
+    });
+    expect(result.current.sessionState?.repositories?.[0].branchName).toBe(
+      "open-inspect/session-1"
+    );
+    expect(result.current.sessionState?.branchName).toBe("open-inspect/session-1");
+
+    // Primary push: update the member and mirror to the scalar.
+    act(() => {
+      socket.receive({
+        type: "session_branch",
+        branchName: "open-inspect/session-1-web",
+        repoOwner: "acme",
+        repoName: "web",
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.branchName).toBe("open-inspect/session-1-web");
+    });
+    expect(result.current.sessionState?.repositories?.[0].branchName).toBe(
+      "open-inspect/session-1-web"
+    );
+  });
+
+  it("ignores an unscoped session_branch for a multi-repo session", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    const multiRepoState = createSessionState({
+      branchName: "open-inspect/session-1",
+      repositories: [
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          repoId: 1,
+          baseBranch: "main",
+          branchName: "open-inspect/session-1",
+          baseSha: null,
+          currentSha: null,
+          prUrl: null,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "api",
+          repoId: 2,
+          baseBranch: "main",
+          branchName: null,
+          baseSha: null,
+          currentSha: null,
+          prUrl: null,
+        },
+      ],
+    });
+
+    act(() => {
+      socket.open();
+      socket.receive({ ...createSubscribedMessage(), state: multiRepoState });
+    });
+
+    // An identity-less update on a multi-repo session is anomalous — it must not
+    // be attributed to the primary or clobber the scalar branch.
+    act(() => {
+      socket.receive({ type: "session_branch", branchName: "open-inspect/session-1-orphan" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.repositories).toBeTruthy();
+    });
+    expect(result.current.sessionState?.branchName).toBe("open-inspect/session-1");
+    expect(result.current.sessionState?.repositories?.[0].branchName).toBe(
+      "open-inspect/session-1"
+    );
+    expect(result.current.sessionState?.repositories?.[1].branchName).toBeNull();
+  });
+
   it("updates sessionState.sandboxDashboardUrl from sandbox_dashboard_url", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 

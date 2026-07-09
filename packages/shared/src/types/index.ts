@@ -138,6 +138,18 @@ export interface Session {
   spawnDepth: number;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Ordered member list; [0] = primary. Absent on scalar-era sessions —
+   * consumers fall back to the scalar repoOwner/repoName. Populated by the
+   * session list index (SessionEntry.repositories).
+   */
+  repositories?: SessionListRepository[];
+  /**
+   * The environment this session was launched from (provenance), or null.
+   * Populated by the session list index (SessionEntry.environmentId); PR-12
+   * renders it.
+   */
+  environmentId?: string | null;
 }
 
 // Message in a session
@@ -448,6 +460,14 @@ export interface SessionState {
    * consumers default to [] / synthesize from repoOwner/repoName.
    */
   repositories?: SessionRepositoryState[];
+  /**
+   * The environment this session was launched from (provenance), or null for
+   * repo-launched/ad-hoc sessions. `environmentName` is resolved live and is
+   * null when the environment has since been deleted (design §7.6) — the UI
+   * renders "environment deleted" in that case.
+   */
+  environmentId?: string | null;
+  environmentName?: string | null;
 }
 
 // Participant presence info
@@ -498,6 +518,41 @@ export const sessionRepositoryStateSchema = z.object({
 });
 
 export type SessionRepositoryState = z.infer<typeof sessionRepositoryStateSchema>;
+
+/**
+ * A session's repository-set member as carried on the session list contract
+ * (Session.repositories / control-plane SessionEntry.repositories). The
+ * identity subset of SessionRepositoryState — no git state, since the list
+ * index doesn't store it. Ordered; [0] = primary (mirrored into the scalar
+ * repoOwner/repoName columns). Control-plane's SessionIndexRepository aliases
+ * this so the wire shape has a single home.
+ */
+export interface SessionListRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
+
+/**
+ * Whether a PR artifact belongs to a given session member. Artifacts written
+ * before multi-repo support carry no repo identity (`artifactRepo === null`)
+ * and by construction belong to the session's primary. Identity is compared
+ * case-insensitively, matching repo-identity comparison elsewhere. This is the
+ * single home of that convention — the control-plane per-repo prUrl projection
+ * (findPrArtifactForRepo) and the web per-repo PR chips both go through here.
+ */
+export function prArtifactBelongsToRepo(
+  artifactRepo: { repoOwner: string; repoName: string } | null,
+  targetRepo: { repoOwner: string; repoName: string },
+  targetIsPrimary: boolean
+): boolean {
+  if (!artifactRepo) return targetIsPrimary;
+  return (
+    artifactRepo.repoOwner.toLowerCase() === targetRepo.repoOwner.toLowerCase() &&
+    artifactRepo.repoName.toLowerCase() === targetRepo.repoName.toLowerCase()
+  );
+}
 
 /**
  * One repository entry on a create/update request. Identifiers are normalized
@@ -596,6 +651,10 @@ const sessionStateSchema = z.object({
    * session; synthesize from repoOwner/repoName when rendering).
    */
   repositories: z.array(sessionRepositoryStateSchema).optional(),
+  // Environment provenance (design §7.6). environmentName resolves live —
+  // null when the environment was deleted after launch.
+  environmentId: z.string().nullable().optional(),
+  environmentName: z.string().nullable().optional(),
 });
 
 const participantPresenceSchema = z.object({
@@ -863,20 +922,32 @@ function hasRepositoryForBranch(data: CreateSessionRepositoryFields): boolean {
   return hasRepositoryIdentifier(data.repoOwner) || !data.branch?.trim();
 }
 
-function hasExclusiveRepositoryTarget(
-  data: CreateSessionRepositoryFields & { repositories?: unknown[] | null }
-): boolean {
-  // Presence-based, not length-based: any provided array selects the
-  // repository-list mode (sessionRepositoriesInputSchema separately rejects
-  // empty lists, so [] can never smuggle scalar fields through).
-  if (!data.repositories) {
-    return true;
-  }
+function hasScalarRepositoryTarget(data: CreateSessionRepositoryFields): boolean {
   return (
-    !hasRepositoryIdentifier(data.repoOwner) &&
-    !hasRepositoryIdentifier(data.repoName) &&
-    !data.branch?.trim()
+    hasRepositoryIdentifier(data.repoOwner) ||
+    hasRepositoryIdentifier(data.repoName) ||
+    Boolean(data.branch?.trim())
   );
+}
+
+function hasExclusiveSessionTarget(
+  data: CreateSessionRepositoryFields & {
+    repositories?: unknown[] | null;
+    environmentId?: string | null;
+  }
+): boolean {
+  // At most one target mode may be selected: a named environment
+  // (environmentId), an ad-hoc repository list (repositories), or the scalar
+  // repoOwner/repoName/branch form. Presence-based, not length-based: any
+  // provided array selects the list mode (sessionRepositoriesInputSchema
+  // separately rejects empty lists, so [] can never smuggle another mode
+  // through).
+  const activeModes = [
+    Boolean(data.repositories),
+    hasRepositoryIdentifier(data.environmentId),
+    hasScalarRepositoryTarget(data),
+  ].filter(Boolean).length;
+  return activeModes <= 1;
 }
 
 // API response types
@@ -889,9 +960,15 @@ const createSessionRequestBaseSchema = z.object({
   branch: z.string().optional(),
   /**
    * Ordered member list for multi-repo sessions ([0] = primary). Mutually
-   * exclusive with the scalar repoOwner/repoName/branch fields.
+   * exclusive with the scalar repoOwner/repoName/branch fields and environmentId.
    */
   repositories: sessionRepositoriesInputSchema.optional(),
+  /**
+   * Launch from a named environment: its snapshotted repositories become the
+   * session's members and sessions.environment_id records provenance (design
+   * §5.5/§7.6). Mutually exclusive with repositories and the scalar fields.
+   */
+  environmentId: z.string().trim().min(1).nullish(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema
@@ -903,8 +980,8 @@ export const createSessionRequestSchema = createSessionRequestBaseSchema
     message: "branch requires repoOwner and repoName",
     path: ["branch"],
   })
-  .refine(hasExclusiveRepositoryTarget, {
-    message: "repositories is mutually exclusive with repoOwner/repoName/branch",
+  .refine(hasExclusiveSessionTarget, {
+    message: "environmentId, repositories, and repoOwner/repoName/branch are mutually exclusive",
     path: ["repositories"],
   });
 
@@ -940,8 +1017,8 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     message: "branch requires repoOwner and repoName",
     path: ["branch"],
   })
-  .refine(hasExclusiveRepositoryTarget, {
-    message: "repositories is mutually exclusive with repoOwner/repoName/branch",
+  .refine(hasExclusiveSessionTarget, {
+    message: "environmentId, repositories, and repoOwner/repoName/branch are mutually exclusive",
     path: ["repositories"],
   });
 
@@ -1192,6 +1269,68 @@ export function toRepositoryRef(
 export const automationRepositoryInputSchema = repositoryInputSchema;
 export type AutomationRepositoryInput = RepositoryInput;
 export const automationRepositoriesInputSchema = repositoriesInputSchema;
+
+// ==================== Environments ====================
+
+/** Maximum characters in an environment's display name. */
+export const MAX_ENVIRONMENT_NAME_LENGTH = 200;
+/** Maximum characters in an environment's description. */
+export const MAX_ENVIRONMENT_DESCRIPTION_LENGTH = 2000;
+
+/**
+ * An environment's repositories share the session list contract: non-empty,
+ * deduplicated by owner/name AND by repoName (checkout paths are
+ * /workspace/{repoName}, so a name collision is rejected), and capped at
+ * MAX_TARGET_REPOSITORIES. An environment is a prebuildable repository set, so
+ * it inherits exactly the session's list rules.
+ */
+export const environmentRepositoriesInputSchema = sessionRepositoriesInputSchema;
+
+export const createEnvironmentInputSchema = z.object({
+  name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH),
+  description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
+  prebuildEnabled: z.boolean().optional(),
+  repositories: environmentRepositoriesInputSchema,
+});
+
+export const updateEnvironmentInputSchema = z.object({
+  name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH).optional(),
+  description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
+  prebuildEnabled: z.boolean().optional(),
+  repositories: environmentRepositoriesInputSchema.optional(),
+});
+
+export type CreateEnvironmentInput = z.input<typeof createEnvironmentInputSchema>;
+export type UpdateEnvironmentInput = z.input<typeof updateEnvironmentInputSchema>;
+
+/**
+ * A resolved environment repository. baseBranch is non-null (the DDL column is
+ * NOT NULL — resolution fills the repo's default branch when the request omits
+ * it); repoId is nullable to tolerate rows written before a repo resolved.
+ */
+export interface EnvironmentRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
+
+/** An environment: a named, prebuildable repository set (design §7.1). */
+export interface Environment {
+  id: string;
+  name: string;
+  description: string | null;
+  prebuildEnabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  /** Ordered repositories; [0] is the primary (sandbox/code-server settings source). */
+  repositories: EnvironmentRepository[];
+}
+
+export interface ListEnvironmentsResponse {
+  environments: Environment[];
+  total: number;
+}
 
 export interface Automation {
   id: string;

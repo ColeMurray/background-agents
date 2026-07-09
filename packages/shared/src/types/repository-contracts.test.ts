@@ -5,6 +5,7 @@ import {
   MAX_AUTOMATION_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
+  prArtifactBelongsToRepo,
   sandboxEventSchema,
   serverMessageSchema,
   sessionRepositoriesInputSchema,
@@ -132,6 +133,42 @@ describe("createSessionRequestSchema repositories", () => {
   });
 });
 
+describe("createSessionRequestSchema environmentId (three-way exclusivity)", () => {
+  it("accepts an environmentId without any repository target", () => {
+    const result = createSessionRequestSchema.safeParse({ environmentId: "env_abc123" });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects environmentId combined with scalar repo fields", () => {
+    const result = createSessionRequestSchema.safeParse({
+      environmentId: "env_abc123",
+      repoOwner: "acme",
+      repoName: "app",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects environmentId combined with a scalar branch", () => {
+    const result = createSessionRequestSchema.safeParse({
+      environmentId: "env_abc123",
+      branch: "main",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects environmentId combined with a repositories list", () => {
+    const result = createSessionRequestSchema.safeParse({
+      environmentId: "env_abc123",
+      repositories: [{ repoOwner: "acme", repoName: "frontend" }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("push event schemas", () => {
   it("accepts legacy events without repo identity", () => {
     const result = sandboxEventSchema.safeParse({
@@ -236,5 +273,24 @@ describe("toRepositoryRef", () => {
     expect(() =>
       toRepositoryRef({ repoOwner: "acme", repoName: "app", repoId: null, baseBranch: null })
     ).toThrow(/not resolved/);
+  });
+});
+
+describe("prArtifactBelongsToRepo", () => {
+  const web = { repoOwner: "acme", repoName: "web" };
+  const api = { repoOwner: "acme", repoName: "api" };
+
+  it("attributes an identity-less artifact to the primary only", () => {
+    expect(prArtifactBelongsToRepo(null, web, true)).toBe(true);
+    expect(prArtifactBelongsToRepo(null, api, false)).toBe(false);
+  });
+
+  it("matches on identity regardless of primary flag", () => {
+    expect(prArtifactBelongsToRepo(web, web, false)).toBe(true);
+    expect(prArtifactBelongsToRepo(web, api, true)).toBe(false);
+  });
+
+  it("compares identity case-insensitively", () => {
+    expect(prArtifactBelongsToRepo({ repoOwner: "Acme", repoName: "Web" }, web, false)).toBe(true);
   });
 });

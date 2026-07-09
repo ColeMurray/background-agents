@@ -4,7 +4,8 @@ import {
   type RepositoryRef,
 } from "@open-inspect/shared";
 import { encryptTokenPair, generateId } from "../auth/crypto";
-import { resolveSessionRepositories } from "../repos/resolve";
+import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
+import { EnvironmentStore } from "../db/environments";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -15,10 +16,7 @@ import {
   resolveGitHubEnrichment,
   resolveProviderIdentity,
 } from "../session/identity";
-import {
-  resolveCodeServerEnabled,
-  resolveSandboxSettings,
-} from "../session/integration-settings-resolution";
+import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { CreateSessionResponse, Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
@@ -75,11 +73,26 @@ async function handleCreateSession(
   let repoOwner: string | null = null;
   let repoName: string | null = null;
   let repositories: RepositoryRef[] | undefined;
-  if (body.repositories) {
-    // List mode (mutually exclusive with the scalar fields by schema). The
-    // primary entry is mirrored into the scalar columns so filters, settings
-    // resolution, and pre-list consumers keep working unchanged.
+  let environmentId: string | null = null;
+  // Environment and ad-hoc list modes both produce a resolved member list;
+  // scalar mode stays a single lookup. The three are mutually exclusive by
+  // schema (hasExclusiveSessionTarget).
+  if (body.environmentId) {
+    // Snapshot the environment's members and resolve them like any other list
+    // (design §7.6); environment_id records provenance on the session.
+    const envInputs = await resolveEnvironmentTarget(
+      new EnvironmentStore(env.DB),
+      body.environmentId
+    );
+    repositories = await resolveSessionRepositories(env, envInputs, ctx, logger);
+    environmentId = body.environmentId;
+  } else if (body.repositories) {
     repositories = await resolveSessionRepositories(env, body.repositories, ctx, logger);
+  }
+
+  if (repositories) {
+    // The primary entry is mirrored into the scalar columns so filters,
+    // settings resolution, and pre-list consumers keep working unchanged.
     const primary = repositories[0];
     repoOwner = primary.repoOwner;
     repoName = primary.repoName;
@@ -176,11 +189,14 @@ async function handleCreateSession(
       ? body.reasoningEffort
       : null;
 
-  // Resolve code-server integration setting and sandbox settings for this repo
-  const [codeServerEnabled, sandboxSettings] = await Promise.all([
-    resolveCodeServerEnabled(env.DB, repoOwner, repoName),
-    resolveSandboxSettings(env.DB, repoOwner, repoName),
-  ]);
+  // Session-scoped integration settings resolve from the primary member (design
+  // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
+  // two are the same repo by the row-0-mirrors-scalars invariant.
+  const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
+  const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+    env.DB,
+    scopeMembers
+  );
 
   const sessionId = generateId();
 
@@ -192,6 +208,7 @@ async function handleCreateSession(
     defaultBranch,
     branch: body.branch,
     repositories,
+    environmentId,
     title: body.title,
     model,
     reasoningEffort,

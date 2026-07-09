@@ -65,13 +65,29 @@ class RepoImageBuildCallback:
             logger=log,
         )
 
-    async def report_success(self, *, base_sha: str, build_duration_seconds: float) -> bool:
-        """Report a successful repo-image build."""
+    async def report_success(
+        self,
+        *,
+        base_sha: str,
+        build_duration_seconds: float,
+        repository_shas: list[dict[str, str]] | None = None,
+        runtime_version: str = "",
+    ) -> bool:
+        """Report a successful image build.
+
+        repository_shas ([{repoOwner, repoName, baseSha}]) and runtime_version are
+        required by environment-image registration (design §7.3) and ignored
+        by the repo-image callback route.
+        """
         payload: dict[str, Any] = {
             "build_id": self.build_id,
             "base_sha": base_sha,
             "build_duration_seconds": round(build_duration_seconds, 3),
         }
+        if repository_shas:
+            payload["repository_shas"] = repository_shas
+        if runtime_version:
+            payload["runtime_version"] = runtime_version
         if self.provider_session_id:
             payload["provider_session_id"] = self.provider_session_id
 

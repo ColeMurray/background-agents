@@ -1,17 +1,13 @@
-import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
+import type { SessionListRepository, SessionStatus, SpawnSource } from "@open-inspect/shared";
 
 /**
  * One member of a session's repository set — the identity subset of the
  * shared SessionRepositoryState (no git state; D1 doesn't store it).
  * Ordered — array position is the persisted `position` column ([0] =
- * primary, mirrored into the scalar repo_owner/repo_name columns).
+ * primary, mirrored into the scalar repo_owner/repo_name columns). Aliases
+ * the shared wire type so Session.repositories and this share one shape.
  */
-export interface SessionIndexRepository {
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  baseBranch: string;
-}
+export type SessionIndexRepository = SessionListRepository;
 
 export interface SessionEntry {
   id: string;
@@ -40,6 +36,11 @@ export interface SessionEntry {
    * consumers synthesize from repoOwner/repoName.
    */
   repositories?: SessionIndexRepository[];
+  /**
+   * The environment this session was launched from (provenance), or null for
+   * repo-launched/ad-hoc sessions. PR-12 renders it on the session list.
+   */
+  environmentId?: string | null;
 }
 
 interface SessionRepositoryRow {
@@ -71,6 +72,7 @@ interface SessionRow {
   active_duration_ms: number;
   message_count: number;
   pr_count: number;
+  environment_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -111,6 +113,7 @@ function toEntry(row: SessionRow): SessionEntry {
     activeDurationMs: row.active_duration_ms,
     messageCount: row.message_count,
     prCount: row.pr_count,
+    environmentId: row.environment_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -148,8 +151,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -167,6 +170,7 @@ export class SessionIndexStore {
         session.automationRunId ?? null,
         session.scmLogin ?? null,
         session.userId ?? null,
+        session.environmentId ?? null,
         session.createdAt,
         session.updatedAt
       );

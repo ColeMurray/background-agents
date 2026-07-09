@@ -30,6 +30,12 @@ export interface SessionInitInput {
    * one-entry list is synthesized from the scalar fields.
    */
   repositories?: RepositoryRef[];
+  /**
+   * The environment this session was launched from (design §7.6). Null for
+   * repo-launched/ad-hoc sessions. Recorded as provenance; the members are
+   * already snapshotted into `repositories`.
+   */
+  environmentId?: string | null;
 
   // Session config
   title?: string;
@@ -128,6 +134,7 @@ export async function initializeSession(
     reasoningEffort: input.reasoningEffort,
     baseBranch,
     repositories,
+    environmentId: input.environmentId ?? null,
     status: "created",
     parentSessionId: input.parentSessionId,
     spawnSource: input.spawnSource,
@@ -164,6 +171,7 @@ export async function initializeSession(
           defaultBranch,
           branch,
           repositories,
+          environmentId: input.environmentId ?? null,
           title: input.title,
           model: input.model,
           reasoningEffort: input.reasoningEffort,

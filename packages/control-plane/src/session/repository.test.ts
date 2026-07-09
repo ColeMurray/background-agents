@@ -121,6 +121,7 @@ describe("SessionRepository", () => {
         0,
         0,
         null,
+        null,
         1000,
         2000,
       ]);
@@ -268,7 +269,7 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("getSessionRepositories", () => {
+  describe("getSessionRepositoryRows", () => {
     it("returns rows ordered by position", () => {
       const rows = [
         { position: 0, repo_owner: "acme", repo_name: "frontend" },
@@ -276,11 +277,11 @@ describe("SessionRepository", () => {
       ];
       mock.setData(`SELECT * FROM session_repositories ORDER BY position`, rows);
 
-      expect(repo.getSessionRepositories()).toEqual(rows);
+      expect(repo.getSessionRepositoryRows()).toEqual(rows);
     });
 
     it("returns an empty list for pre-feature sessions", () => {
-      expect(repo.getSessionRepositories()).toEqual([]);
+      expect(repo.getSessionRepositoryRows()).toEqual([]);
     });
   });
 

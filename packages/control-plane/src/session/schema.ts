@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS session (
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   CHECK (
@@ -434,6 +435,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 32,
+    description: "Add environment_id to session (launch environment provenance)",
+    run: `ALTER TABLE session ADD COLUMN environment_id TEXT`,
+  },
+  {
+    id: 33,
     description: "Create uploads table",
     run: UPLOADS_TABLE_SQL,
   },

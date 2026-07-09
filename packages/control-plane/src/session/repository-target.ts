@@ -17,89 +17,135 @@ export function repoIdentityEquals(a: RepoIdentity, b: RepoIdentity): boolean {
   );
 }
 
-export type SessionRepositoryTargetResolution =
-  | {
-      ok: true;
-      repoOwner: string;
-      repoName: string;
-      /** The matched member row; null for sessions predating member rows. */
-      memberRow: SessionRepositoryRow | null;
-      /** Whether the target is the session's primary (scalar-mirror) repo. */
-      isPrimary: boolean;
-    }
-  | { ok: false; reason: "half_specified" | "ambiguous" | "not_member"; error: string };
+/** One member repository of a session, with its role and backing storage. */
+export interface SessionRepositoryEntry {
+  repoOwner: string;
+  repoName: string;
+  position: number;
+  /**
+   * The entry's base branch: the row's, or the scalar mirror's for
+   * synthesized entries. Null only for legacy sessions without a stored
+   * base branch — consumers apply their own default ("main" for state and
+   * spawn, the repo's default branch for PR creation).
+   */
+  baseBranch: string | null;
+  /** Whether this member is the session's primary (scalar-mirror) repo. */
+  isPrimary: boolean;
+  /** Backing member row; null when synthesized from the scalar mirror. */
+  row: SessionRepositoryRow | null;
+}
+
+/**
+ * Build a session's member list: its rows, or — for sessions predating the
+ * member table — a one-entry list synthesized from the scalar mirror. The
+ * single home of that fallback rule. Primary means identity-equal to the
+ * scalar mirror (the mirror is what legacy consumers read), which coincides
+ * with position 0 by the row-0-mirrors-scalars invariant.
+ */
+export function buildSessionRepositories(
+  scalarRepo: RepoIdentity & { baseBranch?: string | null },
+  rows: SessionRepositoryRow[]
+): SessionRepositoryEntry[] {
+  if (rows.length === 0) {
+    return [
+      {
+        repoOwner: scalarRepo.repoOwner,
+        repoName: scalarRepo.repoName,
+        position: 0,
+        baseBranch: scalarRepo.baseBranch ?? null,
+        isPrimary: true,
+        row: null,
+      },
+    ];
+  }
+  return rows.map((row) => ({
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    position: row.position,
+    baseBranch: row.base_branch,
+    isPrimary: repoIdentityEquals(
+      { repoOwner: row.repo_owner, repoName: row.repo_name },
+      scalarRepo
+    ),
+    row,
+  }));
+}
+
+/** The requested repo names a repository outside the session's member list. */
+export class RepositoryNotMemberError extends Error {
+  constructor(requested: RepoIdentity) {
+    super(`Repository ${requested.repoOwner}/${requested.repoName} is not part of this session`);
+    this.name = "RepositoryNotMemberError";
+  }
+}
+
+/** No repo was requested and the session has more than one member. */
+export class AmbiguousRepositoryTargetError extends Error {
+  constructor(members: SessionRepositoryEntry[]) {
+    const memberList = members.map((member) => `${member.repoOwner}/${member.repoName}`).join(", ");
+    super(
+      `This session spans multiple repositories — specify repoOwner and repoName (one of: ${memberList})`
+    );
+    this.name = "AmbiguousRepositoryTargetError";
+  }
+}
 
 /**
  * Resolve a requested target repository against a session's member list.
- * The single model for PR/push target resolution — normalization (via
- * normalizeOptionalRepositoryPair), membership, and primary fallback live
- * here so callers only translate the typed result into their error shape.
- * Naming a repo outside the session is "not_member": the PR route is
- * reachable with sandbox auth, so membership is a security boundary, not
- * just input validation.
+ * The single model for PR/push target resolution. Matching is
+ * case-insensitive (via normalizeOptionalRepositoryPair); the returned
+ * member carries the list's canonical casing.
  *
- * Sessions predating member rows resolve against the scalar mirror alone.
- * An unspecified target is only valid when the session has a sole member.
- * Matching is case-insensitive; the returned identity carries the member
- * list's canonical casing.
+ * Throws instead of returning an error shape — callers own the mapping:
+ * - RepositoryPairValidationError (propagated from the shared helper) when
+ *   only one of repoOwner/repoName is given;
+ * - AmbiguousRepositoryTargetError when no repo is requested and the
+ *   session has several members;
+ * - RepositoryNotMemberError when the requested repo is not a member — a
+ *   security boundary, not just input validation: the PR route is reachable
+ *   with sandbox auth.
+ *
+ * `members` must be non-empty (callers reject repo-less sessions first).
  */
-export function resolveSessionRepositoryTarget(input: {
-  requested: { repoOwner?: string | null; repoName?: string | null };
-  scalarRepo: RepoIdentity;
-  memberRows: SessionRepositoryRow[];
-}): SessionRepositoryTargetResolution {
-  let requested: RepoIdentity | null;
-  try {
-    requested = normalizeOptionalRepositoryPair(input.requested);
-  } catch (error) {
-    if (error instanceof RepositoryPairValidationError) {
-      return { ok: false, reason: "half_specified", error: error.message };
-    }
-    throw error;
+export function resolveSessionRepositoryTarget(
+  requested: { repoOwner?: string | null; repoName?: string | null },
+  members: SessionRepositoryEntry[]
+): SessionRepositoryEntry {
+  if (members.length === 0) {
+    throw new Error("Session has no member repositories");
   }
 
-  const members: Array<{ identity: RepoIdentity; row: SessionRepositoryRow | null }> =
-    input.memberRows.length > 0
-      ? input.memberRows.map((row) => ({
-          identity: { repoOwner: row.repo_owner, repoName: row.repo_name },
-          row,
-        }))
-      : [{ identity: input.scalarRepo, row: null }];
-
-  if (!requested) {
+  const pair = normalizeOptionalRepositoryPair(requested);
+  if (!pair) {
     if (members.length > 1) {
-      const memberList = members
-        .map((member) => `${member.identity.repoOwner}/${member.identity.repoName}`)
-        .join(", ");
-      return {
-        ok: false,
-        reason: "ambiguous",
-        error: `This session spans multiple repositories — specify repoOwner and repoName (one of: ${memberList})`,
-      };
+      throw new AmbiguousRepositoryTargetError(members);
     }
-    const [sole] = members;
-    return {
-      ok: true,
-      repoOwner: sole.identity.repoOwner,
-      repoName: sole.identity.repoName,
-      memberRow: sole.row,
-      isPrimary: repoIdentityEquals(sole.identity, input.scalarRepo),
-    };
+    return members[0];
   }
 
-  const match = members.find((member) => repoIdentityEquals(member.identity, requested));
+  const match = members.find((member) => repoIdentityEquals(member, pair));
   if (!match) {
-    return {
-      ok: false,
-      reason: "not_member",
-      error: `Repository ${requested.repoOwner}/${requested.repoName} is not part of this session`,
-    };
+    throw new RepositoryNotMemberError(pair);
   }
-  return {
-    ok: true,
-    repoOwner: match.identity.repoOwner,
-    repoName: match.identity.repoName,
-    memberRow: match.row,
-    isPrimary: repoIdentityEquals(match.identity, input.scalarRepo),
-  };
+  return match;
+}
+
+/**
+ * Map a resolveSessionRepositoryTarget throw to its status/message shape,
+ * or null for unrelated errors (callers rethrow those). Shared by the HTTP
+ * handler and the PR service so the two mappings cannot drift — 403 for
+ * non-membership (the security boundary), 400 for a malformed or ambiguous
+ * target.
+ */
+export function mapRepositoryTargetError(error: unknown): { status: number; error: string } | null {
+  if (error instanceof RepositoryNotMemberError) {
+    return { status: 403, error: error.message };
+  }
+  if (
+    error instanceof AmbiguousRepositoryTargetError ||
+    error instanceof RepositoryPairValidationError
+  ) {
+    return { status: 400, error: error.message };
+  }
+  return null;
 }

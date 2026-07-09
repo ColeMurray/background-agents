@@ -3,6 +3,7 @@ import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
 import * as branchResolution from "../source-control/branch-resolution";
 import type { SessionRepositoryRow } from "./repository";
+import { buildSessionRepositories } from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
 import {
   PullRequestCreationClaims,
@@ -45,6 +46,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    environment_id: null,
     created_at: 1,
     updated_at: 1,
     ...overrides,
@@ -123,7 +125,15 @@ function createTestHarness() {
 
   const repository: PullRequestRepository = {
     getSession: () => session,
-    getSessionRepositories: () => [...repositoryRows],
+    // Mirrors SessionRepository.getSessionRepositories: members derive from the
+    // session scalars plus whatever rows the test seeds.
+    getSessionRepositories: () =>
+      session?.repo_owner && session.repo_name
+        ? buildSessionRepositories(
+            { repoOwner: session.repo_owner, repoName: session.repo_name },
+            repositoryRows
+          )
+        : [],
     updateSessionBranch: vi.fn((sessionId: string, branchName: string) => {
       if (session && session.id === sessionId) {
         session = { ...session, branch_name: branchName };

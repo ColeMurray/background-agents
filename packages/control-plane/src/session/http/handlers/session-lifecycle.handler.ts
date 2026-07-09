@@ -34,6 +34,8 @@ interface InitRequest {
    * one-entry list for scalar callers) and an empty list for repo-less ones.
    */
   repositories?: RepositoryRef[];
+  /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
+  environmentId?: string | null;
   title?: string;
   model?: string;
   reasoningEffort?: string;
@@ -196,6 +198,7 @@ export function createSessionLifecycleHandler(
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
         sandboxSettings: body.sandboxSettings ? JSON.stringify(body.sandboxSettings) : null,
+        environmentId: body.environmentId ?? null,
         createdAt: now,
         updatedAt: now,
       });

@@ -1,5 +1,6 @@
 """Tests for the image build scheduler (cron)."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from src.scheduler.image_builder import (
     _git_ls_remote_sha,
     _should_rebuild,
+    _should_rebuild_environment,
 )
 
 
@@ -175,6 +177,103 @@ class TestShouldRebuild:
         assert result is True
 
 
+def _environment(fingerprint="fp-current", repositories=None):
+    return {
+        "id": "env_1",
+        "name": "Flagship",
+        "repositoriesFingerprint": fingerprint,
+        "repositories": repositories
+        or [
+            {"repoOwner": "acme", "repoName": "web", "baseBranch": "main"},
+            {"repoOwner": "acme", "repoName": "api", "baseBranch": "develop"},
+        ],
+    }
+
+
+def _environment_image(**overrides):
+    image = {
+        "id": "envimg-1",
+        "environment_id": "env_1",
+        "status": "ready",
+        "repositories_fingerprint": "fp-current",
+        "repository_shas": json.dumps(
+            [
+                {"repoOwner": "acme", "repoName": "web", "baseSha": "sha-web"},
+                {"repoOwner": "acme", "repoName": "api", "baseSha": "sha-api"},
+            ]
+        ),
+        "runtime_version": "v53-list-native-runtime",
+    }
+    image.update(overrides)
+    return image
+
+
+class TestShouldRebuildEnvironment:
+    """Test the _should_rebuild_environment trigger logic (design §7.3)."""
+
+    def _ls_remote(self, shas_by_repo):
+        def lookup(repo_owner, repo_name, ref, clone_token):
+            return shas_by_repo.get(f"{repo_owner}/{repo_name}")
+
+        return lookup
+
+    def test_rebuild_when_no_ready_image(self):
+        """Trigger 1: no images at all → rebuild."""
+        assert _should_rebuild_environment(_environment(), [], 53, "") is True
+
+    def test_rebuild_when_fingerprint_mismatch(self):
+        """Trigger 1: ready image for an older repository set → rebuild."""
+        images = [_environment_image(repositories_fingerprint="fp-old")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_skip_when_building(self):
+        """Per-environment concurrency 1: in-flight build → skip."""
+        images = [_environment_image(status="building")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is False
+
+    def test_rebuild_when_runtime_below_floor(self):
+        """Trigger 3: baked runtime below the compatibility floor → rebuild."""
+        images = [_environment_image(runtime_version="v52-old")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_rebuild_when_runtime_unparseable(self):
+        """Trigger 3 fails closed: unparseable runtime_version → rebuild."""
+        images = [_environment_image(runtime_version="not-a-version")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_rebuild_when_repository_shas_malformed(self):
+        """Malformed provenance means drift is undetectable → rebuild."""
+        images = [_environment_image(repository_shas="not-json")]
+        assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_rebuild_when_repository_branch_drifts(self):
+        """Trigger 2: any repository's branch tip moved → rebuild."""
+        images = [_environment_image()]
+        with patch(
+            "src.scheduler.image_builder._git_ls_remote_sha",
+            side_effect=self._ls_remote({"acme/web": "sha-web", "acme/api": "sha-api-NEW"}),
+        ):
+            assert _should_rebuild_environment(_environment(), images, 53, "") is True
+
+    def test_skip_when_all_repositories_match(self):
+        """All shas match, runtime fine, fingerprint matches → skip."""
+        images = [_environment_image()]
+        with patch(
+            "src.scheduler.image_builder._git_ls_remote_sha",
+            side_effect=self._ls_remote({"acme/web": "sha-web", "acme/api": "sha-api"}),
+        ):
+            assert _should_rebuild_environment(_environment(), images, 53, "") is False
+
+    def test_ls_remote_failure_is_not_drift(self):
+        """A transient lookup failure must not cause rebuild storms."""
+        images = [_environment_image()]
+        with patch(
+            "src.scheduler.image_builder._git_ls_remote_sha",
+            side_effect=self._ls_remote({"acme/web": "sha-web", "acme/api": None}),
+        ):
+            assert _should_rebuild_environment(_environment(), images, 53, "") is False
+
+
 class TestRebuildRepoImages:
     """Test the rebuild_repo_images cron function (integration-level with mocks)."""
 
@@ -191,27 +290,56 @@ class TestRebuildRepoImages:
 
     @pytest.mark.asyncio
     async def test_skips_when_no_enabled_repos(self):
-        """Should return early when no repos have image building enabled."""
+        """Repo pass skips on empty enabled repos; the environment pass still runs."""
         env = {
             "CONTROL_PLANE_URL": "https://cp.test",
             "MODAL_API_SECRET": "test-secret",
         }
 
-        mock_enabled = {"repos": []}
+        async def mock_get_side_effect(url, **kwargs):
+            if "enabled-repos" in url:
+                return {"repos": []}
+            if "environment-images/enabled" in url:
+                return {"environments": [], "minRuntimeVersion": 53}
+            return {}
 
         with (
             patch.dict("os.environ", env, clear=False),
             patch(
                 "src.scheduler.image_builder._api_get",
                 new_callable=AsyncMock,
-                return_value=mock_enabled,
+                side_effect=mock_get_side_effect,
             ) as mock_get,
+            patch(
+                "src.scheduler.image_builder._api_post",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "markedFailed": 0, "deleted": 0},
+            ) as mock_post,
+            patch(
+                "sandbox_runtime.auth.github_app.generate_installation_token",
+                return_value="gh-token",
+            ),
         ):
             from src.scheduler.image_builder import rebuild_repo_images
 
             await rebuild_repo_images.local()
 
-        mock_get.assert_called_once_with("https://cp.test/repo-images/enabled-repos")
+        # The repo pass stopped at the empty list: no repo status fetch, no
+        # repo maintenance calls.
+        assert [c for c in mock_get.call_args_list if "repo-images/status" in str(c)] == []
+        assert [c for c in mock_post.call_args_list if "repo-images/" in str(c)] == []
+
+        # The environment pass still ran its full skeleton.
+        env_enabled = [c for c in mock_get.call_args_list if "environment-images/enabled" in str(c)]
+        assert len(env_enabled) == 1
+        env_stale = [
+            c for c in mock_post.call_args_list if "environment-images/mark-stale" in str(c)
+        ]
+        assert len(env_stale) == 1
+        env_cleanup = [
+            c for c in mock_post.call_args_list if "environment-images/cleanup" in str(c)
+        ]
+        assert len(env_cleanup) == 1
 
     @pytest.mark.asyncio
     async def test_triggers_build_on_sha_mismatch(self):
@@ -394,9 +522,19 @@ class TestRebuildRepoImages:
 
             await rebuild_repo_images.local()
 
-        # Check that mark-stale and cleanup were called
-        stale_calls = [c for c in mock_post.call_args_list if "mark-stale" in str(c)]
+        # Both passes run their own mark-stale and cleanup
+        stale_calls = [c for c in mock_post.call_args_list if "repo-images/mark-stale" in str(c)]
         assert len(stale_calls) == 1
 
-        cleanup_calls = [c for c in mock_post.call_args_list if "cleanup" in str(c)]
+        cleanup_calls = [c for c in mock_post.call_args_list if "repo-images/cleanup" in str(c)]
         assert len(cleanup_calls) == 1
+
+        environment_stale_calls = [
+            c for c in mock_post.call_args_list if "environment-images/mark-stale" in str(c)
+        ]
+        assert len(environment_stale_calls) == 1
+
+        environment_cleanup_calls = [
+            c for c in mock_post.call_args_list if "environment-images/cleanup" in str(c)
+        ]
+        assert len(environment_cleanup_calls) == 1

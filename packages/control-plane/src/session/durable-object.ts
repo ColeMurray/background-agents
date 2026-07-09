@@ -35,10 +35,12 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type RepoImageLookup,
+  type EnvironmentImageLookup,
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
+import { EnvironmentImageStore } from "../db/environment-images";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
@@ -67,7 +69,15 @@ import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-req
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
-import { mergeSecrets } from "../db/secrets-validation";
+import { EnvironmentSecretsStore } from "../db/environment-secrets";
+import { EnvironmentStore } from "../db/environments";
+import {
+  auditSecretsMerge,
+  mergeSecretSources,
+  parseSecretsCapMode,
+} from "../db/secrets-validation";
+import { buildLaunchUnitSecretSources } from "./launch-unit-secrets";
+import type { SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
@@ -603,10 +613,10 @@ export class SessionDO extends DurableObject<Env> {
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
       getSessionRepositories: () =>
-        this.repository.getSessionRepositories().map((row) => ({
-          repoOwner: row.repo_owner,
-          repoName: row.repo_name,
-          baseBranch: row.base_branch,
+        this.repository.getSessionRepositories().map((entry) => ({
+          repoOwner: entry.repoOwner,
+          repoName: entry.repoName,
+          baseBranch: entry.baseBranch ?? "main",
         })),
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
@@ -693,8 +703,10 @@ export class SessionDO extends DurableObject<Env> {
       };
     }
 
-    // Token absence short-circuits to false so a misconfigured deployment
-    // never installs a tool that would 503 on every call.
+    // Session-scoped gate: resolved from the primary member (the scalar mirror
+    // this lookup is called with) — see resolveSessionScopedSettings for the
+    // per-feature scope rules. Token absence short-circuits to false so a
+    // misconfigured deployment never installs a tool that would 503 on every call.
     let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
     if (this.env.DB) {
       const tokenPresent = !!this.env.SLACK_BOT_TOKEN;
@@ -731,14 +743,24 @@ export class SessionDO extends DurableObject<Env> {
       sandboxDashboardUrlBuilder,
     };
 
-    // Create repo image lookup if D1 is available and the provider supports repo images.
+    // Create image lookups if D1 is available and the provider supports
+    // prebuilt images. Environment images run on the same provider set as
+    // repo images (EnvironmentImageProvider aliases RepoImageProvider).
     let repoImageLookup: RepoImageLookup | undefined;
+    let environmentImageLookup: EnvironmentImageLookup | undefined;
     const repoImageProvider = resolveRepoImageProvider(sandboxBackend);
     if (this.env.DB && repoImageProvider) {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>
           repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
+      };
+      const environmentImageStore = new EnvironmentImageStore(this.env.DB);
+      environmentImageLookup = {
+        getLatestReady: (environmentId) =>
+          environmentImageStore.getLatestReadyForSpawn(environmentId, repoImageProvider),
+        markRestoreFailed: (environmentImageId, error) =>
+          environmentImageStore.markRestoreFailed(environmentImageId, error),
       };
     }
 
@@ -753,7 +775,8 @@ export class SessionDO extends DurableObject<Env> {
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
       },
-      repoImageLookup
+      repoImageLookup,
+      environmentImageLookup
     );
   }
 
@@ -1696,6 +1719,12 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
+    // Environment provenance: the id is stored on the session; the name is
+    // resolved live (resolveEnvironmentName) so a deleted environment surfaces
+    // as null — the UI renders "environment deleted" (§7.6).
+    const environmentId = session?.environment_id ?? null;
+    const environmentName = await this.resolveEnvironmentName(environmentId);
+
     return {
       id: this.getPublicSessionId(session),
       title: session?.title ?? null,
@@ -1719,48 +1748,55 @@ export class SessionDO extends DurableObject<Env> {
       ttydToken,
       sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
       repositories: this.getSessionRepositoryStates(session),
+      environmentId,
+      environmentName,
     };
   }
 
   /**
-   * Member repositories for SessionState, in position order. Sessions that
-   * predate the session_repositories table get a one-entry list synthesized
-   * from the scalar columns. Rows written before per-repo git state existed
-   * have null git columns while the scalars are set, so the primary entry is
-   * overlaid with the session scalars.
+   * The launch environment's current display name, or null when the session has
+   * no environment or the environment was deleted after launch (§7.6). Resolved
+   * live rather than snapshotted so deletion is reflected; best-effort, so a
+   * lookup failure resolves null rather than failing the whole state read.
+   */
+  private async resolveEnvironmentName(environmentId: string | null): Promise<string | null> {
+    if (!environmentId || !this.env.DB) {
+      return null;
+    }
+    try {
+      const environment = await new EnvironmentStore(this.env.DB).getById(environmentId);
+      return environment?.name ?? null;
+    } catch (e) {
+      this.log.warn("Failed to resolve environment name for session state", {
+        environment_id: environmentId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Member repositories for SessionState, in position order (see
+   * buildSessionRepositories for the scalar-mirror fallback). Members synthesized
+   * from the scalars — and member rows written before per-repo git state
+   * existed, whose git columns are null while the scalars are set — have the
+   * primary entry overlaid with the session scalars.
    */
   private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
     const prUrlForRepo = this.getPrUrlLookup();
-    const rows = this.repository.getSessionRepositories();
-    if (rows.length > 0) {
-      return rows.map((row, index) => ({
-        position: row.position,
-        repoOwner: row.repo_owner,
-        repoName: row.repo_name,
-        repoId: row.repo_id,
-        baseBranch: row.base_branch,
-        branchName: row.branch_name ?? (index === 0 ? (session?.branch_name ?? null) : null),
-        baseSha: row.base_sha ?? (index === 0 ? (session?.base_sha ?? null) : null),
-        currentSha: row.current_sha ?? (index === 0 ? (session?.current_sha ?? null) : null),
-        prUrl: prUrlForRepo(row.repo_owner, row.repo_name, index === 0),
-      }));
-    }
-    if (session?.repo_owner && session.repo_name) {
-      return [
-        {
-          position: 0,
-          repoOwner: session.repo_owner,
-          repoName: session.repo_name,
-          repoId: session.repo_id ?? null,
-          baseBranch: session.base_branch ?? "main",
-          branchName: session.branch_name ?? null,
-          baseSha: session.base_sha ?? null,
-          currentSha: session.current_sha ?? null,
-          prUrl: prUrlForRepo(session.repo_owner, session.repo_name, true),
-        },
-      ];
-    }
-    return [];
+    return this.repository.getSessionRepositories().map((member) => ({
+      position: member.position,
+      repoOwner: member.repoOwner,
+      repoName: member.repoName,
+      repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
+      baseBranch: member.baseBranch ?? "main",
+      branchName:
+        member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
+      baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),
+      currentSha:
+        member.row?.current_sha ?? (member.isPrimary ? (session?.current_sha ?? null) : null),
+      prUrl: prUrlForRepo(member.repoOwner, member.repoName, member.isPrimary),
+    }));
   }
 
   /** Per-repo PR URL lookup over the session's PR artifacts. */
@@ -1778,7 +1814,7 @@ export class SessionDO extends DurableObject<Env> {
     if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
     return buildModalSandboxDashboardUrl({
       workspace: this.env.MODAL_WORKSPACE,
-      environment: this.env.MODAL_ENVIRONMENT,
+      modalEnvironment: this.env.MODAL_ENVIRONMENT,
       providerObjectId,
     });
   }
@@ -1844,34 +1880,60 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
-    const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
+    const globalStore = new GlobalSecretsStore(this.env.DB, encryptionKey);
     const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    let repoSecrets: Record<string, string> = {};
-    if (session.repo_owner && session.repo_name) {
-      const repoId = await this.ensureRepoId(session);
-      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
-    }
+    const repoStore = new RepoSecretsStore(this.env.DB, encryptionKey);
+    const environmentSecretsStore = new EnvironmentSecretsStore(this.env.DB, encryptionKey);
+    const sources = await buildLaunchUnitSecretSources({
+      environmentId: session.environment_id,
+      globalSecrets,
+      members: this.repository.getSessionRepositories(),
+      loadMemberSecrets: (member) => this.loadMemberRepoSecrets(session, member, repoStore),
+      loadEnvironmentSecrets: (environmentId) =>
+        environmentSecretsStore.getDecryptedSecrets(environmentId),
+    });
 
-    // Merge: repo overrides global
-    const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
-    const globalCount = Object.keys(globalSecrets).length;
-    const repoCount = Object.keys(repoSecrets).length;
-    const mergedCount = Object.keys(merged).length;
+    const merge = mergeSecretSources(sources);
+    auditSecretsMerge({
+      merge,
+      mode: parseSecretsCapMode(this.env.SECRETS_CAP_ENFORCEMENT),
+      log: this.log,
+      context: { session_id: session.id },
+    });
 
+    const mergedCount = Object.keys(merge.merged).length;
     if (mergedCount > 0) {
-      const logLevel = exceedsLimit ? "warn" : "info";
-      this.log[logLevel]("Secrets merged for sandbox", {
-        global_count: globalCount,
-        repo_count: repoCount,
+      this.log.info("Secrets merged for sandbox", {
+        source_count: sources.length,
         merged_count: mergedCount,
-        payload_bytes: totalBytes,
-        exceeds_limit: exceedsLimit,
+        payload_bytes: merge.totalBytes,
+        exceeds_limit: merge.exceedsLimit,
       });
     }
 
-    return mergedCount === 0 ? undefined : merged;
+    return mergedCount === 0 ? undefined : merge.merged;
+  }
+
+  /**
+   * Decrypt one member repo's secrets — the injected leaf loader for
+   * buildLaunchUnitSecretSources. The member row carries the repo id; a
+   * synthesized primary (legacy scalar row) resolves it lazily via ensureRepoId.
+   * A member without a resolvable id (a secondary with a null row id) can't be
+   * keyed, so it contributes nothing.
+   */
+  private async loadMemberRepoSecrets(
+    session: SessionRow,
+    member: SessionRepositoryEntry,
+    repoStore: RepoSecretsStore
+  ): Promise<Record<string, string>> {
+    const repoId =
+      member.row?.repo_id ?? (member.isPrimary ? await this.ensureRepoId(session) : null);
+    if (repoId === null) {
+      return {};
+    }
+    return repoStore.getDecryptedSecrets(repoId);
   }
 
   /**

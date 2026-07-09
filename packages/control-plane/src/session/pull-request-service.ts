@@ -9,8 +9,12 @@ import {
   type GitPushSpec,
 } from "../source-control";
 import { findPrArtifactForRepo } from "./pr-artifacts";
-import type { SessionRepositoryRow } from "./repository";
-import { resolveSessionRepositoryTarget, type RepoIdentity } from "./repository-target";
+import {
+  mapRepositoryTargetError,
+  resolveSessionRepositoryTarget,
+  type RepoIdentity,
+  type SessionRepositoryEntry,
+} from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
 
 /**
@@ -76,7 +80,7 @@ export class PullRequestCreationClaims {
  */
 export interface PullRequestRepository {
   getSession(): SessionRow | null;
-  getSessionRepositories(): SessionRepositoryRow[];
+  getSessionRepositories(): SessionRepositoryEntry[];
   updateSessionBranch(sessionId: string, branchName: string): void;
   updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void;
   listArtifacts(): ArtifactRow[];
@@ -132,20 +136,17 @@ export class SessionPullRequestService {
     // Re-resolved here even though the handler already validated the target:
     // this is a sandbox-auth security boundary, so the service must not
     // trust its caller (defense in depth).
-    const resolution = resolveSessionRepositoryTarget({
-      requested: input,
-      scalarRepo: { repoOwner: session.repo_owner, repoName: session.repo_name },
-      memberRows: this.deps.repository.getSessionRepositories(),
-    });
-    if (!resolution.ok) {
-      return {
-        kind: "error",
-        status: resolution.reason === "not_member" ? 403 : 400,
-        error: resolution.error,
-      };
+    let target: SessionRepositoryEntry;
+    try {
+      target = resolveSessionRepositoryTarget(input, this.deps.repository.getSessionRepositories());
+    } catch (error) {
+      const mapped = mapRepositoryTargetError(error);
+      if (!mapped) throw error;
+      return { kind: "error", ...mapped };
     }
-    const { memberRow, isPrimary } = resolution;
-    const targetRepo = { repoOwner: resolution.repoOwner, repoName: resolution.repoName };
+    const memberRow = target.row;
+    const isPrimary = target.isPrimary;
+    const targetRepo = { repoOwner: target.repoOwner, repoName: target.repoName };
 
     this.deps.log.info("Creating PR", {
       user_id: input.promptingUserId,
@@ -197,11 +198,9 @@ export class SessionPullRequestService {
         owner: targetRepo.repoOwner,
         name: targetRepo.repoName,
       });
-      // Base: requested > target repo's base branch (scalar mirror for
-      // sessions without member rows) > repo default. Behavioral parity with
-      // the session-base injection the HTTP handler used to do.
-      const baseBranch =
-        input.baseBranch || memberRow?.base_branch || session.base_branch || repoInfo.defaultBranch;
+      // Base: requested > the entry's base branch (the row's, or the scalar
+      // mirror's for sessions without member rows) > repo default.
+      const baseBranch = input.baseBranch || target.baseBranch || repoInfo.defaultBranch;
       // The target repo's working branch; member rows written before PR flow
       // existed have a null branch_name while the scalar mirror is set, so
       // the primary falls back to the scalar.

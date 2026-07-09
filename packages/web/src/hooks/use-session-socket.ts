@@ -226,8 +226,65 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
             meta.previewStatus === "stopped"
               ? meta.previewStatus
               : undefined,
+          repoOwner: typeof meta.repoOwner === "string" ? meta.repoOwner : undefined,
+          repoName: typeof meta.repoName === "string" ? meta.repoName : undefined,
         }
       : undefined,
+  };
+}
+
+/**
+ * Apply a `session_branch` update, keeping `state.repositories` and the scalar
+ * `branchName` in sync. The invariant is explicit rather than a sole/primary
+ * guess:
+ *
+ * - No hydrated member list → scalar-only, exactly as before.
+ * - Exactly one member → the update names the sole repo (the primary): update
+ *   it and mirror the scalar.
+ * - Multi-repo (`length > 1`) → the message MUST name its member
+ *   (repoOwner/repoName); an unscoped or unknown-member update is anomalous
+ *   (multi-repo runtimes always echo identity) and is ignored rather than
+ *   attributed to the primary. The scalar mirrors only when the named member is
+ *   the primary (position 0).
+ */
+function applySessionBranchUpdate(
+  prev: SessionState,
+  branchName: string,
+  repoOwner: string | undefined,
+  repoName: string | undefined
+): SessionState {
+  const repositories = prev.repositories;
+
+  if (!repositories || repositories.length === 0) {
+    return { ...prev, branchName };
+  }
+
+  if (repositories.length === 1) {
+    return {
+      ...prev,
+      repositories: [{ ...repositories[0], branchName }],
+      branchName,
+    };
+  }
+
+  // Multi-repo: require identity; ignore an update we can't attribute.
+  if (!repoOwner || !repoName) {
+    return prev;
+  }
+  const targetIndex = repositories.findIndex(
+    (repo) => repo.repoOwner === repoOwner && repo.repoName === repoName
+  );
+  if (targetIndex === -1) {
+    return prev;
+  }
+
+  const updatedRepositories = repositories.map((repo, index) =>
+    index === targetIndex ? { ...repo, branchName } : repo
+  );
+  return {
+    ...prev,
+    repositories: updatedRepositories,
+    ...(targetIndex === 0 ? { branchName } : {}),
   };
 }
 
@@ -465,7 +522,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "session_branch":
           // Branch updates apply only to the active session detail view.
-          setSessionState((prev) => (prev ? { ...prev, branchName: data.branchName } : null));
+          setSessionState((prev) =>
+            prev
+              ? applySessionBranchUpdate(prev, data.branchName, data.repoOwner, data.repoName)
+              : null
+          );
           break;
 
         case "session_title":

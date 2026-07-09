@@ -5,6 +5,10 @@ const collaboratorPermissionResponseSchema = z.object({
   permission: z.string(),
 });
 
+const installationTokenResponseSchema = z.object({
+  token: z.string(),
+});
+
 export interface GitHubAppConfig {
   appId: string;
   privateKey: string;
@@ -93,8 +97,18 @@ async function getInstallationToken(
     throw new Error(`Failed to get installation token: ${response.status} ${error}`);
   }
 
-  const data = (await response.json()) as { token: string };
-  return data.token;
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new Error("Failed to get installation token: invalid response");
+  }
+
+  const parsed = installationTokenResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Failed to get installation token: invalid response");
+  }
+  return parsed.data.token;
 }
 
 export async function generateInstallationToken(config: GitHubAppConfig): Promise<string> {

@@ -44,6 +44,13 @@ export function SessionRightSidebarContent({
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const filesChanged = useMemo(() => extractChangedFiles(events), [events]);
+  const warnings = useMemo(
+    () =>
+      events.filter(
+        (event): event is Extract<SandboxEvent, { type: "warning" }> => event.type === "warning"
+      ),
+    [events]
+  );
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
@@ -84,6 +91,8 @@ export function SessionRightSidebarContent({
           repoOwner={sessionState.repoOwner}
           repoName={sessionState.repoName}
           artifacts={artifacts}
+          repositories={sessionState.repositories}
+          warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
           totalCost={sessionState.totalCost}
         />

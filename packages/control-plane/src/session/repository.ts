@@ -30,6 +30,7 @@ import {
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
+import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -78,6 +79,8 @@ export interface UpsertSessionData {
   spawnDepth?: number;
   codeServerEnabled?: boolean;
   sandboxSettings?: string | null;
+  /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
+  environmentId?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -305,8 +308,8 @@ export class SessionRepository {
     }
 
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, environment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -322,6 +325,7 @@ export class SessionRepository {
       data.spawnDepth ?? 0,
       data.codeServerEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
+      data.environmentId ?? null,
       data.createdAt,
       data.updatedAt
     );
@@ -410,9 +414,27 @@ export class SessionRepository {
     }
   }
 
-  getSessionRepositories(): SessionRepositoryRow[] {
+  getSessionRepositoryRows(): SessionRepositoryRow[] {
     const result = this.sql.exec(`SELECT * FROM session_repositories ORDER BY position`);
     return this.rows<SessionRepositoryRow>(result);
+  }
+
+  /**
+   * The session's repositories (see buildSessionRepositories for the
+   * scalar-mirror fallback). Empty only for sessions without a repository
+   * context.
+   */
+  getSessionRepositories(): SessionRepositoryEntry[] {
+    const session = this.getSession();
+    if (!session?.repo_owner || !session.repo_name) return [];
+    return buildSessionRepositories(
+      {
+        repoOwner: session.repo_owner,
+        repoName: session.repo_name,
+        baseBranch: session.base_branch,
+      },
+      this.getSessionRepositoryRows()
+    );
   }
 
   updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void {

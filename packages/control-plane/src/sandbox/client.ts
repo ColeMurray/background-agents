@@ -39,14 +39,16 @@ function getModalBaseUrl(workspace: string, environmentWebSuffix?: string): stri
  */
 export function buildModalSandboxDashboardUrl(params: {
   workspace: string | undefined;
-  environment?: string | undefined;
+  // Modal workspace environment (unrelated to the Environment entity); named
+  // modalEnvironment to keep the term unambiguous (design §7.1).
+  modalEnvironment?: string | undefined;
   providerObjectId: string | null | undefined;
 }): string | null {
   if (!params.workspace || !params.providerObjectId) return null;
   const workspace = encodeURIComponent(params.workspace);
-  const environment = encodeURIComponent(params.environment || DEFAULT_MODAL_ENVIRONMENT);
+  const modalEnvironment = encodeURIComponent(params.modalEnvironment || DEFAULT_MODAL_ENVIRONMENT);
   const providerObjectId = encodeURIComponent(params.providerObjectId);
-  return `https://modal.com/apps/${workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
+  return `https://modal.com/apps/${workspace}/${modalEnvironment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
 }
 
 export interface CreateSandboxRequest {
@@ -61,8 +63,8 @@ export interface CreateSandboxRequest {
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
-  repoImageId?: string | null;
-  repoImageSha?: string | null;
+  prebuiltImageId?: string | null;
+  prebuiltImageSha?: string | null;
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
@@ -146,6 +148,26 @@ export interface BuildRepoImageResponse {
   status: string;
 }
 
+export interface BuildEnvironmentImageRequest {
+  environmentId: string;
+  buildId: string;
+  callbackUrl: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  userEnvVars?: Record<string, string>;
+  /**
+   * Build sandbox lifetime, in seconds. Already capped at
+   * MAX_BUILD_TIMEOUT_SECONDS by the trigger.
+   * Omitted → Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
+   */
+  buildTimeoutSeconds?: number;
+}
+
+export interface BuildEnvironmentImageResponse {
+  buildId: string;
+  status: string;
+}
+
 export interface DeleteProviderImageRequest {
   providerImageId: string;
 }
@@ -186,6 +208,7 @@ export class ModalClient {
   private snapshotSandboxUrl: string;
   private restoreSandboxUrl: string;
   private buildRepoImageUrl: string;
+  private buildEnvironmentImageUrl: string;
   private deleteProviderImageUrl: string;
   private secret: string;
 
@@ -203,6 +226,7 @@ export class ModalClient {
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
     this.buildRepoImageUrl = `${baseUrl}-api-build-repo-image.modal.run`;
+    this.buildEnvironmentImageUrl = `${baseUrl}-api-build-environment-image.modal.run`;
     this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
   }
 
@@ -251,8 +275,8 @@ export class ModalClient {
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
-          repo_image_id: request.repoImageId || null,
-          repo_image_sha: request.repoImageSha || null,
+          repo_image_id: request.prebuiltImageId || null,
+          repo_image_sha: request.prebuiltImageSha || null,
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,
@@ -528,6 +552,69 @@ export class ModalClient {
         build_id: request.buildId,
         repo_owner: request.repoOwner,
         repo_name: request.repoName,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  /**
+   * Trigger an async environment image build on Modal (design §7.3).
+   */
+  async buildEnvironmentImage(
+    request: BuildEnvironmentImageRequest,
+    correlation?: CorrelationContext
+  ): Promise<BuildEnvironmentImageResponse> {
+    const startTime = Date.now();
+    const endpoint = "buildEnvironmentImage";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.buildEnvironmentImageUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          environment_id: request.environmentId,
+          build_id: request.buildId,
+          callback_url: request.callbackUrl,
+          repositories: request.repositories.map(toRepositoryConfigPayload),
+          user_env_vars: request.userEnvVars,
+          build_timeout_seconds: request.buildTimeoutSeconds ?? null,
+        }),
+      });
+
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{
+        build_id: string;
+        status: string;
+      }>;
+
+      if (!result.success || !result.data) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+
+      outcome = "success";
+      return {
+        buildId: result.data.build_id,
+        status: result.data.status,
+      };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        build_id: request.buildId,
+        environment_id: request.environmentId,
         trace_id: correlation?.trace_id,
         request_id: correlation?.request_id,
         http_status: httpStatus,

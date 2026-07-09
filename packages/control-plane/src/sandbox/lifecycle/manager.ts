@@ -21,6 +21,7 @@ import {
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
+  type CreateSandboxResult,
   type SessionRepositoryInfo,
 } from "../provider";
 import {
@@ -45,6 +46,13 @@ import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { normalizeSandboxSettings } from "../settings";
+import {
+  evaluateEnvironmentImageForSpawn,
+  type EnvironmentImageLookup,
+  type SelectedEnvironmentImage,
+} from "./environment-image-selection";
+
+export type { EnvironmentImageLookup } from "./environment-image-selection";
 
 const log = createLogger("lifecycle-manager");
 
@@ -75,7 +83,12 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Get current session */
   getSession(): SessionRow | null;
-  /** Get the session's member repositories in position order (empty for pre-list sessions) */
+  /**
+   * Get the session's member repositories in position order. Pre-list
+   * sessions get a one-entry list synthesized from the scalar columns
+   * (buildSessionRepositories owns the rule); empty only for repo-less
+   * sessions.
+   */
   getSessionRepositories(): SessionRepositoryInfo[];
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
@@ -293,7 +306,8 @@ export class SandboxLifecycleManager {
     private readonly idGenerator: IdGenerator,
     private readonly config: SandboxLifecycleConfig,
     private readonly callbacks: LifecycleCallbacks = {},
-    private readonly repoImageLookup?: RepoImageLookup
+    private readonly repoImageLookup?: RepoImageLookup,
+    private readonly environmentImageLookup?: EnvironmentImageLookup
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
   }
@@ -406,16 +420,15 @@ export class SandboxLifecycleManager {
 
       const now = Date.now();
       const sessionId = session.session_name || session.id;
-      const sandboxAuthToken = this.idGenerator.generateId();
-      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
+      let sandboxAuthToken = this.idGenerator.generateId();
       const hasRepository = sessionHasRepository(session);
-      const expectedSandboxId = buildSandboxIdForSession(session, now);
+      let expectedSandboxId = buildSandboxIdForSession(session, now);
 
       // Store expected sandbox ID and auth token BEFORE calling provider
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt: now,
-        authTokenHash: sandboxAuthTokenHash,
+        authTokenHash: await hashToken(sandboxAuthToken),
         modalSandboxId: expectedSandboxId,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
@@ -429,15 +442,30 @@ export class SandboxLifecycleManager {
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const repositories = this.sessionRepositories(session);
+      const repositories = this.storage.getSessionRepositories();
       const multiRepoFields = multiRepoSpawnFields(repositories);
+
+      // Environment sessions boot from their environment image when one
+      // matches the session's own repository snapshot (design §7.3). Repo
+      // images never apply to them — a repo image bakes one checkout and that
+      // repository's setup, not the environment's — so a miss falls straight
+      // through to the base image.
+      let environmentImage: SelectedEnvironmentImage | null = null;
+      if (session.environment_id) {
+        environmentImage = await this.lookupEnvironmentImage(session.environment_id, repositories);
+      }
 
       // Look up pre-built repo image (graceful fallback on failure).
       // Repo images bake a single checkout, so multi-repo sessions boot from
       // the base image and clone every member.
-      let repoImageId: string | null = null;
-      let repoImageSha: string | null = null;
-      if (hasRepository && !multiRepoFields.repositories && this.repoImageLookup) {
+      let prebuiltImageId: string | null = environmentImage?.providerImageId ?? null;
+      let prebuiltImageSha: string | null = environmentImage?.primaryBaseSha ?? null;
+      if (
+        hasRepository &&
+        !session.environment_id &&
+        !multiRepoFields.repositories &&
+        this.repoImageLookup
+      ) {
         try {
           const repoImage = await this.repoImageLookup.getLatestReady(
             session.repo_owner,
@@ -445,11 +473,11 @@ export class SandboxLifecycleManager {
             session.base_branch ?? undefined
           );
           if (repoImage) {
-            repoImageId = repoImage.provider_image_id;
-            repoImageSha = repoImage.base_sha;
+            prebuiltImageId = repoImage.provider_image_id;
+            prebuiltImageSha = repoImage.base_sha;
             this.log.info("Using pre-built repo image", {
-              provider_image_id: repoImageId,
-              base_sha: repoImageSha,
+              provider_image_id: prebuiltImageId,
+              base_sha: prebuiltImageSha,
             });
           }
         } catch (e) {
@@ -478,8 +506,8 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
-        repoImageId,
-        repoImageSha,
+        prebuiltImageId,
+        prebuiltImageSha,
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
@@ -489,7 +517,44 @@ export class SandboxLifecycleManager {
         ...multiRepoFields,
       };
 
-      const result = await this.provider.createSandbox(createConfig);
+      let result: CreateSandboxResult;
+      try {
+        result = await this.provider.createSandbox(createConfig);
+      } catch (error) {
+        if (!environmentImage) throw error;
+        // A provider restore failure is "no image" (design §7.3): fail the
+        // row so the cron rebuilds it and boot this session from base rather
+        // than failing the spawn. Unrelated create failures (quota, network)
+        // can false-positive here — the cost is one rebuild, and the base
+        // retry surfaces them through the normal failure path anyway.
+        this.log.warn("Environment image spawn failed, retrying from base image", {
+          event: "sandbox.environment_image_restore_failed",
+          environment_image_id: environmentImage.environmentImageId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await this.markEnvironmentImageRestoreFailed(environmentImage, error);
+        // The retry gets a fresh spawn identity: the failed attempt may have
+        // actually created a sandbox provider-side (post-create errors are
+        // indistinguishable here), and rotating the token hash and sandbox id
+        // locks such an orphan out of this DO exactly like the next
+        // user-initiated respawn would.
+        const retryNow = Math.max(Date.now(), now + 1);
+        sandboxAuthToken = this.idGenerator.generateId();
+        expectedSandboxId = buildSandboxIdForSession(session, retryNow);
+        this.storage.updateSandboxForSpawn({
+          status: "spawning",
+          createdAt: retryNow,
+          authTokenHash: await hashToken(sandboxAuthToken),
+          modalSandboxId: expectedSandboxId,
+        });
+        result = await this.provider.createSandbox({
+          ...createConfig,
+          sandboxId: expectedSandboxId,
+          sandboxAuthToken,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
+        });
+      }
 
       this.log.info("Sandbox spawned", {
         event: "sandbox.spawned",
@@ -554,6 +619,70 @@ export class SandboxLifecycleManager {
       });
     } finally {
       this.isSpawningSandbox = false;
+    }
+  }
+
+  /**
+   * Resolve the environment image for an environment session's fresh spawn.
+   * Returns null on any miss or lookup failure — the session boots from base
+   * (never blocked, design §7.3) — logging the reason either way; miss-reason
+   * counts are the numbers that justify (or kill) the prebuild fast-follows.
+   */
+  private async lookupEnvironmentImage(
+    environmentId: string,
+    repositories: SessionRepositoryInfo[]
+  ): Promise<SelectedEnvironmentImage | null> {
+    if (!this.environmentImageLookup || repositories.length === 0) return null;
+    try {
+      const image = await this.environmentImageLookup.getLatestReady(environmentId);
+      const result = await evaluateEnvironmentImageForSpawn(image, repositories);
+      if (result.outcome === "selected") {
+        this.log.info("Using pre-built environment image", {
+          event: "sandbox.environment_image_selected",
+          environment_id: environmentId,
+          environment_image_id: result.image.environmentImageId,
+          runtime_version: result.image.runtimeVersion,
+        });
+        return result.image;
+      }
+      this.log.info("Environment image miss, using base image", {
+        event: "sandbox.environment_image_miss",
+        environment_id: environmentId,
+        reason: result.reason,
+        environment_image_id: result.environmentImageId,
+      });
+      return null;
+    } catch (e) {
+      this.log.warn("Failed to look up environment image, using base image", {
+        event: "sandbox.environment_image_miss",
+        environment_id: environmentId,
+        reason: "lookup_failed",
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Best-effort: the base-image retry must proceed even when D1 is the thing
+   * that is down. An unmarked row costs one more failed image boot on the
+   * next spawn, not a broken session.
+   */
+  private async markEnvironmentImageRestoreFailed(
+    image: SelectedEnvironmentImage,
+    error: unknown
+  ): Promise<void> {
+    if (!this.environmentImageLookup) return;
+    try {
+      await this.environmentImageLookup.markRestoreFailed(
+        image.environmentImageId,
+        `restore failed at spawn: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } catch (e) {
+      this.log.warn("Failed to mark environment image restore-failed", {
+        environment_image_id: image.environmentImageId,
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -648,7 +777,7 @@ export class SandboxLifecycleManager {
       const timeoutSeconds =
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
-      const repositories = this.sessionRepositories(session);
+      const repositories = this.storage.getSessionRepositories();
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(repositories);
@@ -1211,28 +1340,6 @@ export class SandboxLifecycleManager {
    */
   private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
     return extractProviderAndModel(session.model || this.config.model);
-  }
-
-  /**
-   * The session's member repositories in position order. Falls back to a
-   * one-entry list synthesized from the scalar columns for sessions that
-   * predate the session_repositories table.
-   */
-  private sessionRepositories(session: SessionRow): SessionRepositoryInfo[] {
-    const repositories = this.storage.getSessionRepositories();
-    if (repositories.length > 0) {
-      return repositories;
-    }
-    if (sessionHasRepository(session)) {
-      return [
-        {
-          repoOwner: session.repo_owner,
-          repoName: session.repo_name,
-          baseBranch: session.base_branch ?? "main",
-        },
-      ];
-    }
-    return [];
   }
 
   /**

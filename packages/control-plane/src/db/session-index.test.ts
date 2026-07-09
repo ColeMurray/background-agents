@@ -22,6 +22,7 @@ type SessionRow = {
   active_duration_ms: number;
   message_count: number;
   pr_count: number;
+  environment_id: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -168,6 +169,7 @@ class FakeD1Database {
         automationRunId,
         scmLogin,
         userId,
+        environmentId,
         createdAt,
         updatedAt,
       ] = args as [
@@ -182,6 +184,7 @@ class FakeD1Database {
         string | null,
         "user" | "agent" | "automation",
         number,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -212,6 +215,7 @@ class FakeD1Database {
           active_duration_ms: 0,
           message_count: 0,
           pr_count: 0,
+          environment_id: environmentId,
           created_at: createdAt,
           updated_at: updatedAt,
         });
@@ -455,6 +459,7 @@ describe("SessionIndexStore", () => {
         activeDurationMs: 0,
         messageCount: 0,
         prCount: 0,
+        environmentId: null,
       });
     });
 

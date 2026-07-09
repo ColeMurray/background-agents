@@ -2,6 +2,7 @@ import type { CreateSessionRequest, RepositoryRef } from "@open-inspect/shared";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
+import type { EnvironmentStore } from "../db/environments";
 import { createRouteSourceControlProvider, HttpError, type RequestContext } from "../routes/shared";
 
 /**
@@ -11,6 +12,38 @@ import { createRouteSourceControlProvider, HttpError, type RequestContext } from
 export type SessionRepositoryResolutionInput = NonNullable<
   CreateSessionRequest["repositories"]
 >[number];
+
+/**
+ * Resolve a launch environment into the repository inputs its session should
+ * clone, in position order (design §7.6). The caller feeds these into
+ * resolveSessionRepositories, so an environment session gets the same
+ * all-or-nothing SCM check as an ad-hoc list: access to a member repo can be
+ * revoked after the environment was created, and a stale member must fail the
+ * create cleanly rather than boot a partial workspace.
+ *
+ * Raises HttpError(404) when the environment does not exist.
+ */
+export async function resolveEnvironmentTarget(
+  store: EnvironmentStore,
+  environmentId: string
+): Promise<SessionRepositoryResolutionInput[]> {
+  const environment = await store.getById(environmentId);
+  if (!environment) {
+    throw new HttpError(`Environment not found: ${environmentId}`, 404);
+  }
+  const repositories = await store.getRepositoriesForEnvironment(environmentId);
+  if (repositories.length === 0) {
+    // Environments always carry >=1 member by construction (the create/update
+    // schema requires it), so an empty set is a data-integrity fault, not a
+    // user mistake.
+    throw new HttpError(`Environment has no repositories: ${environmentId}`, 500);
+  }
+  return repositories.map((repo) => ({
+    repoOwner: repo.repo_owner,
+    repoName: repo.repo_name,
+    baseBranch: repo.base_branch,
+  }));
+}
 
 interface ResolutionOutcome {
   input: SessionRepositoryResolutionInput;

@@ -39,7 +39,7 @@ import {
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { APP_SHORT_NAME } from "@/lib/site-config";
-import { formatRepoLabel } from "@/lib/repo-label";
+import { formatRepoLabel, formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -645,7 +645,11 @@ function SessionListItem({
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
-  const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
+  const repoInfo = formatSessionRepositoriesLabel(
+    session.repoOwner,
+    session.repoName,
+    session.repositories
+  );
   const displayTitle = session.title || repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";

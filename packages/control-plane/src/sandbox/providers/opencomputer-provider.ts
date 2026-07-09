@@ -24,7 +24,7 @@ import {
   type OpenComputerSandboxResponse,
   type OpenComputerSecretStoreResponse,
 } from "../opencomputer-rest-client";
-import { buildSessionConfig } from "../sandbox-env";
+import { buildSessionConfig, toRepositoryConfigPayload } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -72,6 +72,24 @@ export interface TriggerOpenComputerRepoImageBuildResult {
   status: string;
 }
 
+export interface TriggerOpenComputerEnvironmentImageBuildConfig {
+  buildId: string;
+  environmentId: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  callbackUrl: string;
+  callbackToken: string;
+  userEnvVars?: Record<string, string>;
+  cloneToken?: string;
+  buildTimeoutSeconds?: number;
+  onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
+}
+
+export interface TriggerOpenComputerEnvironmentImageBuildResult {
+  buildId: string;
+  status: string;
+}
+
 export interface OpenComputerProviderConfig {
   scmProvider: SourceControlProviderName;
   /** Secret used for deterministic code-server password derivation */
@@ -105,15 +123,15 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let providerObjectId: string | undefined;
     try {
       const environment = await this.buildRuntimeEnvironment(config, {
-        fromRepoImage: !!config.repoImageId,
-        repoImageSha: config.repoImageSha ?? undefined,
+        fromPrebuiltImage: !!config.prebuiltImageId,
+        prebuiltImageSha: config.prebuiltImageSha ?? undefined,
       });
       secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
       const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
-      const sandbox = config.repoImageId
+      const sandbox = config.prebuiltImageId
         ? await this.client.forkFromCheckpoint({
-            checkpointId: config.repoImageId,
+            checkpointId: config.prebuiltImageId,
             name: config.sandboxId,
             env: environment.envVars,
             labels,
@@ -361,7 +379,17 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let providerObjectId: string | undefined;
     try {
       const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
-      const environment = await this.buildBuildEnvironment(config);
+      const environment = this.buildBuildEnvironment({
+        userEnvVars: config.userEnvVars,
+        cloneToken: config.cloneToken,
+        sandboxId: `build-${config.repoOwner}-${config.repoName}`,
+        repoOwner: config.repoOwner,
+        repoName: config.repoName,
+        sessionConfig: { branch: config.defaultBranch },
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        callbackToken: config.callbackToken,
+      });
       secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
       const sandbox = await this.client.createSandbox({
         name: sandboxName,
@@ -414,6 +442,88 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
   }
 
+  /**
+   * Trigger an OpenComputer environment-image build (design §7.3). Same
+   * lifecycle as the repo-image build; the SESSION_CONFIG carries the repository
+   * list so the list-native runtime clones and sets up every repository.
+   */
+  async triggerEnvironmentImageBuild(
+    config: TriggerOpenComputerEnvironmentImageBuildConfig
+  ): Promise<TriggerOpenComputerEnvironmentImageBuildResult> {
+    let secretStore: OpenComputerSecretStoreResponse | undefined;
+    let providerObjectId: string | undefined;
+    try {
+      const primary = config.repositories[0];
+      if (!primary) {
+        throw new Error("environment build requires at least one repository");
+      }
+
+      const sandboxName = `build-env-${config.environmentId}-${Date.now()}`;
+      const environment = this.buildBuildEnvironment({
+        userEnvVars: config.userEnvVars,
+        cloneToken: config.cloneToken,
+        sandboxId: `build-env-${config.environmentId}`,
+        repoOwner: primary.repoOwner,
+        repoName: primary.repoName,
+        sessionConfig: {
+          branch: primary.baseBranch,
+          repositories: config.repositories.map(toRepositoryConfigPayload),
+        },
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        callbackToken: config.callbackToken,
+      });
+      secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
+      const sandbox = await this.client.createSandbox({
+        name: sandboxName,
+        template: this.client.config.template,
+        env: environment.envVars,
+        labels: {
+          openinspect_framework: "open-inspect",
+          openinspect_provider: "opencomputer",
+          openinspect_kind: "environment-image-build",
+          openinspect_build_id: config.buildId,
+          openinspect_environment: config.environmentId,
+        },
+        timeoutSeconds: config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
+        secretStore: secretStore?.name,
+      });
+      providerObjectId = sandbox.id;
+
+      if (config.onProviderSessionCreated) {
+        await config.onProviderSessionCreated(sandbox.id);
+      }
+
+      await this.client.startRuntime(sandbox.id, {
+        [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sandbox.id,
+      });
+      log.info("opencomputer.environment_image_build_triggered", {
+        build_id: config.buildId,
+        environment_id: config.environmentId,
+        sandbox_id: sandbox.id,
+      });
+
+      return { buildId: config.buildId, status: "building" };
+    } catch (error) {
+      if (providerObjectId) {
+        await this.cleanupSandboxAfterFailedCreate(providerObjectId, config.buildId);
+      }
+      if (secretStore) {
+        try {
+          await this.client.deleteSecretStore(secretStore.id);
+        } catch (cleanupError) {
+          log.warn("opencomputer.secret_store_cleanup_failed", {
+            build_id: config.buildId,
+            secret_store_id: secretStore.id,
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to trigger OpenComputer environment image build", error);
+    }
+  }
+
   async deleteProviderImage(
     providerImageId: string,
     providerSessionId?: string | null
@@ -431,8 +541,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     config: CreateSandboxConfig | RestoreConfig,
     mode: {
       restoredFromSnapshot?: boolean;
-      fromRepoImage?: boolean;
-      repoImageSha?: string;
+      fromPrebuiltImage?: boolean;
+      prebuiltImageSha?: string;
     } = {}
   ): Promise<PreparedOpenComputerEnvironment> {
     const environment = this.prepareEnvironment(config.userEnvVars);
@@ -458,9 +568,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
     }
     if (mode.restoredFromSnapshot) envVars.RESTORED_FROM_SNAPSHOT = "true";
-    if (mode.fromRepoImage) {
+    if (mode.fromPrebuiltImage) {
       envVars.FROM_REPO_IMAGE = "true";
-      envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
+      envVars.REPO_IMAGE_SHA = mode.prebuiltImageSha ?? "";
       if (!envVars.VCS_CLONE_TOKEN) {
         envVars.VCS_CLONE_TOKEN = "";
       }
@@ -489,9 +599,18 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     return environment;
   }
 
-  private async buildBuildEnvironment(
-    config: TriggerOpenComputerRepoImageBuildConfig
-  ): Promise<PreparedOpenComputerEnvironment> {
+  /** Build-sandbox env for both repo- and environment-image builds; the caller owns identity + SESSION_CONFIG shape. */
+  private buildBuildEnvironment(config: {
+    userEnvVars?: Record<string, string>;
+    cloneToken?: string;
+    sandboxId: string;
+    repoOwner: string;
+    repoName: string;
+    sessionConfig: Record<string, unknown>;
+    buildId: string;
+    callbackUrl: string;
+    callbackToken: string;
+  }): PreparedOpenComputerEnvironment {
     const environment = this.prepareEnvironment(config.userEnvVars, {
       scrubReservedRepoImageEnv: true,
     });
@@ -499,11 +618,11 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
     Object.assign(envVars, {
       PYTHONUNBUFFERED: "1",
-      SANDBOX_ID: `build-${config.repoOwner}-${config.repoName}`,
+      SANDBOX_ID: config.sandboxId,
       REPO_OWNER: config.repoOwner,
       REPO_NAME: config.repoName,
       IMAGE_BUILD_MODE: "true",
-      SESSION_CONFIG: JSON.stringify({ branch: config.defaultBranch }),
+      SESSION_CONFIG: JSON.stringify(config.sessionConfig),
       [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
