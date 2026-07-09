@@ -934,11 +934,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     // Need to clarify which target; the picker offers both kinds.
     const catalog = await loadTargetCatalog(env, traceId);
 
-    if (catalog.repos.length === 0) {
+    // Only bail when there is nothing at all to pick — environments remain
+    // launchable even when the repo list is empty.
+    if (catalog.repos.length === 0 && catalog.environments.length === 0) {
       await postMessage(
         env.SLACK_BOT_TOKEN,
         channel,
-        "Sorry, no repositories are currently available. Please check that the GitHub App is installed and configured.",
+        "Sorry, no repositories or environments are currently available. Please check that the GitHub App is installed and configured.",
         { thread_ts: threadTs || ts }
       );
       return;

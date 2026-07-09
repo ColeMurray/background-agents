@@ -306,11 +306,14 @@ export class RepoClassifier {
     // classification — to repository-only.
     const catalog = await loadTargetCatalog(this.env, traceId);
 
-    if (catalog.repos.length === 0) {
+    // Only a fully empty catalog is unclassifiable — environments launch by id
+    // without consulting the repo list, so they stay reachable when the repo
+    // fetch degrades to [].
+    if (catalog.repos.length === 0 && catalog.environments.length === 0) {
       return {
         target: null,
         confidence: "low",
-        reasoning: "No repositories are currently available.",
+        reasoning: "No repositories or environments are currently available.",
         needsClarification: true,
       };
     }

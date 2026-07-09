@@ -619,6 +619,36 @@ describe("RepoClassifier", () => {
       expect(result.needsClarification).toBe(true);
     });
 
+    it("still classifies into environments when the repo list is empty", async () => {
+      // A degraded repo fetch (fail-open []) must not strand intact environments.
+      mockGetAvailableRepos.mockResolvedValue([]);
+      mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "env_abc123",
+          confidence: "high",
+          reasoning: "Names the environment.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("work on full-stack");
+
+      expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
+    });
+
+    it("asks for clarification when neither repos nor environments exist", async () => {
+      mockGetAvailableRepos.mockResolvedValue([]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("anything");
+
+      expect(result.target).toBeNull();
+      expect(result.reasoning).toBe("No repositories or environments are currently available.");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
       mockMessagesCreate.mockResolvedValue(
         llmResponse({
