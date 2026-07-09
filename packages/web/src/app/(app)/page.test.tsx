@@ -308,6 +308,13 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /background-agents/i });
   });
 
+  it("falls back to the repo default on a malformed stored value", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", "env:");
+    render(<Home />);
+
+    await screen.findByRole("button", { name: /background-agents/i });
+  });
+
   it("still restores a stored repository fullName (legacy value)", async () => {
     mocks.reposValue = [
       repo,

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSession } from "next-auth/react";
 import useSWR from "swr";
 import type { Environment } from "@open-inspect/shared";
 import type { ComboboxGroup, ComboboxOption } from "@/components/ui/combobox";
@@ -88,7 +87,6 @@ export interface SessionTargetSelection {
  * via `pickerProps`; the page keeps model, prompt, and warming.
  */
 export function useSessionTargetPicker(): SessionTargetSelection {
-  const { status: sessionStatus } = useSession();
   const { repos, loading: loadingRepos } = useRepos();
   const { environments, loading: loadingEnvironments } = useEnvironments();
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
@@ -122,11 +120,6 @@ export function useSessionTargetPicker(): SessionTargetSelection {
   // are still loading — wait for the fetch to settle before deciding.
   useEffect(() => {
     if (sessionTarget) return;
-    // Both data hooks gate their fetch on the auth session, and report
-    // loading=false while it resolves — deciding in that window would read
-    // empty lists as authoritative (e.g. classify a stored environment as
-    // deleted, or lock in "no repository").
-    if (sessionStatus === "loading") return;
 
     const storedValue = localStorage.getItem(LAST_SELECTED_TARGET_STORAGE_KEY);
     const storedTarget = storedValue ? parseTargetSelectValue(storedValue, null) : null;
@@ -154,7 +147,7 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     if (!loadingRepos) {
       setSessionTarget({ kind: "none" });
     }
-  }, [sessionStatus, loadingRepos, repos, loadingEnvironments, environments, sessionTarget]);
+  }, [loadingRepos, repos, loadingEnvironments, environments, sessionTarget]);
 
   // Persist launchable, restorable selections: repos and environments. Ad-hoc
   // lists and "no repository" keep whatever was stored before them.
