@@ -7,7 +7,6 @@ import {
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   isValidReasoningEffort,
   type CodeServerSettings,
-  type EnvironmentSettingsIntegrationId,
   type GitHubBotSettings,
   type IntegrationId,
   type LinearBotSettings,
@@ -40,143 +39,177 @@ function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
   return id;
 }
 
+type SettingsLevel = "global" | "repo" | "environment";
+
 /**
- * Common validation for the environment-level settings handlers: a known
- * integration that supports the environment level (design §13.5), an
- * environment id, and — because the settings table is an owned child of
- * `environments` — an environment that actually exists.
+ * A resolved read/write target for one settings level. The three levels —
+ * global defaults, per-repo overrides, per-environment overrides (design
+ * §13.5) — share identical GET/PUT/DELETE plumbing (body parsing, storage
+ * guards, validation-error translation, logging), so a level only describes
+ * how to address its rows: the identifying fields echoed in responses and
+ * logs, plus the store operations.
  */
-async function extractEnvironmentSettingsParams(
+interface SettingsScopeTarget {
+  /** Identifying fields echoed in every response body. */
+  fields: Record<string, string>;
+  /** The same identity in snake_case for structured logs. */
+  logFields: Record<string, string>;
+  /** Log event prefix, e.g. "integration_repo_settings". */
+  event: string;
+  get(store: IntegrationSettingsStore): Promise<unknown>;
+  set(store: IntegrationSettingsStore, settings: Record<string, unknown>): Promise<void>;
+  remove(store: IntegrationSettingsStore): Promise<void>;
+}
+
+async function resolveScopeTarget(
   env: Env,
-  match: RegExpMatchArray
-): Promise<
-  | {
-      integrationId: EnvironmentSettingsIntegrationId;
-      environmentId: string;
-      store: IntegrationSettingsStore;
+  match: RegExpMatchArray,
+  level: SettingsLevel
+): Promise<SettingsScopeTarget | Response> {
+  const id = extractIntegrationId(match);
+  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+
+  switch (level) {
+    case "global":
+      return {
+        fields: { integrationId: id },
+        logFields: { integration_id: id },
+        event: "integration_settings",
+        get: (store) => store.getGlobal(id),
+        set: (store, settings) => store.setGlobal(id, settings),
+        remove: (store) => store.deleteGlobal(id),
+      };
+    case "repo": {
+      const params = extractRepoParams(match);
+      if (params instanceof Response) return params;
+      const repo = `${params.owner}/${params.name}`;
+      return {
+        fields: { integrationId: id, repo },
+        logFields: { integration_id: id, repo },
+        event: "integration_repo_settings",
+        get: (store) => store.getRepoSettings(id, repo),
+        set: (store, settings) => store.setRepoSettings(id, repo, settings),
+        remove: (store) => store.deleteRepoSettings(id, repo),
+      };
     }
-  | Response
-> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-  if (!supportsEnvironmentSettings(id)) {
-    return error(`Integration ${id} does not support environment-level settings`, 400);
-  }
-
-  const environmentId = match.groups?.environmentId;
-  if (!environmentId) return error("Environment ID required", 400);
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const environmentStore = new EnvironmentStore(env.DB);
-  if (!(await environmentStore.getById(environmentId))) {
-    return error("Environment not found", 404);
-  }
-
-  return { integrationId: id, environmentId, store: new IntegrationSettingsStore(env.DB) };
-}
-
-async function handleGetIntegrationSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  if (!env.DB) {
-    return json({ integrationId: id, settings: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const settings = await store.getGlobal(id);
-  return json({ integrationId: id, settings });
-}
-
-async function handleSetIntegrationSettings(
-  request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
-  if (body instanceof Response) return body;
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-
-  try {
-    await store.setGlobal(id, body.settings);
-
-    logger.info("integration_settings.updated", {
-      event: "integration_settings.updated",
-      integration_id: id,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "updated", integrationId: id });
-  } catch (e) {
-    if (e instanceof IntegrationSettingsValidationError) {
-      return error(e.message, 400);
+    case "environment": {
+      // Environment-level overrides exist only for the session-scoped
+      // integrations, and — because the settings table is an owned child of
+      // `environments` — only for environments that exist. The existence
+      // check needs storage, so it is skipped when D1 is unbound and the
+      // handlers' own storage guards answer instead.
+      if (!supportsEnvironmentSettings(id)) {
+        return error(`Integration ${id} does not support environment-level settings`, 400);
+      }
+      const environmentId = match.groups?.environmentId;
+      if (!environmentId) return error("Environment ID required", 400);
+      if (env.DB && !(await new EnvironmentStore(env.DB).getById(environmentId))) {
+        return error("Environment not found", 404);
+      }
+      return {
+        fields: { integrationId: id, environmentId },
+        logFields: { integration_id: id, environment_id: environmentId },
+        event: "integration_environment_settings",
+        get: (store) => store.getEnvironmentSettings(id, environmentId),
+        set: (store, settings) => store.setEnvironmentSettings(id, environmentId, settings),
+        remove: (store) => store.deleteEnvironmentSettings(id, environmentId),
+      };
     }
-    logger.error("Failed to update integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
   }
 }
 
-async function handleDeleteIntegrationSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+/** The GET/PUT/DELETE handler trio for one settings level. */
+function settingsHandlers(level: SettingsLevel): {
+  get: Route["handler"];
+  set: Route["handler"];
+  remove: Route["handler"];
+} {
+  return {
+    get: async (_request, env, match, _ctx) => {
+      const target = await resolveScopeTarget(env, match, level);
+      if (target instanceof Response) return target;
 
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
+      if (!env.DB) {
+        return json({ ...target.fields, settings: null });
+      }
 
-  const store = new IntegrationSettingsStore(env.DB);
+      const settings = await target.get(new IntegrationSettingsStore(env.DB));
+      return json({ ...target.fields, settings });
+    },
 
-  try {
-    await store.deleteGlobal(id);
+    set: async (request, env, match, ctx) => {
+      const target = await resolveScopeTarget(env, match, level);
+      if (target instanceof Response) return target;
 
-    logger.info("integration_settings.deleted", {
-      event: "integration_settings.deleted",
-      integration_id: id,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
+      if (!env.DB) {
+        return error("Integration settings storage is not configured", 503);
+      }
 
-    return json({ status: "deleted", integrationId: id });
-  } catch (e) {
-    logger.error("Failed to delete integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
+      const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
+      if (body instanceof Response) return body;
+
+      if (!body?.settings || typeof body.settings !== "object") {
+        return error("Request body must include settings object", 400);
+      }
+
+      try {
+        await target.set(new IntegrationSettingsStore(env.DB), body.settings);
+
+        logger.info(`${target.event}.updated`, {
+          event: `${target.event}.updated`,
+          ...target.logFields,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+
+        return json({ status: "updated", ...target.fields });
+      } catch (e) {
+        if (e instanceof IntegrationSettingsValidationError) {
+          return error(e.message, 400);
+        }
+        logger.error(`Failed to update ${level} integration settings`, {
+          error: e instanceof Error ? e.message : String(e),
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+        return error("Integration settings storage unavailable", 503);
+      }
+    },
+
+    remove: async (_request, env, match, ctx) => {
+      const target = await resolveScopeTarget(env, match, level);
+      if (target instanceof Response) return target;
+
+      if (!env.DB) {
+        return error("Integration settings storage is not configured", 503);
+      }
+
+      try {
+        await target.remove(new IntegrationSettingsStore(env.DB));
+
+        logger.info(`${target.event}.deleted`, {
+          event: `${target.event}.deleted`,
+          ...target.logFields,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+
+        return json({ status: "deleted", ...target.fields });
+      } catch (e) {
+        logger.error(`Failed to delete ${level} integration settings`, {
+          error: e instanceof Error ? e.message : String(e),
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+        return error("Integration settings storage unavailable", 503);
+      }
+    },
+  };
 }
+
+const globalSettings = settingsHandlers("global");
+const repoSettings = settingsHandlers("repo");
+const environmentSettings = settingsHandlers("environment");
 
 async function handleListRepoSettings(
   _request: Request,
@@ -194,212 +227,6 @@ async function handleListRepoSettings(
   const store = new IntegrationSettingsStore(env.DB);
   const repos = await store.listRepoSettings(id);
   return json({ integrationId: id, repos });
-}
-
-async function handleGetRepoSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
-
-  const repo = `${owner}/${name}`;
-
-  if (!env.DB) {
-    return json({ integrationId: id, repo, settings: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const settings = await store.getRepoSettings(id, repo);
-  return json({ integrationId: id, repo, settings });
-}
-
-async function handleSetRepoSettings(
-  request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
-  if (body instanceof Response) return body;
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const repo = `${owner}/${name}`;
-
-  try {
-    await store.setRepoSettings(id, repo, body.settings);
-
-    logger.info("integration_repo_settings.updated", {
-      event: "integration_repo_settings.updated",
-      integration_id: id,
-      repo,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "updated", integrationId: id, repo });
-  } catch (e) {
-    if (e instanceof IntegrationSettingsValidationError) {
-      return error(e.message, 400);
-    }
-    logger.error("Failed to update repo integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
-}
-
-async function handleDeleteRepoSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const repo = `${owner}/${name}`;
-
-  try {
-    await store.deleteRepoSettings(id, repo);
-
-    logger.info("integration_repo_settings.deleted", {
-      event: "integration_repo_settings.deleted",
-      integration_id: id,
-      repo,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "deleted", integrationId: id, repo });
-  } catch (e) {
-    logger.error("Failed to delete repo integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
-}
-
-async function handleGetEnvironmentSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(env, match);
-  if (params instanceof Response) return params;
-  const { integrationId, environmentId, store } = params;
-
-  const settings = await store.getEnvironmentSettings(integrationId, environmentId);
-  return json({ integrationId, environmentId, settings });
-}
-
-async function handleSetEnvironmentSettings(
-  request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(env, match);
-  if (params instanceof Response) return params;
-  const { integrationId, environmentId, store } = params;
-
-  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
-  if (body instanceof Response) return body;
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
-
-  try {
-    await store.setEnvironmentSettings(integrationId, environmentId, body.settings);
-
-    logger.info("integration_environment_settings.updated", {
-      event: "integration_environment_settings.updated",
-      integration_id: integrationId,
-      environment_id: environmentId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "updated", integrationId, environmentId });
-  } catch (e) {
-    if (e instanceof IntegrationSettingsValidationError) {
-      return error(e.message, 400);
-    }
-    logger.error("Failed to update environment integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
-}
-
-async function handleDeleteEnvironmentSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(env, match);
-  if (params instanceof Response) return params;
-  const { integrationId, environmentId, store } = params;
-
-  try {
-    await store.deleteEnvironmentSettings(integrationId, environmentId);
-
-    logger.info("integration_environment_settings.deleted", {
-      event: "integration_environment_settings.deleted",
-      integration_id: integrationId,
-      environment_id: environmentId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "deleted", integrationId, environmentId });
-  } catch (e) {
-    logger.error("Failed to delete environment integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
 }
 
 async function handleGetResolvedConfig(
@@ -511,17 +338,17 @@ export const integrationSettingsRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id"),
-    handler: handleGetIntegrationSettings,
+    handler: globalSettings.get,
   },
   {
     method: "PUT",
     pattern: parsePattern("/integration-settings/:id"),
-    handler: handleSetIntegrationSettings,
+    handler: globalSettings.set,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/integration-settings/:id"),
-    handler: handleDeleteIntegrationSettings,
+    handler: globalSettings.remove,
   },
   // Integration settings — per-repo
   {
@@ -532,34 +359,34 @@ export const integrationSettingsRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
-    handler: handleGetRepoSettings,
+    handler: repoSettings.get,
   },
   {
     method: "PUT",
     pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
-    handler: handleSetRepoSettings,
+    handler: repoSettings.set,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
-    handler: handleDeleteRepoSettings,
+    handler: repoSettings.remove,
   },
   // Integration settings — per-environment (design §13.5; sandbox and
   // code-server only)
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
-    handler: handleGetEnvironmentSettings,
+    handler: environmentSettings.get,
   },
   {
     method: "PUT",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
-    handler: handleSetEnvironmentSettings,
+    handler: environmentSettings.set,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
-    handler: handleDeleteEnvironmentSettings,
+    handler: environmentSettings.remove,
   },
   // Resolved config — used by bots at runtime
   {

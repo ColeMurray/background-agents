@@ -508,7 +508,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({
-            settings: { tunnelPorts: [3000], terminalEnabled: false },
+            settings: { tunnelPorts: [3000] },
           }),
         })
       );
@@ -740,7 +740,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({
-            settings: { tunnelPorts: [3000], terminalEnabled: false },
+            settings: { tunnelPorts: [3000] },
           }),
         })
       );
@@ -804,7 +804,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({
-            settings: { tunnelPorts: [], terminalEnabled: false, cpuCores: 4 },
+            settings: { cpuCores: 4 },
           }),
         })
       );
@@ -868,8 +868,6 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
           method: "PUT",
           body: JSON.stringify({
             settings: {
-              tunnelPorts: [],
-              terminalEnabled: false,
               cpuCores: null,
               memoryMib: null,
             },
@@ -944,7 +942,6 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
           body: JSON.stringify({
             settings: {
               tunnelPorts: [3000],
-              terminalEnabled: false,
               cpuCores: null,
               memoryMib: null,
             },
@@ -1050,8 +1047,8 @@ describe("SandboxSettingsEditor — environment scope", () => {
     await user.type(screen.getByLabelText("Image Build Timeout"), "2400");
     await user.click(screen.getByText("Save Settings"));
 
-    // Inherited cpu (and the untouched build-timeout base) must not be pinned
-    // as environment overrides.
+    // Only the edited field is pinned — inherited cpu and the inherited
+    // build-timeout base stay inherited.
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         environmentSettingsKey,
@@ -1059,10 +1056,49 @@ describe("SandboxSettingsEditor — environment scope", () => {
           method: "PUT",
           body: JSON.stringify({
             settings: {
-              tunnelPorts: [],
-              terminalEnabled: false,
               buildTimeoutSeconds: 2400,
             },
+          }),
+        })
+      );
+    });
+  });
+
+  it("displays inherited ports and terminal state without pinning them on save", async () => {
+    const { fetchMock } = renderEnvironmentEditor({
+      [SETTINGS_KEY]: {
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: [3000], terminalEnabled: true } },
+      },
+      [repoSettingsKey]: {
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: { buildTimeoutSeconds: 1200 },
+      },
+      [environmentSettingsKey]: {
+        integrationId: "sandbox",
+        environmentId: "env_1",
+        settings: null,
+      },
+    });
+
+    // Inherited values render instead of blanks/false…
+    expect(screen.getByPlaceholderText("e.g. 3000")).toHaveValue("3000");
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Image Build Timeout")).toHaveValue(1200);
+
+    // …and saving an unrelated edit writes only that edit, never the
+    // inherited ports/toggle/timeout.
+    await user.type(screen.getByLabelText("CPU cores"), "2");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        environmentSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: { cpuCores: 2 },
           }),
         })
       );
