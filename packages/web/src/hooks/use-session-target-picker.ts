@@ -11,6 +11,7 @@ import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import {
   type SessionTarget,
+  type SessionTargetRequestFields,
   NO_REPOSITORY_OPTION_VALUE,
   MULTIPLE_REPOSITORIES_OPTION_VALUE,
   buildSessionTargetRequestFields,
@@ -43,7 +44,8 @@ function describeEnvironment(
   return `${base} · prebuilds on`;
 }
 
-export interface SessionTargetPickerState {
+/** Render contract for SessionTargetPicker: the target/branch/multi-select controls. */
+export interface SessionTargetPickerProps {
   sessionTarget: SessionTarget | null;
   targetSelectValue: string;
   targetOptions: ComboboxOption[] | ComboboxGroup[];
@@ -56,22 +58,32 @@ export interface SessionTargetPickerState {
   loadingBranches: boolean;
   repos: Repo[];
   loadingRepos: boolean;
+}
+
+/** Launch-facing selection state for the page: warming identity and request construction. */
+export interface SessionTargetSelection {
+  sessionTarget: SessionTarget | null;
+  selectedBranch: string;
+  repos: Repo[];
+  loadingRepos: boolean;
   /** The selected repository's metadata when the target is a single repo. */
   selectedRepo: Repo | undefined;
   isLaunchable: boolean;
   /** Selection identity for the sandbox-warming config check. */
   configKey: string;
   /** Request-body fields for the current target, or null when not launchable. */
-  buildRequestFields: () => Record<string, unknown> | null;
+  buildRequestFields: () => SessionTargetRequestFields | null;
+  /** Everything SessionTargetPicker needs to render the controls. */
+  pickerProps: SessionTargetPickerProps;
 }
 
 /**
  * Owns the new-session target selection: SessionTarget state, the unified
  * environment/repository option list, branch and multi-repo handling, and
- * request-field construction. Rendered by SessionTargetPicker; the page keeps
- * model, prompt, and warming.
+ * request-field construction. The controls render through SessionTargetPicker
+ * via `pickerProps`; the page keeps model, prompt, and warming.
  */
-export function useSessionTargetPicker(): SessionTargetPickerState {
+export function useSessionTargetPicker(): SessionTargetSelection {
   const { repos, loading: loadingRepos } = useRepos();
   const { environments } = useEnvironments();
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
@@ -142,7 +154,7 @@ export function useSessionTargetPicker(): SessionTargetPickerState {
     setSessionTarget({ kind: "repos", repoFullNames });
   }, []);
 
-  const buildRequestFields = useCallback((): Record<string, unknown> | null => {
+  const buildRequestFields = useCallback((): SessionTargetRequestFields | null => {
     if (!sessionTarget || !isSessionTargetLaunchable(sessionTarget)) return null;
     return buildSessionTargetRequestFields(sessionTarget, selectedBranch);
   }, [sessionTarget, selectedBranch]);
@@ -208,20 +220,26 @@ export function useSessionTargetPicker(): SessionTargetPickerState {
 
   return {
     sessionTarget,
-    targetSelectValue: getTargetSelectValue(sessionTarget),
-    targetOptions,
-    displayTargetName,
-    onTargetSelectValueChange,
-    onMultiSelectionChange,
     selectedBranch,
-    setSelectedBranch,
-    branches,
-    loadingBranches,
     repos,
     loadingRepos,
     selectedRepo,
     isLaunchable: isSessionTargetLaunchable(sessionTarget),
     configKey: getTargetConfigKey(sessionTarget),
     buildRequestFields,
+    pickerProps: {
+      sessionTarget,
+      targetSelectValue: getTargetSelectValue(sessionTarget),
+      targetOptions,
+      displayTargetName,
+      onTargetSelectValueChange,
+      onMultiSelectionChange,
+      selectedBranch,
+      setSelectedBranch,
+      branches,
+      loadingBranches,
+      repos,
+      loadingRepos,
+    },
   };
 }

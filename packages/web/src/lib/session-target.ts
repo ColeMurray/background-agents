@@ -83,12 +83,19 @@ export function isSessionTargetLaunchable(target: SessionTarget | null): boolean
 
 /**
  * The target's fields for the POST /api/sessions body: exactly one of the
- * scalar repo form, `environmentId`, or `repositories` (design §5.5).
+ * scalar repo form, `environmentId`, or `repositories` (design §5.5). Mirrors
+ * the mutually exclusive modes of createSessionRequestSchema.
  */
+export type SessionTargetRequestFields =
+  | { repoOwner: null; repoName: null }
+  | { repoOwner: string; repoName: string; branch?: string }
+  | { environmentId: string }
+  | { repositories: Array<{ repoOwner: string; repoName: string }> };
+
 export function buildSessionTargetRequestFields(
   target: SessionTarget,
   selectedBranch: string
-): Record<string, unknown> {
+): SessionTargetRequestFields {
   switch (target.kind) {
     case "none":
       return { repoOwner: null, repoName: null };

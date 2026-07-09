@@ -3,7 +3,7 @@
 import { RepositoryMultiSelect } from "@/components/repository-multi-select";
 import { Combobox } from "@/components/ui/combobox";
 import { BranchIcon, ChevronDownIcon, RepoIcon } from "@/components/ui/icons";
-import type { SessionTargetPickerState } from "@/hooks/use-session-target-picker";
+import type { SessionTargetPickerProps } from "@/hooks/use-session-target-picker";
 
 /**
  * The new-session target controls: the unified environment/repository
@@ -11,27 +11,20 @@ import type { SessionTargetPickerState } from "@/hooks/use-session-target-picker
  * State and option building live in useSessionTargetPicker.
  */
 export function SessionTargetPicker({
-  picker,
+  sessionTarget,
+  targetSelectValue,
+  targetOptions,
+  displayTargetName,
+  onTargetSelectValueChange,
+  onMultiSelectionChange,
+  selectedBranch,
+  setSelectedBranch,
+  branches,
+  loadingBranches,
+  repos,
+  loadingRepos,
   disabled,
-}: {
-  picker: SessionTargetPickerState;
-  disabled: boolean;
-}) {
-  const {
-    sessionTarget,
-    targetSelectValue,
-    targetOptions,
-    displayTargetName,
-    onTargetSelectValueChange,
-    onMultiSelectionChange,
-    selectedBranch,
-    setSelectedBranch,
-    branches,
-    loadingBranches,
-    repos,
-    loadingRepos,
-  } = picker;
-
+}: SessionTargetPickerProps & { disabled: boolean }) {
   return (
     <>
       {/* Target selector */}

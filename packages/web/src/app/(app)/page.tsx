@@ -21,7 +21,7 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {
   useSessionTargetPicker,
-  type SessionTargetPickerState,
+  type SessionTargetSelection,
 } from "@/hooks/use-session-target-picker";
 import { SessionTargetPicker } from "@/components/session-target-picker";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
@@ -282,7 +282,7 @@ function HomeContent({
   modelOptions,
 }: {
   isAuthenticated: boolean;
-  picker: SessionTargetPickerState;
+  picker: SessionTargetSelection;
   selectedModel: string;
   setSelectedModel: (value: string) => void;
   reasoningEffort: string | undefined;
@@ -384,7 +384,7 @@ function HomeContent({
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
                   {/* Left side - Target selector + Model selector */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                    <SessionTargetPicker picker={picker} disabled={creating} />
+                    <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
 
                     {/* Model selector */}
                     <Combobox
