@@ -1,13 +1,13 @@
-import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {
-  MAX_TOTAL_VALUE_SIZE,
-  MAX_SECRETS_PER_SCOPE,
-  SecretsValidationError,
-  normalizeKey,
-  validateKey,
-  validateValue,
-} from "./secrets-validation";
+  assertScopeKeyCapacity,
+  decryptSecretRows,
+  encryptSecretEntries,
+  prepareSecretsForWrite,
+  toSecretMetadata,
+} from "./scoped-secrets";
+import type { SecretsWriteResult } from "./scoped-secrets";
+import { normalizeKey } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 
 const log = createLogger("global-secrets");
@@ -18,24 +18,9 @@ export class GlobalSecretsStore {
     private readonly encryptionKey: string
   ) {}
 
-  async setSecrets(
-    secrets: Record<string, string>
-  ): Promise<{ created: number; updated: number; keys: string[] }> {
+  async setSecrets(secrets: Record<string, string>): Promise<SecretsWriteResult> {
     const now = Date.now();
-
-    const normalized: Record<string, string> = {};
-    let totalValueBytes = 0;
-    for (const [rawKey, value] of Object.entries(secrets)) {
-      const key = normalizeKey(rawKey);
-      validateKey(key);
-      validateValue(value);
-      totalValueBytes += new TextEncoder().encode(value).length;
-      normalized[key] = value;
-    }
-
-    if (totalValueBytes > MAX_TOTAL_VALUE_SIZE) {
-      throw new SecretsValidationError(`Total secret size exceeds ${MAX_TOTAL_VALUE_SIZE} bytes`);
-    }
+    const normalized = prepareSecretsForWrite(secrets);
 
     const existingKeys = await this.db
       .prepare("SELECT key FROM global_secrets")
@@ -43,36 +28,25 @@ export class GlobalSecretsStore {
     const existingKeySet = new Set((existingKeys.results || []).map((r) => r.key));
 
     const incomingKeys = Object.keys(normalized);
-    const netNew = incomingKeys.filter((k) => !existingKeySet.has(k)).length;
-    if (existingKeySet.size + netNew > MAX_SECRETS_PER_SCOPE) {
-      throw new SecretsValidationError(
-        `Global secrets would exceed ${MAX_SECRETS_PER_SCOPE} secrets limit ` +
-          `(current: ${existingKeySet.size}, adding: ${netNew})`
-      );
-    }
+    assertScopeKeyCapacity("Global secrets", existingKeySet, incomingKeys);
 
-    let created = 0;
-    let updated = 0;
+    const { entries, created, updated } = await encryptSecretEntries(
+      normalized,
+      existingKeySet,
+      this.encryptionKey
+    );
 
-    const statements: D1PreparedStatement[] = [];
-    for (const [key, value] of Object.entries(normalized)) {
-      const encrypted = await encryptToken(value, this.encryptionKey);
-      const isNew = !existingKeySet.has(key);
-      if (isNew) created++;
-      else updated++;
-
-      statements.push(
-        this.db
-          .prepare(
-            `INSERT INTO global_secrets (key, encrypted_value, created_at, updated_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(key) DO UPDATE SET
-               encrypted_value = excluded.encrypted_value,
-               updated_at = excluded.updated_at`
-          )
-          .bind(key, encrypted, now, now)
-      );
-    }
+    const statements = entries.map((entry) =>
+      this.db
+        .prepare(
+          `INSERT INTO global_secrets (key, encrypted_value, created_at, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+             encrypted_value = excluded.encrypted_value,
+             updated_at = excluded.updated_at`
+        )
+        .bind(entry.key, entry.encryptedValue, now, now)
+    );
 
     if (statements.length > 0) {
       await this.db.batch(statements);
@@ -86,11 +60,7 @@ export class GlobalSecretsStore {
       .prepare("SELECT key, created_at, updated_at FROM global_secrets ORDER BY key")
       .all<{ key: string; created_at: number; updated_at: number }>();
 
-    return (result.results || []).map((row) => ({
-      key: row.key,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return toSecretMetadata(result.results || []);
   }
 
   async getDecryptedSecrets(): Promise<Record<string, string>> {
@@ -98,23 +68,12 @@ export class GlobalSecretsStore {
       .prepare("SELECT key, encrypted_value FROM global_secrets")
       .all<{ key: string; encrypted_value: string }>();
 
-    const rows = result.results || [];
-    const decryptedEntries = await Promise.all(
-      rows.map(async (row) => {
-        try {
-          const decryptedValue = await decryptToken(row.encrypted_value, this.encryptionKey);
-          return [row.key, decryptedValue] as const;
-        } catch (e) {
-          log.error("Failed to decrypt global secret", {
-            key: row.key,
-            error: e instanceof Error ? e.message : String(e),
-          });
-          throw new Error(`Failed to decrypt global secret '${row.key}'`);
-        }
-      })
-    );
-
-    return Object.fromEntries(decryptedEntries);
+    return decryptSecretRows({
+      rows: result.results || [],
+      encryptionKey: this.encryptionKey,
+      log,
+      noun: "global secret",
+    });
   }
 
   async deleteSecret(key: string): Promise<boolean> {
