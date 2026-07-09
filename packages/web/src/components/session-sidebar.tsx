@@ -212,7 +212,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
   // Sort sessions by updatedAt (most recent first), filter by search query,
   // and group children under their parent sessions
-  const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
+  const { activeSessions, inactiveSessions, childrenMap, hasFilteredSessions } = useMemo(() => {
     const filtered = sessions
       .filter((session) => session.status !== "archived")
       .filter((session) => {
@@ -263,7 +263,12 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       }
     }
 
-    return { activeSessions: active, inactiveSessions: inactive, childrenMap: children };
+    return {
+      activeSessions: active,
+      inactiveSessions: inactive,
+      childrenMap: children,
+      hasFilteredSessions: filtered.length > 0,
+    };
   }, [sessions, searchQuery]);
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
@@ -441,7 +446,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           </div>
         ) : sessions.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">{emptyMessage}</div>
-        ) : searchQuery && activeSessions.length === 0 && inactiveSessions.length === 0 ? (
+        ) : searchQuery && !hasFilteredSessions ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
             No matching sessions
           </div>
