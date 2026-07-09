@@ -46,6 +46,10 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:gpt-5.5" }])).toBe("openai/gpt-5.5");
   });
 
+  it.each(["gpt-5.2", "gpt-5.2-codex"])("returns null for unsupported model:%s label", (model) => {
+    expect(extractModelFromLabels([{ name: `model:${model}` }])).toBeNull();
+  });
+
   it.each([
     ["sol", "openai/gpt-5.6-sol"],
     ["terra", "openai/gpt-5.6-terra"],

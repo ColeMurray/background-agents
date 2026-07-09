@@ -25,13 +25,11 @@ const ANTHROPIC_MODELS = [
 ] as const;
 
 const OPENAI_MODELS = [
-  "openai/gpt-5.2",
   "openai/gpt-5.4",
   "openai/gpt-5.5",
   "openai/gpt-5.6-sol",
   "openai/gpt-5.6-terra",
   "openai/gpt-5.6-luna",
-  "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
   "openai/gpt-5.3-codex-spark",
 ] as const;
@@ -79,7 +77,18 @@ describe("model utilities", () => {
   });
 
   it("rejects invalid, legacy, empty, and case-mismatched models", () => {
-    for (const model of ["gpt-4", "claude-3-opus", "claude-3-haiku", "haiku", "", "invalid"]) {
+    for (const model of [
+      "gpt-4",
+      "gpt-5.2",
+      "openai/gpt-5.2",
+      "gpt-5.2-codex",
+      "openai/gpt-5.2-codex",
+      "claude-3-opus",
+      "claude-3-haiku",
+      "haiku",
+      "",
+      "invalid",
+    ]) {
       expect(isValidModel(model)).toBe(false);
     }
     expect(isValidModel("Claude-Haiku-4-5")).toBe(false);
@@ -110,7 +119,8 @@ describe("model utilities", () => {
 
   it("returns canonical valid models or the default fallback", () => {
     expect(getValidModelOrDefault("claude-sonnet-4-6")).toBe("anthropic/claude-sonnet-4-6");
-    expect(getValidModelOrDefault("gpt-5.2-codex")).toBe("openai/gpt-5.2-codex");
+    expect(getValidModelOrDefault("gpt-5.3-codex")).toBe("openai/gpt-5.3-codex");
+    expect(getValidModelOrDefault("gpt-5.2-codex")).toBe(DEFAULT_MODEL);
     expect(getValidModelOrDefault("invalid-model")).toBe(DEFAULT_MODEL);
     expect(getValidModelOrDefault(undefined)).toBe(DEFAULT_MODEL);
     expect(getValidModelOrDefault(null)).toBe(DEFAULT_MODEL);
@@ -120,7 +130,7 @@ describe("model utilities", () => {
   it("reports reasoning support and default efforts", () => {
     expect(supportsReasoning("anthropic/claude-sonnet-4-6")).toBe(true);
     expect(supportsReasoning("claude-opus-4-8")).toBe(true);
-    expect(supportsReasoning("openai/gpt-5.2")).toBe(true);
+    expect(supportsReasoning("openai/gpt-5.4")).toBe(true);
     expect(supportsReasoning("openai/gpt-5.6-terra")).toBe(true);
     expect(supportsReasoning("deepseek/deepseek-v4-flash")).toBe(false);
     expect(supportsReasoning("invalid")).toBe(false);
@@ -148,7 +158,7 @@ describe("model utilities", () => {
       efforts: ["low", "medium", "high", "xhigh", "max"],
       default: "high",
     });
-    expect(getReasoningConfig("openai/gpt-5.2")).toEqual({
+    expect(getReasoningConfig("openai/gpt-5.4")).toEqual({
       efforts: ["none", "low", "medium", "high", "xhigh"],
       default: undefined,
     });
@@ -156,7 +166,7 @@ describe("model utilities", () => {
       efforts: ["none", "low", "medium", "high", "xhigh"],
       default: undefined,
     });
-    expect(getReasoningConfig("openai/gpt-5.2-codex")).toEqual({
+    expect(getReasoningConfig("openai/gpt-5.3-codex")).toEqual({
       efforts: ["low", "medium", "high", "xhigh"],
       default: "high",
     });
@@ -169,10 +179,10 @@ describe("model utilities", () => {
     expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "xhigh")).toBe(true);
     expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "none")).toBe(false);
     expect(isValidReasoningEffort("anthropic/claude-fable-5", "max")).toBe(true);
-    expect(isValidReasoningEffort("openai/gpt-5.2", "none")).toBe(true);
+    expect(isValidReasoningEffort("openai/gpt-5.4", "none")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.6-sol", "xhigh")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.6-sol", "max")).toBe(false);
-    expect(isValidReasoningEffort("openai/gpt-5.2-codex", "max")).toBe(false);
+    expect(isValidReasoningEffort("openai/gpt-5.3-codex", "max")).toBe(false);
     expect(isValidReasoningEffort("deepseek/deepseek-v4-pro", "high")).toBe(false);
     expect(isValidReasoningEffort("invalid", "high")).toBe(false);
     expect(isValidReasoningEffort("anthropic/claude-sonnet-4-5", "")).toBe(false);

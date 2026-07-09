@@ -213,12 +213,12 @@ describe("SlackIntegrationSettings", () => {
 
     const modelSection = screen.getByText("Default model").closest("div")!;
     await user.click(within(modelSection).getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "GPT 5.2" }));
+    await user.click(await screen.findByRole("option", { name: "GPT 5.4" }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
-    expect(body.settings.defaults?.model).toBe("openai/gpt-5.2");
+    expect(body.settings.defaults?.model).toBe("openai/gpt-5.4");
   });
 
   it("clearing the selected default model omits model while preserving other defaults", async () => {
@@ -227,7 +227,7 @@ describe("SlackIntegrationSettings", () => {
       global: {
         defaults: {
           agentNotificationsEnabled: true,
-          model: "openai/gpt-5.2",
+          model: "openai/gpt-5.4",
           mentionsPolicy: "strip",
           routingRules: [{ keyword: "frontend", target: "acme/web" }],
         },
