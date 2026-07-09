@@ -40,3 +40,31 @@ export async function controlPlaneFetch(
         headers: { ...headers, "User-Agent": "open-inspect-slack-bot" },
       });
 }
+
+/** A non-OK control-plane response, carrying the status for structured logs. */
+export class ControlPlaneRequestError extends Error {
+  constructor(
+    path: string,
+    readonly status: number
+  ) {
+    super(`Control plane GET ${path} failed with ${status}`);
+    this.name = "ControlPlaneRequestError";
+  }
+}
+
+/**
+ * GET a control-plane endpoint and return its JSON body, throwing
+ * {@link ControlPlaneRequestError} on a non-OK response — the loader shape
+ * cached resources expect.
+ */
+export async function fetchControlPlaneJson(
+  env: Env,
+  path: string,
+  traceId?: string
+): Promise<unknown> {
+  const response = await controlPlaneFetch(env, path, traceId);
+  if (!response.ok) {
+    throw new ControlPlaneRequestError(path, response.status);
+  }
+  return response.json();
+}

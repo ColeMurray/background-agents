@@ -2,35 +2,34 @@
  * Environment fetching from the control plane, for routing rules that target a
  * saved environment.
  *
- * A declaration over the shared cached read pipeline (in-memory → control
- * plane → KV, **fail open to an empty list**) so an environments-fetch problem
- * never blocks classification — rules targeting an environment are simply
- * skipped, like rules targeting an inaccessible repository.
+ * A cached resource (in-memory → control plane → KV, **fail open to an empty
+ * list**) so an environments-fetch problem never blocks classification —
+ * rules targeting an environment are simply skipped, like rules targeting an
+ * inaccessible repository.
  */
 
 import type { Environment, ListEnvironmentsResponse } from "@open-inspect/shared";
 import type { Env } from "../types";
-import { createCachedControlPlaneRead } from "./cached-read";
+import { createCachedResource } from "./cached-resource";
+import { fetchControlPlaneJson } from "./control-plane";
 
-const environmentsRead = createCachedControlPlaneRead<Environment[]>({
-  loggerName: "environments",
-  path: "/environments",
-  kvCacheKey: "slack:environments",
-  fetchLogEvent: "control_plane.fetch_environments",
-  kvLogKeyPrefix: "environments_cache",
-  parseResponse: (body) => {
-    const environments = (body as ListEnvironmentsResponse).environments;
-    return Array.isArray(environments) ? environments : [];
+const environments = createCachedResource<Environment[]>({
+  name: "environments",
+  kvKey: "slack:environments",
+  load: async (env, traceId) => {
+    const body = await fetchControlPlaneJson(env, "/environments", traceId);
+    const list = (body as ListEnvironmentsResponse).environments;
+    return Array.isArray(list) ? list : [];
   },
-  parseCached: (cached) => (Array.isArray(cached) ? (cached as Environment[]) : null),
-  empty: [],
+  deserialize: (cached) => (Array.isArray(cached) ? (cached as Environment[]) : null),
+  fallback: [],
 });
 
 /**
  * Fetch the workspace's environments from the control plane.
  */
 export async function getAvailableEnvironments(env: Env, traceId?: string): Promise<Environment[]> {
-  return environmentsRead.read(env, traceId);
+  return environments.get(env, traceId);
 }
 
 /**
@@ -41,13 +40,13 @@ export async function getEnvironmentById(
   environmentId: string,
   traceId?: string
 ): Promise<Environment | undefined> {
-  const environments = await getAvailableEnvironments(env, traceId);
-  return environments.find((environment) => environment.id === environmentId);
+  const all = await getAvailableEnvironments(env, traceId);
+  return all.find((environment) => environment.id === environmentId);
 }
 
 /**
- * Clear the local cache (for testing or forced refresh).
+ * Clear the in-memory cache (for testing or forced refresh).
  */
 export function clearEnvironmentsLocalCache(): void {
-  environmentsRead.clearLocalCache();
+  environments.invalidate();
 }

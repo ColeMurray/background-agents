@@ -14,8 +14,13 @@ import {
   type SlackGlobalConfig,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
-import { createCachedControlPlaneRead } from "./cached-read";
-import { controlPlaneFetch, KV_CACHE_TTL_SECONDS, LOCAL_CACHE_TTL_MS } from "./control-plane";
+import { createCachedResource } from "./cached-resource";
+import {
+  controlPlaneFetch,
+  fetchControlPlaneJson,
+  KV_CACHE_TTL_SECONDS,
+  LOCAL_CACHE_TTL_MS,
+} from "./control-plane";
 import { createLogger } from "../logger";
 
 const log = createLogger("repos");
@@ -166,23 +171,22 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
  * default. Normalizes on every path (fresh and KV-fallback) so callers see
  * one canonical shape.
  */
-const routingRulesRead = createCachedControlPlaneRead<SlackRoutingRule[]>({
-  loggerName: "repos",
-  path: "/integration-settings/slack",
-  kvCacheKey: "slack:routing-rules",
-  fetchLogEvent: "control_plane.fetch_routing_rules",
-  kvLogKeyPrefix: "routing_rules_cache",
-  parseResponse: (body) =>
-    normalizeRoutingRules(
+const routingRules = createCachedResource<SlackRoutingRule[]>({
+  name: "routing_rules",
+  kvKey: "slack:routing-rules",
+  load: async (env, traceId) => {
+    const body = await fetchControlPlaneJson(env, "/integration-settings/slack", traceId);
+    return normalizeRoutingRules(
       (body as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
-    ),
-  parseCached: (cached) =>
+    );
+  },
+  deserialize: (cached) =>
     Array.isArray(cached) ? normalizeRoutingRules(cached as SlackRoutingRule[]) : null,
-  empty: [],
+  fallback: [],
 });
 
 export async function getRoutingRules(env: Env, traceId?: string): Promise<SlackRoutingRule[]> {
-  return routingRulesRead.read(env, traceId);
+  return routingRules.get(env, traceId);
 }
 
 /**
@@ -330,5 +334,5 @@ export async function buildRepoDescriptions(env: Env, traceId?: string): Promise
  */
 export function clearLocalCache(): void {
   localCache = null;
-  routingRulesRead.clearLocalCache();
+  routingRules.invalidate();
 }
