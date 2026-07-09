@@ -7,9 +7,10 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { Env, Environment, RepoConfig, ThreadContext, ClassificationResult } from "../types";
-import { getAvailableRepos, buildRepoDescriptions } from "./repos";
-import { buildEnvironmentDescriptions, getAvailableEnvironments } from "./environments";
+import type { Env, ThreadContext, ClassificationResult } from "../types";
+import { buildRepoDescriptions } from "./repos";
+import { buildEnvironmentDescriptions } from "./environments";
+import { loadTargetCatalog, type TargetCatalog } from "./catalog";
 import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText, type ConfidenceLevel } from "@open-inspect/shared";
 import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
@@ -53,26 +54,24 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
 };
 
 /**
- * Build the classification prompt for the LLM.
+ * Build the classification prompt for the LLM over the target catalog.
  */
-async function buildClassificationPrompt(
-  env: Env,
+function buildClassificationPrompt(
   message: string,
-  environments: Environment[],
-  context?: ThreadContext,
-  traceId?: string
-): Promise<string> {
-  const repoDescriptions = await buildRepoDescriptions(env, traceId);
+  catalog: TargetCatalog,
+  context?: ThreadContext
+): string {
+  const repoDescriptions = buildRepoDescriptions(catalog.repos);
 
   const environmentSection =
-    environments.length > 0
+    catalog.environments.length > 0
       ? `
 ## Available Environments
 
 Environments are saved multi-repository workspaces. Prefer an environment over a
 single repository when the message names it, or when the work spans several of
 its repositories.
-${buildEnvironmentDescriptions(environments)}
+${buildEnvironmentDescriptions(catalog.environments)}
 `
       : "";
 
@@ -216,10 +215,10 @@ export class RepoClassifier {
    */
   private async classifyByRoutingRules(
     message: string,
-    repos: RepoConfig[],
+    catalog: TargetCatalog,
     traceId?: string
   ): Promise<ClassificationResult | null> {
-    const resolved = await resolveRoutingRuleTargets(this.env, message, repos, traceId);
+    const resolved = await resolveRoutingRuleTargets(this.env, message, catalog, traceId);
     if (resolved.length === 0) return null;
 
     if (resolved.length === 1) {
@@ -253,17 +252,17 @@ export class RepoClassifier {
    *
    * Returns a high-confidence result when the channel is associated with
    * exactly one target. Several associated repositories fall through (`null`)
-   * to the LLM, which already sees channel associations as a prompt signal —
-   * but the LLM cannot pick an environment until environments join its
-   * candidate set (Phase B), so a multi-target set that includes an
-   * environment asks the user instead of silently dropping it.
+   * to the LLM, which is told to weigh channel context — but channel
+   * associations themselves aren't part of its prompt signal, so a
+   * multi-target set that includes an environment asks the user
+   * deterministically instead of letting the model drop the association.
    */
-  private async classifyByChannelAssociations(
+  private classifyByChannelAssociations(
     channelId: string,
-    repos: RepoConfig[],
+    catalog: TargetCatalog,
     traceId?: string
-  ): Promise<ClassificationResult | null> {
-    const targets = await resolveChannelTargets(this.env, channelId, repos, traceId);
+  ): ClassificationResult | null {
+    const targets = resolveChannelTargets(catalog, channelId);
 
     if (targets.length === 1) {
       const target = targets[0];
@@ -295,18 +294,19 @@ export class RepoClassifier {
   }
 
   /**
-   * Classify which repository a message refers to.
+   * Classify which target a message refers to.
    */
   async classify(
     message: string,
     context?: ThreadContext,
     traceId?: string
   ): Promise<ClassificationResult> {
-    // Fetch available repos dynamically
-    const repos = await getAvailableRepos(this.env, traceId);
+    // The target catalog every stage below works over. Environments fail open
+    // to []: an environments-fetch problem degrades the catalog — and with it
+    // classification — to repository-only.
+    const catalog = await loadTargetCatalog(this.env, traceId);
 
-    // If no repos available, return immediately
-    if (repos.length === 0) {
+    if (catalog.repos.length === 0) {
       return {
         target: null,
         confidence: "low",
@@ -320,7 +320,7 @@ export class RepoClassifier {
     // which would otherwise make environment-targeted rules unreachable in
     // one-repo workspaces — but never override an active thread (handled before
     // classify is called).
-    const routed = await this.classifyByRoutingRules(message, repos, traceId);
+    const routed = await this.classifyByRoutingRules(message, catalog, traceId);
     if (routed) {
       return routed;
     }
@@ -329,20 +329,16 @@ export class RepoClassifier {
     // rules, they run before the single-repo shortcut so a channel associated
     // with an environment stays reachable in one-repo workspaces.
     const channelRouted = context?.channelId
-      ? await this.classifyByChannelAssociations(context.channelId, repos, traceId)
+      ? this.classifyByChannelAssociations(context.channelId, catalog, traceId)
       : null;
     if (channelRouted) {
       return channelRouted;
     }
 
-    // Environments join the LLM's candidate set (fail-open []: an
-    // environments-fetch problem degrades to repository-only classification).
-    const environments = await getAvailableEnvironments(this.env, traceId);
-
     // With a single repository and no environments there is nothing to choose.
-    if (repos.length === 1 && environments.length === 0) {
+    if (catalog.repos.length === 1 && catalog.environments.length === 0) {
       return {
-        target: { kind: "repository", repo: repos[0] },
+        target: { kind: "repository", repo: catalog.repos[0] },
         confidence: "high",
         reasoning: "Only one repository is available.",
         needsClarification: false,
@@ -351,13 +347,7 @@ export class RepoClassifier {
 
     // Use LLM for classification
     try {
-      const prompt = await buildClassificationPrompt(
-        this.env,
-        message,
-        environments,
-        context,
-        traceId
-      );
+      const prompt = buildClassificationPrompt(message, catalog, context);
 
       const response = await this.client.messages.create({
         model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
@@ -379,14 +369,12 @@ export class RepoClassifier {
 
       const llmResult = extractStructuredResponse(response);
 
-      const matchedTarget = llmResult.targetId
-        ? matchTargetId(llmResult.targetId, repos, environments)
-        : null;
+      const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 
       // Resolve alternatives, deduplicated and never repeating the match.
       const alternatives: SlackSessionTarget[] = [];
       for (const altId of llmResult.alternatives) {
-        const target = matchTargetId(altId, repos, environments);
+        const target = matchTargetId(altId, catalog);
         if (
           target &&
           (!matchedTarget || targetValue(target) !== targetValue(matchedTarget)) &&

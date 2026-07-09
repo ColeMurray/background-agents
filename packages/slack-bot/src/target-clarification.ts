@@ -9,7 +9,8 @@
  */
 
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
-import { getAvailableEnvironments, getEnvironmentById } from "./classifier/environments";
+import { getEnvironmentById } from "./classifier/environments";
+import { loadTargetCatalog, type TargetCatalog } from "./classifier/catalog";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { plainTextOption } from "./slack-options";
 import { parseTargetValue, targetValue, type SlackSessionTarget } from "./targets";
@@ -171,15 +172,12 @@ export async function getTargetClarificationOptions(
   query: string | undefined,
   traceId?: string
 ): Promise<TargetClarificationOptions> {
-  const [environments, repos] = await Promise.all([
-    getAvailableEnvironments(env, traceId),
-    getAvailableRepos(env, traceId),
-  ]);
-  const matchedEnvironments = filterEnvironmentsByQuery(environments, query).slice(
+  const catalog = await loadTargetCatalog(env, traceId);
+  const matchedEnvironments = filterEnvironmentsByQuery(catalog.environments, query).slice(
     0,
     MAX_REPO_SUGGESTION_OPTIONS
   );
-  const matchedRepos = filterReposByQuery(repos, query).slice(
+  const matchedRepos = filterReposByQuery(catalog.repos, query).slice(
     0,
     MAX_REPO_SUGGESTION_OPTIONS - matchedEnvironments.length
   );
@@ -187,9 +185,9 @@ export async function getTargetClarificationOptions(
 }
 
 function buildTargetPickerAccessory(
-  repos: RepoConfig[],
-  environments: Environment[]
+  catalog: TargetCatalog
 ): SlackStaticSelectElement | SlackExternalSelectElement {
+  const { repos, environments } = catalog;
   const total = repos.length + environments.length;
   const placeholder = {
     type: "plain_text" as const,
@@ -278,15 +276,15 @@ function duplicateDisplayNames(targets: SlackSessionTarget[]): Set<string> {
 export function buildTargetClarificationBlocks(
   reasoning: string,
   alternatives: SlackSessionTarget[] | undefined,
-  repos: RepoConfig[],
-  environments: Environment[]
+  catalog: TargetCatalog
 ): Array<SlackSectionBlock | SlackActionsBlock> {
   const quickPicks = alternatives?.length ? buildTargetQuickPickButtons(alternatives) : [];
-  const total = repos.length + environments.length;
+  const total = catalog.repos.length + catalog.environments.length;
   const usesInlinePicker = total > 0 && total <= MAX_REPO_SUGGESTION_OPTIONS;
   // The headline names environments only when the workspace has any on offer.
   const offersEnvironments =
-    environments.length > 0 || (alternatives?.some((t) => t.kind === "environment") ?? false);
+    catalog.environments.length > 0 ||
+    (alternatives?.some((t) => t.kind === "environment") ?? false);
   const subject = offersEnvironments ? "repository or environment" : "repository";
 
   const blocks: Array<SlackSectionBlock | SlackActionsBlock> = [
@@ -314,7 +312,7 @@ export function buildTargetClarificationBlocks(
             : `Or search for another ${subject}:`
           : `Which ${subject} should I work with?`,
     },
-    accessory: buildTargetPickerAccessory(repos, environments),
+    accessory: buildTargetPickerAccessory(catalog),
   });
 
   return blocks;

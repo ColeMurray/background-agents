@@ -24,7 +24,7 @@ import {
 import { escapeMrkdwnText, resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
-import { getAvailableEnvironments } from "./classifier/environments";
+import { loadTargetCatalog } from "./classifier/catalog";
 import {
   branchPreferenceRepo,
   buildSessionTargetRequestFields,
@@ -932,10 +932,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   // Post initial response
   if (result.needsClarification || !result.target) {
     // Need to clarify which target; the picker offers both kinds.
-    const repos = await getAvailableRepos(env, traceId);
-    const environments = await getAvailableEnvironments(env, traceId);
+    const catalog = await loadTargetCatalog(env, traceId);
 
-    if (repos.length === 0) {
+    if (catalog.repos.length === 0) {
       await postMessage(
         env.SLACK_BOT_TOKEN,
         channel,
@@ -962,15 +961,10 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
-      `I couldn't determine which ${environments.length > 0 ? "repository or environment" : "repository"} you're referring to. ${result.reasoning}`,
+      `I couldn't determine which ${catalog.environments.length > 0 ? "repository or environment" : "repository"} you're referring to. ${result.reasoning}`,
       {
         thread_ts: threadTs || ts,
-        blocks: buildTargetClarificationBlocks(
-          result.reasoning,
-          result.alternatives,
-          repos,
-          environments
-        ),
+        blocks: buildTargetClarificationBlocks(result.reasoning, result.alternatives, catalog),
       }
     );
     return;

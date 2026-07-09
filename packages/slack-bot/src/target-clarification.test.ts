@@ -303,12 +303,10 @@ describe("getTargetClarificationOptions", () => {
 describe("buildTargetClarificationBlocks", () => {
   it("renders an inline picker when the target list fits in Slack's static option limit", () => {
     const repos = [repo("acme/web"), repo("acme/api")];
-    const blocks = buildTargetClarificationBlocks(
-      "could not tell which repo",
-      undefined,
+    const blocks = buildTargetClarificationBlocks("could not tell which repo", undefined, {
       repos,
-      []
-    );
+      environments: [],
+    });
 
     expect(blocks).toHaveLength(2);
     expect(blocks.some((block) => block.type === "actions")).toBe(false);
@@ -333,7 +331,7 @@ describe("buildTargetClarificationBlocks", () => {
   it("groups the inline picker and names both kinds when environments exist", () => {
     const repos = [repo("acme/web")];
     const environments = [environment("env_abc123", "full-stack")];
-    const blocks = buildTargetClarificationBlocks("unsure", undefined, repos, environments);
+    const blocks = buildTargetClarificationBlocks("unsure", undefined, { repos, environments });
 
     expect(blocks).toMatchObject([
       { type: "section", text: { text: expect.stringContaining("repository or environment") } },
@@ -364,8 +362,7 @@ describe("buildTargetClarificationBlocks", () => {
     const blocks = buildTargetClarificationBlocks(
       "maybe one of these",
       [repoTarget("acme/web"), repoTarget("acme/api")],
-      repos,
-      []
+      { repos, environments: [] }
     );
 
     expect(blocks).toHaveLength(3);
@@ -391,8 +388,7 @@ describe("buildTargetClarificationBlocks", () => {
     const blocks = buildTargetClarificationBlocks(
       "one of these",
       [repoTarget("acme/web"), environmentTarget("env_abc123", "full-stack")],
-      [repo("acme/web")],
-      []
+      { repos: [repo("acme/web")], environments: [] }
     );
 
     expect(blocks[0]).toMatchObject({
@@ -409,7 +405,10 @@ describe("buildTargetClarificationBlocks", () => {
     const repos = Array.from({ length: MAX_REPO_SUGGESTION_OPTIONS + 1 }, (_, idx) =>
       repo(`acme/repo-${idx}`)
     );
-    const blocks = buildTargetClarificationBlocks("too many to inline", undefined, repos, []);
+    const blocks = buildTargetClarificationBlocks("too many to inline", undefined, {
+      repos,
+      environments: [],
+    });
 
     expect(blocks).toMatchObject([
       { type: "section" },

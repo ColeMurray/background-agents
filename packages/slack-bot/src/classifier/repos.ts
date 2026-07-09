@@ -305,12 +305,10 @@ export async function getRepoById(
 }
 
 /**
- * Build a description string for all available repos.
+ * Build a description string for the given repos.
  * Used in the classification prompt.
  */
-export async function buildRepoDescriptions(env: Env, traceId?: string): Promise<string> {
-  const repos = await getAvailableRepos(env, traceId);
-
+export function buildRepoDescriptions(repos: RepoConfig[]): string {
   if (repos.length === 0) {
     return "No repositories are currently available.";
   }

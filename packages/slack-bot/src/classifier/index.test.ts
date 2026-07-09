@@ -327,13 +327,14 @@ describe("RepoClassifier", () => {
       expect(result.reasoning).not.toContain("<!channel>");
     });
 
-    it("does not fetch environments when no matched rule targets one", async () => {
+    it("loads the target catalog exactly once per classification", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
 
       const classifier = new RepoClassifier(TEST_ENV);
       await classifier.classify("frontend tweak");
 
-      expect(mockGetAvailableEnvironments).not.toHaveBeenCalled();
+      expect(mockGetAvailableRepos).toHaveBeenCalledOnce();
+      expect(mockGetAvailableEnvironments).toHaveBeenCalledOnce();
     });
 
     it("routes an environment rule even when only one repository is available", async () => {
