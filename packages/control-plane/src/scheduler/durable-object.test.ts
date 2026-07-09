@@ -125,6 +125,17 @@ vi.mock("../db/user-store", () => ({
   }),
 }));
 
+const mockEnvironmentGetById = vi.fn().mockResolvedValue(null);
+const mockEnvironmentRepositories = vi.fn().mockResolvedValue([]);
+vi.mock("../db/environments", () => ({
+  EnvironmentStore: vi.fn().mockImplementation(function () {
+    return {
+      getById: mockEnvironmentGetById,
+      getRepositoriesForEnvironment: mockEnvironmentRepositories,
+    };
+  }),
+}));
+
 const mockGetSlackAutomationsForChannel = vi.fn().mockResolvedValue([]);
 vi.mock("../db/slack-channel-store", () => ({
   SlackChannelStore: vi.fn().mockImplementation(function () {
@@ -290,6 +301,7 @@ const sampleAutomation = {
   created_at: now - 86400000,
   updated_at: now - 86400000,
   deleted_at: null,
+  environment_id: null as string | null,
 };
 
 function repositoryRow(automationId: string, overrides?: Record<string, unknown>) {
@@ -658,6 +670,124 @@ describe("SchedulerDO", () => {
           repoOwner: null,
           repoName: null,
           baseBranch: null,
+        })
+      );
+    });
+
+    it("launches one environment session for environment-bound automations", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([
+        { ...sampleAutomation, environment_id: "env_1" },
+      ]);
+      selectRepositories("auto-1", []);
+      mockEnvironmentGetById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
+      mockEnvironmentRepositories.mockResolvedValue([
+        { repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" },
+        { repo_owner: "acme", repo_name: "api", repo_id: 67890, base_branch: "develop" },
+      ]);
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+        repoId: name === "api" ? 67890 : 12345,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      }));
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      // The environment path is the repo-less fan-out shape: exactly one child,
+      // with no repository snapshot of its own.
+      expect(lastInsertedChildren()).toEqual([
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+          status: "starting",
+        }),
+      ]);
+
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.environmentId).toBe("env_1");
+      expect(initBody.repositories).toEqual([
+        { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", repoId: 67890, baseBranch: "develop" },
+      ]);
+      // Primary member mirrored into the scalar fields.
+      expect(initBody.repoOwner).toBe("acme");
+      expect(initBody.repoName).toBe("web-app");
+      expect(initBody.repoId).toBe(12345);
+      expect(initBody.defaultBranch).toBe("main");
+      expect(promptCallCount(fetchMock)).toBe(1);
+    });
+
+    it("fails the child run when the bound environment no longer exists", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([
+        { ...sampleAutomation, environment_id: "env_gone" },
+      ]);
+      selectRepositories("auto-1", []);
+      mockEnvironmentGetById.mockResolvedValue(null);
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(promptCallCount(fetchMock)).toBe(0);
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: expect.stringContaining("Environment not found: env_gone"),
+        })
+      );
+      // Launch failures have no callback coming — the strike applies now.
+      expect(mockStore.getInvocationRunAggregate).toHaveBeenCalled();
+    });
+
+    it("fails the child run when an environment member is inaccessible", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([
+        { ...sampleAutomation, environment_id: "env_1" },
+      ]);
+      selectRepositories("auto-1", []);
+      mockEnvironmentGetById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
+      mockEnvironmentRepositories.mockResolvedValue([
+        { repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" },
+        { repo_owner: "acme", repo_name: "api", repo_id: 67890, base_branch: "develop" },
+      ]);
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+        name === "api"
+          ? null
+          : { repoId: 12345, repoOwner: owner, repoName: name, defaultBranch: "main" }
+      );
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(promptCallCount(fetchMock)).toBe(0);
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: expect.stringContaining("acme/api"),
         })
       );
     });

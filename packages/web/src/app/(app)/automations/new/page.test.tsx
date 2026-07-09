@@ -28,6 +28,10 @@ vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: [], loading: false }),
 }));
 
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: () => ({ environments: [], loading: false }),
+}));
+
 vi.mock("@/hooks/use-branches", () => ({
   useBranches: () => ({ branches: [], loading: false }),
 }));

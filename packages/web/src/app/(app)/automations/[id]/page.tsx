@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { describeCron, getReasoningConfig } from "@open-inspect/shared";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
+import { useEnvironments } from "@/hooks/use-environments";
 import { RunHistory } from "@/components/automations/run-history";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { ConditionSummary } from "@/components/automations/condition-summary";
@@ -23,6 +24,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { isOpen, toggle } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
+  const { environments } = useEnvironments();
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
   // the next page in one request. Fine at automation-history scale; revisit
@@ -134,10 +136,20 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <AutomationStatusBadge automation={automation} />
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                {formatRepositoriesLabel(automation.repositories)}
-                {automation.repositories.length === 1 &&
-                  automation.repositories[0].baseBranch &&
-                  ` · ${automation.repositories[0].baseBranch}`}
+                {automation.environmentId ? (
+                  <>
+                    Environment:{" "}
+                    {environments.find((environment) => environment.id === automation.environmentId)
+                      ?.name ?? automation.environmentId}
+                  </>
+                ) : (
+                  <>
+                    {formatRepositoriesLabel(automation.repositories)}
+                    {automation.repositories.length === 1 &&
+                      automation.repositories[0].baseBranch &&
+                      ` · ${automation.repositories[0].baseBranch}`}
+                  </>
+                )}
               </p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">

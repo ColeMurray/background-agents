@@ -55,6 +55,15 @@ vi.mock("../db/user-store", () => ({
   }),
 }));
 
+const mockEnvironmentStore = {
+  getById: vi.fn(),
+};
+vi.mock("../db/environments", () => ({
+  EnvironmentStore: vi.fn().mockImplementation(function () {
+    return mockEnvironmentStore;
+  }),
+}));
+
 vi.mock("../auth/crypto", () => ({
   generateId: vi.fn(() => "generated-id"),
 }));
@@ -153,6 +162,7 @@ const sampleRow = {
   created_at: now,
   updated_at: now,
   deleted_at: null,
+  environment_id: null,
 };
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -169,6 +179,7 @@ describe("automation route handlers", () => {
     mockStore.bindRepositoryInserts.mockReturnValue([{ sql: "insert-repositories" }]);
     mockStore.bindReplaceRepositories.mockReturnValue([{ sql: "replace-repositories" }]);
     mockBatch.mockResolvedValue([]);
+    mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -297,6 +308,97 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
         error: "Multi-repository selections require a schedule trigger",
+      });
+    });
+
+    it("creates an environment-bound automation with an empty selection", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Workspace sync",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          environmentId: "env_1",
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockEnvironmentStore.getById).toHaveBeenCalledWith("env_1");
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ environment_id: "env_1" })
+      );
+      expect(mockStore.bindRepositoryInserts).toHaveBeenCalledWith(
+        "generated-id",
+        [],
+        expect.any(Number)
+      );
+    });
+
+    it("rejects environmentId together with repositories", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, environmentId: "env_1" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "environmentId and repositories are mutually exclusive",
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown environment", async () => {
+      mockEnvironmentStore.getById.mockResolvedValue(null);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Workspace sync",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          environmentId: "env_missing",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Environment not found: env_missing" });
+    });
+
+    it("rejects a malformed environmentId", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Workspace sync",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          environmentId: "not-an-environment",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "environmentId must be an environment id (env_…)",
+      });
+      expect(mockEnvironmentStore.getById).not.toHaveBeenCalled();
+    });
+
+    it("rejects environment bindings on repo-scoped event triggers", async () => {
+      // The zero-repository count rule fires before the binding is even read:
+      // github_event/linear_event automations stay repo-bound.
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "PR review",
+          instructions: "Review",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          environmentId: "env_1",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "Repository-scoped triggers require exactly one repository",
       });
     });
 
@@ -541,6 +643,98 @@ describe("automation route handlers", () => {
         "auto-1",
         expect.objectContaining({ model: "openai/gpt-5.4", reasoning_effort: null })
       );
+    });
+
+    it("binds an environment when the repository selection is empty", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { environmentId: "env_1" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockEnvironmentStore.getById).toHaveBeenCalledWith("env_1");
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ environment_id: "env_1" })
+      );
+    });
+
+    it("rejects binding an environment while repository rows remain", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.getRepositoriesForAutomation.mockResolvedValue([
+        { repo_owner: "acme", repo_name: "web-app" },
+      ]);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { environmentId: "env_1" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "environmentId and repositories are mutually exclusive",
+      });
+    });
+
+    it("rejects adding repositories while an environment binding remains", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repositories: [{ repoOwner: "acme", repoName: "web-app" }] },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "environmentId and repositories are mutually exclusive",
+      });
+    });
+
+    it("clears the environment binding with null", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { environmentId: null },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ environment_id: null })
+      );
+    });
+
+    it("swaps the environment binding for repositories in one update", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          environmentId: null,
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ environment_id: null })
+      );
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledWith(
+        "auto-1",
+        [{ repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" }],
+        expect.any(Number)
+      );
+    });
+
+    it("rejects an unknown environment on update", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockEnvironmentStore.getById.mockResolvedValue(null);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { environmentId: "env_missing" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Environment not found: env_missing" });
     });
 
     it("clears repository context with an empty repositories list", async () => {

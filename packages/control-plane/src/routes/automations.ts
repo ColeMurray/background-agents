@@ -25,13 +25,14 @@ import {
   type AutomationRow,
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
+import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
 import { resolveProviderIdentity, type SessionIdentityFields } from "../session/identity";
 import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import { automationRepositoriesInputSchema } from "@open-inspect/shared";
+import { automationRepositoriesInputSchema, isEnvironmentId } from "@open-inspect/shared";
 import {
   type Route,
   type RequestContext,
@@ -76,14 +77,15 @@ type RepositorySelectionRequest =
   | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
- * Thrown by {@link parseRepositorySelection} when the `repositories` payload is
- * invalid. Route handlers catch it and answer 400 — the parser stays free of
- * HTTP concerns (mirrors normalizeOptionalRepositoryPair / RepositoryPairValidationError).
+ * Thrown by {@link parseRepositorySelection} and {@link parseEnvironmentBinding}
+ * when the launch-target payload is invalid. Route handlers catch it and answer
+ * 400 — the parsers stay free of HTTP concerns (mirrors
+ * normalizeOptionalRepositoryPair / RepositoryPairValidationError).
  */
-class RepositorySelectionError extends Error {
+class TargetSelectionError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "RepositorySelectionError";
+    this.name = "TargetSelectionError";
   }
 }
 
@@ -91,7 +93,7 @@ class RepositorySelectionError extends Error {
  * Parse the repository selection from a create/update body. `unchanged` means
  * the body did not touch the selection (create treats that as empty).
  *
- * @throws RepositorySelectionError when the `repositories` payload is invalid.
+ * @throws TargetSelectionError when the `repositories` payload is invalid.
  */
 function parseRepositorySelection(body: { repositories?: unknown }): RepositorySelectionRequest {
   if (body.repositories === undefined) return { kind: "unchanged" };
@@ -99,7 +101,7 @@ function parseRepositorySelection(body: { repositories?: unknown }): RepositoryS
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
-    throw new RepositorySelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
+    throw new TargetSelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
   }
   return { kind: "replace", repositories: parsed.data };
 }
@@ -111,11 +113,37 @@ function parseRepositorySelection(body: { repositories?: unknown }): RepositoryS
  */
 function validateRepositoryCount(triggerType: AutomationTriggerType, count: number): void {
   if (count === 0 && (triggerType === "github_event" || triggerType === "linear_event")) {
-    throw new RepositorySelectionError("Repository-scoped triggers require exactly one repository");
+    throw new TargetSelectionError("Repository-scoped triggers require exactly one repository");
   }
   if (count > 1 && triggerType !== "schedule") {
-    throw new RepositorySelectionError("Multi-repository selections require a schedule trigger");
+    throw new TargetSelectionError("Multi-repository selections require a schedule trigger");
   }
+}
+
+/**
+ * Validate the environment binding in a create/update body (design §13.3):
+ * `undefined` means the body did not touch the binding, null clears it, and a
+ * string binds the environment — which must exist. Exclusivity with the
+ * repository selection is a cross-field rule, checked in the handlers against
+ * the automation's final state.
+ *
+ * @throws TargetSelectionError when the value is malformed or the environment
+ * does not exist.
+ */
+async function parseEnvironmentBinding(
+  env: Env,
+  body: { environmentId?: unknown }
+): Promise<string | null | undefined> {
+  if (body.environmentId === undefined) return undefined;
+  if (body.environmentId === null) return null;
+  if (typeof body.environmentId !== "string" || !isEnvironmentId(body.environmentId)) {
+    throw new TargetSelectionError("environmentId must be an environment id (env_…)");
+  }
+  const environment = await new EnvironmentStore(env.DB).getById(body.environmentId);
+  if (!environment) {
+    throw new TargetSelectionError(`Environment not found: ${body.environmentId}`);
+  }
+  return body.environmentId;
 }
 
 /**
@@ -250,7 +278,7 @@ async function handleCreateAutomation(
   try {
     selection = parseRepositorySelection(body);
   } catch (e) {
-    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
   const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
@@ -271,8 +299,19 @@ async function handleCreateAutomation(
   try {
     validateRepositoryCount(triggerType, requestedRepositories.length);
   } catch (e) {
-    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
+  }
+
+  let environmentId: string | null;
+  try {
+    environmentId = (await parseEnvironmentBinding(env, body)) ?? null;
+  } catch (e) {
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    throw e;
+  }
+  if (environmentId && requestedRepositories.length > 0) {
+    return error("environmentId and repositories are mutually exclusive", 400);
   }
 
   const isSchedule = triggerType === "schedule";
@@ -402,6 +441,7 @@ async function handleCreateAutomation(
     event_type: body.eventType ?? null,
     trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
     trigger_auth_data: triggerAuthData,
+    environment_id: environmentId,
   };
 
   // Persist the automation, its repository selection, and (for slack_event)
@@ -429,6 +469,7 @@ async function handleCreateAutomation(
     event: "automation.created",
     automation_id: id,
     repo: newRepositories.map((repo) => `${repo.repo_owner}/${repo.repo_name}`).join(",") || null,
+    environment_id: environmentId,
     trigger_type: triggerType,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
@@ -566,7 +607,7 @@ async function handleUpdateAutomation(
   try {
     selection = parseRepositorySelection(body);
   } catch (e) {
-    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
 
@@ -578,12 +619,36 @@ async function handleUpdateAutomation(
         selection.repositories.length
       );
     } catch (e) {
-      if (e instanceof RepositorySelectionError) return error(e.message, 400);
+      if (e instanceof TargetSelectionError) return error(e.message, 400);
       throw e;
     }
     const resolved = await resolveRepositorySelection(env, selection.repositories, ctx);
     replacementRepositories = resolved;
   }
+
+  // Environment binding: exclusivity is checked against the automation's FINAL
+  // state, so both orders of arriving at "environment + repositories" 400 —
+  // binding an environment while repository rows remain, and adding
+  // repositories while a binding remains.
+  let environmentBinding: string | null | undefined;
+  try {
+    environmentBinding = await parseEnvironmentBinding(env, body);
+  } catch (e) {
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    throw e;
+  }
+  const finalEnvironmentId =
+    environmentBinding === undefined ? existing.environment_id : environmentBinding;
+  if (finalEnvironmentId) {
+    const finalRepositoryCount =
+      replacementRepositories !== null
+        ? replacementRepositories.length
+        : (await store.getRepositoriesForAutomation(id)).length;
+    if (finalRepositoryCount > 0) {
+      return error("environmentId and repositories are mutually exclusive", 400);
+    }
+  }
+  if (environmentBinding !== undefined) updateFields.environment_id = environmentBinding;
 
   // Update event type — only for non-schedule types
   if (body.eventType !== undefined) {

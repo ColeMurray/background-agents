@@ -18,6 +18,13 @@ vi.mock("next/link", () => ({
   default: ({ children, ...props }: ComponentProps<"a">) => <a {...props}>{children}</a>,
 }));
 
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: () => ({
+    environments: [{ id: "env_1", name: "Fullstack", repositories: [] }],
+    loading: false,
+  }),
+}));
+
 const noop = () => {};
 
 function makeAutomation(overrides: Partial<Automation> = {}): Automation {
@@ -40,6 +47,7 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
     eventType: null,
     triggerConfig: null,
     repositories: [{ repoOwner: "acme", repoName: "web-app", repoId: 1, baseBranch: "main" }],
+    environmentId: null,
     ...overrides,
   };
 }

@@ -1374,6 +1374,12 @@ export interface Automation {
   triggerConfig: TriggerConfig | null;
   /** Selected repositories (0..MAX_AUTOMATION_REPOSITORIES); the canonical repo representation. */
   repositories: AutomationRepository[];
+  /**
+   * Environment the automation opens instead of fanning out per repository
+   * (design §13.3): each firing launches one session with the environment's
+   * full workspace. Mutually exclusive with a non-empty repository selection.
+   */
+  environmentId: string | null;
 }
 
 export interface CreateAutomationRequest {
@@ -1389,6 +1395,8 @@ export interface CreateAutomationRequest {
   sentryClientSecret?: string;
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories?: AutomationRepositoryInput[];
+  /** Environment to open instead of a repository selection (design §13.3). */
+  environmentId?: string | null;
 }
 
 export interface UpdateAutomationRequest {
@@ -1402,6 +1410,8 @@ export interface UpdateAutomationRequest {
   triggerConfig?: TriggerConfig;
   /** Replaces the full repository selection when present. */
   repositories?: AutomationRepositoryInput[];
+  /** Binds an environment when a string, clears the binding when null. */
+  environmentId?: string | null;
 }
 
 export interface AutomationRun {
@@ -1449,7 +1459,11 @@ export type AutomationInvocationStatus =
   | "partial_failed"
   | "skipped";
 
-/** One firing of an automation: 0 runs when skipped, else one run per repository. */
+/**
+ * One firing of an automation: 0 runs when skipped, else one run per
+ * repository — which is a single run for repo-less and environment-bound
+ * automations.
+ */
 export interface AutomationInvocation {
   id: string;
   automationId: string;

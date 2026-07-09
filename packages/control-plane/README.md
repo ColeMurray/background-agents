@@ -155,10 +155,14 @@ mirroring the repo-image endpoints.
 | `/automations/:id/regenerate-key` | POST   | Rotate a webhook automation's API key                                   |
 
 An automation selects 0–10 repositories (`repositories: [{repoOwner, repoName, baseBranch?}]`;
-multi-repo selections require a schedule trigger). Each firing records one **invocation**; a
-non-skipped invocation fans out into one **run** per repository, and each run links to one session.
-Runs snapshot their repository at firing time, so editing the selection never rewrites history. See
-[docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.md) for the design decisions.
+multi-repo selections require a schedule trigger) — or binds an environment instead
+(`environmentId`, mutually exclusive with a non-empty selection and unavailable to the repo-scoped
+`github_event`/`linear_event` triggers). Each firing records one **invocation**; a non-skipped
+invocation fans out into one **run** per repository, and each run links to one session. Runs
+snapshot their repository at firing time, so editing the selection never rewrites history. An
+environment-bound firing has exactly one run whose session opens the environment's full workspace,
+resolved at launch time. See [docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.md)
+for the design decisions.
 
 An invocation's status is **derived from its child runs, never stored**: no children → `skipped`;
 any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
@@ -260,8 +264,9 @@ sessions index, repo metadata, and encrypted secrets:
 
 Automations:
 
-- `automations`: trigger, schedule, model, instructions, failure counter. The repository selection
-  lives in `automation_repositories`, not on this row.
+- `automations`: trigger, schedule, model, instructions, failure counter, and the optional
+  `environment_id` binding (shared-workspace mode). The repository selection lives in
+  `automation_repositories`, not on this row; a bound environment implies an empty selection.
 - `automation_repositories`: the live repository selection (0–10 rows per automation), unique per
   `(automation_id, repo_owner, repo_name)`.
 - `automation_invocations`: one thin row per firing — source, firing-scoped `trigger_key` (event

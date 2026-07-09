@@ -33,6 +33,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     event_type: null,
     trigger_config: null,
     trigger_auth_data: null,
+    environment_id: null,
     ...overrides,
   };
 }
@@ -118,6 +119,18 @@ describe("AutomationStore (D1 integration)", () => {
       const result = await store.getById("auto-uid-null");
       expect(result).not.toBeNull();
       expect(result!.user_id).toBeNull();
+    });
+
+    it("round-trips the environment binding, including clearing it", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-env", environment_id: "env_abc" }));
+
+      const created = await store.getById("auto-env");
+      expect(created!.environment_id).toBe("env_abc");
+
+      await store.update("auto-env", { environment_id: null });
+      const cleared = await store.getById("auto-env");
+      expect(cleared!.environment_id).toBeNull();
     });
 
     it("returns null for nonexistent automation", async () => {

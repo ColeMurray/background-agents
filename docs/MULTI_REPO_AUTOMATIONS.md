@@ -38,12 +38,12 @@ _repository_ rows.
 
 Answer: yes. A multi-repo firing fans out into one child session per selected repository.
 
-Reasoning: the session model is single-repository — each session has one repository, base branch,
-sync state, artifacts, and pull-request flow. Keeping sessions single-repo avoids cross-repo
-checkout and PR coordination inside one sandbox. Fan-out is the v1 execution shape; a future
-_workspace_ variant (one session that clones several repositories for atomic cross-repo work) is a
-separate follow-up and does not change this model — it would be a property of the session, not of
-the automation.
+Reasoning: fan-out keeps each repository's checkout, sync state, artifacts, and pull-request flow in
+its own session. The _workspace_ variant (one session that clones several repositories for atomic
+cross-repo work) shipped later as the environment binding: an automation may set `environmentId`
+instead of a repository selection, and each firing then launches exactly one session opening the
+environment's full workspace (multi-repo sessions design §13.3). The two modes are mutually
+exclusive per automation; fan-out remains the model for repository selections.
 
 ### How is a firing stored?
 

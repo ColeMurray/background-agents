@@ -38,6 +38,11 @@ export interface AutomationRow {
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
+  /**
+   * Environment the automation opens instead of fanning out per repository
+   * (design §13.3). Set ⇔ automation_repositories is empty for the automation.
+   */
+  environment_id: string | null;
 }
 
 export interface AutomationRunRow {
@@ -152,6 +157,7 @@ export function toAutomation(
     eventType: row.event_type ?? null,
     triggerConfig,
     repositories: repositoryRows.map(toAutomationRepository),
+    environmentId: row.environment_id,
   };
 }
 
@@ -267,8 +273,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-          event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          event_type, trigger_config, trigger_auth_data, environment_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -289,7 +295,8 @@ export class AutomationStore {
         row.deleted_at,
         row.event_type,
         row.trigger_config,
-        row.trigger_auth_data
+        row.trigger_auth_data,
+        row.environment_id
       );
   }
 
@@ -362,6 +369,7 @@ export class AutomationStore {
       "event_type",
       "trigger_config",
       "trigger_auth_data",
+      "environment_id",
     ];
 
     for (const field of allowedFields) {

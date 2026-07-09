@@ -46,6 +46,7 @@ function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
     event_type: null,
     trigger_config: null,
     trigger_auth_data: null,
+    environment_id: null,
     ...overrides,
   };
 }
@@ -63,6 +64,7 @@ async function createSentryAutomation(
     schedule_cron: null,
     next_run_at: null,
     trigger_auth_data: encrypted,
+    environment_id: null,
     ...overrides,
   });
   await store.create(automation);
@@ -225,6 +227,7 @@ describe("POST /webhooks/automation/:id", () => {
       schedule_cron: null,
       next_run_at: null,
       trigger_auth_data: hash,
+      environment_id: null,
       ...overrides,
     });
     await store.create(automation);
