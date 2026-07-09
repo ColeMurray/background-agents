@@ -8,9 +8,12 @@
  *   while keeping the JSON `level` field for programmatic filtering.
  * - JSON.stringify is wrapped in try/catch so a logging failure never crashes
  *   a request or Durable Object event.
- * - Reserved keys (`level`, `component`, `msg`, `ts`, `service`, `event`)
- *   cannot be overwritten by context or data — they are always set by the
- *   logger itself.
+ * - Logger-owned keys (`level`, `component`, `msg`, `ts`, `service`) cannot
+ *   be overwritten by context or data — they are always set by the logger
+ *   itself.
+ * - Other structured fields, including `event`, are merged in this order:
+ *   base context, child context, then per-call data. Later values override
+ *   earlier values when the same field is supplied more than once.
  *
  * Usage:
  *   const log = createLogger("worker", {}, "info", "my-service");
@@ -27,7 +30,7 @@ const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 export type LogLevel = keyof typeof LEVELS;
 
 /** Keys that the logger owns — context and data cannot overwrite these. */
-const RESERVED_KEYS = new Set(["level", "component", "msg", "ts", "service", "event"]);
+const RESERVED_KEYS = new Set(["level", "component", "msg", "ts", "service"]);
 
 /** Map log level to the appropriate console method for severity semantics. */
 const CONSOLE_METHOD: Record<LogLevel, "log" | "warn" | "error"> = {
