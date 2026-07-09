@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   DEFAULT_MODEL,
   getReasoningConfig,
@@ -46,9 +46,9 @@ import {
 import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import { ConditionBuilder } from "./condition-builder";
+import { useAutomationTargets } from "./use-automation-targets";
 import { cn } from "@/lib/utils";
 import { NO_REPOSITORY_LABEL, formatRepositoriesLabel } from "@/lib/repo-label";
-import { parseRepoFullName, type SessionTarget } from "@/lib/session-target";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -72,35 +72,9 @@ const DEFAULT_REASONING_VALUE = "__default__";
 // packages/control-plane/src/routes/automations.ts.
 const INSTRUCTIONS_MAX_LENGTH = 15000;
 const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
-type RepoSelectionMode = "single" | "multiple";
 
 function requiresRepositoryContext(triggerType: AutomationTriggerType): boolean {
   return triggerType === "github_event" || triggerType === "linear_event";
-}
-
-/** Selection key for a repository: the lowercase full name, as the API stores it. */
-function repositoryKey(repoOwner: string, repoName: string): string {
-  return `${repoOwner}/${repoName}`.toLowerCase();
-}
-
-/**
- * One entry of the automation's fan-out selection, reusing the shared
- * session-target model (lib/session-target.ts). An automation targets an
- * ordered list of launchable session targets: each `repo` entry runs in its
- * own session and each `environment` entry opens one workspace session. The
- * empty list is the repo-less selection ("No repository"). Single-select mode
- * replaces the whole list, so repo/environment mutual exclusivity there is
- * structural rather than enforced by cross-clearing effects.
- */
-type AutomationSessionTarget = Extract<SessionTarget, { kind: "repo" | "environment" }>;
-
-/**
- * Leaving multi-select keeps one target: the first repository, or the first
- * environment when only environments are selected.
- */
-function collapseToSingleTarget(targets: AutomationSessionTarget[]): AutomationSessionTarget[] {
-  const firstRepository = targets.find((target) => target.kind === "repo");
-  return firstRepository ? [firstRepository] : targets.slice(0, 1);
 }
 
 const toOption = (tz: string) => ({ value: tz, label: tz.replace(/_/g, " ") });
@@ -163,52 +137,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   );
 
   const [name, setName] = useState(initialValues?.name ?? "");
-  // The fan-out selection as one ordered list of session targets; repositories
-  // and environments hydrate in selection order within each kind.
-  const [selectedTargets, setSelectedTargets] = useState<AutomationSessionTarget[]>(() => [
-    ...initialRepositories.map(
-      (repository): AutomationSessionTarget => ({
-        kind: "repo",
-        repoFullName: repositoryKey(repository.repoOwner, repository.repoName),
-      })
-    ),
-    ...(initialValues?.environmentIds ?? []).map(
-      (environmentId): AutomationSessionTarget => ({ kind: "environment", environmentId })
-    ),
-  ]);
-  const [repoSelectionMode, setRepoSelectionMode] = useState<RepoSelectionMode>(() =>
-    // Combined count: a lone-repo default here would let the single-select
-    // collapse effect silently drop hydrated environment targets on edit.
-    initialRepositories.length + (initialValues?.environmentIds?.length ?? 0) > 1
-      ? "multiple"
-      : "single"
-  );
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
-  // Per-kind views of the selection, in target order. Payload fields and the
-  // render's selected-state checks derive from these.
-  const selectedRepoNames = useMemo(
-    () =>
-      selectedTargets.flatMap((target) => (target.kind === "repo" ? [target.repoFullName] : [])),
-    [selectedTargets]
-  );
-  const selectedEnvironmentIds = useMemo(
-    () =>
-      selectedTargets.flatMap((target) =>
-        target.kind === "environment" ? [target.environmentId] : []
-      ),
-    [selectedTargets]
-  );
-  const selectedRepoName = selectedRepoNames[0] ?? "";
-  const usesSingleRepository = selectedTargets.length === 1 && selectedTargets[0].kind === "repo";
-  const selectedRepository = usesSingleRepository ? parseRepoFullName(selectedRepoName) : null;
-  const { branches, loading: loadingBranches } = useBranches(
-    selectedRepository?.owner ?? "",
-    selectedRepository?.name ?? ""
-  );
-  const [baseBranch, setBaseBranch] = useState(() =>
-    initialRepositories.length === 1 ? (initialRepositories[0].baseBranch ?? "") : ""
-  );
   const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState(initialValues?.reasoningEffort ?? "");
   const [scheduleCron, setScheduleCron] = useState(initialValues?.scheduleCron ?? "0 9 * * *");
@@ -231,7 +161,37 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   // Multi-repository selections are schedule-only (the server rejects them for
   // event triggers), so the mode toggle only exists there.
   const multiRepoAllowed = isSchedule;
-  const multipleSelectionEnabled = multiRepoAllowed && repoSelectionMode === "multiple";
+
+  const {
+    selectedRepoNames,
+    selectedEnvironmentIds,
+    targetCount,
+    usesSingleRepository,
+    selectedRepository,
+    repositoryLabel,
+    multipleSelectionEnabled,
+    baseBranch,
+    setBaseBranch,
+    toggleRepository,
+    toggleEnvironment,
+    clearTargets,
+    toggleSelectionMode,
+    buildRepositoriesPayload,
+  } = useAutomationTargets({
+    initialRepositories,
+    initialEnvironmentIds: initialValues?.environmentIds ?? [],
+    multiRepoAllowed,
+    repositoryRequired,
+    repos,
+    environments,
+    loadingEnvironments,
+  });
+  // Branch options for the sole selected repository (the only branch-pickable shape).
+  const { branches, loading: loadingBranches } = useBranches(
+    selectedRepository?.owner ?? "",
+    selectedRepository?.name ?? ""
+  );
+
   const isSlack = triggerType === "slack_event";
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
   const repositorySelectionDescription = repositoryRequired
@@ -277,117 +237,23 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     }
   }, [showEventTypeSelector, eventType]);
 
-  const findRepo = useCallback(
-    (key: string) => repos.find((repo) => repo.fullName.toLowerCase() === key),
-    [repos]
-  );
+  // Selection transitions live in useAutomationTargets; the form only adds the
+  // dropdown-close behavior (single-select picks close the picker).
+  const handleRepoToggle = (repoFullName: string) => {
+    toggleRepository(repoFullName);
+    if (!multipleSelectionEnabled) setRepoDropdownOpen(false);
+  };
 
-  // Branch state follows repository membership: exactly one selected
-  // repository pins baseBranch to its default, anything else clears it.
-  // Environment-only mutations bypass this (setSelectedTargets directly) so a
-  // branch pick survives adding and removing environments around its repo.
-  const applyTargets = useCallback(
-    (nextTargets: AutomationSessionTarget[]) => {
-      setSelectedTargets(nextTargets);
-      const nextRepoNames = nextTargets.flatMap((target) =>
-        target.kind === "repo" ? [target.repoFullName] : []
-      );
-      if (nextRepoNames.length === 1) {
-        setBaseBranch(findRepo(nextRepoNames[0])?.defaultBranch ?? "");
-      } else {
-        setBaseBranch("");
-      }
-    },
-    [findRepo]
-  );
+  const handleEnvironmentToggle = (environmentId: string) => {
+    toggleEnvironment(environmentId);
+    if (!multipleSelectionEnabled) setRepoDropdownOpen(false);
+  };
 
-  useEffect(() => {
-    if (!multiRepoAllowed && repoSelectionMode === "multiple") {
-      setRepoSelectionMode("single");
-    }
-  }, [multiRepoAllowed, repoSelectionMode]);
-
-  // Repo-scoped triggers stay bound to the webhook's repository, so any
-  // environment targets (e.g. hydrated before a trigger-type change) drop out.
-  useEffect(() => {
-    if (!repositoryRequired) return;
-    if (!selectedTargets.some((target) => target.kind === "environment")) return;
-    setSelectedTargets(selectedTargets.filter((target) => target.kind === "repo"));
-  }, [repositoryRequired, selectedTargets]);
-
-  useEffect(() => {
-    if (multipleSelectionEnabled || selectedTargets.length <= 1) return;
-    applyTargets(collapseToSingleTarget(selectedTargets));
-  }, [applyTargets, multipleSelectionEnabled, selectedTargets]);
-
-  const targetCount = selectedTargets.length;
-
-  const handleRepoToggle = useCallback(
-    (repoFullName: string) => {
-      const target: AutomationSessionTarget = {
-        kind: "repo",
-        repoFullName: repoFullName.toLowerCase(),
-      };
-      if (!multipleSelectionEnabled) {
-        applyTargets([target]);
-        setRepoDropdownOpen(false);
-        return;
-      }
-
-      const selected = selectedRepoNames.includes(target.repoFullName);
-      if (!selected && targetCount >= MAX_AUTOMATION_REPOSITORIES) return;
-      applyTargets(
-        selected
-          ? selectedTargets.filter(
-              (entry) => !(entry.kind === "repo" && entry.repoFullName === target.repoFullName)
-            )
-          : [...selectedTargets, target]
-      );
-    },
-    [applyTargets, multipleSelectionEnabled, selectedRepoNames, selectedTargets, targetCount]
-  );
-
-  const handleEnvironmentToggle = useCallback(
-    (environmentId: string) => {
-      const target: AutomationSessionTarget = { kind: "environment", environmentId };
-      if (!multipleSelectionEnabled) {
-        applyTargets([target]);
-        setRepoDropdownOpen(false);
-        return;
-      }
-
-      const selected = selectedEnvironmentIds.includes(environmentId);
-      if (!selected && targetCount >= MAX_AUTOMATION_REPOSITORIES) return;
-      setSelectedTargets(
-        selected
-          ? selectedTargets.filter(
-              (entry) => !(entry.kind === "environment" && entry.environmentId === environmentId)
-            )
-          : [...selectedTargets, target]
-      );
-    },
-    [applyTargets, multipleSelectionEnabled, selectedEnvironmentIds, selectedTargets, targetCount]
-  );
-
-  const handleNoRepository = useCallback(() => {
+  const handleNoRepository = () => {
     if (repositoryRequired) return;
-    applyTargets([]);
+    clearTargets();
     setRepoDropdownOpen(false);
-  }, [applyTargets, repositoryRequired]);
-
-  const handleRepoSelectionModeToggle = useCallback(() => {
-    if (!multiRepoAllowed) return;
-
-    if (repoSelectionMode === "multiple") {
-      setRepoSelectionMode("single");
-      if (selectedTargets.length > 1) {
-        applyTargets(collapseToSingleTarget(selectedTargets));
-      }
-      return;
-    }
-
-    setRepoSelectionMode("multiple");
-  }, [applyTargets, multiRepoAllowed, repoSelectionMode, selectedTargets]);
+  };
 
   useEffect(() => {
     if (!repoDropdownOpen) {
@@ -429,21 +295,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       instructions: instructions.trim(),
       triggerType,
       // Always send the full selection — an empty list means repo-less.
-      repositories: selectedRepoNames.map((key) => {
-        const [entryOwner = "", entryName = ""] = key.split("/");
-        const entry: AutomationRepositoryInput = { repoOwner: entryOwner, repoName: entryName };
-        if (usesSingleRepository) {
-          if (baseBranch.trim()) entry.baseBranch = baseBranch.trim();
-        } else {
-          // Multi-repo selections have no branch picker; keep the branch each
-          // already-selected repository had so an unrelated edit can't reset it.
-          const existing = initialRepositories.find(
-            (repository) => repositoryKey(repository.repoOwner, repository.repoName) === key
-          );
-          if (existing?.baseBranch) entry.baseBranch = existing.baseBranch;
-        }
-        return entry;
-      }),
+      repositories: buildRepositoriesPayload(),
     };
 
     if (!isSchedule) {
@@ -481,32 +333,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     if (!query) return environments;
     return environments.filter((environment) => environment.name.toLowerCase().includes(query));
   }, [environments, repositoryRequired, repoQuery]);
-  const environmentName = (environmentId: string) =>
-    environments.find((environment) => environment.id === environmentId)?.name ??
-    (loadingEnvironments ? "Loading..." : environmentId);
-  const repositoryLabel = (() => {
-    if (targetCount === 0) return NO_REPOSITORY_LABEL;
-    if (selectedRepoNames.length === 1 && selectedEnvironmentIds.length === 0) {
-      return findRepo(selectedRepoName)?.fullName ?? selectedRepoName;
-    }
-    if (selectedEnvironmentIds.length === 1 && selectedRepoNames.length === 0) {
-      return environmentName(selectedEnvironmentIds[0]);
-    }
-    const parts: string[] = [];
-    if (selectedRepoNames.length > 0) {
-      parts.push(
-        selectedRepoNames.length === 1 ? "1 repository" : `${selectedRepoNames.length} repositories`
-      );
-    }
-    if (selectedEnvironmentIds.length > 0) {
-      parts.push(
-        selectedEnvironmentIds.length === 1
-          ? "1 environment"
-          : `${selectedEnvironmentIds.length} environments`
-      );
-    }
-    return parts.join(" + ");
-  })();
   const reasoningConfig = getReasoningConfig(resolvedModel);
 
   return (
@@ -664,12 +490,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                 All repositories
               </span>
               {multiRepoAllowed && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  onClick={handleRepoSelectionModeToggle}
-                >
+                <Button type="button" variant="outline" size="xs" onClick={toggleSelectionMode}>
                   {multipleSelectionEnabled ? "Select One" : "Select Multiple"}
                 </Button>
               )}
@@ -781,7 +602,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             searchPlaceholder="Search branches..."
             filterFn={(option, query) => option.label.toLowerCase().includes(query)}
             dropdownWidth="w-56"
-            disabled={!selectedRepoName || loadingBranches}
+            disabled={!selectedRepository || loadingBranches}
             triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
           >
             <BranchIcon className="w-3.5 h-3.5 text-muted-foreground" />
