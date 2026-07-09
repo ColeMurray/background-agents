@@ -27,7 +27,14 @@ import type {
 import { getRepoImagesUnsupportedMessage } from "../repo-images/provider-policy";
 import type { Env } from "../types";
 import { getRepoImageCallbackBearerToken } from "./repo-image-callback-auth";
-import { type RequestContext, type Route, error, json, parsePattern } from "./shared";
+import {
+  type RequestContext,
+  type Route,
+  error,
+  json,
+  parseMaxAgeMs,
+  parsePattern,
+} from "./shared";
 
 const logger = createLogger("router:environment-images");
 const MS_PER_SECOND = 1000;
@@ -212,7 +219,7 @@ function buildCompleteCommand(
   let buildDurationMs: number | undefined;
   if (body.build_duration_seconds !== undefined) {
     if (typeof body.build_duration_seconds !== "number") {
-      return error("build_duration_seconds is required", 400);
+      return error("build_duration_seconds must be a number", 400);
     }
     buildDurationMs = body.build_duration_seconds * MS_PER_SECOND;
   }
@@ -360,8 +367,11 @@ async function handleTriggerBuild(
 
 /**
  * GET /environment-images/status[?environment_id=...]
- * Image rows (non-superseded) for the cron and the settings UI. Rows are
- * returned verbatim (snake_case columns; repository_shas is a JSON document).
+ * With environment_id: that environment's recent non-superseded rows (the
+ * settings UI / debugging view, failed rows included). Without: the cron's
+ * view — ready and building rows across all prebuild-enabled environments.
+ * Rows are returned verbatim (snake_case columns; repository_shas is a JSON
+ * document).
  */
 async function handleGetStatus(
   request: Request,
@@ -381,7 +391,7 @@ async function handleGetStatus(
   try {
     const images = environmentId
       ? await store.getStatus(environmentId)
-      : await store.getAllStatus();
+      : await store.getStatusForEnabledEnvironments();
     return json({ images });
   } catch (e) {
     logger.error("environment_image.status_error", {
@@ -466,17 +476,8 @@ async function handleMarkStale(
   const dbError = requireDb(env);
   if (dbError) return dbError;
 
-  let body: { max_age_seconds?: number };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    body = {};
-  }
-
-  const maxAgeMs =
-    body.max_age_seconds === undefined
-      ? DEFAULT_STALE_BUILD_MAX_AGE_MS
-      : body.max_age_seconds * MS_PER_SECOND;
+  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_STALE_BUILD_MAX_AGE_MS);
+  if (maxAgeMs instanceof Response) return maxAgeMs;
 
   const store = new EnvironmentImageStore(env.DB);
 
@@ -518,17 +519,8 @@ async function handleCleanup(
   const dbError = requireDb(env);
   if (dbError) return dbError;
 
-  let body: { max_age_seconds?: number };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    body = {};
-  }
-
-  const maxAgeMs =
-    body.max_age_seconds === undefined
-      ? DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS
-      : body.max_age_seconds * MS_PER_SECOND;
+  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS);
+  if (maxAgeMs instanceof Response) return maxAgeMs;
 
   try {
     const result = await createEnvironmentImageBuildWorkflowFromEnv(env).cleanupImages(

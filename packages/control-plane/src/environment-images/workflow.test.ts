@@ -28,7 +28,7 @@ function createEnv(overrides: Partial<Env> = {}): Env {
 
 function createStore() {
   return {
-    registerBuild: vi.fn().mockResolvedValue(undefined),
+    registerBuild: vi.fn().mockResolvedValue(true),
     getActiveBuild: vi.fn().mockResolvedValue(null),
     hasReadyImageForFingerprint: vi.fn().mockResolvedValue(false),
     getCallbackBuild: vi.fn().mockResolvedValue(null),
@@ -45,7 +45,7 @@ function createStore() {
     deleteOldFailedBuilds: vi.fn().mockResolvedValue(0),
     markStaleBuildsAsFailed: vi.fn().mockResolvedValue(0),
     getStatus: vi.fn().mockResolvedValue([]),
-    getAllStatus: vi.fn().mockResolvedValue([]),
+    getStatusForEnabledEnvironments: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -184,6 +184,26 @@ describe("EnvironmentImageBuildWorkflow", () => {
       expect(result).toEqual({ type: "already_building", buildId: "envimg-existing" });
       expect(planBuild).not.toHaveBeenCalled();
       expect(store.registerBuild).not.toHaveBeenCalled();
+    });
+
+    it("yields to a concurrent trigger that wins the registerBuild guard", async () => {
+      // The getActiveBuild read races: both triggers can pass it, but the
+      // registerBuild NOT EXISTS guard admits exactly one. The loser must
+      // report the winner's build, not start provider work.
+      const store = createStore();
+      store.getActiveBuild
+        .mockResolvedValueOnce(null) // pre-register short-circuit: nothing yet
+        .mockResolvedValueOnce({ id: "envimg-winner" }); // re-read after losing
+      store.registerBuild.mockResolvedValue(false);
+      const { workflow, adapter, planBuild } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild("env_1", ctx);
+
+      expect(result).toEqual({ type: "already_building", buildId: "envimg-winner" });
+      expect(planBuild).not.toHaveBeenCalled();
+      expect(adapter.startBuild).not.toHaveBeenCalled();
+      // The loser's phantom id must not be failed — no row was written.
+      expect(store.markBuildFailed).not.toHaveBeenCalled();
     });
 
     it("propagates environment-not-found from target resolution without writing a row", async () => {
@@ -700,6 +720,40 @@ describe("EnvironmentImageBuildWorkflow", () => {
         "envimg-env_1-1-abcd",
         "vercel",
         "snapshot failed"
+      );
+      expect(adapter.cleanupCompletedBuild).toHaveBeenCalled();
+    });
+
+    it("reclaims the finalized snapshot when the ready transition fails after it", async () => {
+      // finalize succeeded (artifact exists provider-side) but the D1 ready
+      // transition threw: nothing recorded the artifact id, so the deferred
+      // path must delete it and fail the build — not leave the row building
+      // with an orphaned snapshot.
+      const store = sessionBuildStore();
+      store.tryMarkEnvironmentImageReady.mockRejectedValue(new Error("D1 unavailable"));
+      const adapter = createAdapter();
+      const { workflow } = createWorkflow({ store, adapter });
+
+      const result = await workflow.acceptBuildComplete({
+        completion: validCompletion({
+          providerImageId: undefined,
+          providerSessionId: "vercel-session-1",
+        }),
+        callbackToken: "callback-token",
+        context: ctx,
+      });
+      if (result.type !== "completion_accepted") throw new Error("unreachable");
+      await result.finalization;
+
+      expect(adapter.deleteImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          image: expect.objectContaining({ providerImageId: "im-finalized" }),
+        })
+      );
+      expect(store.markBuildFailed).toHaveBeenCalledWith(
+        "envimg-env_1-1-abcd",
+        "vercel",
+        "D1 unavailable"
       );
       expect(adapter.cleanupCompletedBuild).toHaveBeenCalled();
     });

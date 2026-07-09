@@ -290,27 +290,56 @@ class TestRebuildRepoImages:
 
     @pytest.mark.asyncio
     async def test_skips_when_no_enabled_repos(self):
-        """Should return early when no repos have image building enabled."""
+        """Repo pass skips on empty enabled repos; the environment pass still runs."""
         env = {
             "CONTROL_PLANE_URL": "https://cp.test",
             "MODAL_API_SECRET": "test-secret",
         }
 
-        mock_enabled = {"repos": []}
+        async def mock_get_side_effect(url, **kwargs):
+            if "enabled-repos" in url:
+                return {"repos": []}
+            if "environment-images/enabled" in url:
+                return {"environments": [], "minRuntimeVersion": 53}
+            return {}
 
         with (
             patch.dict("os.environ", env, clear=False),
             patch(
                 "src.scheduler.image_builder._api_get",
                 new_callable=AsyncMock,
-                return_value=mock_enabled,
+                side_effect=mock_get_side_effect,
             ) as mock_get,
+            patch(
+                "src.scheduler.image_builder._api_post",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "markedFailed": 0, "deleted": 0},
+            ) as mock_post,
+            patch(
+                "sandbox_runtime.auth.github_app.generate_installation_token",
+                return_value="gh-token",
+            ),
         ):
             from src.scheduler.image_builder import rebuild_repo_images
 
             await rebuild_repo_images.local()
 
-        mock_get.assert_called_once_with("https://cp.test/repo-images/enabled-repos")
+        # The repo pass stopped at the empty list: no repo status fetch, no
+        # repo maintenance calls.
+        assert [c for c in mock_get.call_args_list if "repo-images/status" in str(c)] == []
+        assert [c for c in mock_post.call_args_list if "repo-images/" in str(c)] == []
+
+        # The environment pass still ran its full skeleton.
+        env_enabled = [c for c in mock_get.call_args_list if "environment-images/enabled" in str(c)]
+        assert len(env_enabled) == 1
+        env_stale = [
+            c for c in mock_post.call_args_list if "environment-images/mark-stale" in str(c)
+        ]
+        assert len(env_stale) == 1
+        env_cleanup = [
+            c for c in mock_post.call_args_list if "environment-images/cleanup" in str(c)
+        ]
+        assert len(env_cleanup) == 1
 
     @pytest.mark.asyncio
     async def test_triggers_build_on_sha_mismatch(self):

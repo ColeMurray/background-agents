@@ -73,8 +73,16 @@ export interface SupersededEnvironmentImageRow {
 export class EnvironmentImageStore {
   constructor(private readonly db: D1Database) {}
 
-  async registerBuild(build: EnvironmentImageBuild): Promise<void> {
-    await this.db
+  /**
+   * Registers a build unless one is already in flight for the same
+   * (environment, provider). The NOT EXISTS guard is the authoritative
+   * concurrency-1 gate: it is atomic within the single INSERT statement, so
+   * concurrent triggers cannot both insert (the workflow's earlier
+   * getActiveBuild read is only a cheap short-circuit). Returns false when a
+   * building row already existed and nothing was inserted.
+   */
+  async registerBuild(build: EnvironmentImageBuild): Promise<boolean> {
+    const result = await this.db
       .prepare(
         `INSERT INTO environment_images (
            id,
@@ -88,7 +96,11 @@ export class EnvironmentImageStore {
            callback_token_expires_at,
            created_at
          )
-         VALUES (?, ?, ?, ?, '[]', '', 'building', ?, ?, ?)`
+         SELECT ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM environment_images
+           WHERE environment_id = ? AND provider = ? AND status = 'building'
+         )`
       )
       .bind(
         build.id,
@@ -97,9 +109,13 @@ export class EnvironmentImageStore {
         build.repositoriesFingerprint,
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
-        Date.now()
+        Date.now(),
+        build.environmentId,
+        build.provider
       )
       .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async bindProviderSession(
@@ -542,10 +558,21 @@ export class EnvironmentImageStore {
     return result.results || [];
   }
 
-  async getAllStatus(): Promise<EnvironmentImage[]> {
+  /**
+   * Scheduler-facing status: every row the cron's rebuild checks read —
+   * ready and building rows of prebuild-enabled environments. Unbounded on
+   * purpose: the state machine caps live rows per (environment, provider) at
+   * one ready (mark-ready supersedes older readies) plus one building (the
+   * registerBuild guard), so a row cap would just reintroduce the risk of
+   * ready images dropping out of view and the cron re-triggering forever.
+   */
+  async getStatusForEnabledEnvironments(): Promise<EnvironmentImage[]> {
     const result = await this.db
       .prepare(
-        "SELECT * FROM environment_images WHERE status <> 'superseded' ORDER BY created_at DESC LIMIT 100"
+        `SELECT ei.* FROM environment_images ei
+         JOIN environments e ON e.id = ei.environment_id AND e.prebuild_enabled = 1
+         WHERE ei.status IN ('building', 'ready')
+         ORDER BY ei.created_at DESC`
       )
       .all<EnvironmentImage>();
 

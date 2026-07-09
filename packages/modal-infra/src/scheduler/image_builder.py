@@ -870,6 +870,97 @@ async def _rebuild_environment_images_pass(control_plane_url: str, clone_token: 
     return builds_triggered
 
 
+async def _rebuild_repo_images_pass(control_plane_url: str) -> int:
+    """
+    Repo-images pass:
+    1. Fetch list of repos with image building enabled from control plane
+    2. Fetch current image status for all repos
+    3. For each enabled repo, check remote HEAD SHA via git ls-remote
+    4. If SHA differs from latest ready image, trigger a build
+    5. Mark stale builds as failed
+    6. Clean up old failed D1 rows
+
+    Returns the number of builds triggered.
+    """
+    # 1. Get enabled repos
+    enabled_data = await _api_get(f"{control_plane_url}/repo-images/enabled-repos")
+    enabled_repos: list[dict] = enabled_data.get("repos", [])
+
+    if not enabled_repos:
+        log.info("scheduler.no_enabled_repos")
+        return 0
+
+    builds_triggered = 0
+
+    # 2. Get current image status (all repos)
+    status_data = await _api_get(f"{control_plane_url}/repo-images/status")
+    all_images: list[dict] = status_data.get("images", [])
+
+    # 3. Generate GitHub App token for ls-remote
+    clone_token = resolve_clone_token() or ""
+
+    # 4. Check each enabled repo
+    for repo in enabled_repos:
+        repo_owner = repo.get("repoOwner", "")
+        repo_name = repo.get("repoName", "")
+
+        if not repo_owner or not repo_name:
+            continue
+
+        # Detect changes on the repo's default branch via HEAD: ls-remote
+        # resolves HEAD to the default branch tip, so the scheduler never
+        # needs the branch name. The build path resolves the name when it
+        # tags the image (see handleTriggerBuild in repo-images.ts).
+        remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "HEAD", clone_token)
+        if not remote_sha:
+            continue
+
+        if _should_rebuild(repo_owner, repo_name, remote_sha, all_images):
+            try:
+                await _api_post(
+                    f"{control_plane_url}/repo-images/trigger/{repo_owner}/{repo_name}",
+                )
+                builds_triggered += 1
+                log.info(
+                    "scheduler.build_triggered",
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                )
+            except Exception as e:
+                log.error(
+                    "scheduler.trigger_error",
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    error=str(e),
+                )
+
+    # 5. Mark stale builds as failed
+    try:
+        result = await _api_post(
+            f"{control_plane_url}/repo-images/mark-stale",
+            {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS},
+        )
+        stale_count = result.get("markedFailed", 0)
+        if stale_count:
+            log.info("scheduler.stale_marked", count=stale_count)
+    except Exception as e:
+        log.warn("scheduler.mark_stale_error", error=str(e))
+
+    # 6. Clean up old failed builds
+    try:
+        result = await _api_post(
+            f"{control_plane_url}/repo-images/cleanup",
+            {"max_age_seconds": FAILED_BUILD_CLEANUP_SECONDS},
+        )
+        deleted = result.get("deleted", 0)
+        if deleted:
+            log.info("scheduler.cleanup", deleted=deleted)
+    except Exception as e:
+        log.warn("scheduler.cleanup_error", error=str(e))
+
+    return builds_triggered
+
+
 @app.function(
     image=function_image,
     schedule=modal.Cron("*/30 * * * *"),
@@ -878,14 +969,12 @@ async def _rebuild_environment_images_pass(control_plane_url: str, clone_token: 
 )
 async def rebuild_repo_images():
     """
-    Every 30 minutes:
-    1. Fetch list of repos with image building enabled from control plane
-    2. Fetch current image status for all repos
-    3. For each enabled repo, check remote HEAD SHA via git ls-remote
-    4. If SHA differs from latest ready image, trigger a build
-    5. Mark stale builds as failed
-    6. Clean up old failed D1 rows
-    7. Run the environments pass (same skeleton, per-repository drift checks)
+    Every 30 minutes, run the repo-images pass and the environments pass.
+    Each pass is isolated in its own try/except so a failure — or an early
+    exit like "no enabled repos" — in one can never starve the other.
+
+    (The function keeps its historical name: it is the deployed Modal cron
+    entrypoint, and renaming it would replace the scheduled function.)
     """
     control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
     if not control_plane_url:
@@ -898,85 +987,10 @@ async def rebuild_repo_images():
     environment_builds_triggered = 0
 
     try:
-        # 1. Get enabled repos
-        enabled_data = await _api_get(f"{control_plane_url}/repo-images/enabled-repos")
-        enabled_repos: list[dict] = enabled_data.get("repos", [])
-
-        if not enabled_repos:
-            log.info("scheduler.no_enabled_repos")
-            return
-
-        # 2. Get current image status (all repos)
-        status_data = await _api_get(f"{control_plane_url}/repo-images/status")
-        all_images: list[dict] = status_data.get("images", [])
-
-        # 3. Generate GitHub App token for ls-remote
-        clone_token = resolve_clone_token() or ""
-
-        # 4. Check each enabled repo
-        for repo in enabled_repos:
-            repo_owner = repo.get("repoOwner", "")
-            repo_name = repo.get("repoName", "")
-
-            if not repo_owner or not repo_name:
-                continue
-
-            # Detect changes on the repo's default branch via HEAD: ls-remote
-            # resolves HEAD to the default branch tip, so the scheduler never
-            # needs the branch name. The build path resolves the name when it
-            # tags the image (see handleTriggerBuild in repo-images.ts).
-            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "HEAD", clone_token)
-            if not remote_sha:
-                continue
-
-            if _should_rebuild(repo_owner, repo_name, remote_sha, all_images):
-                try:
-                    await _api_post(
-                        f"{control_plane_url}/repo-images/trigger/{repo_owner}/{repo_name}",
-                    )
-                    builds_triggered += 1
-                    log.info(
-                        "scheduler.build_triggered",
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                    )
-                except Exception as e:
-                    log.error(
-                        "scheduler.trigger_error",
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        error=str(e),
-                    )
-
-        # 5. Mark stale builds as failed
-        try:
-            result = await _api_post(
-                f"{control_plane_url}/repo-images/mark-stale",
-                {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS},
-            )
-            stale_count = result.get("markedFailed", 0)
-            if stale_count:
-                log.info("scheduler.stale_marked", count=stale_count)
-        except Exception as e:
-            log.warn("scheduler.mark_stale_error", error=str(e))
-
-        # 6. Clean up old failed builds
-        try:
-            result = await _api_post(
-                f"{control_plane_url}/repo-images/cleanup",
-                {"max_age_seconds": FAILED_BUILD_CLEANUP_SECONDS},
-            )
-            deleted = result.get("deleted", 0)
-            if deleted:
-                log.info("scheduler.cleanup", deleted=deleted)
-        except Exception as e:
-            log.warn("scheduler.cleanup_error", error=str(e))
-
+        builds_triggered = await _rebuild_repo_images_pass(control_plane_url)
     except Exception as e:
         log.error("scheduler.error", error=str(e))
 
-    # Environments pass — isolated so a repo-pass failure never starves it
-    # and vice versa.
     try:
         clone_token = resolve_clone_token() or ""
         environment_builds_triggered = await _rebuild_environment_images_pass(

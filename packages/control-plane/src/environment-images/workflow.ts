@@ -198,13 +198,23 @@ export class EnvironmentImageBuildWorkflow {
     let providerSessionIdForCleanup: string | null = null;
     let startAdapter: AnyEnvironmentImageBuildAdapter | null = null;
     try {
-      await this.store.registerBuild({
+      const registered = await this.store.registerBuild({
         id: buildId,
         environmentId,
         provider,
         repositoriesFingerprint: target.repositoriesFingerprint,
         ...callbackAuthRegistration(callbackAuth),
       });
+      if (!registered) {
+        // A concurrent trigger won the registerBuild NOT EXISTS guard (the
+        // getActiveBuild read above is only a cheap short-circuit, not
+        // atomic with the insert). Report the winner's build.
+        const winner = await this.store.getActiveBuild(environmentId, provider);
+        if (!winner) {
+          throw new Error("Concurrent trigger raced registerBuild and its build is already gone");
+        }
+        return { type: "already_building", buildId: winner.id };
+      }
 
       const planned = await this.planner.planBuild({
         buildId,
@@ -500,6 +510,7 @@ export class EnvironmentImageBuildWorkflow {
   ): Promise<void> {
     const startedAt = Date.now();
     let finalized: EnvironmentImageProviderImageRef | null = null;
+    let commitResolved = false;
     let adapter: AnyEnvironmentImageBuildAdapter | null = null;
 
     try {
@@ -522,6 +533,10 @@ export class EnvironmentImageBuildWorkflow {
         input.runtimeVersion,
         input.buildDurationMs
       );
+      // Any returned variant means the row transition is settled (ready,
+      // superseded, or rejected-with-artifact-reclaimed) — from here the
+      // catch below must not fail the build or touch the artifact.
+      commitResolved = true;
 
       switch (result.type) {
         case "marked_ready": {
@@ -570,7 +585,14 @@ export class EnvironmentImageBuildWorkflow {
       if (adapter) {
         await this.cleanupCompletedBuild(provider, adapter, input, ctx);
       }
-      if (!finalized) {
+      if (!commitResolved) {
+        // The ready transition never settled: the row is still building and
+        // a snapshot taken by finalizeSuccessfulBuild would orphan — nothing
+        // records its id for the reaper — so reclaim it before failing the
+        // build.
+        if (finalized && adapter) {
+          await this.deleteImageBestEffort(provider, finalized, ctx, adapter);
+        }
         try {
           await this.store.markBuildFailed(input.buildId, provider, errorMessage(e));
         } catch (markFailedError) {

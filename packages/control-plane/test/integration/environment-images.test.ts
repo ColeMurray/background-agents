@@ -176,6 +176,28 @@ describe("Environment images", () => {
       expect((await getRow("envimg-winner"))?.status).toBe("ready");
     });
 
+    it("registerBuild admits exactly one in-flight build per environment/provider", async () => {
+      const environmentId = await seedEnvironment();
+      const store = new EnvironmentImageStore(env.DB);
+      const build = (id: string) => ({
+        id,
+        environmentId,
+        provider: "modal" as const,
+        repositoriesFingerprint: "fp-race",
+      });
+
+      expect(await store.registerBuild(build("race-a"))).toBe(true);
+      // Concurrent trigger racing past the getActiveBuild read: the INSERT's
+      // NOT EXISTS guard is the authoritative gate.
+      expect(await store.registerBuild(build("race-b"))).toBe(false);
+      expect(await getRow("race-b")).toBeNull();
+
+      // Out-of-band supersede (secret change) releases the slot so the
+      // corrective rebuild can register.
+      await store.supersedeActiveImages(environmentId);
+      expect(await store.registerBuild(build("race-c"))).toBe(true);
+    });
+
     it("supersedeActiveImages flips building and ready rows for the secret-change hook", async () => {
       const environmentId = await seedEnvironment();
       const store = new EnvironmentImageStore(env.DB);
@@ -243,25 +265,42 @@ describe("Environment images", () => {
       );
     });
 
-    it("GET /environment-images/status returns non-superseded rows, filterable by environment", async () => {
-      const environmentId = await seedEnvironment();
-      const otherId = await seedEnvironment();
+    it("GET /environment-images/status serves the cron view unfiltered and the debug view per environment", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      const otherId = await seedEnvironment({ prebuildEnabled: true });
+      const disabledId = await seedEnvironment();
       await seedImageRow({ id: "st-ready", environmentId, status: "ready", providerImageId: "im" });
       await seedImageRow({ id: "st-superseded", environmentId, status: "superseded" });
+      await seedImageRow({
+        id: "st-failed",
+        environmentId,
+        status: "failed",
+        createdAt: Date.now() - 1000,
+      });
       await seedImageRow({ id: "st-other", environmentId: otherId, status: "building" });
+      await seedImageRow({
+        id: "st-disabled",
+        environmentId: disabledId,
+        status: "ready",
+        providerImageId: "im-d",
+      });
 
+      // Cron view: ready + building rows of prebuild-enabled environments
+      // only — failed rows and disabled environments never crowd it, so a
+      // ready image can't drop out of the scheduler's sight.
       const all = await SELF.fetch(`${BASE}/environment-images/status`, {
         headers: await authHeaders(),
       });
       const allBody = (await all.json()) as { images: Array<{ id: string }> };
       expect(allBody.images.map((i) => i.id).sort()).toEqual(["st-other", "st-ready"]);
 
+      // Per-environment debug view keeps failed rows, drops only superseded.
       const filtered = await SELF.fetch(
         `${BASE}/environment-images/status?environment_id=${environmentId}`,
         { headers: await authHeaders() }
       );
       const filteredBody = (await filtered.json()) as { images: Array<{ id: string }> };
-      expect(filteredBody.images.map((i) => i.id)).toEqual(["st-ready"]);
+      expect(filteredBody.images.map((i) => i.id)).toEqual(["st-ready", "st-failed"]);
     });
 
     it("POST /environment-images/mark-stale fails old building rows", async () => {
@@ -320,6 +359,25 @@ describe("Environment images", () => {
       expect(await getRow("old-failed")).toBeNull();
       expect(await getRow("bare-superseded")).toBeNull();
       expect((await getRow("artifact-superseded"))?.status).toBe("superseded");
+    });
+
+    it("rejects non-numeric max_age_seconds instead of treating it as 0", async () => {
+      const environmentId = await seedEnvironment();
+      await seedImageRow({ id: "guard-building", environmentId, status: "building" });
+      await seedImageRow({ id: "guard-failed", environmentId, status: "failed" });
+
+      for (const path of ["mark-stale", "cleanup"]) {
+        const response = await SELF.fetch(`${BASE}/environment-images/${path}`, {
+          method: "POST",
+          headers: await authHeaders(),
+          body: JSON.stringify({ max_age_seconds: null }),
+        });
+        // A null that fell through to 0 would fail every building row or
+        // delete every failed row.
+        expect(response.status, path).toBe(400);
+      }
+      expect((await getRow("guard-building"))?.status).toBe("building");
+      expect((await getRow("guard-failed"))?.status).toBe("failed");
     });
 
     it("requires internal auth on cron-facing routes", async () => {

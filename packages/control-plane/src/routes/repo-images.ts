@@ -28,6 +28,7 @@ import {
   extractRepoParams,
   json,
   parseJsonBody,
+  parseMaxAgeMs,
   parsePattern,
 } from "./shared";
 import { getRepoImageCallbackBearerToken } from "./repo-image-callback-auth";
@@ -383,17 +384,8 @@ async function handleMarkStale(
     return error("Database not configured", 503);
   }
 
-  let body: { max_age_seconds?: number };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    body = {};
-  }
-
-  const maxAgeMs =
-    body.max_age_seconds === undefined
-      ? DEFAULT_STALE_BUILD_MAX_AGE_MS
-      : body.max_age_seconds * MS_PER_SECOND;
+  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_STALE_BUILD_MAX_AGE_MS);
+  if (maxAgeMs instanceof Response) return maxAgeMs;
   const maxAgeSeconds = maxAgeMs / MS_PER_SECOND;
 
   const store = new RepoImageStore(env.DB);
@@ -436,17 +428,8 @@ async function handleCleanup(
     return error("Database not configured", 503);
   }
 
-  let body: { max_age_seconds?: number };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    body = {};
-  }
-
-  const maxAgeMs =
-    body.max_age_seconds === undefined
-      ? DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS
-      : body.max_age_seconds * MS_PER_SECOND;
+  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS);
+  if (maxAgeMs instanceof Response) return maxAgeMs;
   const maxAgeSeconds = maxAgeMs / MS_PER_SECOND;
 
   const store = new RepoImageStore(env.DB);
