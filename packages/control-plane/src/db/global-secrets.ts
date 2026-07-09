@@ -1,5 +1,6 @@
 import { createLogger } from "../logger";
 import {
+  SecretDecryptionError,
   assertScopeKeyCapacity,
   decryptSecretRows,
   encryptSecretEntries,
@@ -68,12 +69,18 @@ export class GlobalSecretsStore {
       .prepare("SELECT key, encrypted_value FROM global_secrets")
       .all<{ key: string; encrypted_value: string }>();
 
-    return decryptSecretRows({
-      rows: result.results || [],
-      encryptionKey: this.encryptionKey,
-      log,
-      noun: "global secret",
-    });
+    try {
+      return await decryptSecretRows(result.results || [], this.encryptionKey);
+    } catch (e) {
+      if (e instanceof SecretDecryptionError) {
+        log.error("Failed to decrypt global secret", {
+          key: e.key,
+          error: e.cause instanceof Error ? e.cause.message : String(e.cause),
+        });
+        throw new Error(`Failed to decrypt global secret '${e.key}'`);
+      }
+      throw e;
+    }
   }
 
   async deleteSecret(key: string): Promise<boolean> {

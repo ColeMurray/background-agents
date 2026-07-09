@@ -106,36 +106,38 @@ export function toSecretMetadata(
   }));
 }
 
-interface SecretsDecryptLog {
-  error(message: string, data?: Record<string, unknown>): void;
+/**
+ * Thrown by `decryptSecretRows` when a stored value fails to decrypt. Carries
+ * the failing key (never the plaintext or ciphertext) and the underlying
+ * decryption error as `cause`, so each store can log with its own logger and
+ * scope fields before surfacing its user-facing error.
+ */
+export class SecretDecryptionError extends Error {
+  constructor(
+    readonly key: string,
+    options?: { cause?: unknown }
+  ) {
+    super(`Failed to decrypt secret '${key}'`, options);
+    this.name = "SecretDecryptionError";
+  }
 }
 
 /**
- * Decrypt `key, encrypted_value` rows into a key → plaintext record. On
- * failure, logs (never the value) and throws. `noun` names the scope in the
- * message ("secret" by default, "global secret" for the global scope);
- * `logContext` adds scope identifiers such as repo_id or environment_id.
+ * Decrypt `key, encrypted_value` rows in parallel into a key → plaintext
+ * record. Pure crypto: on failure, throws `SecretDecryptionError`; logging is
+ * the caller's concern.
  */
-export async function decryptSecretRows(params: {
-  rows: Array<{ key: string; encrypted_value: string }>;
-  encryptionKey: string;
-  log: SecretsDecryptLog;
-  noun?: string;
-  logContext?: Record<string, unknown>;
-}): Promise<Record<string, string>> {
-  const { rows, encryptionKey, log, noun = "secret", logContext = {} } = params;
+export async function decryptSecretRows(
+  rows: Array<{ key: string; encrypted_value: string }>,
+  encryptionKey: string
+): Promise<Record<string, string>> {
   const decryptedEntries = await Promise.all(
     rows.map(async (row) => {
       try {
         const decryptedValue = await decryptToken(row.encrypted_value, encryptionKey);
         return [row.key, decryptedValue] as const;
       } catch (e) {
-        log.error(`Failed to decrypt ${noun}`, {
-          ...logContext,
-          key: row.key,
-          error: e instanceof Error ? e.message : String(e),
-        });
-        throw new Error(`Failed to decrypt ${noun} '${row.key}'`);
+        throw new SecretDecryptionError(row.key, { cause: e });
       }
     })
   );

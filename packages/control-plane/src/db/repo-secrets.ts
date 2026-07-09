@@ -1,5 +1,6 @@
 import { createLogger } from "../logger";
 import {
+  SecretDecryptionError,
   assertScopeKeyCapacity,
   decryptSecretRows,
   encryptSecretEntries,
@@ -85,12 +86,19 @@ export class RepoSecretsStore {
       .bind(repoId)
       .all<{ key: string; encrypted_value: string }>();
 
-    return decryptSecretRows({
-      rows: result.results || [],
-      encryptionKey: this.encryptionKey,
-      log,
-      logContext: { repo_id: repoId },
-    });
+    try {
+      return await decryptSecretRows(result.results || [], this.encryptionKey);
+    } catch (e) {
+      if (e instanceof SecretDecryptionError) {
+        log.error("Failed to decrypt secret", {
+          repo_id: repoId,
+          key: e.key,
+          error: e.cause instanceof Error ? e.cause.message : String(e.cause),
+        });
+        throw new Error(`Failed to decrypt secret '${e.key}'`);
+      }
+      throw e;
+    }
   }
 
   async deleteSecret(repoId: number, key: string): Promise<boolean> {
