@@ -33,7 +33,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     event_type: null,
     trigger_config: null,
     trigger_auth_data: null,
-    environment_id: null,
     ...overrides,
   };
 }
@@ -56,6 +55,7 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     repo_name: null,
     repo_id: null,
     base_branch: null,
+    environment_id: null,
     ...overrides,
   };
 }
@@ -121,16 +121,17 @@ describe("AutomationStore (D1 integration)", () => {
       expect(result!.user_id).toBeNull();
     });
 
-    it("round-trips the environment binding, including clearing it", async () => {
+    it("round-trips the environment selection, including clearing it", async () => {
       const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-env", environment_id: "env_abc" }));
+      await store.create(makeAutomation({ id: "auto-env" }));
 
-      const created = await store.getById("auto-env");
-      expect(created!.environment_id).toBe("env_abc");
+      const now = Date.now();
+      await env.DB.batch(store.bindReplaceEnvironments("auto-env", ["env_abc", "env_def"], now));
+      const selected = await store.getEnvironmentsForAutomation("auto-env");
+      expect(selected.map((row) => row.environment_id)).toEqual(["env_abc", "env_def"]);
 
-      await store.update("auto-env", { environment_id: null });
-      const cleared = await store.getById("auto-env");
-      expect(cleared!.environment_id).toBeNull();
+      await env.DB.batch(store.bindReplaceEnvironments("auto-env", [], now));
+      expect(await store.getEnvironmentsForAutomation("auto-env")).toEqual([]);
     });
 
     it("returns null for nonexistent automation", async () => {

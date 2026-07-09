@@ -103,7 +103,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
             initialValues={{
               name: automation.name,
               repositories: automation.repositories,
-              environmentId: automation.environmentId,
+              environmentIds: automation.environmentIds,
               model: automation.model,
               reasoningEffort: automation.reasoningEffort,
               scheduleCron: automation.scheduleCron ?? "0 9 * * *",

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { FolderIcon, BoxIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
 import { useEnvironments } from "@/hooks/use-environments";
 import { formatFutureRelativeTime } from "@/lib/time";
-import { formatRepositoriesLabel } from "@/lib/repo-label";
+import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 
 interface AutomationsListProps {
   automations: Automation[];
@@ -146,15 +146,12 @@ export function AutomationsList({
           {/* Metadata: icon-paired items */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1">
-              {automation.environmentId ? (
+              {automation.environmentIds.length > 0 && automation.repositories.length === 0 ? (
                 <BoxIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
               ) : (
                 <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
               )}
-              {automation.environmentId
-                ? (environments.find((environment) => environment.id === automation.environmentId)
-                    ?.name ?? "Environment")
-                : formatRepositoriesLabel(automation.repositories)}
+              {formatAutomationTargetsLabel(automation, environments)}
             </span>
             <span className="inline-flex items-center gap-1">
               <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveAutomationSessionTarget } from "./session-target";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { HttpError, type RequestContext } from "../routes/shared";
-import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
+import type { AutomationRunRow } from "../db/automation-store";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 
@@ -29,32 +29,6 @@ const ctx: RequestContext = {
   metrics: {} as RequestContext["metrics"],
 };
 
-function automation(overrides?: Partial<AutomationRow>): AutomationRow {
-  return {
-    id: "auto-1",
-    name: "Daily sync",
-    instructions: "Run tests",
-    trigger_type: "schedule",
-    schedule_cron: "0 9 * * *",
-    schedule_tz: "UTC",
-    model: "anthropic/claude-sonnet-4-6",
-    reasoning_effort: null,
-    enabled: 1,
-    next_run_at: null,
-    consecutive_failures: 0,
-    created_by: "user-1",
-    user_id: null,
-    created_at: 0,
-    updated_at: 0,
-    deleted_at: null,
-    event_type: null,
-    trigger_config: null,
-    trigger_auth_data: null,
-    environment_id: null,
-    ...overrides,
-  };
-}
-
 function run(overrides?: Partial<AutomationRunRow>): AutomationRunRow {
   return {
     id: "run-1",
@@ -72,6 +46,7 @@ function run(overrides?: Partial<AutomationRunRow>): AutomationRunRow {
     repo_name: "web-app",
     repo_id: 12345,
     base_branch: "main",
+    environment_id: null,
     ...overrides,
   };
 }
@@ -82,7 +57,7 @@ describe("resolveAutomationSessionTarget", () => {
   });
 
   it("returns the run's firing-time snapshot for repository runs", async () => {
-    const target = await resolveAutomationSessionTarget(env, automation(), run(), ctx, log);
+    const target = await resolveAutomationSessionTarget(env, run(), ctx, log);
 
     expect(target).toEqual({
       repoOwner: "acme",
@@ -97,7 +72,6 @@ describe("resolveAutomationSessionTarget", () => {
   it("returns null fields for repo-less runs", async () => {
     const target = await resolveAutomationSessionTarget(
       env,
-      automation(),
       run({ repo_owner: null, repo_name: null, repo_id: null, base_branch: null }),
       ctx,
       log
@@ -126,9 +100,15 @@ describe("resolveAutomationSessionTarget", () => {
 
     const target = await resolveAutomationSessionTarget(
       env,
-      automation({ environment_id: "env_1" }),
-      // The environment child is repo-less; its target comes from the binding.
-      run({ repo_owner: null, repo_name: null, repo_id: null, base_branch: null }),
+      // Environment runs carry no repository snapshot; the environment id is
+      // the run's firing-time target.
+      run({
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+        environment_id: "env_1",
+      }),
       ctx,
       log
     );
@@ -151,13 +131,7 @@ describe("resolveAutomationSessionTarget", () => {
     );
 
     await expect(
-      resolveAutomationSessionTarget(
-        env,
-        automation({ environment_id: "env_gone" }),
-        run(),
-        ctx,
-        log
-      )
+      resolveAutomationSessionTarget(env, run({ environment_id: "env_gone" }), ctx, log)
     ).rejects.toThrow("Environment not found: env_gone");
   });
 });

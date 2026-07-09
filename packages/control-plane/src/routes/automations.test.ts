@@ -24,10 +24,14 @@ const mockStore = {
   getRunById: vi.fn(),
   getRepositoriesForAutomation: vi.fn(),
   getRepositoriesForAutomationIds: vi.fn(),
+  getEnvironmentsForAutomation: vi.fn(),
+  getEnvironmentsForAutomationIds: vi.fn(),
   bindAutomationInsert: vi.fn(),
   bindAutomationUpdate: vi.fn(),
   bindRepositoryInserts: vi.fn(),
   bindReplaceRepositories: vi.fn(),
+  bindEnvironmentInserts: vi.fn(),
+  bindReplaceEnvironments: vi.fn(),
   listInvocations: vi.fn(),
 };
 
@@ -162,7 +166,6 @@ const sampleRow = {
   created_at: now,
   updated_at: now,
   deleted_at: null,
-  environment_id: null,
 };
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -174,10 +177,14 @@ describe("automation route handlers", () => {
     // (mockClear keeps implementations) cannot leak across tests.
     mockStore.getRepositoriesForAutomation.mockResolvedValue([]);
     mockStore.getRepositoriesForAutomationIds.mockResolvedValue(new Map());
+    mockStore.getEnvironmentsForAutomation.mockResolvedValue([]);
+    mockStore.getEnvironmentsForAutomationIds.mockResolvedValue(new Map());
     mockStore.bindAutomationInsert.mockReturnValue({ sql: "insert-automation" });
     mockStore.bindAutomationUpdate.mockReturnValue({ sql: "update-automation" });
     mockStore.bindRepositoryInserts.mockReturnValue([{ sql: "insert-repositories" }]);
     mockStore.bindReplaceRepositories.mockReturnValue([{ sql: "replace-repositories" }]);
+    mockStore.bindEnvironmentInserts.mockReturnValue([{ sql: "insert-environments" }]);
+    mockStore.bindReplaceEnvironments.mockReturnValue([{ sql: "replace-environments" }]);
     mockBatch.mockResolvedValue([]);
     mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
     vi.mocked(resolveRepoOrError).mockResolvedValue({
@@ -307,12 +314,12 @@ describe("automation route handlers", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "Multi-repository selections require a schedule trigger",
+        error: "Multi-target selections require a schedule trigger",
       });
     });
 
-    it("creates an environment-bound automation with an empty selection", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
+    it("creates an environment-targeted automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", {
         body: {
@@ -320,35 +327,60 @@ describe("automation route handlers", () => {
           scheduleCron: "0 9 * * *",
           scheduleTz: "UTC",
           instructions: "Run tests",
-          environmentId: "env_1",
+          environmentIds: ["env_1", "env_2"],
         },
       });
 
       expect(res.status).toBe(201);
       expect(mockEnvironmentStore.getById).toHaveBeenCalledWith("env_1");
-      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ environment_id: "env_1" })
+      expect(mockEnvironmentStore.getById).toHaveBeenCalledWith("env_2");
+      expect(mockStore.bindEnvironmentInserts).toHaveBeenCalledWith(
+        "generated-id",
+        ["env_1", "env_2"],
+        expect.any(Number)
       );
+      expect(mockBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([{ sql: "insert-automation" }, { sql: "insert-environments" }])
+      );
+    });
+
+    it("creates a mixed repository + environment fan-out", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, environmentIds: ["env_1"] },
+      });
+
+      expect(res.status).toBe(201);
       expect(mockStore.bindRepositoryInserts).toHaveBeenCalledWith(
         "generated-id",
-        [],
+        [{ repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" }],
+        expect.any(Number)
+      );
+      expect(mockStore.bindEnvironmentInserts).toHaveBeenCalledWith(
+        "generated-id",
+        ["env_1"],
         expect.any(Number)
       );
     });
 
-    it("rejects environmentId together with repositories", async () => {
+    it("rejects duplicate environment ids", async () => {
       const res = await callRoute("POST", "/automations", {
-        body: { ...validBody, environmentId: "env_1" },
+        body: {
+          name: "Dup envs",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          environmentIds: ["env_1", "env_1"],
+        },
       });
 
       expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({
-        error: "environmentId and repositories are mutually exclusive",
-      });
+      expect(await res.json()).toEqual({ error: "environmentIds must not contain duplicates" });
       expect(mockBatch).not.toHaveBeenCalled();
     });
 
-    it("rejects an unknown environment", async () => {
+    it("rejects unknown environments, naming every missing one", async () => {
       mockEnvironmentStore.getById.mockResolvedValue(null);
 
       const res = await callRoute("POST", "/automations", {
@@ -357,48 +389,85 @@ describe("automation route handlers", () => {
           scheduleCron: "0 9 * * *",
           scheduleTz: "UTC",
           instructions: "Run tests",
-          environmentId: "env_missing",
+          environmentIds: ["env_a", "env_b"],
         },
       });
 
       expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: "Environment not found: env_missing" });
+      expect(await res.json()).toEqual({ error: "Environment not found: env_a, env_b" });
     });
 
-    it("rejects a malformed environmentId", async () => {
+    it("rejects malformed environment ids", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "Workspace sync",
           scheduleCron: "0 9 * * *",
           scheduleTz: "UTC",
           instructions: "Run tests",
-          environmentId: "not-an-environment",
+          environmentIds: ["not-an-environment"],
         },
       });
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "environmentId must be an environment id (env_…)",
+        error: "environmentIds must be an array of environment ids (env_…)",
       });
       expect(mockEnvironmentStore.getById).not.toHaveBeenCalled();
     });
 
-    it("rejects environment bindings on repo-scoped event triggers", async () => {
-      // The zero-repository count rule fires before the binding is even read:
-      // github_event/linear_event automations stay repo-bound.
+    it("rejects environments on repo-scoped event triggers", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "PR review",
           instructions: "Review",
           triggerType: "github_event",
           eventType: "pull_request.opened",
-          environmentId: "env_1",
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+          environmentIds: ["env_1"],
         },
       });
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "Repository-scoped triggers require exactly one repository",
+        error: "Repository-scoped triggers cannot target environments",
+      });
+    });
+
+    it("rejects multi-target selections on non-schedule triggers", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Webhook fan-out",
+          instructions: "Run tests",
+          triggerType: "webhook",
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+          environmentIds: ["env_1"],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "Multi-target selections require a schedule trigger",
+      });
+    });
+
+    it("enforces the combined target cap", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Too many targets",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          repositories: Array.from({ length: 8 }, (_, i) => ({
+            repoOwner: "acme",
+            repoName: `repo-${i}`,
+          })),
+          environmentIds: ["env_1", "env_2", "env_3"],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "At most 10 repositories and environments combined",
       });
     });
 
@@ -645,84 +714,60 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("binds an environment when the repository selection is empty", async () => {
+    it("replaces the environment selection", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { environmentId: "env_1" },
+        body: { environmentIds: ["env_1"] },
       });
 
       expect(res.status).toBe(200);
       expect(mockEnvironmentStore.getById).toHaveBeenCalledWith("env_1");
-      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+      expect(mockStore.bindReplaceEnvironments).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ environment_id: "env_1" })
+        ["env_1"],
+        expect.any(Number)
+      );
+      expect(mockBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([{ sql: "replace-environments" }])
       );
     });
 
-    it("rejects binding an environment while repository rows remain", async () => {
+    it("clears the environment selection with an empty list", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { environmentIds: [] },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindReplaceEnvironments).toHaveBeenCalledWith(
+        "auto-1",
+        [],
+        expect.any(Number)
+      );
+    });
+
+    it("validates the combined count against the other side's existing rows", async () => {
+      // A webhook automation with one existing repository row: adding an
+      // environment makes it multi-target, which requires a schedule trigger.
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "webhook",
+        schedule_cron: null,
+      });
       mockStore.getRepositoriesForAutomation.mockResolvedValue([
         { repo_owner: "acme", repo_name: "web-app" },
       ]);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { environmentId: "env_1" },
+        body: { environmentIds: ["env_1"] },
       });
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "environmentId and repositories are mutually exclusive",
+        error: "Multi-target selections require a schedule trigger",
       });
-    });
-
-    it("rejects adding repositories while an environment binding remains", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { repositories: [{ repoOwner: "acme", repoName: "web-app" }] },
-      });
-
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({
-        error: "environmentId and repositories are mutually exclusive",
-      });
-    });
-
-    it("clears the environment binding with null", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { environmentId: null },
-      });
-
-      expect(res.status).toBe(200);
-      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
-        "auto-1",
-        expect.objectContaining({ environment_id: null })
-      );
-    });
-
-    it("swaps the environment binding for repositories in one update", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, environment_id: "env_1" });
-
-      const res = await callRoute("PUT", "/automations/auto-1", {
-        body: {
-          environmentId: null,
-          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
-        },
-      });
-
-      expect(res.status).toBe(200);
-      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
-        "auto-1",
-        expect.objectContaining({ environment_id: null })
-      );
-      expect(mockStore.bindReplaceRepositories).toHaveBeenCalledWith(
-        "auto-1",
-        [{ repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" }],
-        expect.any(Number)
-      );
     });
 
     it("rejects an unknown environment on update", async () => {
@@ -730,7 +775,7 @@ describe("automation route handlers", () => {
       mockEnvironmentStore.getById.mockResolvedValue(null);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { environmentId: "env_missing" },
+        body: { environmentIds: ["env_missing"] },
       });
 
       expect(res.status).toBe(400);

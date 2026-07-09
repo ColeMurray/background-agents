@@ -60,7 +60,6 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
       ],
     }),
     trigger_auth_data: null,
-    environment_id: null,
     ...overrides,
   };
 }

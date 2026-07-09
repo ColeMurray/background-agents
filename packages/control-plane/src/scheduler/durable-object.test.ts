@@ -64,6 +64,8 @@ function createMockStore() {
     getLatestSteerableRunForThread: vi.fn().mockResolvedValue(null),
     getRepositoriesForAutomation: vi.fn().mockResolvedValue([]),
     getRepositoriesForAutomationIds: vi.fn().mockResolvedValue(new Map()),
+    getEnvironmentsForAutomation: vi.fn().mockResolvedValue([]),
+    getEnvironmentsForAutomationIds: vi.fn().mockResolvedValue(new Map()),
     insertInvocationGuarded: vi.fn().mockImplementation(async (params: unknown) => {
       capturedInvocationParams.push(
         structuredClone(params) as { children: Array<Record<string, unknown>> }
@@ -301,7 +303,6 @@ const sampleAutomation = {
   created_at: now - 86400000,
   updated_at: now - 86400000,
   deleted_at: null,
-  environment_id: null as string | null,
 };
 
 function repositoryRow(automationId: string, overrides?: Record<string, unknown>) {
@@ -321,6 +322,18 @@ function repositoryRow(automationId: string, overrides?: Record<string, unknown>
 function selectRepositories(automationId: string, rows: unknown[]) {
   mockStore.getRepositoriesForAutomationIds.mockResolvedValue(new Map([[automationId, rows]]));
   mockStore.getRepositoriesForAutomation.mockResolvedValue(rows);
+}
+
+/** Point the tick's batched environment fetch at a selection for one automation. */
+function selectEnvironments(automationId: string, environmentIds: string[]) {
+  const rows = environmentIds.map((environmentId) => ({
+    automation_id: automationId,
+    environment_id: environmentId,
+    created_at: now,
+    updated_at: now,
+  }));
+  mockStore.getEnvironmentsForAutomationIds.mockResolvedValue(new Map([[automationId, rows]]));
+  mockStore.getEnvironmentsForAutomation.mockResolvedValue(rows);
 }
 
 function sampleRunRow(overrides?: Record<string, unknown>) {
@@ -674,11 +687,10 @@ describe("SchedulerDO", () => {
       );
     });
 
-    it("launches one environment session for environment-bound automations", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([
-        { ...sampleAutomation, environment_id: "env_1" },
-      ]);
+    it("fans out one workspace session per selected environment", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", []);
+      selectEnvironments("auto-1", ["env_1"]);
       mockEnvironmentGetById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
       mockEnvironmentRepositories.mockResolvedValue([
         { repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" },
@@ -701,14 +713,15 @@ describe("SchedulerDO", () => {
       );
 
       expect(res.status).toBe(200);
-      // The environment path is the repo-less fan-out shape: exactly one child,
-      // with no repository snapshot of its own.
+      // One child per environment, snapshotting the environment id — no
+      // repository snapshot of its own.
       expect(lastInsertedChildren()).toEqual([
         expect.objectContaining({
           repo_owner: null,
           repo_name: null,
           repo_id: null,
           base_branch: null,
+          environment_id: "env_1",
           status: "starting",
         }),
       ]);
@@ -727,11 +740,59 @@ describe("SchedulerDO", () => {
       expect(promptCallCount(fetchMock)).toBe(1);
     });
 
-    it("fails the child run when the bound environment no longer exists", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([
-        { ...sampleAutomation, environment_id: "env_gone" },
+    it("fans out repository and environment targets together", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      selectEnvironments("auto-1", ["env_1", "env_2"]);
+      mockEnvironmentGetById.mockImplementation(async (id: string) => ({
+        id,
+        name: `Env ${id}`,
+      }));
+      mockEnvironmentRepositories.mockResolvedValue([
+        { repo_owner: "acme", repo_name: "api", repo_id: 67890, base_branch: "develop" },
       ]);
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+        repoId: name === "api" ? 67890 : 12345,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      }));
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(lastInsertedChildren()).toEqual([
+        expect.objectContaining({
+          repo_owner: "acme",
+          repo_name: "web-app",
+          environment_id: null,
+          status: "starting",
+        }),
+        expect.objectContaining({
+          repo_owner: null,
+          environment_id: "env_1",
+          status: "starting",
+        }),
+        expect.objectContaining({
+          repo_owner: null,
+          environment_id: "env_2",
+          status: "starting",
+        }),
+      ]);
+      expect(promptCallCount(fetchMock)).toBe(3);
+    });
+
+    it("fails the environment child when its environment no longer exists", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", []);
+      selectEnvironments("auto-1", ["env_gone"]);
       mockEnvironmentGetById.mockResolvedValue(null);
 
       const env = createEnv();
@@ -756,11 +817,10 @@ describe("SchedulerDO", () => {
       expect(mockStore.getInvocationRunAggregate).toHaveBeenCalled();
     });
 
-    it("fails the child run when an environment member is inaccessible", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([
-        { ...sampleAutomation, environment_id: "env_1" },
-      ]);
+    it("fails the environment child when a workspace member is inaccessible", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", []);
+      selectEnvironments("auto-1", ["env_1"]);
       mockEnvironmentGetById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
       mockEnvironmentRepositories.mockResolvedValue([
         { repo_owner: "acme", repo_name: "web-app", repo_id: 12345, base_branch: "main" },

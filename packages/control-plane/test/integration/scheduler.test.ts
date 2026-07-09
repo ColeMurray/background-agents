@@ -31,7 +31,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     event_type: null,
     trigger_config: null,
     trigger_auth_data: null,
-    environment_id: null,
     ...overrides,
   };
 }
@@ -545,6 +544,7 @@ describe("SchedulerDO (integration)", () => {
           repo_name: null,
           repo_id: null,
           base_branch: null,
+          environment_id: null,
         })),
         overlapScope: { kind: "automation" },
       });

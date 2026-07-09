@@ -29,6 +29,7 @@ export function makeRunRow(
     repo_name: null,
     repo_id: null,
     base_branch: null,
+    environment_id: null,
     ...overrides,
   };
 }
@@ -37,8 +38,9 @@ export async function seedRun(run: AutomationRunRow): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO automation_runs
      (id, automation_id, invocation_id, session_id, status, skip_reason, failure_reason,
-      scheduled_at, started_at, completed_at, created_at, repo_owner, repo_name, repo_id, base_branch)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      scheduled_at, started_at, completed_at, created_at, repo_owner, repo_name, repo_id, base_branch,
+      environment_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       run.id,
@@ -55,7 +57,8 @@ export async function seedRun(run: AutomationRunRow): Promise<void> {
       run.repo_owner,
       run.repo_name,
       run.repo_id,
-      run.base_branch
+      run.base_branch,
+      run.environment_id
     )
     .run();
 }

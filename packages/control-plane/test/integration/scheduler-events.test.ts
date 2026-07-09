@@ -32,7 +32,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     event_type: null,
     trigger_config: null,
     trigger_auth_data: null,
-    environment_id: null,
     ...overrides,
   };
 }

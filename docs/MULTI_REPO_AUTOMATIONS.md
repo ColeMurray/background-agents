@@ -40,10 +40,11 @@ Answer: yes. A multi-repo firing fans out into one child session per selected re
 
 Reasoning: fan-out keeps each repository's checkout, sync state, artifacts, and pull-request flow in
 its own session. The _workspace_ variant (one session that clones several repositories for atomic
-cross-repo work) shipped later as the environment binding: an automation may set `environmentId`
-instead of a repository selection, and each firing then launches exactly one session opening the
-environment's full workspace (multi-repo sessions design §13.3). The two modes are mutually
-exclusive per automation; fan-out remains the model for repository selections.
+cross-repo work) shipped later as environment targets: an automation's selection may also name
+environments (`environmentIds`), and each firing fans out one run per target — a repository run
+works that repository alone, while an environment run launches one session opening that
+environment's full workspace (multi-repo sessions design §13.3). Repositories and environments share
+the combined target cap and fan out together.
 
 ### How is a firing stored?
 

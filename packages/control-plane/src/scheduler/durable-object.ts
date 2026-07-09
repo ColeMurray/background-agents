@@ -31,6 +31,7 @@ import {
   type AutomationInvocationRow,
   type InvocationOverlapScope,
   type AutomationRepositoryInsert,
+  type AutomationEnvironmentRow,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import {
@@ -140,6 +141,8 @@ interface StartInvocationParams {
   triggerMetadata?: string | null;
   /** Pre-fetched repository selection (the tick passes its batched fetch). */
   repositories?: AutomationRepositoryInsert[];
+  /** Pre-fetched environment selection (the tick passes its batched fetch). */
+  environments?: AutomationEnvironmentRow[];
   instructionsOverride?: string;
 }
 
@@ -243,56 +246,61 @@ export class SchedulerDO extends DurableObject<Env> {
 
     const selection =
       params.repositories ?? (await store.getRepositoriesForAutomation(automation.id));
+    const environmentSelection =
+      params.environments ?? (await store.getEnvironmentsForAutomation(automation.id));
     const resolutions = await resolveAutomationRepositories(this.env, selection);
 
     const invocationId = generateId();
     const scheduledAt = params.scheduledAt ?? now;
 
-    // One child per selected repository, snapshotting the resolved repo; a
+    const childBase = () => ({
+      id: generateId(),
+      automation_id: automation.id,
+      invocation_id: invocationId,
+      session_id: null,
+      skip_reason: null,
+      failure_reason: null,
+      scheduled_at: scheduledAt,
+      started_at: null,
+      completed_at: null,
+      created_at: now,
+      repo_owner: null,
+      repo_name: null,
+      repo_id: null,
+      base_branch: null,
+      environment_id: null,
+    });
+
+    // One child per target. Repository children snapshot the resolved repo; a
     // failed resolution pre-fails its child (snapshot from the selection row)
-    // without blocking siblings. No repositories → one repo-less child —
-    // deliberately also the environment-bound shape (design §13.3): such
-    // automations have no repository rows, so each firing gets exactly one
-    // child, which createSessionForAutomationRun launches as an environment
-    // session.
-    const children: AutomationRunRow[] =
-      resolutions.length === 0
-        ? [
-            {
-              id: generateId(),
-              automation_id: automation.id,
-              invocation_id: invocationId,
-              session_id: null,
-              status: "starting",
-              skip_reason: null,
-              failure_reason: null,
-              scheduled_at: scheduledAt,
-              started_at: null,
-              completed_at: null,
-              created_at: now,
-              repo_owner: null,
-              repo_name: null,
-              repo_id: null,
-              base_branch: null,
-            },
-          ]
-        : resolutions.map((resolution) => ({
-            id: generateId(),
-            automation_id: automation.id,
-            invocation_id: invocationId,
-            session_id: null,
-            status: resolution.error ? "failed" : "starting",
-            skip_reason: null,
-            failure_reason: resolution.error,
-            scheduled_at: scheduledAt,
-            started_at: null,
-            completed_at: resolution.error ? now : null,
-            created_at: now,
-            repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
-            repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
-            repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
-            base_branch: resolution.repository?.baseBranch ?? resolution.requested.base_branch,
-          }));
+    // without blocking siblings. Environment children snapshot the environment
+    // id — the workspace itself resolves at launch time (design §13.3), so a
+    // deleted environment fails through the launch-failure path. No targets →
+    // one repo-less child.
+    const children: AutomationRunRow[] = [
+      ...resolutions.map(
+        (resolution): AutomationRunRow => ({
+          ...childBase(),
+          status: resolution.error ? "failed" : "starting",
+          failure_reason: resolution.error,
+          completed_at: resolution.error ? now : null,
+          repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
+          repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
+          repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
+          base_branch: resolution.repository?.baseBranch ?? resolution.requested.base_branch,
+        })
+      ),
+      ...environmentSelection.map(
+        (environment): AutomationRunRow => ({
+          ...childBase(),
+          status: "starting",
+          environment_id: environment.environment_id,
+        })
+      ),
+    ];
+    if (children.length === 0) {
+      children.push({ ...childBase(), status: "starting" });
+    }
 
     const invocation: AutomationInvocationRow = {
       id: invocationId,
@@ -496,19 +504,22 @@ export class SchedulerDO extends DurableObject<Env> {
 
     // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
-    const repositoriesByAutomation = await store.getRepositoriesForAutomationIds(
-      overdue.map((automation) => automation.id)
-    );
+    const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
+      store.getRepositoriesForAutomationIds(overdue.map((automation) => automation.id)),
+      store.getEnvironmentsForAutomationIds(overdue.map((automation) => automation.id)),
+    ]);
 
     for (const [index, automation] of overdue.entries()) {
       const repositories = repositoriesByAutomation.get(automation.id) ?? [];
-      // Each repository launches one child (a repo-less automation launches one
-      // null-repo child), so estimate this firing's child count up front and
-      // defer whole automations that would push the tick past the budget.
-      // Checking before startInvocation prevents the overshoot where a firing
-      // materializes and launches up to 10 children before the budget is
-      // reconciled. Always admit the first automation so a tick makes progress.
-      const estimatedChildren = Math.max(repositories.length, 1);
+      const environments = environmentsByAutomation.get(automation.id) ?? [];
+      // Each target — repository or environment — launches one child (a
+      // target-less automation launches one null-repo child), so estimate this
+      // firing's child count up front and defer whole automations that would
+      // push the tick past the budget. Checking before startInvocation
+      // prevents the overshoot where a firing materializes and launches up to
+      // 10 children before the budget is reconciled. Always admit the first
+      // automation so a tick makes progress.
+      const estimatedChildren = Math.max(repositories.length + environments.length, 1);
       if (launchedChildren > 0 && launchedChildren + estimatedChildren > TICK_CHILD_LAUNCH_BUDGET) {
         this.log.info("Tick child budget reached; remaining overdue deferred to next tick", {
           event: "scheduler.tick_budget_exhausted",
@@ -529,6 +540,7 @@ export class SchedulerDO extends DurableObject<Env> {
           scheduledAt: automation.next_run_at!,
           advanceToNextRunAt: nextRunAt,
           repositories,
+          environments,
         });
 
         switch (result.outcome) {
@@ -1220,7 +1232,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // environment-bound automations, the environment's workspace. All target
     // semantics live in resolveAutomationSessionTarget; a resolution failure
     // throws into launchChild's failure path.
-    const target = await resolveAutomationSessionTarget(this.env, automation, run, ctx, this.log);
+    const target = await resolveAutomationSessionTarget(this.env, run, ctx, this.log);
 
     // Session-scoped integration settings resolve from the primary member
     // (design §6.2) — same rule as handleCreateSession.

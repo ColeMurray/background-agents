@@ -98,7 +98,6 @@ const sampleRow: AutomationRow = {
   event_type: null,
   trigger_config: null,
   trigger_auth_data: null,
-  environment_id: null,
 };
 
 const sampleRunRow: AutomationRunRow = {
@@ -117,6 +116,7 @@ const sampleRunRow: AutomationRunRow = {
   repo_name: null,
   repo_id: null,
   base_branch: null,
+  environment_id: null,
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -147,12 +147,29 @@ describe("toAutomation", () => {
     expect(automation.triggerConfig).toBeNull();
     expect(automation.consecutiveFailures).toBe(0);
     expect(automation.createdBy).toBe("user-1");
-    expect(automation.environmentId).toBeNull();
+    expect(automation.environmentIds).toEqual([]);
   });
 
-  it("maps environment_id", () => {
-    const automation = toAutomation({ ...sampleRow, environment_id: "env_abc" }, []);
-    expect(automation.environmentId).toBe("env_abc");
+  it("maps environment rows to environmentIds", () => {
+    const automation = toAutomation(
+      sampleRow,
+      [],
+      [
+        {
+          automation_id: "auto_test1",
+          environment_id: "env_abc",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          automation_id: "auto_test1",
+          environment_id: "env_def",
+          created_at: now,
+          updated_at: now,
+        },
+      ]
+    );
+    expect(automation.environmentIds).toEqual(["env_abc", "env_def"]);
   });
 
   it("converts enabled=0 to false", () => {
@@ -195,15 +212,6 @@ describe("AutomationStore", () => {
       expect(statements[0].params[1]).toBe("Daily sync");
       expect(statements[0].params[2]).toBe("Run daily sync tasks");
     });
-
-    it("binds environment_id", async () => {
-      const { db, statements } = createFakeD1();
-      const store = new AutomationStore(db);
-      await store.create({ ...sampleRow, environment_id: "env_abc" });
-
-      expect(statements[0].sql).toContain("environment_id");
-      expect(statements[0].params[statements[0].params.length - 1]).toBe("env_abc");
-    });
   });
 
   describe("update", () => {
@@ -217,18 +225,6 @@ describe("AutomationStore", () => {
       expect(updateStatement).toBeDefined();
       expect(updateStatement!.sql).toContain("name = ?");
       expect(updateStatement!.sql).not.toContain("repo_owner");
-    });
-
-    it("writes environment_id, including clearing to null", async () => {
-      const { db, statements } = createFakeD1({ firstResult: sampleRow });
-      const store = new AutomationStore(db);
-
-      await store.update(sampleRow.id, { environment_id: null });
-
-      const updateStatement = statements.find((s) => s.sql.includes("UPDATE automations SET"));
-      expect(updateStatement).toBeDefined();
-      expect(updateStatement!.sql).toContain("environment_id = ?");
-      expect(updateStatement!.params[0]).toBeNull();
     });
   });
 

@@ -1,5 +1,5 @@
 import type { RepositoryRef } from "@open-inspect/shared";
-import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
+import type { AutomationRunRow } from "../db/automation-store";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { RequestContext } from "../routes/shared";
@@ -24,25 +24,25 @@ export interface AutomationSessionTarget {
  * Resolve what an automation run's session opens (design §13.3) — the
  * session-creation counterpart of ./repository's firing-time resolution:
  *
- * - Environment-bound automation: the environment's full workspace, resolved
- *   here so the session snapshots the member list (§7.6), exactly like the
- *   session-create route. Throws HttpError when the environment is gone or a
- *   member fails to resolve — the caller's launch-failure path owns it.
- * - Otherwise: the child's firing-time repository snapshot (null fields for
- *   repo-less runs); the automation row's selection may already have been
+ * - Environment run (run.environment_id set): that environment's full
+ *   workspace, resolved here so the session snapshots the member list (§7.6),
+ *   exactly like the session-create route. Throws HttpError when the
+ *   environment is gone or a member fails to resolve — the caller's
+ *   launch-failure path owns it.
+ * - Otherwise: the run's firing-time repository snapshot (null fields for
+ *   repo-less runs); the automation's live selection may already have been
  *   edited past it.
  */
 export async function resolveAutomationSessionTarget(
   env: Env,
-  automation: AutomationRow,
   run: AutomationRunRow,
   ctx: RequestContext,
   log: Logger
 ): Promise<AutomationSessionTarget> {
-  if (automation.environment_id) {
+  if (run.environment_id) {
     const environmentInputs = await resolveEnvironmentTarget(
       new EnvironmentStore(env.DB),
-      automation.environment_id
+      run.environment_id
     );
     const repositories = await resolveSessionRepositories(env, environmentInputs, ctx, log);
     const primary = repositories[0];
@@ -52,7 +52,7 @@ export async function resolveAutomationSessionTarget(
       repoId: primary.repoId,
       defaultBranch: primary.baseBranch,
       repositories,
-      environmentId: automation.environment_id,
+      environmentId: run.environment_id,
     };
   }
 

@@ -15,7 +15,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon, PencilIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatModelNameLower } from "@/lib/format";
-import { formatRepositoriesLabel } from "@/lib/repo-label";
+import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -136,20 +136,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <AutomationStatusBadge automation={automation} />
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                {automation.environmentId ? (
-                  <>
-                    Environment:{" "}
-                    {environments.find((environment) => environment.id === automation.environmentId)
-                      ?.name ?? automation.environmentId}
-                  </>
-                ) : (
-                  <>
-                    {formatRepositoriesLabel(automation.repositories)}
-                    {automation.repositories.length === 1 &&
-                      automation.repositories[0].baseBranch &&
-                      ` · ${automation.repositories[0].baseBranch}`}
-                  </>
-                )}
+                {formatAutomationTargetsLabel(automation, environments)}
+                {automation.repositories.length === 1 &&
+                  automation.environmentIds.length === 0 &&
+                  automation.repositories[0].baseBranch &&
+                  ` · ${automation.repositories[0].baseBranch}`}
               </p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">

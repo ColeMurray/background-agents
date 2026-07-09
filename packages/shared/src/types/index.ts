@@ -1375,11 +1375,12 @@ export interface Automation {
   /** Selected repositories (0..MAX_AUTOMATION_REPOSITORIES); the canonical repo representation. */
   repositories: AutomationRepository[];
   /**
-   * Environment the automation opens instead of fanning out per repository
-   * (design §13.3): each firing launches one session with the environment's
-   * full workspace. Mutually exclusive with a non-empty repository selection.
+   * Selected environments (design §13.3): each firing fans out one session
+   * per environment, opening that environment's full workspace, alongside the
+   * per-repository sessions. Repositories and environments share the combined
+   * MAX_AUTOMATION_REPOSITORIES target cap.
    */
-  environmentId: string | null;
+  environmentIds: string[];
 }
 
 export interface CreateAutomationRequest {
@@ -1395,8 +1396,8 @@ export interface CreateAutomationRequest {
   sentryClientSecret?: string;
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories?: AutomationRepositoryInput[];
-  /** Environment to open instead of a repository selection (design §13.3). */
-  environmentId?: string | null;
+  /** Environments to fan out over, one workspace session each (design §13.3). */
+  environmentIds?: string[];
 }
 
 export interface UpdateAutomationRequest {
@@ -1410,8 +1411,8 @@ export interface UpdateAutomationRequest {
   triggerConfig?: TriggerConfig;
   /** Replaces the full repository selection when present. */
   repositories?: AutomationRepositoryInput[];
-  /** Binds an environment when a string, clears the binding when null. */
-  environmentId?: string | null;
+  /** Replaces the full environment selection when present (empty clears). */
+  environmentIds?: string[];
 }
 
 export interface AutomationRun {
@@ -1437,6 +1438,11 @@ export interface AutomationRun {
   repoName: string | null;
   repoId: number | null;
   baseBranch: string | null;
+  /**
+   * Environment snapshot taken at firing time; the run's session opens this
+   * environment's workspace. Null for repository and repo-less runs.
+   */
+  environmentId: string | null;
 }
 
 export interface ListAutomationsResponse {
@@ -1460,9 +1466,8 @@ export type AutomationInvocationStatus =
   | "skipped";
 
 /**
- * One firing of an automation: 0 runs when skipped, else one run per
- * repository — which is a single run for repo-less and environment-bound
- * automations.
+ * One firing of an automation: 0 runs when skipped, else one run per target —
+ * repository or environment — with repo-less automations getting a single run.
  */
 export interface AutomationInvocation {
   id: string;

@@ -32,7 +32,11 @@ import { resolveProviderIdentity, type SessionIdentityFields } from "../session/
 import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import { automationRepositoriesInputSchema, isEnvironmentId } from "@open-inspect/shared";
+import {
+  automationRepositoriesInputSchema,
+  isEnvironmentId,
+  MAX_AUTOMATION_REPOSITORIES,
+} from "@open-inspect/shared";
 import {
   type Route,
   type RequestContext,
@@ -107,43 +111,77 @@ function parseRepositorySelection(body: { repositories?: unknown }): RepositoryS
 }
 
 /**
- * Repository-count rules: repo-scoped event triggers need exactly one
- * repository; fan-out over several is a schedule/manual-only product scope
- * (event fan-out semantics are undefined, not technically prevented).
+ * Target-count rules across BOTH selections (repositories + environments):
+ * repo-scoped event triggers need exactly one repository and no environments;
+ * fan-out over several targets is a schedule/manual-only product scope (event
+ * fan-out semantics are undefined, not technically prevented). Repositories
+ * and environments share one combined cap.
  */
-function validateRepositoryCount(triggerType: AutomationTriggerType, count: number): void {
-  if (count === 0 && (triggerType === "github_event" || triggerType === "linear_event")) {
-    throw new TargetSelectionError("Repository-scoped triggers require exactly one repository");
+function validateTargetCounts(
+  triggerType: AutomationTriggerType,
+  repositoryCount: number,
+  environmentCount: number
+): void {
+  if (triggerType === "github_event" || triggerType === "linear_event") {
+    if (repositoryCount === 0) {
+      throw new TargetSelectionError("Repository-scoped triggers require exactly one repository");
+    }
+    if (environmentCount > 0) {
+      throw new TargetSelectionError("Repository-scoped triggers cannot target environments");
+    }
   }
-  if (count > 1 && triggerType !== "schedule") {
-    throw new TargetSelectionError("Multi-repository selections require a schedule trigger");
+  if (repositoryCount + environmentCount > 1 && triggerType !== "schedule") {
+    throw new TargetSelectionError("Multi-target selections require a schedule trigger");
+  }
+  if (repositoryCount + environmentCount > MAX_AUTOMATION_REPOSITORIES) {
+    throw new TargetSelectionError(
+      `At most ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined`
+    );
   }
 }
 
+type EnvironmentSelectionRequest =
+  | { kind: "unchanged" }
+  | { kind: "replace"; environmentIds: string[] };
+
 /**
- * Validate the environment binding in a create/update body (design §13.3):
- * `undefined` means the body did not touch the binding, null clears it, and a
- * string binds the environment — which must exist. Exclusivity with the
- * repository selection is a cross-field rule, checked in the handlers against
- * the automation's final state.
+ * Parse the environment selection from a create/update body (design §13.3).
+ * `unchanged` means the body did not touch the selection (create treats that
+ * as empty); an array replaces it wholesale (empty clears).
  *
- * @throws TargetSelectionError when the value is malformed or the environment
- * does not exist.
+ * @throws TargetSelectionError when the `environmentIds` payload is malformed.
  */
-async function parseEnvironmentBinding(
-  env: Env,
-  body: { environmentId?: unknown }
-): Promise<string | null | undefined> {
-  if (body.environmentId === undefined) return undefined;
-  if (body.environmentId === null) return null;
-  if (typeof body.environmentId !== "string" || !isEnvironmentId(body.environmentId)) {
-    throw new TargetSelectionError("environmentId must be an environment id (env_…)");
+function parseEnvironmentSelection(body: {
+  environmentIds?: unknown;
+}): EnvironmentSelectionRequest {
+  if (body.environmentIds === undefined) return { kind: "unchanged" };
+  if (
+    !Array.isArray(body.environmentIds) ||
+    body.environmentIds.some((id) => typeof id !== "string" || !isEnvironmentId(id))
+  ) {
+    throw new TargetSelectionError("environmentIds must be an array of environment ids (env_…)");
   }
-  const environment = await new EnvironmentStore(env.DB).getById(body.environmentId);
-  if (!environment) {
-    throw new TargetSelectionError(`Environment not found: ${body.environmentId}`);
+  const environmentIds = body.environmentIds as string[];
+  if (new Set(environmentIds).size !== environmentIds.length) {
+    throw new TargetSelectionError("environmentIds must not contain duplicates");
   }
-  return body.environmentId;
+  return { kind: "replace", environmentIds };
+}
+
+/**
+ * Verify every selected environment exists — a selection must not silently
+ * point at deleted environments.
+ *
+ * @throws TargetSelectionError naming every missing environment.
+ */
+async function resolveEnvironmentSelection(env: Env, environmentIds: string[]): Promise<void> {
+  if (environmentIds.length === 0) return;
+  const store = new EnvironmentStore(env.DB);
+  const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
+  const missing = environmentIds.filter((_, index) => !found[index]);
+  if (missing.length > 0) {
+    throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
+  }
 }
 
 /**
@@ -235,13 +273,19 @@ async function handleListAutomations(
 
   const store = new AutomationStore(env.DB);
   const result = await store.list({ repoOwner, repoName });
-  const repositoriesByAutomation = await store.getRepositoriesForAutomationIds(
-    result.automations.map((row) => row.id)
-  );
+  const automationIds = result.automations.map((row) => row.id);
+  const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
+    store.getRepositoriesForAutomationIds(automationIds),
+    store.getEnvironmentsForAutomationIds(automationIds),
+  ]);
 
   return json({
     automations: result.automations.map((row) =>
-      toAutomation(row, repositoriesByAutomation.get(row.id) ?? [])
+      toAutomation(
+        row,
+        repositoriesByAutomation.get(row.id) ?? [],
+        environmentsByAutomation.get(row.id) ?? []
+      )
     ),
     total: result.total,
   });
@@ -296,22 +340,16 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
+  let requestedEnvironmentIds: string[];
   try {
-    validateRepositoryCount(triggerType, requestedRepositories.length);
+    const environmentSelection = parseEnvironmentSelection(body);
+    requestedEnvironmentIds =
+      environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
+    validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
+    await resolveEnvironmentSelection(env, requestedEnvironmentIds);
   } catch (e) {
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
-  }
-
-  let environmentId: string | null;
-  try {
-    environmentId = (await parseEnvironmentBinding(env, body)) ?? null;
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
-  if (environmentId && requestedRepositories.length > 0) {
-    return error("environmentId and repositories are mutually exclusive", 400);
   }
 
   const isSchedule = triggerType === "schedule";
@@ -441,7 +479,6 @@ async function handleCreateAutomation(
     event_type: body.eventType ?? null,
     trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
     trigger_auth_data: triggerAuthData,
-    environment_id: environmentId,
   };
 
   // Persist the automation, its repository selection, and (for slack_event)
@@ -451,6 +488,7 @@ async function handleCreateAutomation(
   const createStatements = [
     store.bindAutomationInsert(row),
     ...store.bindRepositoryInserts(id, newRepositories, now),
+    ...store.bindEnvironmentInserts(id, requestedEnvironmentIds, now),
   ];
   if (triggerType === "slack_event") {
     const slackStore = new SlackChannelStore(env.DB);
@@ -462,14 +500,15 @@ async function handleCreateAutomation(
 
   const automation = toAutomation(
     (await store.getById(id))!,
-    await store.getRepositoriesForAutomation(id)
+    await store.getRepositoriesForAutomation(id),
+    await store.getEnvironmentsForAutomation(id)
   );
 
   logger.info("automation.created", {
     event: "automation.created",
     automation_id: id,
     repo: newRepositories.map((repo) => `${repo.repo_owner}/${repo.repo_name}`).join(",") || null,
-    environment_id: environmentId,
+    environments: requestedEnvironmentIds.join(",") || null,
     trigger_type: triggerType,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
@@ -514,7 +553,11 @@ async function handleGetAutomation(
   if (!row) return error("Automation not found", 404);
 
   return json({
-    automation: toAutomation(row, await store.getRepositoriesForAutomation(id)),
+    automation: toAutomation(
+      row,
+      await store.getRepositoriesForAutomation(id),
+      await store.getEnvironmentsForAutomation(id)
+    ),
   });
 }
 
@@ -611,44 +654,48 @@ async function handleUpdateAutomation(
     throw e;
   }
 
-  let replacementRepositories: AutomationRepositoryInsert[] | null = null;
-  if (selection.kind === "replace") {
-    try {
-      validateRepositoryCount(
-        existing.trigger_type as AutomationTriggerType,
-        selection.repositories.length
-      );
-    } catch (e) {
-      if (e instanceof TargetSelectionError) return error(e.message, 400);
-      throw e;
-    }
-    const resolved = await resolveRepositorySelection(env, selection.repositories, ctx);
-    replacementRepositories = resolved;
-  }
-
-  // Environment binding: exclusivity is checked against the automation's FINAL
-  // state, so both orders of arriving at "environment + repositories" 400 —
-  // binding an environment while repository rows remain, and adding
-  // repositories while a binding remains.
-  let environmentBinding: string | null | undefined;
+  let environmentSelection: EnvironmentSelectionRequest;
   try {
-    environmentBinding = await parseEnvironmentBinding(env, body);
+    environmentSelection = parseEnvironmentSelection(body);
   } catch (e) {
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
-  const finalEnvironmentId =
-    environmentBinding === undefined ? existing.environment_id : environmentBinding;
-  if (finalEnvironmentId) {
-    const finalRepositoryCount =
-      replacementRepositories !== null
-        ? replacementRepositories.length
-        : (await store.getRepositoriesForAutomation(id)).length;
-    if (finalRepositoryCount > 0) {
-      return error("environmentId and repositories are mutually exclusive", 400);
+
+  // The count rules span both selections, so when EITHER is replaced they are
+  // validated against the automation's FINAL state (the replacement plus the
+  // other side's existing rows). Edits that touch neither selection skip this
+  // — count rules stay write-time so a stored selection predating a rule can
+  // never brick unrelated edits.
+  let replacementRepositories: AutomationRepositoryInsert[] | null = null;
+  const replacementEnvironmentIds: string[] | null =
+    environmentSelection.kind === "replace" ? environmentSelection.environmentIds : null;
+  if (selection.kind === "replace" || replacementEnvironmentIds !== null) {
+    try {
+      const finalRepositoryCount =
+        selection.kind === "replace"
+          ? selection.repositories.length
+          : (await store.getRepositoriesForAutomation(id)).length;
+      const finalEnvironmentCount =
+        replacementEnvironmentIds !== null
+          ? replacementEnvironmentIds.length
+          : (await store.getEnvironmentsForAutomation(id)).length;
+      validateTargetCounts(
+        existing.trigger_type as AutomationTriggerType,
+        finalRepositoryCount,
+        finalEnvironmentCount
+      );
+      if (replacementEnvironmentIds !== null) {
+        await resolveEnvironmentSelection(env, replacementEnvironmentIds);
+      }
+    } catch (e) {
+      if (e instanceof TargetSelectionError) return error(e.message, 400);
+      throw e;
+    }
+    if (selection.kind === "replace") {
+      replacementRepositories = await resolveRepositorySelection(env, selection.repositories, ctx);
     }
   }
-  if (environmentBinding !== undefined) updateFields.environment_id = environmentBinding;
 
   // Update event type — only for non-schedule types
   if (body.eventType !== undefined) {
@@ -734,6 +781,9 @@ async function handleUpdateAutomation(
   if (replacementRepositories !== null) {
     statements.push(...store.bindReplaceRepositories(id, replacementRepositories, Date.now()));
   }
+  if (replacementEnvironmentIds !== null) {
+    statements.push(...store.bindReplaceEnvironments(id, replacementEnvironmentIds, Date.now()));
+  }
   if (resyncSlackChannels) {
     const slackStore = new SlackChannelStore(env.DB);
     statements.push(
@@ -754,7 +804,11 @@ async function handleUpdateAutomation(
   });
 
   return json({
-    automation: toAutomation(updated, await store.getRepositoriesForAutomation(id)),
+    automation: toAutomation(
+      updated,
+      await store.getRepositoriesForAutomation(id),
+      await store.getEnvironmentsForAutomation(id)
+    ),
   });
 }
 
@@ -803,7 +857,13 @@ async function handlePauseAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? toAutomation(row, await store.getRepositoriesForAutomation(id)) : null,
+    automation: row
+      ? toAutomation(
+          row,
+          await store.getRepositoriesForAutomation(id),
+          await store.getEnvironmentsForAutomation(id)
+        )
+      : null,
   });
 }
 
@@ -845,7 +905,13 @@ async function handleResumeAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? toAutomation(row, await store.getRepositoriesForAutomation(id)) : null,
+    automation: row
+      ? toAutomation(
+          row,
+          await store.getRepositoriesForAutomation(id),
+          await store.getEnvironmentsForAutomation(id)
+        )
+      : null,
   });
 }
 

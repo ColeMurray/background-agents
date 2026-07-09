@@ -38,11 +38,6 @@ export interface AutomationRow {
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
-  /**
-   * Environment the automation opens instead of fanning out per repository
-   * (design §13.3). Set ⇔ automation_repositories is empty for the automation.
-   */
-  environment_id: string | null;
 }
 
 export interface AutomationRunRow {
@@ -63,6 +58,8 @@ export interface AutomationRunRow {
   repo_name: string | null;
   repo_id: number | null;
   base_branch: string | null;
+  /** Environment snapshot taken at firing time (null for repository/repo-less runs). */
+  environment_id: string | null;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
@@ -85,6 +82,13 @@ export type AutomationRepositoryInsert = Pick<
   AutomationRepositoryRow,
   "repo_owner" | "repo_name" | "repo_id" | "base_branch"
 >;
+
+export interface AutomationEnvironmentRow {
+  automation_id: string;
+  environment_id: string;
+  created_at: number;
+  updated_at: number;
+}
 
 export interface AutomationInvocationRow {
   id: string;
@@ -129,10 +133,11 @@ export function toAutomationRepository(row: AutomationRepositoryRow): Automation
   };
 }
 
-/** Map an automation row plus its repository rows to the response shape. */
+/** Map an automation row plus its repository and environment rows to the response shape. */
 export function toAutomation(
   row: AutomationRow,
-  repositoryRows: AutomationRepositoryRow[]
+  repositoryRows: AutomationRepositoryRow[],
+  environmentRows: AutomationEnvironmentRow[] = []
 ): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)
@@ -157,7 +162,7 @@ export function toAutomation(
     eventType: row.event_type ?? null,
     triggerConfig,
     repositories: repositoryRows.map(toAutomationRepository),
-    environmentId: row.environment_id,
+    environmentIds: environmentRows.map((environment) => environment.environment_id),
   };
 }
 
@@ -180,6 +185,7 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
     repoName: row.repo_name ?? null,
     repoId: row.repo_id ?? null,
     baseBranch: row.base_branch ?? null,
+    environmentId: row.environment_id ?? null,
   };
 }
 
@@ -273,8 +279,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-          event_type, trigger_config, trigger_auth_data, environment_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          event_type, trigger_config, trigger_auth_data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -295,8 +301,7 @@ export class AutomationStore {
         row.deleted_at,
         row.event_type,
         row.trigger_config,
-        row.trigger_auth_data,
-        row.environment_id
+        row.trigger_auth_data
       );
   }
 
@@ -369,7 +374,6 @@ export class AutomationStore {
       "event_type",
       "trigger_config",
       "trigger_auth_data",
-      "environment_id",
     ];
 
     for (const field of allowedFields) {
@@ -510,6 +514,75 @@ export class AutomationStore {
           now
         )
     );
+  }
+
+  // --- Environment selection (automation_environments: single source of truth) ---
+
+  async getEnvironmentsForAutomation(automationId: string): Promise<AutomationEnvironmentRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM automation_environments
+         WHERE automation_id = ?
+         ORDER BY environment_id`
+      )
+      .bind(automationId)
+      .all<AutomationEnvironmentRow>();
+    return result.results || [];
+  }
+
+  /** Batched variant for the tick loop — one query for all overdue automations. */
+  async getEnvironmentsForAutomationIds(
+    automationIds: string[]
+  ): Promise<Map<string, AutomationEnvironmentRow[]>> {
+    const map = new Map<string, AutomationEnvironmentRow[]>();
+    for (const id of automationIds) map.set(id, []);
+    if (automationIds.length === 0) return map;
+
+    const placeholders = automationIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM automation_environments
+         WHERE automation_id IN (${placeholders})
+         ORDER BY environment_id`
+      )
+      .bind(...automationIds)
+      .all<AutomationEnvironmentRow>();
+
+    for (const row of result.results ?? []) {
+      map.get(row.automation_id)?.push(row);
+    }
+    return map;
+  }
+
+  /** INSERT statements for an automation's environment rows (composable into a batch). */
+  bindEnvironmentInserts(
+    automationId: string,
+    environmentIds: string[],
+    now: number
+  ): D1PreparedStatement[] {
+    return environmentIds.map((environmentId) =>
+      this.db
+        .prepare(
+          `INSERT INTO automation_environments
+           (automation_id, environment_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind(automationId, environmentId, now, now)
+    );
+  }
+
+  /** Statements replacing an automation's environment selection. */
+  bindReplaceEnvironments(
+    automationId: string,
+    environmentIds: string[],
+    now: number
+  ): D1PreparedStatement[] {
+    return [
+      this.db
+        .prepare(`DELETE FROM automation_environments WHERE automation_id = ?`)
+        .bind(automationId),
+      ...this.bindEnvironmentInserts(automationId, environmentIds, now),
+    ];
   }
 
   /** Statements replacing an automation's repository selection. */
@@ -767,8 +840,8 @@ export class AutomationStore {
             `INSERT INTO automation_runs
              (id, automation_id, invocation_id, session_id, status, skip_reason, failure_reason,
               scheduled_at, started_at, completed_at, created_at,
-              repo_owner, repo_name, repo_id, base_branch)
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+              repo_owner, repo_name, repo_id, base_branch, environment_id)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
              WHERE EXISTS (SELECT 1 FROM automation_invocations WHERE id = ?)`
           )
           .bind(
@@ -787,6 +860,7 @@ export class AutomationStore {
             child.repo_name,
             child.repo_id,
             child.base_branch,
+            child.environment_id,
             invocation.id
           )
       );
