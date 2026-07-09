@@ -9,12 +9,15 @@ browser (only key names are visible in the UI).
 ## Quick Start
 
 1. Open your Open-Inspect web app and go to **Settings**
-2. The **Secrets** tab is selected by default
-3. Use the scope dropdown at the top to choose **All Repositories (Global)** or a specific
-   repository
-4. Click **Add secret**, enter a key and value, then click **Save**
+2. Navigate to the scope you want:
+   - **Global or repository secrets**: the **Secrets** tab (selected by default) — use the scope
+     dropdown at the top to choose **All Repositories (Global)** or a specific repository
+   - **Environment secrets**: the **Environments** tab — open the environment and switch to its
+     **Secrets** tab
+3. Click **Add secret**, enter a key and value, then click **Save**
 
-That's it — the next sandbox you launch will have the secret available as an environment variable.
+That's it — the next sandbox you launch from that scope will have the secret available as an
+environment variable.
 
 ---
 

@@ -180,11 +180,14 @@ regularly, save it as an environment and enable prebuilds.
 
 ### Build keeps failing
 
-Check the error message shown in the Images settings page. Common causes:
+Check the error message shown next to the failed build — on **Settings > Images** for repository
+images, or on the environment's row in **Settings > Environments** for environment images. Common
+causes:
 
-- **Setup script errors** — Your `.openinspect/setup.sh` is failing. Test it locally or check the
+- **Setup script errors** — A `.openinspect/setup.sh` is failing. Test it locally or check the
   script for commands that might not work in the sandbox environment (Debian Linux with Node.js,
-  Python, and common dev tools).
+  Python, and common dev tools). For environment builds, the error names which repository's script
+  failed.
 - **Timeout** — Builds have a 30-minute limit. If your setup takes longer, look for ways to optimize
   it (e.g., use faster package managers, reduce dependencies). Environment builds run one setup
   script per repository, so large environments approach the limit sooner; the timeout for an
@@ -195,22 +198,32 @@ temporary service outages) resolve themselves.
 
 ### Session isn't using the pre-built image
 
-Verify that:
+For a **repository** session, verify that:
 
 - Image building is **enabled** for the repository in Settings > Images
 - The status shows **Ready** (not Building or Failed)
 - You're creating a session for the same repository that the image was built for
 
+For an **environment** session, verify that:
+
+- The **prebuild** toggle is on for the environment in Settings > Environments
+- The environment's image status shows **Ready**
+- The environment hasn't been edited (repositories, order, or base branches) since the image was
+  built — an edit retires the image until the rebuild completes
+- You launched the session by picking the **environment** in the picker — ad-hoc "Multiple
+  repositories" selections never use prebuilt images, even if an environment with the same
+  repositories exists
+
 ### Image seems stale
 
 Pre-built images are rebuilt every 30 minutes when new commits are detected. If you just pushed code
-and want the image updated immediately, click the refresh button next to the repository in the
-Images settings page to trigger a manual rebuild.
+and want the image updated immediately, trigger a manual rebuild — the refresh button next to the
+repository in Settings > Images, or next to the environment in Settings > Environments.
 
 ---
 
 ## Disabling Pre-Built Images
 
-To stop using pre-built images for a repository, toggle the switch off in Settings > Images. New
-sessions will return to the normal startup flow (full clone + setup). Existing sessions are not
-affected.
+To stop using pre-built images, toggle the switch off — per repository in Settings > Images, or the
+prebuild toggle on the environment in Settings > Environments. New sessions will return to the
+normal startup flow (full clone + setup). Existing sessions are not affected.

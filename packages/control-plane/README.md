@@ -11,7 +11,9 @@ The control plane provides:
 - **Multi-client Sync**: Web, Slack, extension clients all see the same state
 - **GitHub Integration**: GitHub App for repository access
 - **Token Encryption**: AES-256-GCM encryption for GitHub tokens at rest
-- **Repo Secrets**: Encrypted repo-scoped secrets stored in D1, injected into sandboxes as env vars
+- **Secrets**: Encrypted global, repo-scoped, and environment-scoped secrets stored in D1, injected
+  into sandboxes as env vars
+- **Environments**: Named repository sets with their own secrets and prebuilt images, stored in D1
 
 ## Architecture
 
@@ -37,7 +39,8 @@ The control plane provides:
 │  │  └────────────────┘                                       │   │
 │  └───────────────────────────────────────────────────────────┘   │
 │  ┌───────────────────────────────────────────────────────────┐   │
-│  │              D1 Database (repo-scoped secrets)              │   │
+│  │   D1 Database (sessions index, environments, automations,   │   │
+│  │              image builds, encrypted secrets)               │   │
 │  └───────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```

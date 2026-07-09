@@ -112,7 +112,7 @@ An environment defines:
 Sessions snapshot the environment at creation time: editing or deleting an environment never changes
 what an existing session works on (the session page shows "Environment deleted" if the source is
 gone). Ad-hoc "Multiple repositories" selections are the unsaved counterpart — same workspace shape,
-but no secrets scope and no prebuilds; the picker offers to save the set as an environment.
+but no environment-scoped secrets or prebuilds; the picker offers to save the set as an environment.
 
 ---
 
