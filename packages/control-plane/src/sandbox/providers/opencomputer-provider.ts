@@ -123,15 +123,15 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let providerObjectId: string | undefined;
     try {
       const environment = await this.buildRuntimeEnvironment(config, {
-        fromRepoImage: !!config.repoImageId,
-        repoImageSha: config.repoImageSha ?? undefined,
+        fromPrebuiltImage: !!config.prebuiltImageId,
+        prebuiltImageSha: config.prebuiltImageSha ?? undefined,
       });
       secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
       const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
-      const sandbox = config.repoImageId
+      const sandbox = config.prebuiltImageId
         ? await this.client.forkFromCheckpoint({
-            checkpointId: config.repoImageId,
+            checkpointId: config.prebuiltImageId,
             name: config.sandboxId,
             env: environment.envVars,
             labels,
@@ -541,8 +541,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     config: CreateSandboxConfig | RestoreConfig,
     mode: {
       restoredFromSnapshot?: boolean;
-      fromRepoImage?: boolean;
-      repoImageSha?: string;
+      fromPrebuiltImage?: boolean;
+      prebuiltImageSha?: string;
     } = {}
   ): Promise<PreparedOpenComputerEnvironment> {
     const environment = this.prepareEnvironment(config.userEnvVars);
@@ -568,9 +568,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
     }
     if (mode.restoredFromSnapshot) envVars.RESTORED_FROM_SNAPSHOT = "true";
-    if (mode.fromRepoImage) {
+    if (mode.fromPrebuiltImage) {
       envVars.FROM_REPO_IMAGE = "true";
-      envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
+      envVars.REPO_IMAGE_SHA = mode.prebuiltImageSha ?? "";
       if (!envVars.VCS_CLONE_TOKEN) {
         envVars.VCS_CLONE_TOKEN = "";
       }

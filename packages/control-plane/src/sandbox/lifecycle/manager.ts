@@ -420,16 +420,15 @@ export class SandboxLifecycleManager {
 
       const now = Date.now();
       const sessionId = session.session_name || session.id;
-      const sandboxAuthToken = this.idGenerator.generateId();
-      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
+      let sandboxAuthToken = this.idGenerator.generateId();
       const hasRepository = sessionHasRepository(session);
-      const expectedSandboxId = buildSandboxIdForSession(session, now);
+      let expectedSandboxId = buildSandboxIdForSession(session, now);
 
       // Store expected sandbox ID and auth token BEFORE calling provider
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt: now,
-        authTokenHash: sandboxAuthTokenHash,
+        authTokenHash: await hashToken(sandboxAuthToken),
         modalSandboxId: expectedSandboxId,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
@@ -459,8 +458,8 @@ export class SandboxLifecycleManager {
       // Look up pre-built repo image (graceful fallback on failure).
       // Repo images bake a single checkout, so multi-repo sessions boot from
       // the base image and clone every member.
-      let repoImageId: string | null = environmentImage?.providerImageId ?? null;
-      let repoImageSha: string | null = environmentImage?.primaryBaseSha ?? null;
+      let prebuiltImageId: string | null = environmentImage?.providerImageId ?? null;
+      let prebuiltImageSha: string | null = environmentImage?.primaryBaseSha ?? null;
       if (
         hasRepository &&
         !session.environment_id &&
@@ -474,11 +473,11 @@ export class SandboxLifecycleManager {
             session.base_branch ?? undefined
           );
           if (repoImage) {
-            repoImageId = repoImage.provider_image_id;
-            repoImageSha = repoImage.base_sha;
+            prebuiltImageId = repoImage.provider_image_id;
+            prebuiltImageSha = repoImage.base_sha;
             this.log.info("Using pre-built repo image", {
-              provider_image_id: repoImageId,
-              base_sha: repoImageSha,
+              provider_image_id: prebuiltImageId,
+              base_sha: prebuiltImageSha,
             });
           }
         } catch (e) {
@@ -507,8 +506,8 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
-        repoImageId,
-        repoImageSha,
+        prebuiltImageId,
+        prebuiltImageSha,
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
@@ -534,10 +533,26 @@ export class SandboxLifecycleManager {
           error: error instanceof Error ? error.message : String(error),
         });
         await this.markEnvironmentImageRestoreFailed(environmentImage, error);
+        // The retry gets a fresh spawn identity: the failed attempt may have
+        // actually created a sandbox provider-side (post-create errors are
+        // indistinguishable here), and rotating the token hash and sandbox id
+        // locks such an orphan out of this DO exactly like the next
+        // user-initiated respawn would.
+        const retryNow = Math.max(Date.now(), now + 1);
+        sandboxAuthToken = this.idGenerator.generateId();
+        expectedSandboxId = buildSandboxIdForSession(session, retryNow);
+        this.storage.updateSandboxForSpawn({
+          status: "spawning",
+          createdAt: retryNow,
+          authTokenHash: await hashToken(sandboxAuthToken),
+          modalSandboxId: expectedSandboxId,
+        });
         result = await this.provider.createSandbox({
           ...createConfig,
-          repoImageId: null,
-          repoImageSha: null,
+          sandboxId: expectedSandboxId,
+          sandboxAuthToken,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
         });
       }
 

@@ -517,8 +517,8 @@ describe("SandboxLifecycleManager", () => {
           branch: null,
           codeServerEnabled: true,
           agentSlackNotifyEnabled: true,
-          repoImageId: null,
-          repoImageSha: null,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
         })
       );
       expect(mcpServerLookup.getDecryptedForSession).toHaveBeenCalledWith([]);
@@ -1695,7 +1695,7 @@ describe("SandboxLifecycleManager", () => {
   });
 
   describe("repo image lookup in doSpawn", () => {
-    it("passes repoImageId when lookup returns a ready image", async () => {
+    it("passes prebuiltImageId when lookup returns a ready image", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1724,13 +1724,13 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          repoImageId: "img-abc123",
-          repoImageSha: "sha-def456",
+          prebuiltImageId: "img-abc123",
+          prebuiltImageSha: "sha-def456",
         })
       );
     });
 
-    it("passes null repoImageId when no ready image exists", async () => {
+    it("passes null prebuiltImageId when no ready image exists", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1756,8 +1756,8 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          repoImageId: null,
-          repoImageSha: null,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
         })
       );
     });
@@ -1791,8 +1791,8 @@ describe("SandboxLifecycleManager", () => {
       // Should still spawn, just without repo image
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          repoImageId: null,
-          repoImageSha: null,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
         })
       );
     });
@@ -1828,7 +1828,7 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("passes null repoImageId when no lookup is configured", async () => {
+    it("passes null prebuiltImageId when no lookup is configured", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1849,8 +1849,8 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          repoImageId: null,
-          repoImageSha: null,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
         })
       );
     });
@@ -1919,8 +1919,8 @@ describe("SandboxLifecycleManager", () => {
       expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith("env-1");
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          repoImageId: "im-env-123",
-          repoImageSha: "sha-primary",
+          prebuiltImageId: "im-env-123",
+          prebuiltImageSha: "sha-primary",
           repositories: ENV_MEMBERS,
         })
       );
@@ -1943,7 +1943,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ repoImageId: null, repoImageSha: null })
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
     });
 
@@ -1971,7 +1971,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(repoImageLookup.getLatestReady).not.toHaveBeenCalled();
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ repoImageId: null, repoImageSha: null })
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
     });
 
@@ -1989,7 +1989,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ repoImageId: null, repoImageSha: null })
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
       expect(storage.calls).toContain("updateSandboxStatus:connecting");
     });
@@ -2000,7 +2000,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ repoImageId: null, repoImageSha: null })
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
     });
 
@@ -2032,11 +2032,18 @@ describe("SandboxLifecycleManager", () => {
       expect(createSandbox).toHaveBeenCalledTimes(2);
       expect(createSandbox.mock.calls[1][0]).toEqual(
         expect.objectContaining({
-          repoImageId: null,
-          repoImageSha: null,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
           repositories: ENV_MEMBERS,
         })
       );
+      // The retry rotates the spawn identity: the failed attempt may have
+      // created an orphan sandbox provider-side, and it must not share
+      // credentials with the sandbox that actually boots.
+      const [firstAttempt, retryAttempt] = createSandbox.mock.calls.map(([config]) => config);
+      expect(retryAttempt.sandboxAuthToken).not.toBe(firstAttempt.sandboxAuthToken);
+      expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
+      expect(vi.mocked(storage.updateSandboxForSpawn)).toHaveBeenCalledTimes(2);
       expect(storage.calls).toContain("updateSandboxStatus:connecting");
       expect(storage.calls).not.toContain("updateSandboxStatus:failed");
     });
@@ -2201,7 +2208,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(repoImageLookup.getLatestReady).not.toHaveBeenCalled();
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ repoImageId: null, repoImageSha: null })
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
     });
 

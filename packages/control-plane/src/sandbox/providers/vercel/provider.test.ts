@@ -354,8 +354,8 @@ describe("VercelSandboxProvider", () => {
 
     const result = await provider.createSandbox({
       ...baseCreateConfig,
-      repoImageId: "repo-snapshot-1",
-      repoImageSha: "abc123",
+      prebuiltImageId: "repo-snapshot-1",
+      prebuiltImageSha: "abc123",
       codeServerEnabled: true,
       sandboxSettings: { terminalEnabled: true, tunnelPorts: [8080, 3000, 5173] },
     });

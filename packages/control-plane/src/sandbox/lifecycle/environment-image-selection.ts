@@ -55,7 +55,7 @@ export interface SelectedEnvironmentImage {
   environmentImageId: string;
   providerImageId: string;
   /**
-   * The primary repository's baked SHA — the scalar repoImageSha mirror
+   * The primary repository's baked SHA — the scalar prebuiltImageSha mirror
    * (repository_shas is position-ordered, primary first). Null when the
    * provenance document is missing or unparseable; the SHA is informational
    * (boot logging), so a null must not fail the match.

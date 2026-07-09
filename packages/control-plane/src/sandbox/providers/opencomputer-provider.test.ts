@@ -342,8 +342,8 @@ describe("OpenComputerSandboxProvider", () => {
 
     const result = await provider.createSandbox({
       ...baseConfig,
-      repoImageId: "checkpoint-repo-1",
-      repoImageSha: "abc123",
+      prebuiltImageId: "checkpoint-repo-1",
+      prebuiltImageSha: "abc123",
     });
 
     expect(result).toMatchObject({
@@ -382,7 +382,7 @@ describe("OpenComputerSandboxProvider", () => {
 
     await provider.createSandbox({
       ...baseConfig,
-      repoImageId: "checkpoint-repo-1",
+      prebuiltImageId: "checkpoint-repo-1",
       userEnvVars: { VCS_CLONE_TOKEN: "session-token" },
     });
 

@@ -137,15 +137,15 @@ export class VercelSandboxProvider implements SandboxProvider {
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
     try {
       const env = await this.buildEnvVars(config, {
-        fromRepoImage: !!config.repoImageId,
-        repoImageSha: config.repoImageSha ?? undefined,
+        fromPrebuiltImage: !!config.prebuiltImageId,
+        prebuiltImageSha: config.prebuiltImageSha ?? undefined,
       });
       const ports = collectExposedPorts(
         config.codeServerEnabled,
         config.sandboxSettings
       ).allExposedPorts;
       const sourceSnapshotId =
-        config.repoImageId || (await this.resolveBaseSnapshotId(config.correlation));
+        config.prebuiltImageId || (await this.resolveBaseSnapshotId(config.correlation));
       if (!sourceSnapshotId) {
         throw new Error(
           "VERCEL_BASE_SNAPSHOT_ID or VERCEL_BASE_SNAPSHOT_NAME is required for fresh Vercel sandboxes when no repo image snapshot is available"
@@ -429,8 +429,8 @@ export class VercelSandboxProvider implements SandboxProvider {
     config: CreateSandboxConfig | RestoreConfig,
     mode: {
       restoredFromSnapshot?: boolean;
-      fromRepoImage?: boolean;
-      repoImageSha?: string;
+      fromPrebuiltImage?: boolean;
+      prebuiltImageSha?: string;
     }
   ): Promise<Record<string, string>> {
     const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
@@ -454,9 +454,9 @@ export class VercelSandboxProvider implements SandboxProvider {
     this.injectScmEnvVars(envVars);
 
     if (mode.restoredFromSnapshot) envVars.RESTORED_FROM_SNAPSHOT = "true";
-    if (mode.fromRepoImage) {
+    if (mode.fromPrebuiltImage) {
       envVars.FROM_REPO_IMAGE = "true";
-      envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
+      envVars.REPO_IMAGE_SHA = mode.prebuiltImageSha ?? "";
     }
     const { codeServerPort, terminalPort } = resolveServicePorts(config.sandboxSettings);
     if (config.codeServerEnabled) {
