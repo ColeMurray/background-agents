@@ -126,6 +126,18 @@ class TestClearStaleTunnelEnvFile:
 
         assert not stub_path.exists()
 
+    def test_removes_dangling_symlink(self, tmp_path, monkeypatch):
+        """exists() is False for a broken symlink, but it must still be cleared."""
+        stub_path = tmp_path / "tunnels.env"
+        stub_path.symlink_to(tmp_path / "missing-target")
+        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+
+        sup = _make_supervisor()
+        sup._clear_stale_tunnel_env_file()
+
+        assert not stub_path.is_symlink()
+        assert not stub_path.exists()
+
     def test_no_op_when_file_missing(self, tmp_path, monkeypatch):
         stub_path = tmp_path / "tunnels.env"
         monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))

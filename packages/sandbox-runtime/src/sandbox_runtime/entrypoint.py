@@ -1675,7 +1675,9 @@ class SandboxSupervisor:
         cleared so `_wait_for_tunnel_env_file` blocks until fresh URLs arrive.
         """
         path = Path(TUNNEL_ENV_FILE_PATH)
-        if not path.exists():
+        # exists() follows symlinks, so a dangling symlink reads as absent —
+        # but it must still be cleared or it can break the manager's write.
+        if not path.exists() and not path.is_symlink():
             return
         if self.sandbox_id and self.sandbox_id != "unknown":
             try:
