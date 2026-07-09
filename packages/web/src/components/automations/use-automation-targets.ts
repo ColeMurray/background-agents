@@ -2,54 +2,19 @@
 
 import { useCallback, useMemo, useEffect, useState } from "react";
 import { MAX_AUTOMATION_REPOSITORIES, type AutomationRepositoryInput } from "@open-inspect/shared";
-import { parseRepoFullName, type SessionTarget } from "@/lib/session-target";
-
-/**
- * One entry of the automation's fan-out selection, reusing the shared
- * session-target model (lib/session-target.ts). An automation targets an
- * ordered list of launchable session targets: each `repo` entry runs in its
- * own session and each `environment` entry opens one workspace session. The
- * empty list is the repo-less selection ("No repository"). Single-select mode
- * replaces the whole list, so repo/environment mutual exclusivity there is
- * structural rather than enforced by cross-clearing effects.
- */
-export type AutomationSessionTarget = Extract<SessionTarget, { kind: "repo" | "environment" }>;
-
-type SelectionMode = "single" | "multiple";
-
-/** Selection key for a repository: the lowercase full name, as the API stores it. */
-function repositoryKey(repoOwner: string, repoName: string): string {
-  return `${repoOwner}/${repoName}`.toLowerCase();
-}
-
-function repoNamesOf(targets: AutomationSessionTarget[]): string[] {
-  return targets.flatMap((target) => (target.kind === "repo" ? [target.repoFullName] : []));
-}
-
-function sameStringList(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
-function sameTargetList(a: AutomationSessionTarget[], b: AutomationSessionTarget[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((target, index) => {
-      const other = b[index];
-      return target.kind === "repo"
-        ? other.kind === "repo" && other.repoFullName === target.repoFullName
-        : other.kind === "environment" && other.environmentId === target.environmentId;
-    })
-  );
-}
-
-/**
- * Leaving multi-select keeps one target: the first repository, or the first
- * environment when only environments are selected.
- */
-function collapseToSingleTarget(targets: AutomationSessionTarget[]): AutomationSessionTarget[] {
-  const firstRepository = targets.find((target) => target.kind === "repo");
-  return firstRepository ? [firstRepository] : targets.slice(0, 1);
-}
+import { parseRepoFullName } from "@/lib/session-target";
+import {
+  type AutomationSessionTarget,
+  type SelectionMode,
+  buildRepositoriesPayload,
+  collapseToSingleTarget,
+  hydrateTargets,
+  initialBaseBranch,
+  initialSelectionMode,
+  nextBaseBranch,
+  repoNamesOf,
+  toggleTarget,
+} from "./automation-target-selection";
 
 export interface UseAutomationTargetsOptions {
   /** Stored selection hydrated in edit mode (or a template pre-fill). */
@@ -96,6 +61,8 @@ export interface UseAutomationTargetsResult {
  * Owns the automation form's target selection: the session-target list and its
  * hydration, single/multi selection mode, every selection transition, base
  * branch state coupled to those transitions, and the payload derivation. The
+ * selection rules themselves are pure functions in
+ * automation-target-selection.ts; this hook wires them to React state. The
  * form renders from the derived views and never mutates the selection
  * directly.
  */
@@ -110,59 +77,31 @@ export function useAutomationTargets(
     repos,
   } = options;
 
-  // The fan-out selection as one ordered list of session targets; repositories
-  // and environments hydrate in selection order within each kind.
-  const [selectedTargets, setSelectedTargets] = useState<AutomationSessionTarget[]>(() => [
-    ...initialRepositories.map(
-      (repository): AutomationSessionTarget => ({
-        kind: "repo",
-        repoFullName: repositoryKey(repository.repoOwner, repository.repoName),
-      })
-    ),
-    ...initialEnvironmentIds.map(
-      (environmentId): AutomationSessionTarget => ({ kind: "environment", environmentId })
-    ),
-  ]);
+  // State: the ordered session-target list, the selection mode, and the branch.
+  const [selectedTargets, setSelectedTargets] = useState<AutomationSessionTarget[]>(() =>
+    hydrateTargets(initialRepositories, initialEnvironmentIds)
+  );
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(() =>
-    // Combined count: a lone-repo default here would let the single-select
-    // collapse effect silently drop hydrated environment targets on edit.
-    initialRepositories.length + initialEnvironmentIds.length > 1 ? "multiple" : "single"
+    initialSelectionMode(initialRepositories, initialEnvironmentIds)
   );
-  const [baseBranch, setBaseBranch] = useState(() =>
-    initialRepositories.length === 1 ? (initialRepositories[0].baseBranch ?? "") : ""
-  );
+  const [baseBranch, setBaseBranch] = useState(() => initialBaseBranch(initialRepositories));
 
   const multipleSelectionEnabled = multiRepoAllowed && selectionMode === "multiple";
 
-  const findRepo = useCallback(
-    (key: string) => repos.find((repo) => repo.fullName.toLowerCase() === key),
-    [repos]
-  );
-
-  // The single mutation path for the selection. Branch policy is decided here
-  // from the transition itself, never by callers picking a setter:
-  // - Repository membership changed: exactly one selected repository pins
-  //   baseBranch to its default, anything else clears it.
-  // - Identical selection (a single-select re-click of the current target):
-  //   treated as an explicit re-selection, so "selecting a repository resets
-  //   this to that repo's default branch" holds even for the same repository.
-  // - Otherwise (an environment-only change): baseBranch is left alone so a
-  //   branch pick survives adding and removing environments around its repo.
+  // The single mutation path for the selection: every transition below commits
+  // here, and nextBaseBranch decides the branch policy from the transition
+  // itself — callers never choose between branch-updating and branch-keeping
+  // setters.
   const commitTargets = useCallback(
     (nextTargets: AutomationSessionTarget[]) => {
       setSelectedTargets(nextTargets);
-      const currentRepoNames = repoNamesOf(selectedTargets);
-      const nextRepoNames = repoNamesOf(nextTargets);
-      const membershipUnchanged = sameStringList(currentRepoNames, nextRepoNames);
-      const reselectedCurrent = membershipUnchanged && sameTargetList(selectedTargets, nextTargets);
-      if (membershipUnchanged && !reselectedCurrent) return;
-      setBaseBranch(
-        nextRepoNames.length === 1 ? (findRepo(nextRepoNames[0])?.defaultBranch ?? "") : ""
-      );
+      const branch = nextBaseBranch(selectedTargets, nextTargets, repos);
+      if (branch !== null) setBaseBranch(branch);
     },
-    [findRepo, selectedTargets]
+    [repos, selectedTargets]
   );
 
+  // Multi-select mode is schedule-only; leaving schedule forces single-select.
   useEffect(() => {
     if (!multiRepoAllowed && selectionMode === "multiple") {
       setSelectionMode("single");
@@ -177,11 +116,13 @@ export function useAutomationTargets(
     commitTargets(selectedTargets.filter((target) => target.kind === "repo"));
   }, [commitTargets, repositoryRequired, selectedTargets]);
 
+  // Single-select holds at most one target; collapse anything larger.
   useEffect(() => {
     if (multipleSelectionEnabled || selectedTargets.length <= 1) return;
     commitTargets(collapseToSingleTarget(selectedTargets));
   }, [commitTargets, multipleSelectionEnabled, selectedTargets]);
 
+  // Per-kind views of the selection, in target order.
   const selectedRepoNames = useMemo(() => repoNamesOf(selectedTargets), [selectedTargets]);
   const selectedEnvironmentIds = useMemo(
     () =>
@@ -192,8 +133,9 @@ export function useAutomationTargets(
   );
   const targetCount = selectedTargets.length;
   const usesSingleRepository = selectedTargets.length === 1 && selectedTargets[0].kind === "repo";
-  const selectedRepoName = selectedRepoNames[0] ?? "";
-  const selectedRepository = usesSingleRepository ? parseRepoFullName(selectedRepoName) : null;
+  const selectedRepository = usesSingleRepository
+    ? parseRepoFullName(selectedRepoNames[0] ?? "")
+    : null;
 
   const toggleRepository = useCallback(
     (repoFullName: string) => {
@@ -205,18 +147,10 @@ export function useAutomationTargets(
         commitTargets([target]);
         return;
       }
-
-      const selected = selectedRepoNames.includes(target.repoFullName);
-      if (!selected && targetCount >= MAX_AUTOMATION_REPOSITORIES) return;
-      commitTargets(
-        selected
-          ? selectedTargets.filter(
-              (entry) => !(entry.kind === "repo" && entry.repoFullName === target.repoFullName)
-            )
-          : [...selectedTargets, target]
-      );
+      const nextTargets = toggleTarget(selectedTargets, target, MAX_AUTOMATION_REPOSITORIES);
+      if (nextTargets) commitTargets(nextTargets);
     },
-    [commitTargets, multipleSelectionEnabled, selectedRepoNames, selectedTargets, targetCount]
+    [commitTargets, multipleSelectionEnabled, selectedTargets]
   );
 
   const toggleEnvironment = useCallback(
@@ -226,18 +160,10 @@ export function useAutomationTargets(
         commitTargets([target]);
         return;
       }
-
-      const selected = selectedEnvironmentIds.includes(environmentId);
-      if (!selected && targetCount >= MAX_AUTOMATION_REPOSITORIES) return;
-      commitTargets(
-        selected
-          ? selectedTargets.filter(
-              (entry) => !(entry.kind === "environment" && entry.environmentId === environmentId)
-            )
-          : [...selectedTargets, target]
-      );
+      const nextTargets = toggleTarget(selectedTargets, target, MAX_AUTOMATION_REPOSITORIES);
+      if (nextTargets) commitTargets(nextTargets);
     },
-    [commitTargets, multipleSelectionEnabled, selectedEnvironmentIds, selectedTargets, targetCount]
+    [commitTargets, multipleSelectionEnabled, selectedTargets]
   );
 
   const clearTargets = useCallback(() => {
@@ -259,23 +185,14 @@ export function useAutomationTargets(
     setSelectionMode("multiple");
   }, [commitTargets, multiRepoAllowed, selectionMode, selectedTargets]);
 
-  const buildRepositoriesPayload = useCallback(
-    (): AutomationRepositoryInput[] =>
-      selectedRepoNames.map((key) => {
-        const [entryOwner = "", entryName = ""] = key.split("/");
-        const entry: AutomationRepositoryInput = { repoOwner: entryOwner, repoName: entryName };
-        if (usesSingleRepository) {
-          if (baseBranch.trim()) entry.baseBranch = baseBranch.trim();
-        } else {
-          // Multi-repo selections have no branch picker; keep the branch each
-          // already-selected repository had so an unrelated edit can't reset it.
-          const existing = initialRepositories.find(
-            (repository) => repositoryKey(repository.repoOwner, repository.repoName) === key
-          );
-          if (existing?.baseBranch) entry.baseBranch = existing.baseBranch;
-        }
-        return entry;
-      }),
+  const buildPayload = useCallback(
+    () =>
+      buildRepositoriesPayload(
+        selectedRepoNames,
+        usesSingleRepository,
+        baseBranch,
+        initialRepositories
+      ),
     [baseBranch, initialRepositories, selectedRepoNames, usesSingleRepository]
   );
 
@@ -292,6 +209,6 @@ export function useAutomationTargets(
     toggleEnvironment,
     clearTargets,
     toggleSelectionMode,
-    buildRepositoriesPayload,
+    buildRepositoriesPayload: buildPayload,
   };
 }
