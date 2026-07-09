@@ -278,6 +278,15 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     };
   }, [sessions, searchQuery]);
 
+  // Environment provenance for the cards, resolved once for the whole list.
+  // Names are looked up so a deleted environment (or one still loading)
+  // simply drops the chip instead of showing a raw id.
+  const { environments } = useEnvironments();
+  const environmentNamesById = useMemo(
+    () => new Map(environments.map((environment) => [environment.id, environment.name])),
+    [environments]
+  );
+
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
   const hasSessionListError = sessionsError;
   const emptyMessage = hasSessionListError
@@ -464,6 +473,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
               <SessionWithChildren
                 key={session.id}
                 session={session}
+                environmentName={
+                  session.environmentId
+                    ? environmentNamesById.get(session.environmentId)
+                    : undefined
+                }
                 childrenMap={childrenMap}
                 currentSessionId={currentSessionId}
                 isMobile={isMobile}
@@ -485,6 +499,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                   <SessionWithChildren
                     key={session.id}
                     session={session}
+                    environmentName={
+                      session.environmentId
+                        ? environmentNamesById.get(session.environmentId)
+                        : undefined
+                    }
                     childrenMap={childrenMap}
                     currentSessionId={currentSessionId}
                     isMobile={isMobile}
@@ -558,6 +577,7 @@ function UserMenu({ user }: { user?: { name?: string | null; image?: string | nu
 
 function SessionWithChildren({
   session,
+  environmentName,
   childrenMap,
   currentSessionId,
   isMobile,
@@ -566,6 +586,7 @@ function SessionWithChildren({
   onSessionRenamed,
 }: {
   session: SessionItem;
+  environmentName?: string;
   childrenMap: Map<string, SessionItem[]>;
   currentSessionId: string | null;
   isMobile: boolean;
@@ -577,6 +598,7 @@ function SessionWithChildren({
     <>
       <SessionListItem
         session={session}
+        environmentName={environmentName}
         isActive={session.id === currentSessionId}
         isMobile={isMobile}
         onArchive={onArchive}
@@ -646,6 +668,7 @@ function ChildSessionTree({
 
 function SessionListItem({
   session,
+  environmentName,
   isActive,
   isMobile,
   onArchive,
@@ -653,6 +676,7 @@ function SessionListItem({
   onSessionRenamed,
 }: {
   session: SessionItem;
+  environmentName?: string;
   isActive: boolean;
   isMobile: boolean;
   onArchive: (sessionId: string) => Promise<void>;
@@ -666,12 +690,6 @@ function SessionListItem({
     session.repoName,
     session.repositories
   );
-  // Environment provenance chip: resolved by name so a deleted environment
-  // (or one still loading) simply drops the chip instead of showing a raw id.
-  const { environments } = useEnvironments();
-  const environmentName = session.environmentId
-    ? environments.find((environment) => environment.id === session.environmentId)?.name
-    : undefined;
   const displayTitle = session.title || repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
