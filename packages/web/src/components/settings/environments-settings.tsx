@@ -9,12 +9,12 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { formatRelativeTime } from "@/lib/time";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
 import { EnvironmentForm, type EnvironmentFormValues } from "./environment-form";
 import { EnvironmentSecretsImport } from "./environment-secrets-import";
+import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
 import { SecretsEditor } from "@/components/secrets-editor";
 
 /** Latest environment image row as returned by /api/environments/[id]/images. */
@@ -57,7 +57,9 @@ export function EnvironmentsSettings() {
         setError(data?.error || "Failed to create environment");
         return;
       }
-      mutate(ENVIRONMENTS_KEY);
+      // Await the revalidation: the edit view resolves the environment from
+      // the SWR cache, so switching before it refreshes flashes "not found".
+      await mutate(ENVIRONMENTS_KEY);
       toast.success(`Created ${values.name}`);
       const createdId = data?.environment?.id;
       setView(
@@ -405,73 +407,31 @@ function parsePrimaryBuildSha(repositoryShas: string): string | null {
 }
 
 /**
- * Latest build status for an environment (mirrors the repo ImageStatus
- * rendering). Fetches only while prebuilds are enabled — disabled
- * environments show a static label.
+ * Latest build status for an environment. Fetches only while prebuilds are
+ * enabled — disabled environments show the static label. Presentation is the
+ * shared ImageBuildStatus.
  */
 function EnvironmentImageStatus({ environment }: { environment: Environment }) {
   const { data } = useSWR<{ images: EnvironmentImageRow[] }>(
     environment.prebuildEnabled ? environmentImagesKey(environment.id) : null
   );
 
-  if (!environment.prebuildEnabled) {
-    return <span className="text-xs text-muted-foreground">Disabled</span>;
-  }
-
-  const image = data?.images?.[0];
-  if (!image) {
-    return <span className="text-xs text-muted-foreground">No image</span>;
-  }
-
-  if (image.status === "ready") {
-    const sha = parsePrimaryBuildSha(image.repository_shas)?.slice(0, 7) ?? "";
-    const duration = image.build_duration_seconds
-      ? `${Math.round(image.build_duration_seconds)}s`
-      : "";
-    const details = [sha, duration].filter(Boolean).join(" · ");
-
-    return (
-      <div className="text-right">
-        <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
-          <span className="text-xs text-foreground">
-            Ready {formatRelativeTime(image.created_at)}
-          </span>
-        </div>
-        {details && <span className="text-xs text-muted-foreground">{details}</span>}
-      </div>
-    );
-  }
-
-  if (image.status === "building") {
-    return (
-      <div className="flex items-center gap-1.5">
-        <span className="w-2 h-2 rounded-full bg-warning animate-pulse flex-shrink-0" />
-        <span className="text-xs text-foreground">
-          Building... {formatRelativeTime(image.created_at)}
-        </span>
-      </div>
-    );
-  }
+  const image = environment.prebuildEnabled ? data?.images?.[0] : undefined;
 
   return (
-    <div className="text-right">
-      <div className="flex items-center gap-1.5">
-        <span className="w-2 h-2 rounded-full bg-destructive flex-shrink-0" />
-        <span className="text-xs text-foreground">Failed</span>
-      </div>
-      {image.error_message && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-xs text-muted-foreground truncate max-w-[200px] block cursor-help">
-              {image.error_message}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-md overflow-visible whitespace-pre-wrap break-words">
-            {image.error_message}
-          </TooltipContent>
-        </Tooltip>
-      )}
-    </div>
+    <ImageBuildStatus
+      isEnabled={environment.prebuildEnabled}
+      image={
+        image && {
+          status: image.status,
+          createdAt: image.created_at,
+          readyDetails: formatReadyDetails(
+            parsePrimaryBuildSha(image.repository_shas),
+            image.build_duration_seconds
+          ),
+          errorMessage: image.error_message,
+        }
+      }
+    />
   );
 }
