@@ -46,6 +46,14 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:gpt-5.5" }])).toBe("openai/gpt-5.5");
   });
 
+  it.each([
+    ["sol", "openai/gpt-5.6-sol"],
+    ["terra", "openai/gpt-5.6-terra"],
+    ["luna", "openai/gpt-5.6-luna"],
+  ])("returns GPT 5.6 %s for its model label", (variant, expected) => {
+    expect(extractModelFromLabels([{ name: `model:gpt-5.6-${variant}` }])).toBe(expected);
+  });
+
   it("returns Opus 4.7 for model:opus-4-7 label", () => {
     expect(extractModelFromLabels([{ name: "model:opus-4-7" }])).toBe("anthropic/claude-opus-4-7");
   });
