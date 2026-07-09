@@ -24,6 +24,7 @@ import {
 import { escapeMrkdwnText, resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
+import { getAvailableEnvironments } from "./classifier/environments";
 import {
   branchPreferenceRepo,
   buildSessionTargetRequestFields,
@@ -40,13 +41,14 @@ import { getUserRepoBranchPreference } from "./branch-preferences";
 import { setAssistantThreadStatusBestEffort } from "./activity-status";
 import { handleAppHomeInteractionRoute, publishAppHome } from "./app-home";
 import {
-  SELECT_REPO_ACTION_ID,
-  SELECT_REPO_QUICK_PICK_ACTION_ID,
+  SELECT_TARGET_ACTION_ID,
+  SELECT_TARGET_QUICK_PICK_ACTION_ID,
   baseActionId,
-  getRepoClarificationOptions,
-  buildRepoClarificationBlocks,
+  countClarificationOptions,
+  getTargetClarificationOptions,
+  buildTargetClarificationBlocks,
   resolveTargetValue,
-} from "./repo-clarification";
+} from "./target-clarification";
 import { getResolvedUserPreferences } from "./user-preferences";
 import { getAvailableModels, getSlackDefaultModel } from "./app-home/models";
 import { slackInteractionPayloadSchema } from "./interaction-payload";
@@ -653,20 +655,22 @@ app.post("/interactions", async (c) => {
   }
 
   if (payload.type === "block_suggestion") {
-    const options =
-      payload.action_id === SELECT_REPO_ACTION_ID
-        ? await getRepoClarificationOptions(c.env, payload.value, traceId).catch((e) => {
-            // A repo-lookup failure must not surface as a 500 on /interactions —
-            // return no matches instead.
-            log.error("slack.repo_clarification_options", {
-              trace_id: traceId,
-              query: payload.value,
-              error: e instanceof Error ? e : new Error(String(e)),
-              duration_ms: Date.now() - startTime,
-            });
-            return [];
-          })
-        : [];
+    const response =
+      payload.action_id === SELECT_TARGET_ACTION_ID
+        ? await getTargetClarificationOptions(c.env, payload.value, traceId).catch(
+            (e): { options: [] } => {
+              // A target-lookup failure must not surface as a 500 on
+              // /interactions — return no matches instead.
+              log.error("slack.target_clarification_options", {
+                trace_id: traceId,
+                query: payload.value,
+                error: e instanceof Error ? e : new Error(String(e)),
+                duration_ms: Date.now() - startTime,
+              });
+              return { options: [] };
+            }
+          )
+        : { options: [] };
     log.info("http.request", {
       trace_id: traceId,
       http_method: "POST",
@@ -674,10 +678,10 @@ app.post("/interactions", async (c) => {
       http_status: 200,
       interaction_type: payload.type,
       action_id: payload.action_id,
-      option_count: options.length,
+      option_count: countClarificationOptions(response),
       duration_ms: Date.now() - startTime,
     });
-    return c.json({ options });
+    return c.json(response);
   }
 
   const actionId = payload.actions?.[0]?.action_id ?? payload.action_id;
@@ -927,8 +931,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
   // Post initial response
   if (result.needsClarification || !result.target) {
-    // Need to clarify which repo
+    // Need to clarify which target; the picker offers both kinds.
     const repos = await getAvailableRepos(env, traceId);
+    const environments = await getAvailableEnvironments(env, traceId);
 
     if (repos.length === 0) {
       await postMessage(
@@ -957,10 +962,15 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
-      `I couldn't determine which repository you're referring to. ${result.reasoning}`,
+      `I couldn't determine which ${environments.length > 0 ? "repository or environment" : "repository"} you're referring to. ${result.reasoning}`,
       {
         thread_ts: threadTs || ts,
-        blocks: buildRepoClarificationBlocks(result.reasoning, result.alternatives, repos),
+        blocks: buildTargetClarificationBlocks(
+          result.reasoning,
+          result.alternatives,
+          repos,
+          environments
+        ),
       }
     );
     return;
@@ -1224,8 +1234,8 @@ async function handleSlackInteraction(
 
   // Collapse a quick-pick's per-button action_id back to the bare constant before matching.
   switch (baseActionId(action.action_id)) {
-    case SELECT_REPO_ACTION_ID:
-    case SELECT_REPO_QUICK_PICK_ACTION_ID: {
+    case SELECT_TARGET_ACTION_ID:
+    case SELECT_TARGET_QUICK_PICK_ACTION_ID: {
       if (!channel || !messageTs) return;
       // external_select selection carries selected_option; quick-pick buttons carry value.
       const selectedValue = action.selected_option?.value ?? action.value;

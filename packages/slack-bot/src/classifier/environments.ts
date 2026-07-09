@@ -45,6 +45,23 @@ export async function getEnvironmentById(
 }
 
 /**
+ * Build a description string for the given environments, mirroring
+ * {@link buildRepoDescriptions} for the classification prompt.
+ */
+export function buildEnvironmentDescriptions(environments: Environment[]): string {
+  return environments
+    .map(
+      (environment) => `
+- **${environment.id}** ("${environment.name}")
+  - Description: ${environment.description || "N/A"}
+  - Repositories: ${environment.repositories
+    .map((repository) => `${repository.repoOwner}/${repository.repoName}`)
+    .join(", ")}`
+    )
+    .join("\n");
+}
+
+/**
  * Clear the in-memory cache (for testing or forced refresh).
  */
 export function clearEnvironmentsLocalCache(): void {

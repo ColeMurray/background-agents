@@ -62,11 +62,12 @@ which settings apply. The agent sees all clones side by side and can make coordi
 them; pushes and pull requests are per-repository, so one session can produce PRs in several
 repositories. The session sidebar lists every repository with its branch and any PR created for it.
 
-Bot-created sessions (GitHub, Linear) remain single-repository. Slack sessions are single-repository
-by default, but a Slack routing rule (Settings › Integrations › Slack) can target an environment,
-launching the full multi-repository workspace from a keyword. An environment can also be associated
-with Slack channels (`channelAssociations` on the environments API, like repository metadata):
-messages in an associated channel route to the environment without needing a keyword.
+Bot-created sessions (GitHub, Linear) remain single-repository. Slack sessions can target an
+environment three ways: a routing rule (Settings › Integrations › Slack) launches it from a keyword;
+a channel association (`channelAssociations` on the environments API, like repository metadata)
+routes messages in that channel to it automatically; and the LLM classifier considers environments
+alongside repositories, using their names and descriptions as signals — its clarification picker
+lists both kinds when it has to ask.
 
 ### Session Lifecycle
 

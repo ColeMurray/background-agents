@@ -33,7 +33,9 @@ vi.mock("./repos", () => ({
   getRoutingRules: mockGetRoutingRules,
 }));
 
-vi.mock("./environments", () => ({
+vi.mock("./environments", async (importOriginal) => ({
+  // Keep the pure exports (buildEnvironmentDescriptions) real; mock the fetchers.
+  ...((await importOriginal()) as object),
   getAvailableEnvironments: mockGetAvailableEnvironments,
   // Imported by targets.ts (via ../targets); unused in these tests.
   getEnvironmentById: vi.fn(),
@@ -108,9 +110,9 @@ describe("RepoClassifier", () => {
         {
           type: "tool_use",
           id: "toolu_1",
-          name: "classify_repository",
+          name: "classify_target",
           input: {
-            repoId: "acme/prod",
+            targetId: "acme/prod",
             confidence: "high",
             reasoning: "The message explicitly mentions prod.",
             alternatives: [],
@@ -130,9 +132,9 @@ describe("RepoClassifier", () => {
         temperature: 0,
         tool_choice: expect.objectContaining({
           type: "tool",
-          name: "classify_repository",
+          name: "classify_target",
         }),
-        tools: [expect.objectContaining({ name: "classify_repository" })],
+        tools: [expect.objectContaining({ name: "classify_target" })],
       })
     );
   });
@@ -143,9 +145,9 @@ describe("RepoClassifier", () => {
         {
           type: "tool_use",
           id: "toolu_2",
-          name: "classify_repository",
+          name: "classify_target",
           input: {
-            repoId: "acme/prod",
+            targetId: "acme/prod",
             confidence: "certain",
             reasoning: "Totally sure",
             alternatives: [],
@@ -169,7 +171,7 @@ describe("RepoClassifier", () => {
       content: [
         {
           type: "text",
-          text: '{"repoId":"acme/web","confidence":"high","reasoning":"Mentions frontend and UI.","alternatives":[]}',
+          text: '{"targetId":"acme/web","confidence":"high","reasoning":"Mentions frontend and UI.","alternatives":[]}',
         },
       ],
     });
@@ -236,9 +238,9 @@ describe("RepoClassifier", () => {
           {
             type: "tool_use",
             id: "toolu_x",
-            name: "classify_repository",
+            name: "classify_target",
             input: {
-              repoId: "acme/web",
+              targetId: "acme/web",
               confidence: "high",
               reasoning: "Mentions frontend.",
               alternatives: [],
@@ -261,9 +263,9 @@ describe("RepoClassifier", () => {
           {
             type: "tool_use",
             id: "toolu_y",
-            name: "classify_repository",
+            name: "classify_target",
             input: {
-              repoId: "acme/prod",
+              targetId: "acme/prod",
               confidence: "high",
               reasoning: "Mentions prod.",
               alternatives: [],
@@ -378,9 +380,9 @@ describe("RepoClassifier", () => {
           {
             type: "tool_use",
             id: "toolu_z",
-            name: "classify_repository",
+            name: "classify_target",
             input: {
-              repoId: "acme/web",
+              targetId: "acme/web",
               confidence: "high",
               reasoning: "Mentions the web app.",
               alternatives: [],
@@ -480,9 +482,9 @@ describe("RepoClassifier", () => {
           {
             type: "tool_use",
             id: "toolu_c",
-            name: "classify_repository",
+            name: "classify_target",
             input: {
-              repoId: "acme/web",
+              targetId: "acme/web",
               confidence: "high",
               reasoning: "Mentions the web app.",
               alternatives: [],
@@ -497,28 +499,139 @@ describe("RepoClassifier", () => {
       expect(classifiedRepoFullName(result)).toBe("acme/web");
       expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
+  });
 
-    it("does not consult environments for messages outside a channel context", async () => {
-      mockMessagesCreate.mockResolvedValue({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_d",
-            name: "classify_repository",
-            input: {
-              repoId: "acme/web",
-              confidence: "high",
-              reasoning: "Mentions the web app.",
-              alternatives: [],
-            },
-          },
-        ],
-      });
+  describe("LLM environment candidates", () => {
+    function llmResponse(input: Record<string, unknown>) {
+      return {
+        content: [{ type: "tool_use", id: "toolu_llm", name: "classify_target", input }],
+      };
+    }
+
+    function sentPrompt(): string {
+      return mockMessagesCreate.mock.calls[0][0].messages[0].content as string;
+    }
+
+    it("offers environments to the LLM and resolves a returned environment id", async () => {
+      mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "env_abc123",
+          confidence: "high",
+          reasoning: "Spans both repositories of the full-stack environment.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("update login across web and prod");
+
+      expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
+      expect(result.needsClarification).toBe(false);
+      expect(sentPrompt()).toContain("## Available Environments");
+      expect(sentPrompt()).toContain("env_abc123");
+      expect(sentPrompt()).toContain("full-stack");
+    });
+
+    it("omits the environments prompt section when none exist", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/web",
+          confidence: "high",
+          reasoning: "Mentions the web app.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       await classifier.classify("web app issue");
 
-      expect(mockGetAvailableEnvironments).not.toHaveBeenCalled();
+      expect(sentPrompt()).not.toContain("## Available Environments");
+    });
+
+    it("resolves an environment echoed by name instead of id", async () => {
+      mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "Full-Stack",
+          confidence: "high",
+          reasoning: "Names the environment.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("work on full-stack");
+
+      expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
+    });
+
+    it("suppresses the single-repo shortcut when environments exist", async () => {
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+      mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "env_abc123",
+          confidence: "high",
+          reasoning: "Spans several repositories.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("touch everything");
+
+      expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+
+    it("keeps the single-repo shortcut when no environments exist", async () => {
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("anything at all");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.reasoning).toBe("Only one repository is available.");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("resolves mixed alternatives, deduplicated and excluding the match", async () => {
+      mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/prod",
+          confidence: "medium",
+          reasoning: "Probably prod, could be broader.",
+          alternatives: ["env_abc123", "acme/web", "ACME/WEB", "acme/prod", "env_gone"],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("deploy the service");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.alternatives).toEqual([
+        { kind: "environment", environment: TEST_ENVIRONMENT },
+        { kind: "repository", repo: TEST_REPOS[1] },
+      ]);
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("escapes the LLM reasoning for mrkdwn rendering", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/web",
+          confidence: "high",
+          reasoning: "Mentions <!channel> & the web app.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("web app issue");
+
+      expect(result.reasoning).toBe("Mentions &lt;!channel&gt; &amp; the web app.");
     });
   });
 });

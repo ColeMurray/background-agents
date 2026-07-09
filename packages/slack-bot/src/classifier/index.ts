@@ -1,32 +1,36 @@
 /**
- * Repository classifier for the Slack bot.
+ * Target classifier for the Slack bot.
  *
- * Uses an LLM to classify which repository a Slack message refers to,
- * based on message content, thread context, and channel information.
+ * Uses an LLM to classify which target — a repository or a saved environment —
+ * a Slack message refers to, based on message content, thread context, and
+ * channel information.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
+import type { Env, Environment, RepoConfig, ThreadContext, ClassificationResult } from "../types";
 import { getAvailableRepos, buildRepoDescriptions } from "./repos";
-import { resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
+import { buildEnvironmentDescriptions, getAvailableEnvironments } from "./environments";
+import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText, type ConfidenceLevel } from "@open-inspect/shared";
-import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
+import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
-const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
+const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
 const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium", "low"];
 
-const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
-  name: CLASSIFY_REPO_TOOL_NAME,
+const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
+  name: CLASSIFY_TARGET_TOOL_NAME,
   description:
-    "Classify which repository a Slack message refers to. Use repoId as null when uncertain.",
+    "Classify which repository or environment a Slack message refers to. " +
+    "Use targetId as null when uncertain.",
   input_schema: {
     type: "object",
     properties: {
-      repoId: {
+      targetId: {
         type: ["string", "null"],
-        description: "Repository ID/fullName if confident enough to choose one, otherwise null.",
+        description:
+          'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
       },
       confidence: {
         type: "string",
@@ -39,10 +43,11 @@ const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
       alternatives: {
         type: "array",
         items: { type: "string" },
-        description: "Alternative repository IDs/fullNames when confidence is not high.",
+        description:
+          "Alternative repository fullNames / environment ids when confidence is not high.",
       },
     },
-    required: ["repoId", "confidence", "reasoning", "alternatives"],
+    required: ["targetId", "confidence", "reasoning", "alternatives"],
     additionalProperties: false,
   },
 };
@@ -53,10 +58,23 @@ const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
 async function buildClassificationPrompt(
   env: Env,
   message: string,
+  environments: Environment[],
   context?: ThreadContext,
   traceId?: string
 ): Promise<string> {
   const repoDescriptions = await buildRepoDescriptions(env, traceId);
+
+  const environmentSection =
+    environments.length > 0
+      ? `
+## Available Environments
+
+Environments are saved multi-repository workspaces. Prefer an environment over a
+single repository when the message names it, or when the work spans several of
+its repositories.
+${buildEnvironmentDescriptions(environments)}
+`
+      : "";
 
   let contextSection = "";
 
@@ -75,11 +93,11 @@ ${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
 }`;
   }
 
-  return `You are a repository classifier for a coding agent. Your job is to determine which code repository a Slack message is referring to.
+  return `You are a target classifier for a coding agent. Your job is to determine which code repository or environment a Slack message is referring to.
 
 ## Available Repositories
 ${repoDescriptions}
-
+${environmentSection}
 ${contextSection}
 
 ## User's Message
@@ -87,10 +105,10 @@ ${message}
 
 ## Your Task
 
-Analyze the message and context to determine which repository the user is referring to.
+Analyze the message and context to determine which repository or environment the user is referring to.
 
 Consider:
-1. Explicit mentions of repository names or aliases
+1. Explicit mentions of repository or environment names or aliases
 2. Technical keywords that match repository technologies
 3. File paths or code patterns mentioned
 4. Channel associations (some channels are associated with specific repos)
@@ -98,18 +116,18 @@ Consider:
 
 ## Response Format
 
-Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool with:
-- repoId: "owner/name" or null if unclear
+Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
+- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
-- alternatives: other possible repos when confidence is not high`;
+- alternatives: other possible targets when confidence is not high`;
 }
 
 /**
  * Parse the LLM response into a structured result.
  */
 interface LLMResponse {
-  repoId: string | null;
+  targetId: string | null;
   confidence: ConfidenceLevel;
   reasoning: string;
   alternatives: string[];
@@ -121,12 +139,12 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
   }
 
   const input = raw as Record<string, unknown>;
-  const rawRepoId = input.repoId;
-  const repoId =
-    rawRepoId === null
+  const rawTargetId = input.targetId;
+  const targetId =
+    rawTargetId === null
       ? null
-      : typeof rawRepoId === "string" && rawRepoId.trim().length > 0
-        ? rawRepoId.trim()
+      : typeof rawTargetId === "string" && rawTargetId.trim().length > 0
+        ? rawTargetId.trim()
         : null;
 
   const rawConfidence = typeof input.confidence === "string" ? input.confidence.trim() : "";
@@ -153,7 +171,7 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
   }
 
   return {
-    repoId,
+    targetId,
     confidence: confidence as ClassificationResult["confidence"],
     reasoning: input.reasoning.trim(),
     alternatives: [...new Set(alternatives)],
@@ -163,7 +181,7 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
 function extractStructuredResponse(response: Anthropic.Messages.Message): LLMResponse {
   const toolUseBlock = response.content.find(
     (block): block is Anthropic.Messages.ToolUseBlock =>
-      block.type === "tool_use" && block.name === CLASSIFY_REPO_TOOL_NAME
+      block.type === "tool_use" && block.name === CLASSIFY_TARGET_TOOL_NAME
   );
 
   if (!toolUseBlock) {
@@ -317,8 +335,12 @@ export class RepoClassifier {
       return channelRouted;
     }
 
-    // If only one repo, skip classification
-    if (repos.length === 1) {
+    // Environments join the LLM's candidate set (fail-open []: an
+    // environments-fetch problem degrades to repository-only classification).
+    const environments = await getAvailableEnvironments(this.env, traceId);
+
+    // With a single repository and no environments there is nothing to choose.
+    if (repos.length === 1 && environments.length === 0) {
       return {
         target: { kind: "repository", repo: repos[0] },
         confidence: "high",
@@ -329,16 +351,22 @@ export class RepoClassifier {
 
     // Use LLM for classification
     try {
-      const prompt = await buildClassificationPrompt(this.env, message, context, traceId);
+      const prompt = await buildClassificationPrompt(
+        this.env,
+        message,
+        environments,
+        context,
+        traceId
+      );
 
       const response = await this.client.messages.create({
         model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
         max_tokens: 500,
         temperature: 0,
-        tools: [CLASSIFY_REPO_TOOL],
+        tools: [CLASSIFY_TARGET_TOOL],
         tool_choice: {
           type: "tool",
-          name: CLASSIFY_REPO_TOOL_NAME,
+          name: CLASSIFY_TARGET_TOOL_NAME,
           disable_parallel_tool_use: true,
         },
         messages: [
@@ -351,37 +379,32 @@ export class RepoClassifier {
 
       const llmResult = extractStructuredResponse(response);
 
-      // Find the matched repo
-      let matchedRepo: RepoConfig | null = null;
-      if (llmResult.repoId) {
-        matchedRepo =
-          repos.find(
-            (r) =>
-              r.id.toLowerCase() === llmResult.repoId!.toLowerCase() ||
-              r.fullName.toLowerCase() === llmResult.repoId!.toLowerCase()
-          ) || null;
-      }
+      const matchedTarget = llmResult.targetId
+        ? matchTargetId(llmResult.targetId, repos, environments)
+        : null;
 
-      // Find alternative repos
+      // Resolve alternatives, deduplicated and never repeating the match.
       const alternatives: SlackSessionTarget[] = [];
       for (const altId of llmResult.alternatives) {
-        const altRepo = repos.find(
-          (r) =>
-            r.id.toLowerCase() === altId.toLowerCase() ||
-            r.fullName.toLowerCase() === altId.toLowerCase()
-        );
-        if (altRepo && altRepo.id !== matchedRepo?.id) {
-          alternatives.push({ kind: "repository", repo: altRepo });
+        const target = matchTargetId(altId, repos, environments);
+        if (
+          target &&
+          (!matchedTarget || targetValue(target) !== targetValue(matchedTarget)) &&
+          !alternatives.some((existing) => targetValue(existing) === targetValue(target))
+        ) {
+          alternatives.push(target);
         }
       }
 
       return {
-        target: matchedRepo ? { kind: "repository", repo: matchedRepo } : null,
+        target: matchedTarget,
         confidence: llmResult.confidence,
-        reasoning: llmResult.reasoning,
+        // Reasoning renders as mrkdwn and may quote target names or message
+        // text; escape it at composition like the deterministic stages do.
+        reasoning: escapeMrkdwnText(llmResult.reasoning),
         alternatives: alternatives.length > 0 ? alternatives : undefined,
         needsClarification:
-          !matchedRepo ||
+          !matchedTarget ||
           llmResult.confidence === "low" ||
           (llmResult.confidence === "medium" && alternatives.length > 0),
       };
@@ -398,9 +421,9 @@ export class RepoClassifier {
         target: null,
         confidence: "low",
         reasoning:
-          "Could not classify repository from structured model output. Please select a repository.",
-        // No basis to suggest specific repos on a classification failure; the
-        // picker lets the user search the full list.
+          "Could not classify a target from structured model output. Please pick one below.",
+        // No basis to suggest specific targets on a classification failure;
+        // the picker lets the user search the full list.
         alternatives: undefined,
         needsClarification: true,
       };
