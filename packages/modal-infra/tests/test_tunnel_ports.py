@@ -10,6 +10,7 @@ from sandbox_runtime.constants import (
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
 
@@ -239,8 +240,9 @@ class TestWriteTunnelEnvFile:
         write_text.assert_awaited_once()
         written, path = write_text.call_args[0]
         assert path == TUNNEL_ENV_FILE_PATH
-        # Sorted by port, dotenv format, trailing newline.
+        # Sandbox-ID tag first, then sorted by port, dotenv format, trailing newline.
         assert written == (
+            f"{TUNNEL_ENV_SANDBOX_ID_KEY}=sb-1\n"
             "TUNNEL_3000=https://tunnel-3000.example.com\n"
             "TUNNEL_3001=https://tunnel-3001.example.com\n"
         )
@@ -285,6 +287,7 @@ class TestResolveAndSetupTunnelsWritesFile:
 
         write_text.assert_awaited_once()
         written = write_text.call_args[0][0]
+        assert written.startswith(f"{TUNNEL_ENV_SANDBOX_ID_KEY}=sb-1\n")
         assert "TUNNEL_3000=https://tunnel-3000.example.com" in written
 
     @pytest.mark.asyncio

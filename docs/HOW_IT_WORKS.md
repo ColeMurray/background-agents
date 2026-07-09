@@ -310,17 +310,21 @@ can read them locally.
 
 ```dotenv
 # /workspace/.tunnels.env
+TUNNEL_SANDBOX_ID=sandbox-acme-app-1783614336426
 TUNNEL_3000=https://abc123-3000.modal.host
 TUNNEL_5173=https://abc123-5173.modal.host
 ```
 
 This dotenv shape works directly with tools that accept an env-file path — `node --env-file=...`,
 `bun --env-file=...`, `docker compose --env-file=...`. The format is plain `KEY=value`, so any other
-dotenv consumer can read it without parsing.
+dotenv consumer can read it without parsing. The `TUNNEL_SANDBOX_ID` line names the sandbox the URLs
+were resolved for; the supervisor uses it to tell a fresh write from a snapshot leftover.
 
 **Boot ordering.** On every non-build boot, the supervisor:
 
-1. Clears any stale file inherited from a snapshot.
+1. Clears a file left by a previous sandbox (its `TUNNEL_SANDBOX_ID` doesn't match), such as one
+   inherited from a snapshot. A file already written for _this_ sandbox is kept — the backend's
+   write can land before the supervisor starts.
 2. Waits up to `TUNNEL_WAIT_TIMEOUT_SECONDS` (default `30`) for fresh URLs.
 3. Runs `.openinspect/start.sh`.
 

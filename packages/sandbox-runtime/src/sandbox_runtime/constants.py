@@ -17,6 +17,14 @@ TTYD_PROXY_PORT_ENV_VAR = "TTYD_PROXY_PORT"
 # services via `--env-file` or direct read.
 TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env"
 
+# First line of the tunnel env file: names the sandbox the URLs were resolved
+# for. The manager's write can land before the entrypoint starts (it only
+# needs the container agent, not the supervisor), so the entrypoint's stale
+# cleanup keeps a file whose value matches its own SANDBOX_ID and clears
+# everything else (snapshot/image leftovers with dead URLs). Mirrored as a
+# string literal in the Vercel provider (control-plane).
+TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID"
+
 # Comma-separated tunnel ports the manager will resolve. Read by the entrypoint
 # to gate stale-file cleanup and the wait-for-fresh-URLs before start.sh.
 EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"

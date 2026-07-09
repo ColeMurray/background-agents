@@ -33,6 +33,7 @@ from .constants import (
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from .log_config import configure_logging, get_logger
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
@@ -1665,8 +1666,25 @@ class SandboxSupervisor:
         return ports
 
     def _clear_stale_tunnel_env_file(self) -> None:
-        """Remove any pre-existing tunnel env file inherited from a snapshot."""
+        """Remove a tunnel env file left behind by a previous sandbox.
+
+        Presence alone doesn't mean stale: the manager's write only needs the
+        container agent, so it can land before this entrypoint runs. A file
+        tagged with our own SANDBOX_ID is that fresh write and must survive;
+        anything else (snapshot/image leftover with dead URLs, or untagged) is
+        cleared so `_wait_for_tunnel_env_file` blocks until fresh URLs arrive.
+        """
         path = Path(TUNNEL_ENV_FILE_PATH)
+        if not path.exists():
+            return
+        if self.sandbox_id and self.sandbox_id != "unknown":
+            try:
+                own_marker = f"{TUNNEL_ENV_SANDBOX_ID_KEY}={self.sandbox_id}"
+                if own_marker in path.read_text().splitlines():
+                    self.log.info("tunnel.fresh_file_kept", path=str(path))
+                    return
+            except Exception as e:
+                self.log.warn("tunnel.stale_check_read_failed", path=str(path), exc=e)
         try:
             path.unlink(missing_ok=True)
             self.log.info("tunnel.stale_file_cleared", path=str(path))

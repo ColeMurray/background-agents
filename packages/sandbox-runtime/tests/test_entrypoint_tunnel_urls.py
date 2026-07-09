@@ -1,7 +1,9 @@
 """Tests for SandboxSupervisor tunnel-env-file handling.
 
 The supervisor owns the tunnel env file lifecycle from inside the sandbox:
-- clears any stale file at boot when tunnels are expected this session
+- at boot, keeps a file the manager already wrote for THIS sandbox (the
+  manager's write can land before the entrypoint runs) and clears anything
+  else as a snapshot/image leftover
 - blocks `start.sh` until the manager has written fresh URLs (bounded)
 """
 
@@ -13,6 +15,7 @@ import pytest
 from sandbox_runtime.constants import (
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from sandbox_runtime.entrypoint import SandboxSupervisor
 
@@ -67,12 +70,58 @@ class TestExpectedTunnelPorts:
 
 
 class TestClearStaleTunnelEnvFile:
-    def test_removes_existing_file(self, tmp_path, monkeypatch):
+    def test_removes_untagged_file(self, tmp_path, monkeypatch):
+        """A file with no sandbox-ID tag (pre-tag writer, or user-made) is stale."""
         stub_path = tmp_path / "tunnels.env"
         stub_path.write_text("TUNNEL_3000=https://stale.example.com\n")
         monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
         sup = _make_supervisor()
+        sup._clear_stale_tunnel_env_file()
+
+        assert not stub_path.exists()
+
+    def test_keeps_file_tagged_with_own_sandbox_id(self, tmp_path, monkeypatch):
+        """The manager's write can land before the entrypoint runs; keep it."""
+        stub_path = tmp_path / "tunnels.env"
+        content = (
+            f"{TUNNEL_ENV_SANDBOX_ID_KEY}=test-sandbox\nTUNNEL_3000=https://fresh.example.com\n"
+        )
+        stub_path.write_text(content)
+        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+
+        sup = _make_supervisor()
+        sup._clear_stale_tunnel_env_file()
+
+        assert stub_path.read_text() == content
+
+    def test_removes_file_tagged_with_other_sandbox_id(self, tmp_path, monkeypatch):
+        """A snapshot/image leftover carries the previous sandbox's ID."""
+        stub_path = tmp_path / "tunnels.env"
+        stub_path.write_text(
+            f"{TUNNEL_ENV_SANDBOX_ID_KEY}=previous-sandbox\nTUNNEL_3000=https://stale.example.com\n"
+        )
+        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+
+        sup = _make_supervisor()
+        sup._clear_stale_tunnel_env_file()
+
+        assert not stub_path.exists()
+
+    def test_removes_tagged_file_when_own_sandbox_id_unknown(self, tmp_path, monkeypatch):
+        """Without a SANDBOX_ID identity, never trust a pre-existing file."""
+        stub_path = tmp_path / "tunnels.env"
+        stub_path.write_text(f"{TUNNEL_ENV_SANDBOX_ID_KEY}=unknown\n")
+        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+
+        base_env = {
+            "CONTROL_PLANE_URL": "https://cp.example.com",
+            "SANDBOX_AUTH_TOKEN": "tok",
+            "REPO_OWNER": "acme",
+            "REPO_NAME": "app",
+        }
+        with patch.dict("os.environ", base_env, clear=True):
+            sup = SandboxSupervisor()
         sup._clear_stale_tunnel_env_file()
 
         assert not stub_path.exists()
