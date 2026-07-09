@@ -2,7 +2,7 @@
  * Core types for the trigger-based automation event system.
  */
 
-import type { AutomationTriggerType } from "../types";
+import type { AutomationTriggerType } from "../types/automations";
 import type { ConditionType } from "./conditions";
 import { z } from "zod";
 

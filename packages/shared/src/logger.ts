@@ -22,7 +22,13 @@
  *   child.info("Session started");
  */
 
-import type { Logger } from "./types";
+export interface Logger {
+  debug(msg: string, data?: Record<string, unknown>): void;
+  info(msg: string, data?: Record<string, unknown>): void;
+  warn(msg: string, data?: Record<string, unknown>): void;
+  error(msg: string, data?: Record<string, unknown>): void;
+  child(context: Record<string, unknown>): Logger;
+}
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 

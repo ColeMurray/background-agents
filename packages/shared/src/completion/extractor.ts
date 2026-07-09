@@ -7,15 +7,14 @@
  */
 
 import type {
-  EventResponse,
-  ListEventsResponse,
   ListArtifactsResponse,
   AgentResponse,
   ToolCallSummary,
   ArtifactInfo,
-  ArtifactType,
-  Logger,
-} from "../types";
+} from "../types/artifacts";
+import type { EventResponse, ListEventsResponse } from "../types/sandbox-events";
+import type { ArtifactType } from "../types/statuses";
+import type { Logger } from "../logger";
 import { buildInternalAuthHeaders } from "../auth";
 
 /**

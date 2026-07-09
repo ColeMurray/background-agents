@@ -14,7 +14,7 @@ import type {
 import type { TriggerCondition } from "./conditions";
 import { matchesConditions } from "./conditions";
 import { conditionRegistry } from "./registry";
-import type { Automation } from "../types";
+import type { Automation } from "../types/automations";
 
 type EventForSource<S extends AutomationEventSource> = Extract<AutomationEvent, { source: S }>;
 
