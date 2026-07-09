@@ -237,7 +237,7 @@ export class EnvironmentImageBuildPlanner {
       });
     }
 
-    // Same source labels as the session spawn fold (launch-unit-secrets.ts) so
+    // Same source labels as the session spawn fold (session-target-secrets.ts) so
     // collision/cap logs attribute identically at build and session time.
     const merge = mergeSecretSources([
       { label: "global", secrets: globalSecrets },

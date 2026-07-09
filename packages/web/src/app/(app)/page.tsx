@@ -427,7 +427,7 @@ function HomeContent({
                 </div>
               </div>
 
-              {/* Secrets disclosure per launch unit (design §7.4) */}
+              {/* Secrets disclosure per session target (design §7.4) */}
               {sessionTarget?.kind === "environment" && (
                 <p className="mt-3 text-xs text-muted-foreground text-center">
                   Sessions from this environment use global secrets plus the environment&apos;s

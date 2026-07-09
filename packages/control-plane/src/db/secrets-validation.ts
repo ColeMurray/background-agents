@@ -95,7 +95,7 @@ export interface MergedSecrets {
  * Fold an ordered list of secret sources into one payload. Sources are given
  * lowest precedence first; a later source's key overrides (case-insensitively)
  * an earlier one's — so `[global, repoB, repoA]` lets repoA win, which is how
- * the launch-unit fold passes the primary member last (design §6.4). Reports
+ * the session-target fold passes the primary member last (design §6.4). Reports
  * per-source byte attribution and cross-source collisions for the cap-check and
  * collision warnings; the pure merge stays identical to the old two-arg
  * `mergeSecrets(global, repo)` for the single-source-plus-global case.

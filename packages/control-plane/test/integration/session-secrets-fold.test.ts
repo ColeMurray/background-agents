@@ -8,7 +8,7 @@ import { initSession } from "./helpers";
 
 const KEY = () => env.REPO_SECRETS_ENCRYPTION_KEY as string;
 
-/** Invoke the DO's real (private) getUserEnvVars, exercising the launch-unit fold. */
+/** Invoke the DO's real (private) getUserEnvVars, exercising the session-target fold. */
 function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
   return runInDurableObject(stub, (instance: SessionDO) =>
     (
@@ -19,7 +19,7 @@ function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string>
   );
 }
 
-describe("getUserEnvVars launch-unit fold", () => {
+describe("getUserEnvVars session-target fold", () => {
   beforeEach(cleanD1Tables);
 
   it("folds member repo secrets with the primary winning collisions (ad-hoc list)", async () => {

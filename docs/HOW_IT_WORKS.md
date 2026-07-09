@@ -554,7 +554,7 @@ restores still mint a fresh fallback token on restore.
 ### Secrets
 
 You can configure environment variables (API keys, credentials) at global, per-repository, or
-per-environment scope. A session receives global secrets plus its **launch unit's** secrets:
+per-environment scope. A session receives global secrets plus its **session target's** secrets:
 
 - **Global secrets** apply to all sessions (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
   `ZHIPU_API_KEY`)

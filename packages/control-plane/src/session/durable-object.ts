@@ -75,7 +75,7 @@ import {
   mergeSecretSources,
   parseSecretsCapMode,
 } from "../db/secrets-validation";
-import { buildLaunchUnitSecretSources } from "./launch-unit-secrets";
+import { buildSessionTargetSecretSources } from "./session-target-secrets";
 import type { SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
@@ -1869,7 +1869,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const repoStore = new RepoSecretsStore(this.env.DB, encryptionKey);
     const environmentSecretsStore = new EnvironmentSecretsStore(this.env.DB, encryptionKey);
-    const sources = await buildLaunchUnitSecretSources({
+    const sources = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
       globalSecrets,
       members: this.repository.getSessionRepositories(),
@@ -1901,7 +1901,7 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Decrypt one member repo's secrets — the injected leaf loader for
-   * buildLaunchUnitSecretSources. The member row carries the repo id; a
+   * buildSessionTargetSecretSources. The member row carries the repo id; a
    * synthesized primary (legacy scalar row) resolves it lazily via ensureRepoId.
    * A member without a resolvable id (a secondary with a null row id) can't be
    * keyed, so it contributes nothing.

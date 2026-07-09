@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildLaunchUnitSecretSources } from "./launch-unit-secrets";
+import { buildSessionTargetSecretSources } from "./session-target-secrets";
 import type { SessionRepositoryEntry } from "./repository-target";
 
 function member(
@@ -14,14 +14,14 @@ function member(
 /** Repo-launched sessions never load environment secrets; a stub keeps that explicit. */
 const noEnvironmentSecrets = async (): Promise<Record<string, string>> => ({});
 
-describe("buildLaunchUnitSecretSources", () => {
+describe("buildSessionTargetSecretSources", () => {
   it("folds members lowest-precedence-first with the primary (position 0) last", async () => {
     const secretsByRepo: Record<string, Record<string, string>> = {
       "acme/web": { A: "web" },
       "acme/backend": { B: "backend" },
     };
 
-    const sources = await buildLaunchUnitSecretSources({
+    const sources = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: { G: "g" },
       members: [member("acme", "web", 0, true), member("acme", "backend", 1, false)],
@@ -36,7 +36,7 @@ describe("buildLaunchUnitSecretSources", () => {
   it("folds global + environment for an environment-launched session — member repos never inherit", async () => {
     const loadMemberSecrets = vi.fn();
 
-    const sources = await buildLaunchUnitSecretSources({
+    const sources = await buildSessionTargetSecretSources({
       environmentId: "env_flagship",
       globalSecrets: { G: "g" },
       members: [member("acme", "web", 0, true)],
@@ -51,7 +51,7 @@ describe("buildLaunchUnitSecretSources", () => {
   });
 
   it("returns only global for an environment session with no environment secrets", async () => {
-    const sources = await buildLaunchUnitSecretSources({
+    const sources = await buildSessionTargetSecretSources({
       environmentId: "env_empty",
       globalSecrets: { G: "g" },
       members: [member("acme", "web", 0, true)],
@@ -63,7 +63,7 @@ describe("buildLaunchUnitSecretSources", () => {
   });
 
   it("omits members that contribute no secrets", async () => {
-    const sources = await buildLaunchUnitSecretSources({
+    const sources = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: {},
       members: [member("acme", "web", 0, true), member("acme", "empty", 1, false)],
@@ -76,7 +76,7 @@ describe("buildLaunchUnitSecretSources", () => {
   });
 
   it("returns only global when there are no members", async () => {
-    const sources = await buildLaunchUnitSecretSources({
+    const sources = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: { G: "g" },
       members: [],

@@ -1,6 +1,6 @@
 /**
  * Environment CRUD routes. Internal-HMAC authenticated (the web BFF proxies
- * these). Environments are the Phase-2 launch unit: a named, prebuildable
+ * these). Environments are the Phase-2 session target: a named, prebuildable
  * repository set with its own secrets. Additive and dark until the web picker
  * (PR-12); the create-from-environment session path is PR-9. Secrets routes
  * live in ./environment-secrets.

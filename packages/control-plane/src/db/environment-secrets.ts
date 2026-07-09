@@ -134,7 +134,7 @@ export class EnvironmentSecretsStore {
   /**
    * Copy secrets from a member repo into this environment, ciphertext-verbatim.
    * When `keys` is omitted, imports every key the source repo has. Enforces the
-   * per-scope key cap; the combined-value byte cap is left to the launch-unit
+   * per-scope key cap; the combined-value byte cap is left to the session-target
    * fold at spawn/build time (PR-6) since measuring it here would require
    * decrypting the copied ciphertext.
    *
