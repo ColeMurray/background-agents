@@ -294,6 +294,30 @@ describe("environment binding", () => {
     });
   });
 
+  it("preserves hydrated multi-environment selections on untouched edits", () => {
+    environmentsValue = [
+      fullstackEnvironment,
+      { id: "env_2", name: "Data", repositories: [{ repoOwner: "acme", repoName: "data" }] },
+    ];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, environmentIds: ["env_1", "env_2"] }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1", "env_2"],
+      repositories: [],
+    });
+  });
+
   it("hides environments for repo-scoped triggers", () => {
     environmentsValue = [fullstackEnvironment];
     render(

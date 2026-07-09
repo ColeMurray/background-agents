@@ -260,6 +260,21 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 automation.triggerConfig.conditions.length > 0 && (
                   <ConditionSummary conditions={automation.triggerConfig.conditions} />
                 )}
+              {automation.environmentIds.length > 0 && (
+                <div className="sm:col-span-2">
+                  <dt className="text-muted-foreground">Environments</dt>
+                  <dd className="text-foreground">
+                    <ul className="mt-1 space-y-0.5">
+                      {automation.environmentIds.map((environmentId) => (
+                        <li key={environmentId}>
+                          {environments.find((environment) => environment.id === environmentId)
+                            ?.name ?? environmentId}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              )}
               {automation.repositories.length > 1 && (
                 <div className="sm:col-span-2">
                   <dt className="text-muted-foreground">Repositories</dt>

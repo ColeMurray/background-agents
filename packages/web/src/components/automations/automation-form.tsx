@@ -151,7 +151,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     )
   );
   const [repoSelectionMode, setRepoSelectionMode] = useState<RepoSelectionMode>(() =>
-    initialRepositories.length > 1 ? "multiple" : "single"
+    // Combined count: a lone-repo default here would let the single-select
+    // collapse effect silently drop hydrated environment targets on edit.
+    initialRepositories.length + (initialValues?.environmentIds?.length ?? 0) > 1
+      ? "multiple"
+      : "single"
   );
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
