@@ -61,6 +61,9 @@ export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+export const DEFAULT_STALE_BUILD_MAX_AGE_MS = 4200 * 1000;
+export const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * 1000;
+
 /**
  * max_age_seconds for the image-maintenance routes (repo + environment
  * mark-stale/cleanup). Rejecting non-numbers matters: a null that fell
