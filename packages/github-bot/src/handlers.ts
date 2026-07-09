@@ -16,16 +16,16 @@ import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
+import { requestedReviewerPayloadSchema } from "./payload-schemas";
 
 export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
   | { outcome: "skipped"; skip_reason: string };
 
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
-  if (!payload || typeof payload !== "object") return false;
-  const reviewer = (payload as Record<string, unknown>).requested_reviewer;
-  if (!reviewer || typeof reviewer !== "object") return false;
-  return (reviewer as Record<string, unknown>).login === botUsername;
+  const parsed = requestedReviewerPayloadSchema.safeParse(payload);
+  if (!parsed.success) return false;
+  return parsed.data.requested_reviewer?.login === botUsername;
 }
 
 async function getAuthHeaders(env: Env, traceId: string): Promise<Record<string, string>> {
