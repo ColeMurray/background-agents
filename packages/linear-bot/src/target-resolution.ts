@@ -16,6 +16,7 @@ import { splitRepoFullName } from "./utils/repo";
 import { classifyRepo } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { getEnvironmentById } from "./environments";
+import { getLinearConfig, type ResolvedLinearConfig } from "./utils/integration-config";
 import { resolveStaticTarget } from "./model-resolution";
 import { getProjectRepoMapping, getTeamRepoMapping } from "./kv-store";
 import { createLogger } from "./logger";
@@ -40,12 +41,53 @@ export function targetId(target: SessionTarget): string {
 /**
  * The repository whose integration settings govern this launch: the repo
  * itself, or the environment's primary repository — environment-level
- * integration settings are deferred (design §13.5).
+ * integration settings are deferred (design §13.5). Private: every consumer
+ * of the primary-repo rule goes through {@link resolveTargetIntegration}, so
+ * environment-level settings later change exactly one function.
  */
-export function targetSettingsRepoFullName(target: SessionTarget): string {
+function targetSettingsRepoFullName(target: SessionTarget): string {
   if (target.kind === "repository") return target.fullName;
   const primary = target.environment.repositories[0];
   return `${primary.repoOwner}/${primary.repoName}`;
+}
+
+/**
+ * Everything the handler derives from a target's integration settings, so the
+ * primary-repo rule for environments stays inside this module.
+ */
+export interface TargetIntegration {
+  config: ResolvedLinearConfig;
+  /** Whether the integration's enabled-repos allowlist admits this target. */
+  enabled: boolean;
+  /** Lowercased fullName of the repo whose settings governed the lookup. */
+  settingsRepo: string;
+  /** Display subject for the "integration is not enabled" error. */
+  notEnabledSubject: string;
+  /** Value for `LinearCallbackContext.repoFullName` — the context is echoed
+   * back by the control plane and nothing reads this field today. */
+  callbackRepoFullName: string;
+}
+
+/**
+ * Resolve the integration settings governing a target launch.
+ */
+export async function resolveTargetIntegration(
+  env: Env,
+  target: SessionTarget
+): Promise<TargetIntegration> {
+  const callbackRepoFullName = targetSettingsRepoFullName(target);
+  const settingsRepo = callbackRepoFullName.toLowerCase();
+  const config = await getLinearConfig(env, settingsRepo);
+  return {
+    config,
+    enabled: config.enabledRepos === null || config.enabledRepos.includes(settingsRepo),
+    settingsRepo,
+    notEnabledSubject:
+      target.kind === "environment"
+        ? `environment \`${targetLabel(target)}\` (primary repository \`${settingsRepo}\`)`
+        : `\`${targetLabel(target)}\``,
+    callbackRepoFullName,
+  };
 }
 
 /**

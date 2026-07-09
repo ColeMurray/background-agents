@@ -7,6 +7,7 @@ import {
   handleAgentSessionEvent,
 } from "./webhook-handler";
 import { clearEnvironmentsLocalCache } from "./environments";
+import { clearReposLocalCache } from "./classifier/repos";
 import type { AgentSessionWebhook, Env, Environment } from "./types";
 import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
@@ -178,6 +179,7 @@ describe("handleAgentSessionEvent environment targets", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearEnvironmentsLocalCache();
+    clearReposLocalCache();
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);

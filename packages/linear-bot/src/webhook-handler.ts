@@ -20,16 +20,15 @@ import {
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
 import { buildInternalAuthHeaders } from "./utils/internal";
-import { getLinearConfig } from "./utils/integration-config";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
 import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
 import {
   resolveSessionTarget,
+  resolveTargetIntegration,
   targetId,
   targetLabel,
   targetRequestFields,
-  targetSettingsRepoFullName,
   type SessionTarget,
 } from "./target-resolution";
 import { getUserPreferences, lookupIssueSession, storeIssueSession } from "./kv-store";
@@ -395,28 +394,19 @@ async function handleNewSession(
 
   const { target, reasoning: classificationReasoning } = resolved;
   const label = targetLabel(target);
-  // Integration settings resolve per repository; environments use their
-  // primary repository's settings until env-level settings exist (§13.5).
-  const settingsRepo = targetSettingsRepoFullName(target).toLowerCase();
 
-  const integrationConfig = await getLinearConfig(env, settingsRepo);
-  if (
-    integrationConfig.enabledRepos !== null &&
-    !integrationConfig.enabledRepos.includes(settingsRepo)
-  ) {
-    const subject =
-      target.kind === "environment"
-        ? `environment \`${label}\` (primary repository \`${settingsRepo}\`)`
-        : `\`${label}\``;
+  const integration = await resolveTargetIntegration(env, target);
+  const integrationConfig = integration.config;
+  if (!integration.enabled) {
     await emitAgentActivity(client, agentSessionId, {
       type: "error",
-      body: `The Linear integration is not enabled for ${subject}.`,
+      body: `The Linear integration is not enabled for ${integration.notEnabledSubject}.`,
     });
     log.info("agent_session.repo_not_enabled", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
       target: targetId(target),
-      repo: settingsRepo,
+      repo: integration.settingsRepo,
     });
     return;
   }
@@ -502,9 +492,7 @@ async function handleNewSession(
     sessionId: session.sessionId,
     issueId: issue.id,
     issueIdentifier: issue.identifier,
-    ...(target.kind === "environment"
-      ? { environmentId: target.environment.id }
-      : { repoOwner: target.owner, repoName: target.name }),
+    ...targetRequestFields(target),
     model,
     agentSessionId,
     createdAt: Date.now(),
@@ -534,9 +522,7 @@ async function handleNewSession(
     issueId: issue.id,
     issueIdentifier: issue.identifier,
     issueUrl: issue.url,
-    // Environment sessions carry the primary repository — the context is
-    // echoed back by the control plane and nothing reads this field today.
-    repoFullName: targetSettingsRepoFullName(target),
+    repoFullName: integration.callbackRepoFullName,
     model,
     agentSessionId,
     organizationId: orgId,
