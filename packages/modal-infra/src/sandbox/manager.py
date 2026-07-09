@@ -294,11 +294,7 @@ class SandboxManager:
         lines = [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
         content = "\n".join(lines) + "\n"
         try:
-            f = await sandbox.open.aio(TUNNEL_ENV_FILE_PATH, "w")
-            try:
-                await f.write.aio(content)
-            finally:
-                await f.close.aio()
+            await sandbox.filesystem.write_text.aio(content, TUNNEL_ENV_FILE_PATH)
             log.info(
                 "tunnel.urls_written",
                 sandbox_id=sandbox_id,
