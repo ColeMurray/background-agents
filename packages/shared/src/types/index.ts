@@ -746,6 +746,12 @@ export interface RepoMetadata {
   aliases?: string[];
   channelAssociations?: string[];
   keywords?: string[];
+  /**
+   * Environment opened by GitHub-bot sessions triggered from this repo
+   * (design §13.2). The bot falls back to a repo-bound session when the
+   * environment no longer exists or no longer contains this repository.
+   */
+  defaultEnvironmentId?: string;
 }
 
 export interface EnrichedRepository extends InstallationRepository {

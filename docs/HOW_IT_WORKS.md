@@ -62,13 +62,16 @@ which settings apply. The agent sees all clones side by side and can make coordi
 them; pushes and pull requests are per-repository, so one session can produce PRs in several
 repositories. The session sidebar lists every repository with its branch and any PR created for it.
 
-GitHub-bot sessions remain single-repository. Slack sessions can target an environment three ways: a
-routing rule (Settings › Integrations › Slack) launches it from a keyword; a channel association
-(`channelAssociations` on the environments API, like repository metadata) routes messages in that
-channel to it automatically; and the LLM classifier considers environments alongside repositories,
-using their names and descriptions as signals — its clarification picker lists both kinds when it
-has to ask. Linear sessions can target an environment through the team and project mappings
-(`{"environmentId": "env_…"}` entries alongside repository entries).
+GitHub-bot sessions open the webhook's repository, unless that repository's metadata names a default
+environment (`defaultEnvironmentId` via the repo-metadata API) — then a PR review or @mention opens
+that environment's full workspace, provided the environment still contains the trigger repository.
+Slack sessions can target an environment three ways: a routing rule (Settings › Integrations ›
+Slack) launches it from a keyword; a channel association (`channelAssociations` on the environments
+API, like repository metadata) routes messages in that channel to it automatically; and the LLM
+classifier considers environments alongside repositories, using their names and descriptions as
+signals — its clarification picker lists both kinds when it has to ask. Linear sessions can target
+an environment through the team and project mappings (`{"environmentId": "env_…"}` entries alongside
+repository entries).
 
 ### Session Lifecycle
 

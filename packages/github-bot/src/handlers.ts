@@ -15,6 +15,7 @@ import type {
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
+import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 
 export type HandlerResult =
@@ -39,8 +40,7 @@ async function createSession(
   controlPlane: Fetcher,
   headers: Record<string, string>,
   params: {
-    repoOwner: string;
-    repoName: string;
+    target: SessionTargetFields;
     title: string;
     model: string;
     reasoningEffort?: string | null;
@@ -50,8 +50,7 @@ async function createSession(
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
-    repoOwner: params.repoOwner,
-    repoName: params.repoName,
+    ...params.target,
     title: params.title,
     model: params.model,
     scmLogin: params.scmLogin,
@@ -228,9 +227,9 @@ export async function handleReviewRequested(
     meta
   );
 
+  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
-    repoName,
+    target,
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
@@ -328,9 +327,9 @@ export async function handlePullRequestOpened(
     meta
   );
 
+  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
-    repoName,
+    target,
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
@@ -434,9 +433,9 @@ export async function handleIssueComment(
     meta
   );
 
+  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
-    repoName,
+    target,
     title: `GitHub: PR #${issue.number} comment`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
@@ -533,9 +532,9 @@ export async function handleReviewComment(
     meta
   );
 
+  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
-    repoName,
+    target,
     title: `GitHub: PR #${pr.number} review comment`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,

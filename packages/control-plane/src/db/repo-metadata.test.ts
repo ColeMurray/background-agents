@@ -8,6 +8,7 @@ type RepoMetadataRow = {
   aliases: string | null;
   channel_associations: string | null;
   keywords: string | null;
+  default_environment_id: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -66,11 +67,13 @@ class FakeD1Database {
         aliases,
         channelAssociations,
         keywords,
+        defaultEnvironmentId,
         createdAt,
         updatedAt,
       ] = args as [
         string,
         string,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -87,6 +90,7 @@ class FakeD1Database {
         aliases,
         channel_associations: channelAssociations,
         keywords,
+        default_environment_id: defaultEnvironmentId,
         created_at: existing ? existing.created_at : createdAt,
         updated_at: updatedAt,
       });
@@ -150,6 +154,7 @@ describe("RepoMetadataStore", () => {
         aliases: ["test"],
         channelAssociations: ["#general"],
         keywords: ["testing"],
+        defaultEnvironmentId: "env_123",
       });
 
       const result = await store.get("Owner", "Repo");
@@ -158,6 +163,7 @@ describe("RepoMetadataStore", () => {
         aliases: ["test"],
         channelAssociations: ["#general"],
         keywords: ["testing"],
+        defaultEnvironmentId: "env_123",
       });
     });
 
@@ -174,6 +180,7 @@ describe("RepoMetadataStore", () => {
       expect(result?.aliases).toBeUndefined();
       expect(result?.channelAssociations).toBeUndefined();
       expect(result?.keywords).toBeUndefined();
+      expect(result?.defaultEnvironmentId).toBeUndefined();
     });
 
     it("normalizes owner and name to lowercase", async () => {
@@ -198,6 +205,14 @@ describe("RepoMetadataStore", () => {
       const result = await store.get("owner", "repo");
       expect(result?.description).toBe("updated");
       expect(result?.aliases).toEqual(["alias1"]);
+    });
+
+    it("clears defaultEnvironmentId when omitted from an update", async () => {
+      await store.upsert("owner", "repo", { defaultEnvironmentId: "env_123" });
+      await store.upsert("owner", "repo", { description: "no env" });
+
+      const result = await store.get("owner", "repo");
+      expect(result?.defaultEnvironmentId).toBeUndefined();
     });
   });
 

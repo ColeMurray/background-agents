@@ -148,6 +148,19 @@ people to request the GitHub App bot through the PR reviewer picker.
 **Review Comment:** Same as issue comment, but the prompt additionally includes `filePath`,
 `diffHunk`, and `commentId` for thread-specific context and reply threading.
 
+### Session Launch Target
+
+Sessions are repo-bound by default: they open the webhook payload's repository. A repository can opt
+into launching a saved environment instead by setting `defaultEnvironmentId` in its repo metadata
+(`PUT /repos/:owner/:name/metadata` on the control plane) — a PR review or @mention on that repo
+then opens the environment's full multi-repository workspace.
+
+The environment must still contain the trigger repository — the session has to check out the PR
+under review. The bot falls back to the plain repo-bound session (with a `target.*` warning log)
+when the metadata or environment lookup fails, the environment was deleted, or it no longer contains
+the trigger repo. Integration settings (model, enabled repos, instructions) always resolve from the
+trigger repository either way.
+
 ## Authentication
 
 ### Webhook Verification
