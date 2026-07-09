@@ -92,6 +92,8 @@ export function SessionRightSidebarContent({
           repoName={sessionState.repoName}
           artifacts={artifacts}
           repositories={sessionState.repositories}
+          environmentId={sessionState.environmentId}
+          environmentName={sessionState.environmentName}
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
           totalCost={sessionState.totalCost}

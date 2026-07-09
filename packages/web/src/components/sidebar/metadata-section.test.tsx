@@ -150,4 +150,50 @@ describe("MetadataSection", () => {
 
     expect(screen.getByText("acme/api: Secret key collision on API_KEY")).toBeInTheDocument();
   });
+
+  it("renders the environment name for environment-launched sessions", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        environmentId="env-1"
+        environmentName="full-stack"
+      />
+    );
+
+    expect(screen.getByText("full-stack")).toBeInTheDocument();
+    expect(screen.queryByText("Environment deleted")).not.toBeInTheDocument();
+  });
+
+  it("renders the deleted state when the environment name resolves null", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        environmentId="env-1"
+        environmentName={null}
+      />
+    );
+
+    expect(screen.getByText("Environment deleted")).toBeInTheDocument();
+  });
+
+  it("renders no environment row for repo-launched sessions", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        environmentId={null}
+        environmentName={null}
+      />
+    );
+
+    expect(screen.queryByText("Environment deleted")).not.toBeInTheDocument();
+  });
 });

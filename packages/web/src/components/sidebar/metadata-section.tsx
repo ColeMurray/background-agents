@@ -16,6 +16,7 @@ import {
   GitPrIcon,
   BranchIcon,
   RepoIcon,
+  FolderIcon,
   CopyIcon,
   CheckIcon,
   LinkIcon,
@@ -37,6 +38,10 @@ interface MetadataSectionProps {
   /** Ordered member list ([0] = primary). Multi-member sessions render a
    *  per-repo list instead of the scalar repo tag. */
   repositories?: SessionRepositoryState[];
+  /** Environment provenance (design §7.6): the name resolves live, so a
+   *  non-null id with a null name means the environment was deleted. */
+  environmentId?: string | null;
+  environmentName?: string | null;
   /** Non-fatal boot/runtime warnings surfaced to the user. */
   warnings?: WarningEvent[];
   parentSessionId?: string | null;
@@ -72,6 +77,8 @@ export function MetadataSection({
   repoName,
   artifacts = [],
   repositories,
+  environmentId,
+  environmentName,
   warnings = [],
   parentSessionId,
   totalCost,
@@ -135,6 +142,20 @@ export function MetadataSection({
       {typeof totalCost === "number" && totalCost > 0 && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>Session cost: {formatSessionCost(totalCost)}</span>
+        </div>
+      )}
+
+      {/* Environment provenance */}
+      {environmentId && (
+        <div className="flex items-center gap-2 text-sm">
+          <FolderIcon className="w-4 h-4 text-muted-foreground" />
+          {environmentName ? (
+            <span className="text-foreground truncate max-w-[180px]" title={environmentName}>
+              {environmentName}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">Environment deleted</span>
+          )}
         </div>
       )}
 

@@ -5,10 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ owner: string; name: string }> }
-) {
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,29 +15,25 @@ export async function PUT(
     return NextResponse.json(
       {
         error:
-          "Repo images are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
+          "Environment images are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
       },
       { status: 501 }
     );
   }
 
-  const { owner, name } = await params;
+  const { id } = await params;
 
   try {
-    const body = await request.json();
-
     const response = await controlPlaneFetch(
-      `/repo-images/toggle/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(body),
-      }
+      `/environment-images/status?environment_id=${encodeURIComponent(id)}`
     );
-
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to toggle image build:", error);
-    return NextResponse.json({ error: "Failed to toggle image build" }, { status: 500 });
+    console.error("Failed to fetch environment image status:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch environment image status" },
+      { status: 500 }
+    );
   }
 }

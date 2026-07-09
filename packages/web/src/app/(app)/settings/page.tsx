@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
+import { EnvironmentsSettings } from "@/components/settings/environments-settings";
 import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
@@ -20,6 +21,7 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   secrets: "Secrets",
+  environments: "Environments",
   models: "Models",
   images: "Images",
   appearance: "Appearance",
@@ -32,6 +34,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
 
 const VALID_CATEGORIES = new Set<string>([
   "secrets",
+  "environments",
   "models",
   "images",
   "appearance",
@@ -81,6 +84,7 @@ export default function SettingsPage() {
   const content = (
     <>
       {activeCategory === "secrets" && <SecretsSettings />}
+      {activeCategory === "environments" && <EnvironmentsSettings />}
       {activeCategory === "models" && <ModelsSettings />}
       {activeCategory === "images" && repoImagesEnabled && <ImagesSettings />}
       {activeCategory === "appearance" && <AppearanceSettings />}

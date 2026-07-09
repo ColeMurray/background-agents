@@ -11,10 +11,10 @@ Three tiers connected by WebSockets:
 1. **Web Client** (Next.js on Vercel or Cloudflare Workers via OpenNext) — UI with GitHub OAuth,
    session dashboard, real-time streaming
 2. **Control Plane** (Cloudflare Workers + Durable Objects) — session lifecycle, WebSocket hub,
-   GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for
-   session index, repo metadata, and encrypted repo secrets.
+   GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for the
+   session index, repo metadata, environments, and encrypted secrets.
 3. **Data Plane** (Modal, Python) — sandboxed environments running coding agents. Manages sandbox
-   creation, snapshots, and repo image builds.
+   creation, snapshots, and repository/environment image builds.
 
 **Bot integrations** — all Cloudflare Workers using Hono:
 
