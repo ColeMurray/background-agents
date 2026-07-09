@@ -36,12 +36,14 @@ import {
   SettingsIcon,
   AutomationsIcon,
   BranchIcon,
+  BoxIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { APP_SHORT_NAME } from "@/lib/site-config";
 import { formatRepoLabel, formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useEnvironments } from "@/hooks/use-environments";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -219,8 +221,13 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         if (!searchQuery) return true;
         const query = searchQuery.toLowerCase();
         const title = session.title?.toLowerCase() || "";
-        const repo = formatRepoLabel(session.repoOwner, session.repoName).toLowerCase();
-        return title.includes(query) || repo.includes(query);
+        if (title.includes(query)) return true;
+        // Match against every member of the repository set, not just the
+        // primary; scalar fallback covers pre-multi-repo sessions.
+        const repoLabels = session.repositories?.length
+          ? session.repositories.map((repo) => formatRepoLabel(repo.repoOwner, repo.repoName))
+          : [formatRepoLabel(session.repoOwner, session.repoName)];
+        return repoLabels.some((label) => label.toLowerCase().includes(query));
       });
 
     // Sort by updatedAt descending
@@ -270,6 +277,15 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       hasFilteredSessions: filtered.length > 0,
     };
   }, [sessions, searchQuery]);
+
+  // Environment provenance for the cards, resolved once for the whole list.
+  // Names are looked up so a deleted environment (or one still loading)
+  // simply drops the chip instead of showing a raw id.
+  const { environments } = useEnvironments();
+  const environmentNamesById = useMemo(
+    () => new Map(environments.map((environment) => [environment.id, environment.name])),
+    [environments]
+  );
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
   const hasSessionListError = sessionsError;
@@ -457,6 +473,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
               <SessionWithChildren
                 key={session.id}
                 session={session}
+                environmentName={
+                  session.environmentId
+                    ? environmentNamesById.get(session.environmentId)
+                    : undefined
+                }
                 childrenMap={childrenMap}
                 currentSessionId={currentSessionId}
                 isMobile={isMobile}
@@ -478,6 +499,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                   <SessionWithChildren
                     key={session.id}
                     session={session}
+                    environmentName={
+                      session.environmentId
+                        ? environmentNamesById.get(session.environmentId)
+                        : undefined
+                    }
                     childrenMap={childrenMap}
                     currentSessionId={currentSessionId}
                     isMobile={isMobile}
@@ -551,6 +577,7 @@ function UserMenu({ user }: { user?: { name?: string | null; image?: string | nu
 
 function SessionWithChildren({
   session,
+  environmentName,
   childrenMap,
   currentSessionId,
   isMobile,
@@ -559,6 +586,7 @@ function SessionWithChildren({
   onSessionRenamed,
 }: {
   session: SessionItem;
+  environmentName?: string;
   childrenMap: Map<string, SessionItem[]>;
   currentSessionId: string | null;
   isMobile: boolean;
@@ -570,6 +598,7 @@ function SessionWithChildren({
     <>
       <SessionListItem
         session={session}
+        environmentName={environmentName}
         isActive={session.id === currentSessionId}
         isMobile={isMobile}
         onArchive={onArchive}
@@ -639,6 +668,7 @@ function ChildSessionTree({
 
 function SessionListItem({
   session,
+  environmentName,
   isActive,
   isMobile,
   onArchive,
@@ -646,6 +676,7 @@ function SessionListItem({
   onSessionRenamed,
 }: {
   session: SessionItem;
+  environmentName?: string;
   isActive: boolean;
   isMobile: boolean;
   onArchive: (sessionId: string) => Promise<void>;
@@ -862,6 +893,13 @@ function SessionListItem({
               <span>{relativeTime}</span>
               <span>·</span>
               <span className="truncate">{repoInfo}</span>
+              {environmentName && (
+                <>
+                  <span>·</span>
+                  <BoxIcon className="w-3 h-3 flex-shrink-0" />
+                  <span className="truncate">{environmentName}</span>
+                </>
+              )}
               {isOrphanChild && (
                 <>
                   <span>·</span>
