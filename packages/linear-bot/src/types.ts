@@ -63,10 +63,25 @@ export interface StaticRepoConfig {
 }
 
 /**
- * Static team→repo mapping stored in KV under "config:team-repos".
+ * An environment target with an optional label filter. References the stable
+ * `env_…` id, not the rename-able display name.
+ */
+export interface StaticEnvironmentConfig {
+  environmentId: string;
+  label?: string;
+}
+
+/**
+ * A mapping entry: a repository or a saved environment. Targets unify instead
+ * of migrate — repository entries never stop working; environments join them.
+ */
+export type StaticTargetConfig = StaticRepoConfig | StaticEnvironmentConfig;
+
+/**
+ * Static team→target mapping stored in KV under "config:team-repos".
  */
 export interface TeamRepoMapping {
-  [teamId: string]: StaticRepoConfig[];
+  [teamId: string]: StaticTargetConfig[];
 }
 
 /**
@@ -77,13 +92,15 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
+  Environment,
+  ListEnvironmentsResponse,
 } from "@open-inspect/shared";
 
 /**
- * Project→repo mapping stored in KV under "config:project-repos".
+ * Project→target mapping stored in KV under "config:project-repos".
  */
 export interface ProjectRepoMapping {
-  [projectId: string]: { owner: string; name: string };
+  [projectId: string]: { owner: string; name: string } | { environmentId: string };
 }
 
 /**
@@ -102,8 +119,11 @@ export interface IssueSession {
   sessionId: string;
   issueId: string;
   issueIdentifier: string;
-  repoOwner: string;
-  repoName: string;
+  /** Set for repository sessions; absent for environment sessions. */
+  repoOwner?: string;
+  repoName?: string;
+  /** Set for environment sessions. */
+  environmentId?: string;
   model: string;
   agentSessionId?: string;
   createdAt: number;
