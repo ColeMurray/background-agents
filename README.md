@@ -281,4 +281,4 @@ built with:
 - [OpenComputer](https://www.opencomputer.dev) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
 - [OpenCode](https://opencode.ai) - Coding agent runtime
-- [Next.js](https://nextjs.org) - Web framework
+- [Next.js](https://nextjs.org) - Web framework multi-repo test
