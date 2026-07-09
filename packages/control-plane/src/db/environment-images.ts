@@ -530,6 +530,24 @@ export class EnvironmentImageStore {
   }
 
   /**
+   * Spawn-side twin of markBuildFailed (design §7.3): a ready image whose
+   * provider artifact failed to restore is failed by id, so the rebuild cron
+   * sees no matching ready image and rebuilds it on the next tick. Scoped to
+   * status='ready' — building rows belong to the build workflow's failure
+   * paths and superseded rows to the reaper.
+   */
+  async markRestoreFailed(environmentImageId: string, error: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE environment_images SET status = 'failed', error_message = ? WHERE id = ? AND status = 'ready'"
+      )
+      .bind(error, environmentImageId)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
    * Secret-change invalidation (design §7.4): flip every live image —
    * including in-flight builds, which are baking the outdated values — to
    * superseded. The status flip is the load-bearing part and happens in the
@@ -545,6 +563,31 @@ export class EnvironmentImageStore {
       .run();
 
     return result.meta?.changes ?? 0;
+  }
+
+  /**
+   * Spawn-time selection read (design §7.3): the latest ready image for an
+   * environment on the active provider. The environments join mirrors the
+   * repo_metadata join in RepoImageStore: it is defense-in-depth against a
+   * lingering row serving a deleted environment (delete supersedes rows in
+   * the same batch, but a partial write must not hand out an image), and the
+   * prebuild_enabled gate mirrors image_build_enabled — a disabled
+   * environment's frozen image never rebuilds, so serving it would drift
+   * unboundedly.
+   */
+  async getLatestReadyForSpawn(
+    environmentId: string,
+    provider: EnvironmentImageProvider
+  ): Promise<EnvironmentImage | null> {
+    return await this.db
+      .prepare(
+        `SELECT ei.* FROM environment_images ei
+         INNER JOIN environments e ON e.id = ei.environment_id AND e.prebuild_enabled = 1
+         WHERE ei.environment_id = ? AND ei.provider = ? AND ei.status = 'ready'
+         ORDER BY ei.created_at DESC LIMIT 1`
+      )
+      .bind(environmentId, provider)
+      .first<EnvironmentImage>();
   }
 
   async getStatus(environmentId: string): Promise<EnvironmentImage[]> {

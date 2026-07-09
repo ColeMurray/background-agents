@@ -63,8 +63,8 @@ export interface CreateSandboxRequest {
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
-  repoImageId?: string | null;
-  repoImageSha?: string | null;
+  prebuiltImageId?: string | null;
+  prebuiltImageSha?: string | null;
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
@@ -275,8 +275,8 @@ export class ModalClient {
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
-          repo_image_id: request.repoImageId || null,
-          repo_image_sha: request.repoImageSha || null,
+          repo_image_id: request.prebuiltImageId || null,
+          repo_image_sha: request.prebuiltImageSha || null,
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,

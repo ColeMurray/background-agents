@@ -62,6 +62,7 @@ async function seedImageRow(row: {
   id: string;
   environmentId: string;
   status: string;
+  provider?: string;
   providerImageId?: string | null;
   repositoriesFingerprint?: string;
   createdAt?: number;
@@ -70,11 +71,12 @@ async function seedImageRow(row: {
     `INSERT INTO environment_images
        (id, environment_id, provider, provider_image_id, repositories_fingerprint,
         repository_shas, runtime_version, status, created_at)
-     VALUES (?, ?, 'modal', ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       row.id,
       row.environmentId,
+      row.provider ?? "modal",
       row.providerImageId ?? null,
       row.repositoriesFingerprint ?? "fp-seeded",
       JSON.stringify(REPOSITORY_SHAS),
@@ -226,6 +228,122 @@ describe("Environment images", () => {
 
       expect(await store.hasReadyImageForFingerprint(environmentId, "modal", "fp-x")).toBe(true);
       expect(await store.hasReadyImageForFingerprint(environmentId, "modal", "fp-y")).toBe(false);
+    });
+  });
+
+  describe("spawn-time selection (design §7.3)", () => {
+    it("serves the latest ready image for the environment and provider only", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      const otherId = await seedEnvironment({ prebuildEnabled: true });
+      const store = new EnvironmentImageStore(env.DB);
+      const now = Date.now();
+
+      await seedImageRow({
+        id: "sp-older",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-older",
+        createdAt: now - 2000,
+      });
+      await seedImageRow({
+        id: "sp-latest",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-latest",
+        createdAt: now - 1000,
+      });
+      await seedImageRow({ id: "sp-building", environmentId, status: "building", createdAt: now });
+      await seedImageRow({ id: "sp-failed", environmentId, status: "failed", createdAt: now });
+      await seedImageRow({
+        id: "sp-superseded",
+        environmentId,
+        status: "superseded",
+        providerImageId: "im-superseded",
+        createdAt: now,
+      });
+      await seedImageRow({
+        id: "sp-vercel",
+        environmentId,
+        status: "ready",
+        provider: "vercel",
+        providerImageId: "im-vercel",
+        createdAt: now,
+      });
+      await seedImageRow({
+        id: "sp-other-env",
+        environmentId: otherId,
+        status: "ready",
+        providerImageId: "im-other",
+        createdAt: now,
+      });
+
+      const selected = await store.getLatestReadyForSpawn(environmentId, "modal");
+
+      expect(selected?.id).toBe("sp-latest");
+      expect(selected?.provider_image_id).toBe("im-latest");
+      expect((await store.getLatestReadyForSpawn(environmentId, "vercel"))?.id).toBe("sp-vercel");
+    });
+
+    it("never serves a deleted environment's lingering row", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      const store = new EnvironmentImageStore(env.DB);
+      await seedImageRow({
+        id: "sp-lingering",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-lingering",
+      });
+
+      expect((await store.getLatestReadyForSpawn(environmentId, "modal"))?.id).toBe("sp-lingering");
+
+      // Raw delete bypasses EnvironmentStore.delete's supersede batch — the
+      // lingering ready row must still never be served (environments join).
+      await env.DB.prepare("DELETE FROM environments WHERE id = ?").bind(environmentId).run();
+
+      expect(await store.getLatestReadyForSpawn(environmentId, "modal")).toBeNull();
+      expect((await getRow("sp-lingering"))?.status).toBe("ready");
+    });
+
+    it("does not serve images of prebuild-disabled environments", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: false });
+      const store = new EnvironmentImageStore(env.DB);
+      await seedImageRow({
+        id: "sp-disabled",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-disabled",
+      });
+
+      expect(await store.getLatestReadyForSpawn(environmentId, "modal")).toBeNull();
+    });
+
+    it("markRestoreFailed fails only a ready row, exactly once", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      const store = new EnvironmentImageStore(env.DB);
+      await seedImageRow({
+        id: "sp-restore",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-restore",
+      });
+      await seedImageRow({ id: "sp-inflight", environmentId, status: "building" });
+
+      expect(
+        await store.markRestoreFailed("sp-restore", "restore failed at spawn: image expired")
+      ).toBe(true);
+      const failed = await getRow("sp-restore");
+      expect(failed?.status).toBe("failed");
+      expect(failed?.error_message).toBe("restore failed at spawn: image expired");
+
+      // No longer ready — a repeat (or stale) mark is a no-op.
+      expect(await store.markRestoreFailed("sp-restore", "again")).toBe(false);
+      expect((await getRow("sp-restore"))?.error_message).toBe(
+        "restore failed at spawn: image expired"
+      );
+
+      // Building rows belong to the build workflow's failure paths.
+      expect(await store.markRestoreFailed("sp-inflight", "nope")).toBe(false);
+      expect((await getRow("sp-inflight"))?.status).toBe("building");
     });
   });
 

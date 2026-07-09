@@ -34,10 +34,12 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type RepoImageLookup,
+  type EnvironmentImageLookup,
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
+import { EnvironmentImageStore } from "../db/environment-images";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
@@ -724,14 +726,24 @@ export class SessionDO extends DurableObject<Env> {
       sandboxDashboardUrlBuilder,
     };
 
-    // Create repo image lookup if D1 is available and the provider supports repo images.
+    // Create image lookups if D1 is available and the provider supports
+    // prebuilt images. Environment images run on the same provider set as
+    // repo images (EnvironmentImageProvider aliases RepoImageProvider).
     let repoImageLookup: RepoImageLookup | undefined;
+    let environmentImageLookup: EnvironmentImageLookup | undefined;
     const repoImageProvider = resolveRepoImageProvider(sandboxBackend);
     if (this.env.DB && repoImageProvider) {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>
           repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
+      };
+      const environmentImageStore = new EnvironmentImageStore(this.env.DB);
+      environmentImageLookup = {
+        getLatestReady: (environmentId) =>
+          environmentImageStore.getLatestReadyForSpawn(environmentId, repoImageProvider),
+        markRestoreFailed: (environmentImageId, error) =>
+          environmentImageStore.markRestoreFailed(environmentImageId, error),
       };
     }
 
@@ -746,7 +758,8 @@ export class SessionDO extends DurableObject<Env> {
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
       },
-      repoImageLookup
+      repoImageLookup,
+      environmentImageLookup
     );
   }
 
