@@ -10,9 +10,12 @@
  * session must always be able to check out the PR under review.
  */
 
+import { resolveAppName } from "@open-inspect/shared";
 import { z } from "zod";
 import type { Env } from "./types";
 import type { Logger } from "./logger";
+import { checkSenderPermission } from "./github-auth";
+import type { ResolvedGitHubConfig } from "./utils/integration-config";
 
 /**
  * Create-session request fields: scalar repo or environment id — the create
@@ -114,19 +117,83 @@ async function fetchEnvironment(
   return parsed.data.environment;
 }
 
+export interface ResolveSessionTargetParams {
+  owner: string;
+  repoName: string;
+  /** Webhook sender login, permission-checked against environment repositories. */
+  senderLogin: string;
+  /** Resolved integration config — its allowedTriggerUsers picks the gating mode. */
+  config: ResolvedGitHubConfig;
+  /** GitHub App installation token from caller gating. */
+  ghToken: string;
+  /** Control-plane auth headers from caller gating. */
+  headers: Record<string, string>;
+  traceId: string;
+}
+
+/**
+ * Whether the sender may launch a session spanning the environment's
+ * repositories. Extends caller gating's trigger-repo semantics to the whole
+ * set: an explicit allowedTriggerUsers allowlist vouches for the sender
+ * without GitHub permission checks (as it already does for the trigger repo);
+ * otherwise the sender needs write permission on every environment repository
+ * — an environment launch must not widen what the sender can reach (private
+ * clones, agent pushes) beyond what GitHub already grants them.
+ */
+async function senderAuthorizedForEnvironment(
+  env: Env,
+  environment: { id: string; repositories: Array<{ repoOwner: string; repoName: string }> },
+  params: ResolveSessionTargetParams,
+  log: Logger
+): Promise<boolean> {
+  if (params.config.allowedTriggerUsers !== null) return true;
+
+  // The trigger repo was already permission-checked by caller gating.
+  const otherRepos = environment.repositories.filter(
+    (r) =>
+      r.repoOwner.toLowerCase() !== params.owner.toLowerCase() ||
+      r.repoName.toLowerCase() !== params.repoName.toLowerCase()
+  );
+  const userAgent = resolveAppName(env);
+  const checks = await Promise.all(
+    otherRepos.map(async (r) => ({
+      repo: `${r.repoOwner}/${r.repoName}`.toLowerCase(),
+      ...(await checkSenderPermission(
+        params.ghToken,
+        r.repoOwner,
+        r.repoName,
+        params.senderLogin,
+        userAgent
+      )),
+    }))
+  );
+  const denied = checks.find((c) => !c.hasPermission);
+  if (denied) {
+    log.warn("target.environment_sender_not_authorized", {
+      trace_id: params.traceId,
+      environment_id: environment.id,
+      repo: `${params.owner}/${params.repoName}`.toLowerCase(),
+      denied_repo: denied.repo,
+      sender: params.senderLogin,
+      permission_check_error: denied.error === true,
+    });
+    return false;
+  }
+  return true;
+}
+
 /**
  * Resolve the launch target for a session triggered from a repository: the
- * repo's default environment when one is configured, still exists, and
- * contains the trigger repo; otherwise the repo itself.
+ * repo's default environment when one is configured, still exists, contains
+ * the trigger repo, and the sender is authorized for all of its repositories;
+ * otherwise the repo itself.
  */
 export async function resolveSessionTarget(
   env: Env,
-  headers: Record<string, string>,
-  owner: string,
-  repoName: string,
   log: Logger,
-  traceId: string
+  params: ResolveSessionTargetParams
 ): Promise<SessionTargetFields> {
+  const { owner, repoName, headers, traceId } = params;
   const repoFields = { repoOwner: owner, repoName };
 
   const environmentId = await fetchDefaultEnvironmentId(
@@ -153,6 +220,10 @@ export async function resolveSessionTarget(
       environment_id: environmentId,
       repo: `${owner}/${repoName}`.toLowerCase(),
     });
+    return repoFields;
+  }
+
+  if (!(await senderAuthorizedForEnvironment(env, environment, params, log))) {
     return repoFields;
   }
 

@@ -1047,6 +1047,86 @@ describe("default environment targets", () => {
       "target.environment_selected",
       expect.objectContaining({ environment_id: "env_abc", repo: "acme/widgets" })
     );
+    // Sender permission is verified on the environment's other repository
+    // (the trigger repo was already checked by caller gating).
+    expect(checkSenderPermission).toHaveBeenCalledWith(
+      "test-installation-token",
+      "acme",
+      "gadgets",
+      "alice",
+      expect.any(String)
+    );
+  });
+
+  it("falls back to the repo when the sender lacks permission on another environment repo", async () => {
+    vi.mocked(checkSenderPermission).mockImplementation(async (_token, _owner, repo) => ({
+      hasPermission: repo !== "gadgets",
+    }));
+    const env = createMockEnv();
+    const log = createMockLogger();
+    mockLaunchTarget(env, {
+      metadata: { defaultEnvironmentId: "env_abc" },
+      environment: fullstackEnvironment,
+    });
+
+    const result = await handleReviewRequested(env, log, reviewRequestedPayload, "trace-env-authz");
+
+    expect(result).toMatchObject({ outcome: "processed" });
+    const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
+    expect(sessionBody.repoOwner).toBe("acme");
+    expect(sessionBody.environmentId).toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(
+      "target.environment_sender_not_authorized",
+      expect.objectContaining({
+        environment_id: "env_abc",
+        denied_repo: "acme/gadgets",
+        sender: "alice",
+      })
+    );
+  });
+
+  it("falls back to the repo when a sender permission check errors", async () => {
+    vi.mocked(checkSenderPermission).mockImplementation(async (_token, _owner, repo) =>
+      repo === "gadgets" ? { hasPermission: false, error: true } : { hasPermission: true }
+    );
+    const env = createMockEnv();
+    const log = createMockLogger();
+    mockLaunchTarget(env, {
+      metadata: { defaultEnvironmentId: "env_abc" },
+      environment: fullstackEnvironment,
+    });
+
+    const result = await handleReviewRequested(env, log, reviewRequestedPayload, "trace-env-err");
+
+    expect(result).toMatchObject({ outcome: "processed" });
+    const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
+    expect(sessionBody.environmentId).toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(
+      "target.environment_sender_not_authorized",
+      expect.objectContaining({ denied_repo: "acme/gadgets", permission_check_error: true })
+    );
+  });
+
+  it("allowlisted senders launch environments without per-repo permission checks", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["alice"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    mockLaunchTarget(env, {
+      metadata: { defaultEnvironmentId: "env_abc" },
+      environment: fullstackEnvironment,
+    });
+
+    const result = await handleReviewRequested(env, log, reviewRequestedPayload, "trace-env-al");
+
+    expect(result).toMatchObject({ outcome: "processed" });
+    const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
+    expect(sessionBody.environmentId).toBe("env_abc");
+    // Allowlist mode never consults GitHub repo permissions — for the trigger
+    // repo or the environment's repositories.
+    expect(checkSenderPermission).not.toHaveBeenCalled();
   });
 
   it("falls back to the repo when the environment no longer exists", async () => {

@@ -223,7 +223,7 @@ describe("RepoMetadataStore", () => {
     });
 
     it("returns metadata for repos that have it", async () => {
-      await store.upsert("owner", "repo1", { description: "First" });
+      await store.upsert("owner", "repo1", { description: "First", defaultEnvironmentId: "env_1" });
       await store.upsert("owner", "repo2", { description: "Second", keywords: ["kw"] });
 
       const result = await store.getBatch([
@@ -234,6 +234,7 @@ describe("RepoMetadataStore", () => {
 
       expect(result.size).toBe(2);
       expect(result.get("owner/repo1")?.description).toBe("First");
+      expect(result.get("owner/repo1")?.defaultEnvironmentId).toBe("env_1");
       expect(result.get("owner/repo2")?.description).toBe("Second");
       expect(result.get("owner/repo2")?.keywords).toEqual(["kw"]);
       expect(result.has("owner/repo3")).toBe(false);

@@ -227,7 +227,15 @@ export async function handleReviewRequested(
     meta
   );
 
-  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
+  const target = await resolveSessionTarget(env, log, {
+    owner,
+    repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     target,
     title: `GitHub: Review PR #${pr.number}`,
@@ -327,7 +335,15 @@ export async function handlePullRequestOpened(
     meta
   );
 
-  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
+  const target = await resolveSessionTarget(env, log, {
+    owner,
+    repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     target,
     title: `GitHub: Review PR #${pr.number}`,
@@ -433,7 +449,15 @@ export async function handleIssueComment(
     meta
   );
 
-  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
+  const target = await resolveSessionTarget(env, log, {
+    owner,
+    repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     target,
     title: `GitHub: PR #${issue.number} comment`,
@@ -532,7 +556,15 @@ export async function handleReviewComment(
     meta
   );
 
-  const target = await resolveSessionTarget(env, headers, owner, repoName, log, traceId);
+  const target = await resolveSessionTarget(env, log, {
+    owner,
+    repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     target,
     title: `GitHub: PR #${pr.number} review comment`,

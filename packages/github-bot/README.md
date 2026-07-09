@@ -156,10 +156,14 @@ into launching a saved environment instead by setting `defaultEnvironmentId` in 
 then opens the environment's full multi-repository workspace.
 
 The environment must still contain the trigger repository — the session has to check out the PR
-under review. The bot falls back to the plain repo-bound session (with a `target.*` warning log)
-when the metadata or environment lookup fails, the environment was deleted, or it no longer contains
-the trigger repo. Integration settings (model, enabled repos, instructions) always resolve from the
-trigger repository either way.
+under review — and the sender must be authorized for the whole workspace: caller gating's semantics
+extend from the trigger repo to every environment repository. An `allowedTriggerUsers` allowlist
+vouches for the sender as it already does today; without one, the sender needs write permission on
+each repository in the environment, so an environment launch never widens what the sender can reach.
+The bot falls back to the plain repo-bound session (with a `target.*` warning log) when the metadata
+or environment lookup fails, the environment was deleted, it no longer contains the trigger repo, or
+the sender lacks permission on any of its repositories. Integration settings (model, enabled repos,
+instructions) always resolve from the trigger repository either way.
 
 ## Authentication
 
