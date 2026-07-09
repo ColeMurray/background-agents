@@ -38,6 +38,8 @@ vi.mock("./repos", () => ({
 
 vi.mock("./environments", () => ({
   getAvailableEnvironments: mockGetAvailableEnvironments,
+  // Imported by targets.ts (via ../targets); unused in these tests.
+  getEnvironmentById: vi.fn(),
 }));
 
 import { RepoClassifier } from "./index";

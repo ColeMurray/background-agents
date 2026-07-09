@@ -24,8 +24,14 @@ import {
 import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
-import { getEnvironmentById } from "./classifier/environments";
-import { parseTargetValue, targetId, targetLabel, type SlackSessionTarget } from "./targets";
+import {
+  branchPreferenceRepo,
+  buildSessionTargetRequestFields,
+  resolveTargetValue,
+  targetId,
+  targetLabel,
+  type SlackSessionTarget,
+} from "./targets";
 import { handleChannelTrigger } from "./channel-trigger";
 import { getAuthHeaders } from "./internal-auth";
 import { callbacksRouter } from "./callbacks";
@@ -76,17 +82,13 @@ async function createSession(
     branch,
     slack_user_id: slackUserId,
   };
-  const targetFields =
-    target.kind === "environment"
-      ? { environmentId: target.environment.id }
-      : { repoOwner: target.repo.owner, repoName: target.repo.name, branch };
   try {
     const headers = await getAuthHeaders(env, traceId);
     const response = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
       method: "POST",
       headers,
       body: JSON.stringify({
-        ...targetFields,
+        ...buildSessionTargetRequestFields(target, branch),
         model,
         reasoningEffort,
         spawnSource: "slack-bot",
@@ -404,9 +406,10 @@ async function startSessionAndSendPrompt(
   const model = userPrefs.model;
   const reasoningEffort = userPrefs.reasoningEffort;
   // Branch preferences are per-repo; an environment defines its own branches.
+  const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
-  if (target.kind === "repository") {
-    const repoBranch = await getUserRepoBranchPreference(env, userId, target.repo.id);
+  if (preferenceRepo) {
+    const repoBranch = await getUserRepoBranchPreference(env, userId, preferenceRepo.id);
     branch = repoBranch ?? userPrefs.branch;
   }
 
@@ -1146,24 +1149,13 @@ async function handleTargetSelection(
   const threadKey = threadTs || messageTs;
 
   // Resolve the selected value against the live lists
-  const ref = parseTargetValue(selectedValue);
-  let target: SlackSessionTarget | null = null;
-  if (ref.kind === "environment") {
-    const environment = await getEnvironmentById(env, ref.environmentId, traceId);
-    if (environment) target = { kind: "environment", environment };
-  } else {
-    const repos = await getAvailableRepos(env, traceId);
-    const repo = repos.find((r) => r.id === ref.repoId);
-    if (repo) target = { kind: "repository", repo };
-  }
+  const target = await resolveTargetValue(env, selectedValue, traceId);
 
   if (!target) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
-      ref.kind === "environment"
-        ? "Sorry, that environment is no longer available. Please try again."
-        : "Sorry, that repository is no longer available. Please try again.",
+      "Sorry, that repository or environment is no longer available. Please try again.",
       { thread_ts: threadTs || messageTs }
     );
     return;

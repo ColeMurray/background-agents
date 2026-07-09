@@ -171,13 +171,18 @@ export function buildRepoClarificationBlocks(
 ): Array<SlackSectionBlock | SlackActionsBlock> {
   const quickPicks = alternatives?.length ? buildTargetQuickPickButtons(alternatives) : [];
   const usesInlinePicker = repos.length > 0 && repos.length <= MAX_REPO_SUGGESTION_OPTIONS;
+  // The headline names environments only when one is actually on offer; the
+  // fallback picker below stays repository-only either way.
+  const subject = alternatives?.some((target) => target.kind === "environment")
+    ? "which repository or environment"
+    : "which repository";
 
   const blocks: Array<SlackSectionBlock | SlackActionsBlock> = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `I couldn't determine which repository you're referring to.\n\n_${reasoning}_`,
+        text: `I couldn't determine ${subject} you're referring to.\n\n_${reasoning}_`,
       },
     },
   ];

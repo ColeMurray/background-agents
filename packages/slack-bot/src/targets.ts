@@ -5,9 +5,16 @@
  * quick-picks, the repository picker — resolves to a {@link SlackSessionTarget}:
  * a repository or a saved environment. Targets unify instead of migrate —
  * repositories never stop working; environments join them.
+ *
+ * This module owns the target-kind policy (value encoding, labels, launch
+ * request fields, branch-preference applicability) so the message handler
+ * stays orchestration-only.
  */
 
-import type { Environment, RepoConfig } from "@open-inspect/shared";
+import { escapeMrkdwnText, type Environment, type RepoConfig } from "@open-inspect/shared";
+import type { Env } from "./types";
+import { getAvailableRepos } from "./classifier/repos";
+import { getEnvironmentById } from "./classifier/environments";
 
 export type SlackSessionTarget =
   | { kind: "repository"; repo: RepoConfig }
@@ -45,12 +52,61 @@ export function parseTargetValue(value: string): SlackTargetRef {
   return { kind: "repository", repoId: value };
 }
 
-/** Canonical label for messages and callback contexts: repo fullName or environment name. */
+/**
+ * Resolve a Slack option/button value to a launchable target against the live
+ * lists, or null when it no longer exists (deleted environment, repo access
+ * revoked, stale message).
+ */
+export async function resolveTargetValue(
+  env: Env,
+  value: string,
+  traceId?: string
+): Promise<SlackSessionTarget | null> {
+  const ref = parseTargetValue(value);
+  if (ref.kind === "environment") {
+    const environment = await getEnvironmentById(env, ref.environmentId, traceId);
+    return environment ? { kind: "environment", environment } : null;
+  }
+  const repos = await getAvailableRepos(env, traceId);
+  const repo = repos.find((r) => r.id === ref.repoId);
+  return repo ? { kind: "repository", repo } : null;
+}
+
+/**
+ * Canonical label for Slack `mrkdwn` text and callback contexts: the repo
+ * fullName, or the environment name escaped for literal display. Environment
+ * names are arbitrary user text (a name like `<!channel>` must never become a
+ * live broadcast mention); repo fullNames are charset-constrained by GitHub.
+ */
 export function targetLabel(target: SlackSessionTarget): string {
-  return target.kind === "environment" ? target.environment.name : target.repo.fullName;
+  return target.kind === "environment"
+    ? escapeMrkdwnText(target.environment.name)
+    : target.repo.fullName;
 }
 
 /** Stable id for storage: the repo id ("owner/name") or environment id ("env_…"). */
 export function targetId(target: SlackSessionTarget): string {
   return target.kind === "environment" ? target.environment.id : target.repo.id;
+}
+
+/**
+ * Create-session request fields for a target: scalar repoOwner/repoName
+ * (+ optional branch) or environmentId only — the create schema makes the two
+ * mutually exclusive, and the environment defines its own branches.
+ */
+export function buildSessionTargetRequestFields(
+  target: SlackSessionTarget,
+  branch: string | undefined
+): { repoOwner: string; repoName: string; branch?: string } | { environmentId: string } {
+  return target.kind === "environment"
+    ? { environmentId: target.environment.id }
+    : { repoOwner: target.repo.owner, repoName: target.repo.name, branch };
+}
+
+/**
+ * The repository whose per-user branch preference applies to this launch, or
+ * null when none does — an environment defines its own branches.
+ */
+export function branchPreferenceRepo(target: SlackSessionTarget): RepoConfig | null {
+  return target.kind === "repository" ? target.repo : null;
 }

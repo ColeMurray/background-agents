@@ -782,8 +782,8 @@ function RoutingRulesSection({
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Keywords match whole words, case-insensitively. Point each keyword at one repository; the
-        same keyword on two repositories will prompt for a choice instead of guessing.
+        Keywords match whole words, case-insensitively. Point each keyword at one repository or
+        environment; the same keyword on two targets will prompt for a choice instead of guessing.
       </p>
     </Section>
   );

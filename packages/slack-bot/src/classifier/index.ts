@@ -7,14 +7,9 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
-import {
-  getAvailableRepos,
-  buildRepoDescriptions,
-  getReposByChannel,
-  getRoutingRules,
-} from "./repos";
-import { getAvailableEnvironments } from "./environments";
-import { matchRoutingRules, type ConfidenceLevel } from "@open-inspect/shared";
+import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./repos";
+import { resolveRoutingRuleTargets } from "./routing";
+import type { ConfidenceLevel } from "@open-inspect/shared";
 import { targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 
@@ -193,48 +188,20 @@ export class RepoClassifier {
   }
 
   /**
-   * Match the message against the workspace's Slack routing rules.
+   * Match the message against the workspace's Slack routing rules (resolution
+   * lives in {@link resolveRoutingRuleTargets}).
    *
    * Returns a high-confidence result when exactly one accessible target matches,
    * a clarification result when several distinct targets match (so the user
    * picks rather than the bot guessing), or `null` when no rule applies — in
    * which case the caller falls through to channel association and the LLM.
-   *
-   * Rules whose target is not in the accessible repo list (or, for
-   * environment-targeted rules, not an existing environment) are skipped, so a
-   * stale rule never routes to something the bot can't launch. Environments are
-   * fetched only when a matched rule needs them.
    */
   private async classifyByRoutingRules(
     message: string,
     repos: RepoConfig[],
     traceId?: string
   ): Promise<ClassificationResult | null> {
-    const matched = matchRoutingRules(message, await getRoutingRules(this.env, traceId));
-    if (matched.length === 0) return null;
-
-    const environments = matched.some((rule) => rule.targetType === "environment")
-      ? await getAvailableEnvironments(this.env, traceId)
-      : [];
-
-    const targets = new Map<string, { target: SlackSessionTarget; keyword: string }>();
-    for (const rule of matched) {
-      let target: SlackSessionTarget | null = null;
-      if (rule.targetType === "environment") {
-        const environment = environments.find((e) => e.id === rule.target);
-        if (environment) target = { kind: "environment", environment };
-      } else {
-        const repo = repos.find(
-          (r) => r.fullName.toLowerCase() === rule.target || r.id.toLowerCase() === rule.target
-        );
-        if (repo) target = { kind: "repository", repo };
-      }
-      if (target && !targets.has(targetValue(target))) {
-        targets.set(targetValue(target), { target, keyword: rule.keyword });
-      }
-    }
-
-    const resolved = [...targets.values()];
+    const resolved = await resolveRoutingRuleTargets(this.env, message, repos, traceId);
     if (resolved.length === 0) return null;
 
     if (resolved.length === 1) {

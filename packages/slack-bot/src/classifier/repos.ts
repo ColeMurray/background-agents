@@ -9,12 +9,13 @@
 import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
-  buildInternalAuthHeaders,
   createKvCacheStore,
   normalizeRoutingRules,
   type SlackGlobalConfig,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
+import { createCachedControlPlaneRead } from "./cached-read";
+import { controlPlaneFetch, KV_CACHE_TTL_SECONDS, LOCAL_CACHE_TTL_MS } from "./control-plane";
 import { createLogger } from "../logger";
 
 const log = createLogger("repos");
@@ -26,37 +27,12 @@ const log = createLogger("repos");
 const FALLBACK_REPOS: RepoConfig[] = [];
 
 /**
- * Local cache TTL in milliseconds (1 minute).
- * This is shorter than the control plane's 5-minute cache because
- * the slack-bot might be restarted more frequently.
- */
-export const LOCAL_CACHE_TTL_MS = 60 * 1000;
-
-/**
- * Expiration for the shared KV caches (repos, routing rules, environments,
- * watched channels), in seconds — the unit Cloudflare KV's `expirationTtl`
- * expects.
- */
-export const KV_CACHE_TTL_SECONDS = 300;
-
-/**
  * Local in-memory cache for repos.
  */
 let localCache: {
   repos: RepoConfig[];
   timestamp: number;
 } | null = null;
-
-/**
- * Local in-memory cache for Slack routing rules. Same TTL as the repos cache;
- * the bot tolerates rules being up to a few minutes stale.
- */
-let routingRulesLocalCache: {
-  rules: SlackRoutingRule[];
-  timestamp: number;
-} | null = null;
-
-const ROUTING_RULES_CACHE_KEY = "slack:routing-rules";
 
 const WATCHED_CHANNELS_CACHE_KEY = "slack:watched-channels";
 
@@ -81,27 +57,6 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
     keywords: repo.metadata?.keywords,
     channelAssociations: repo.metadata?.channelAssociations,
   };
-}
-
-/**
- * Issue an authenticated GET to the control plane, preferring the service
- * binding and falling back to URL-based fetch. Centralizes the internal-auth
- * headers and binding-vs-URL switch shared by every control-plane read.
- */
-export async function controlPlaneFetch(
-  env: Env,
-  path: string,
-  traceId?: string
-): Promise<Response> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-  return env.CONTROL_PLANE
-    ? env.CONTROL_PLANE.fetch(`https://internal${path}`, { headers })
-    : fetch(`${env.CONTROL_PLANE_URL}${path}`, {
-        headers: { ...headers, "User-Agent": "open-inspect-slack-bot" },
-      });
 }
 
 /**
@@ -205,83 +160,29 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
 }
 
 /**
- * Fetch workspace-wide Slack routing rules (keyword → repository) from the
- * control plane's GET /integration-settings/slack endpoint.
- *
- * Mirrors {@link getAvailableRepos}: in-memory cache → control plane → KV cache,
- * and **fails open to an empty list** so a settings-fetch problem never blocks
- * classification — the bot simply behaves as if no rules were configured.
+ * Workspace-wide Slack routing rules (keyword → repository or environment)
+ * from the control plane's GET /integration-settings/slack endpoint. Fails
+ * open to an empty list — no rules means no deterministic routing, the safe
+ * default. Normalizes on every path (fresh and KV-fallback) so callers see
+ * one canonical shape.
  */
+const routingRulesRead = createCachedControlPlaneRead<SlackRoutingRule[]>({
+  loggerName: "repos",
+  path: "/integration-settings/slack",
+  kvCacheKey: "slack:routing-rules",
+  fetchLogEvent: "control_plane.fetch_routing_rules",
+  kvLogKeyPrefix: "routing_rules_cache",
+  parseResponse: (body) =>
+    normalizeRoutingRules(
+      (body as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
+    ),
+  parseCached: (cached) =>
+    Array.isArray(cached) ? normalizeRoutingRules(cached as SlackRoutingRule[]) : null,
+  empty: [],
+});
+
 export async function getRoutingRules(env: Env, traceId?: string): Promise<SlackRoutingRule[]> {
-  if (
-    routingRulesLocalCache &&
-    Date.now() - routingRulesLocalCache.timestamp < LOCAL_CACHE_TTL_MS
-  ) {
-    return routingRulesLocalCache.rules;
-  }
-
-  const startTime = Date.now();
-  try {
-    const response = await controlPlaneFetch(env, "/integration-settings/slack", traceId);
-
-    if (!response.ok) {
-      log.warn("control_plane.fetch_routing_rules", {
-        trace_id: traceId,
-        outcome: "error",
-        http_status: response.status,
-        duration_ms: Date.now() - startTime,
-      });
-      return getRoutingRulesFromCache(env);
-    }
-
-    const data = (await response.json()) as { settings?: SlackGlobalConfig | null };
-    const rules = normalizeRoutingRules(data.settings?.defaults?.routingRules);
-
-    routingRulesLocalCache = { rules, timestamp: Date.now() };
-
-    try {
-      await createKvCacheStore(env.SLACK_KV).put(ROUTING_RULES_CACHE_KEY, JSON.stringify(rules), {
-        expirationTtl: KV_CACHE_TTL_SECONDS,
-      });
-    } catch (e) {
-      log.warn("kv.put", {
-        trace_id: traceId,
-        key_prefix: "routing_rules_cache",
-        error: e instanceof Error ? e : new Error(String(e)),
-      });
-    }
-
-    return rules;
-  } catch (e) {
-    log.warn("control_plane.fetch_routing_rules", {
-      trace_id: traceId,
-      outcome: "error",
-      error: e instanceof Error ? e : new Error(String(e)),
-      duration_ms: Date.now() - startTime,
-    });
-    return getRoutingRulesFromCache(env);
-  }
-}
-
-/**
- * Read routing rules from the KV cache, returning an empty list on miss/error.
- * Fail open: no rules means no deterministic routing, the safe default.
- */
-async function getRoutingRulesFromCache(env: Env): Promise<SlackRoutingRule[]> {
-  try {
-    const cached = await createKvCacheStore(env.SLACK_KV).get(ROUTING_RULES_CACHE_KEY, "json");
-    if (cached && Array.isArray(cached)) {
-      // Normalize on read so the KV-fallback path returns the same canonical
-      // shape as the fresh control-plane path (one uniform contract).
-      return normalizeRoutingRules(cached as SlackRoutingRule[]);
-    }
-  } catch (e) {
-    log.warn("kv.get", {
-      key_prefix: "routing_rules_cache",
-      error: e instanceof Error ? e : new Error(String(e)),
-    });
-  }
-  return [];
+  return routingRulesRead.read(env, traceId);
 }
 
 /**
@@ -429,5 +330,5 @@ export async function buildRepoDescriptions(env: Env, traceId?: string): Promise
  */
 export function clearLocalCache(): void {
   localCache = null;
-  routingRulesLocalCache = null;
+  routingRulesRead.clearLocalCache();
 }
