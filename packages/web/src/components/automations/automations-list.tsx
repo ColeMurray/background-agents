@@ -7,7 +7,7 @@ import type { Automation } from "@open-inspect/shared";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { Button } from "@/components/ui/button";
 import { FolderIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
-import { formatRelativeTime } from "@/lib/time";
+import { formatFutureRelativeTime } from "@/lib/time";
 import { formatRepositoriesLabel } from "@/lib/repo-label";
 
 interface AutomationsListProps {
@@ -153,7 +153,7 @@ export function AutomationsList({
             </span>
             {automation.triggerType === "schedule" && automation.nextRunAt && (
               <span className="inline-flex items-center gap-1">
-                Next: {formatRelativeTime(automation.nextRunAt)}
+                Next: {formatFutureRelativeTime(automation.nextRunAt)}
               </span>
             )}
           </div>
