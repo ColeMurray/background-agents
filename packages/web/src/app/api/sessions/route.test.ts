@@ -318,4 +318,67 @@ describe("sessions API route (POST)", () => {
     expect(sent.scmLogin).toBeUndefined();
     expect(sent.scmEmail).toBeUndefined();
   });
+
+  it("forwards environmentId for environment launches", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: "12345", provider: "github" },
+    } as never);
+    vi.mocked(getToken).mockResolvedValue(null);
+    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess3" }, { status: 201 }));
+
+    const response = await POST(postRequest({ environmentId: "env-1", model: "m" }));
+
+    expect(response.status).toBe(201);
+    const sent = controlPlaneBody();
+    expect(sent.environmentId).toBe("env-1");
+    expect(sent.repositories).toBeUndefined();
+    expect(sent.repoOwner).toBeUndefined();
+    expect(sent.repoName).toBeUndefined();
+  });
+
+  it("forwards the repositories list for ad-hoc multi-repo launches", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: "12345", provider: "github" },
+    } as never);
+    vi.mocked(getToken).mockResolvedValue(null);
+    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess4" }, { status: 201 }));
+
+    const repositories = [
+      { repoOwner: "acme", repoName: "backend" },
+      { repoOwner: "acme", repoName: "frontend" },
+    ];
+    const response = await POST(postRequest({ repositories, model: "m" }));
+
+    expect(response.status).toBe(201);
+    const sent = controlPlaneBody();
+    expect(sent.repositories).toEqual(repositories);
+    expect(sent.environmentId).toBeUndefined();
+  });
+
+  it("still strips fields outside the allowlist", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: "12345", provider: "github" },
+    } as never);
+    vi.mocked(getToken).mockResolvedValue(null);
+    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess5" }, { status: 201 }));
+
+    const response = await POST(
+      postRequest({
+        environmentId: "env-1",
+        userId: "attacker",
+        spawnSource: "automation",
+        scmToken: "gho_forged",
+        authUserId: "someone-else",
+      })
+    );
+
+    expect(response.status).toBe(201);
+    const sent = controlPlaneBody();
+    expect(sent.environmentId).toBe("env-1");
+    // Identity fields stay server-derived.
+    expect(sent.userId).toBe("12345");
+    expect(sent.spawnSource).toBe("user");
+    expect(sent.scmToken).toBeUndefined();
+    expect(sent.authUserId).toBe("12345");
+  });
 });

@@ -82,13 +82,16 @@ function createRow(partial?: Partial<SecretRow>): SecretRow {
 export function SecretsEditor({
   owner,
   name,
+  environmentId,
   disabled = false,
   scope = "repo",
 }: {
   owner?: string;
   name?: string;
+  /** Required for scope "environment". */
+  environmentId?: string;
   disabled?: boolean;
-  scope?: "repo" | "global";
+  scope?: "repo" | "global" | "environment";
 }) {
   const [rows, setRows] = useState<SecretRow[]>([]);
   const [saving, setSaving] = useState(false);
@@ -96,10 +99,15 @@ export function SecretsEditor({
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
   const isGlobal = scope === "global";
-  const ready = isGlobal || Boolean(owner && name);
+  const isEnvironment = scope === "environment";
+  const ready = isGlobal || (isEnvironment ? Boolean(environmentId) : Boolean(owner && name));
   const repoLabel = owner && name ? `${owner}/${name}` : "";
 
-  const apiBase = isGlobal ? "/api/secrets" : `/api/repos/${owner}/${name}/secrets`;
+  const apiBase = isGlobal
+    ? "/api/secrets"
+    : isEnvironment
+      ? `/api/environments/${environmentId}/secrets`
+      : `/api/repos/${owner}/${name}/secrets`;
 
   const {
     data: secretsData,
@@ -341,7 +349,9 @@ export function SecretsEditor({
 
   const descriptionText = isGlobal
     ? "Secrets apply to all repositories."
-    : `Values are never shown after save. Secrets apply to ${repoLabel || "the selected repo"}.`;
+    : isEnvironment
+      ? "Values are never shown after save. Secrets apply to sessions launched from this environment."
+      : `Values are never shown after save. Secrets apply to ${repoLabel || "the selected repo"}.`;
 
   return (
     <div className="mt-4 rounded-md border border-border bg-background p-4">
@@ -371,7 +381,11 @@ export function SecretsEditor({
 
           {!loading && rows.length === 0 && globalRows.length === 0 && (
             <p className="text-xs text-muted-foreground">
-              {isGlobal ? "No global secrets set." : "No secrets set for this repo."}
+              {isGlobal
+                ? "No global secrets set."
+                : isEnvironment
+                  ? "No secrets set for this environment."
+                  : "No secrets set for this repo."}
             </p>
           )}
 
@@ -459,7 +473,9 @@ export function SecretsEditor({
                         className="flex-1 min-w-[200px] h-auto px-2 py-1 text-xs"
                       />
                       {overridden && (
-                        <span className="text-xs text-muted-foreground">(overridden by repo)</span>
+                        <span className="text-xs text-muted-foreground">
+                          (overridden by {isEnvironment ? "environment" : "repo"})
+                        </span>
                       )}
                     </div>
                   );

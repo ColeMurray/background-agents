@@ -23,6 +23,20 @@ const mocks = vi.hoisted(() => ({
     defaultBranch: string;
   }>,
   loadingReposValue: false,
+  environmentsValue: [] as Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    prebuildEnabled: boolean;
+    createdAt: number;
+    updatedAt: number;
+    repositories: Array<{
+      repoOwner: string;
+      repoName: string;
+      repoId: number | null;
+      baseBranch: string;
+    }>;
+  }>,
 }));
 
 const repo = {
@@ -44,7 +58,14 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("swr", () => ({
+  // Home uses the default export only for the picker's prebuild-status text.
+  default: () => ({ data: undefined, isLoading: false }),
   mutate: mocks.mutateMock,
+}));
+
+vi.mock("@/hooks/use-environments", () => ({
+  ENVIRONMENTS_KEY: "/api/environments",
+  useEnvironments: () => ({ environments: mocks.environmentsValue, loading: false }),
 }));
 
 vi.mock("@/components/sidebar-layout", () => ({
@@ -79,6 +100,7 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.reposValue = [repo];
   mocks.loadingReposValue = false;
+  mocks.environmentsValue = [];
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -147,5 +169,81 @@ describe("Home", () => {
       model: DEFAULT_MODEL,
     });
     expect(screen.getByText(/you can start without a repository/i)).toBeInTheDocument();
+  });
+
+  it("launches from an environment sending only environmentId", async () => {
+    mocks.environmentsValue = [
+      {
+        id: "env-1",
+        name: "full-stack",
+        description: null,
+        prebuildEnabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+        repositories: [
+          { repoOwner: "acme", repoName: "backend", repoId: 1, baseBranch: "main" },
+          { repoOwner: "acme", repoName: "frontend", repoId: 2, baseBranch: "main" },
+        ],
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await screen.findByRole("button", { name: /background-agents/i });
+    await user.click(screen.getByRole("button", { name: /background-agents/i }));
+    const listbox = screen.getByRole("listbox");
+    await user.click(within(listbox).getByRole("option", { name: /full-stack/i }));
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Wire the API");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const body = sessionCreateBody();
+    expect(body).toMatchObject({ environmentId: "env-1", model: DEFAULT_MODEL });
+    expect(body).not.toHaveProperty("repoOwner");
+    expect(body).not.toHaveProperty("repositories");
+    expect(body).not.toHaveProperty("branch");
+  });
+
+  it("launches an ad-hoc set sending only repositories, seeded from the selected repo", async () => {
+    mocks.reposValue = [
+      repo,
+      {
+        id: 2,
+        fullName: "open-inspect/docs",
+        owner: "open-inspect",
+        name: "docs",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await screen.findByRole("button", { name: /background-agents/i });
+    await user.click(screen.getByRole("button", { name: /background-agents/i }));
+    const listbox = screen.getByRole("listbox");
+    await user.click(within(listbox).getByRole("option", { name: /multiple repositories/i }));
+
+    // The multi-select opens seeded with the previously selected repo; add docs.
+    await user.click(screen.getByRole("button", { name: /repository selection/i }));
+    await user.click(screen.getByRole("checkbox", { name: /open-inspect\/docs/i }));
+    await user.click(screen.getByRole("button", { name: /done/i }));
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Sync the docs");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const body = sessionCreateBody();
+    expect(body).toMatchObject({
+      repositories: [
+        { repoOwner: "open-inspect", repoName: "background-agents" },
+        { repoOwner: "open-inspect", repoName: "docs" },
+      ],
+    });
+    expect(body).not.toHaveProperty("repoOwner");
+    expect(body).not.toHaveProperty("environmentId");
+    expect(body).not.toHaveProperty("branch");
   });
 });
