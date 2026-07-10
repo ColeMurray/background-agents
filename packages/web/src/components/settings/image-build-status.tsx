@@ -1,11 +1,13 @@
 "use client";
 
+import type { ImageBuildStatus as ImageBuildStatusValue } from "@open-inspect/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/time";
 
 /** Presentation-ready view of one prebuilt image's latest build. */
 export interface ImageBuildStatusView {
-  status: "building" | "ready" | "failed";
+  /** Superseded rows are filtered at the fetch boundary and render nothing. */
+  status: ImageBuildStatusValue;
   createdAt: number;
   /** Extra line under a ready status, e.g. "abc1234 · 45s". */
   readyDetails?: string;

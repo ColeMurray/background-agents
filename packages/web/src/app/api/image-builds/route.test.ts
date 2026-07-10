@@ -23,20 +23,20 @@ vi.mock("@/lib/sandbox-provider", () => ({
 
 import { getServerSession } from "next-auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-import { GET as getRegistry } from "./route";
-import { POST as triggerBuild } from "./[owner]/[name]/trigger/route";
-import { PUT as toggleBuild } from "./[owner]/[name]/toggle/route";
+import { GET as getFeed } from "./route";
+import { POST as triggerBuild } from "./repo/[owner]/[name]/trigger/route";
+import { PUT as toggleBuild } from "./repo/[owner]/[name]/toggle/route";
 
 const params = { params: Promise.resolve({ owner: "acme", name: "web" }) };
 
 const routes = [
-  { name: "GET /api/repo-images", call: () => getRegistry() },
+  { name: "GET /api/image-builds", call: () => getFeed() },
   {
-    name: "POST /api/repo-images/[owner]/[name]/trigger",
+    name: "POST /api/image-builds/repo/[owner]/[name]/trigger",
     call: () => triggerBuild({} as NextRequest, params),
   },
   {
-    name: "PUT /api/repo-images/[owner]/[name]/toggle",
+    name: "PUT /api/image-builds/repo/[owner]/[name]/toggle",
     call: () => toggleBuild({ json: async () => ({ enabled: true }) } as NextRequest, params),
   },
 ];
@@ -69,7 +69,7 @@ describe.each(routes)("$name", ({ call }) => {
 
   it("proxies to the control plane for authenticated users", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
-    // Fresh Response per call — the registry route consumes two bodies.
+    // Fresh Response per call — the feed route consumes two bodies.
     vi.mocked(controlPlaneFetch).mockImplementation(async () =>
       Response.json({ units: [], images: [] })
     );
@@ -81,66 +81,101 @@ describe.each(routes)("$name", ({ call }) => {
   });
 });
 
-describe("GET /api/repo-images translation", () => {
+describe("GET /api/image-builds feed", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.supportsRepoImagesValue = true;
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
   });
 
-  it("reads the unified endpoints and serves the legacy RepoImage shape", async () => {
+  it("serves enabled scopes plus cross-scope status, failed rows included", async () => {
+    const readyRepoRow = {
+      id: "build-1",
+      scope_kind: "repo",
+      scope_id: "acme/web",
+      provider: "modal",
+      status: "ready",
+      repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
+      runtime_version: "60",
+      build_duration_seconds: 42.5,
+      error_message: null,
+      created_at: 1700000000000,
+    };
+    const failedEnvironmentRow = {
+      id: "build-2",
+      scope_kind: "environment",
+      scope_id: "env_1",
+      provider: "modal",
+      status: "failed",
+      repository_shas: "[]",
+      runtime_version: "60",
+      build_duration_seconds: null,
+      error_message: "boom",
+      created_at: 1700000000001,
+    };
     vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
-      if (path === "/image-builds/enabled-repos") {
+      if (path === "/image-builds/enabled") {
         return Response.json({
-          repos: [{ repoOwner: "acme", repoName: "web" }],
+          units: [
+            {
+              scopeKind: "repo",
+              scopeId: "acme/web",
+              repositoriesFingerprint: "fp",
+              repositories: [],
+            },
+            {
+              scopeKind: "environment",
+              scopeId: "env_1",
+              repositoriesFingerprint: "fp",
+              repositories: [],
+            },
+          ],
+          minRuntimeVersion: 53,
         });
       }
       if (path === "/image-builds/status") {
-        return Response.json({
-          images: [
-            {
-              scope_kind: "repo",
-              scope_id: "acme/web",
-              status: "ready",
-              repository_shas: JSON.stringify([
-                { repoOwner: "acme", repoName: "web", baseSha: "abc123" },
-              ]),
-              build_duration_seconds: 42.5,
-              error_message: null,
-              created_at: 1700000000000,
-            },
-            // Environment rows never leak into the repo images registry.
-            {
-              scope_kind: "environment",
-              scope_id: "env_1",
-              status: "ready",
-              repository_shas: "[]",
-              build_duration_seconds: 10,
-              error_message: null,
-              created_at: 1700000000000,
-            },
-          ],
-        });
+        return Response.json({ images: [readyRepoRow, failedEnvironmentRow] });
       }
       throw new Error(`unexpected control-plane path: ${path}`);
     });
 
-    const response = await getRegistry();
+    const response = await getFeed();
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      enabledRepos: ["acme/web"],
-      images: [
-        {
-          repo_owner: "acme",
-          repo_name: "web",
-          status: "ready",
-          base_sha: "abc123",
-          build_duration_seconds: 42.5,
-          created_at: 1700000000000,
-        },
+      units: [
+        { scopeKind: "repo", scopeId: "acme/web" },
+        { scopeKind: "environment", scopeId: "env_1" },
       ],
+      images: [readyRepoRow, failedEnvironmentRow],
     });
+  });
+
+  it("filters superseded rows at the fetch boundary", async () => {
+    vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") return Response.json({ units: [] });
+      return Response.json({
+        images: [
+          {
+            id: "build-1",
+            scope_kind: "environment",
+            scope_id: "env_1",
+            provider: "modal",
+            status: "superseded",
+            repository_shas: "[]",
+            runtime_version: "60",
+            build_duration_seconds: 10,
+            error_message: null,
+            created_at: 1700000000000,
+          },
+        ],
+      });
+    });
+
+    const response = await getFeed();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ units: [], images: [] });
   });
 });
 

@@ -23,15 +23,13 @@ vi.mock("@/lib/sandbox-provider", () => ({
 
 import { getServerSession } from "next-auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-import { GET as getAllStatus } from "./route";
-import { GET as getEnvironmentStatus } from "../environments/[id]/images/route";
-import { POST as triggerBuild } from "../environments/[id]/images/trigger/route";
+import { GET as getEnvironmentStatus } from "./[id]/images/route";
+import { POST as triggerBuild } from "./[id]/images/trigger/route";
 
 const request = {} as NextRequest;
 const params = { params: Promise.resolve({ id: "env-1" }) };
 
 const routes = [
-  { name: "GET /api/environment-images", call: () => getAllStatus() },
   {
     name: "GET /api/environments/[id]/images",
     call: () => getEnvironmentStatus(request, params),
@@ -76,5 +74,48 @@ describe.each(routes)("$name", ({ call }) => {
 
     expect(response.status).toBe(200);
     expect(controlPlaneFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("unified route consumption", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.supportsRepoImagesValue = true;
+    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+  });
+
+  it("status reads the per-scope unified status and filters superseded rows", async () => {
+    const readyRow = {
+      id: "build-1",
+      scope_kind: "environment",
+      scope_id: "env-1",
+      provider: "modal",
+      status: "ready",
+      repository_shas: "[]",
+      runtime_version: "60",
+      build_duration_seconds: 10,
+      error_message: null,
+      created_at: 1700000000000,
+    };
+    vi.mocked(controlPlaneFetch).mockResolvedValue(
+      Response.json({ images: [readyRow, { ...readyRow, id: "build-0", status: "superseded" }] })
+    );
+
+    const response = await getEnvironmentStatus(request, params);
+
+    expect(controlPlaneFetch).toHaveBeenCalledWith(
+      "/image-builds/status?scope_kind=environment&scope_id=env-1"
+    );
+    await expect(response.json()).resolves.toEqual({ images: [readyRow] });
+  });
+
+  it("trigger posts to the unified environment trigger route", async () => {
+    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ ok: true }));
+
+    await triggerBuild(request, params);
+
+    expect(controlPlaneFetch).toHaveBeenCalledWith("/image-builds/trigger/environment/env-1", {
+      method: "POST",
+    });
   });
 });

@@ -5,8 +5,8 @@ import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
-export async function POST(
-  _request: NextRequest,
+export async function PUT(
+  request: NextRequest,
   { params }: { params: Promise<{ owner: string; name: string }> }
 ) {
   const session = await getServerSession(authOptions);
@@ -18,7 +18,7 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          "Repo images are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
+          "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
       },
       { status: 501 }
     );
@@ -27,15 +27,20 @@ export async function POST(
   const { owner, name } = await params;
 
   try {
+    const body = await request.json();
+
     const response = await controlPlaneFetch(
-      `/image-builds/trigger/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-      { method: "POST" }
+      `/image-builds/toggle/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }
     );
 
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to trigger image build:", error);
-    return NextResponse.json({ error: "Failed to trigger image build" }, { status: 500 });
+    console.error("Failed to toggle image build:", error);
+    return NextResponse.json({ error: "Failed to toggle image build" }, { status: 500 });
   }
 }

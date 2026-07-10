@@ -2,11 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import type { Environment } from "@open-inspect/shared";
+import type { Environment, ImageBuildStatus } from "@open-inspect/shared";
 import type { ComboboxGroup, ComboboxOption } from "@/components/ui/combobox";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos, type Repo } from "@/hooks/use-repos";
+import {
+  IMAGE_BUILDS_KEY,
+  foldImageBuildStatusByScope,
+  imageBuildScopeKey,
+  type ImageBuildsFeed,
+} from "@/lib/image-builds";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import {
@@ -28,22 +34,18 @@ import {
 // (it stored only repo names) and is kept so stored repo values keep working.
 const LAST_SELECTED_TARGET_STORAGE_KEY = "open-inspect-last-selected-repo";
 
-interface EnvironmentImageStatusRow {
-  environment_id: string;
-  status: "building" | "ready" | "failed";
-}
-
 /** Picker subtitle for an environment: repository count plus prebuild state. */
-function describeEnvironment(
+export function describeEnvironment(
   environment: Environment,
-  imageStatusByEnvironment: Map<string, EnvironmentImageStatusRow["status"]>
+  imageStatusByScope: Map<string, ImageBuildStatus>
 ): string {
   const count = environment.repositories.length;
   const base = `${count} ${count === 1 ? "repository" : "repositories"}`;
   if (!environment.prebuildEnabled) return base;
-  const status = imageStatusByEnvironment.get(environment.id);
+  const status = imageStatusByScope.get(imageBuildScopeKey("environment", environment.id));
   if (status === "ready") return `${base} · prebuilt`;
   if (status === "building") return `${base} · prebuild building`;
+  if (status === "failed") return `${base} · prebuild failed`;
   return `${base} · prebuilds on`;
 }
 
@@ -99,20 +101,16 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     selectedRepository?.name ?? ""
   );
 
-  // Prebuild status for the environment options (ready/building rows of
-  // prebuild-enabled environments, one call across all of them).
-  const { data: environmentImagesData } = useSWR<{ images: EnvironmentImageStatusRow[] }>(
-    environments.length > 0 && supportsRepoImages() ? "/api/environment-images" : null
+  // Prebuild status for the environment options: the unified cross-scope
+  // feed (repo and environment scopes, failed rows included), one call across
+  // all of them, folded to one status per scope.
+  const { data: imageBuildsData } = useSWR<ImageBuildsFeed>(
+    environments.length > 0 && supportsRepoImages() ? IMAGE_BUILDS_KEY : null
   );
-  const imageStatusByEnvironment = useMemo(() => {
-    const statusByEnvironment = new Map<string, EnvironmentImageStatusRow["status"]>();
-    for (const row of environmentImagesData?.images ?? []) {
-      if (row.status === "ready" || !statusByEnvironment.has(row.environment_id)) {
-        statusByEnvironment.set(row.environment_id, row.status);
-      }
-    }
-    return statusByEnvironment;
-  }, [environmentImagesData]);
+  const imageStatusByScope = useMemo(
+    () => foldImageBuildStatusByScope(imageBuildsData?.images ?? []),
+    [imageBuildsData]
+  );
 
   // Restore the last-selected target once data loads. This effect commits a
   // target exactly once (the guard blocks any later correction), so a stored
@@ -231,7 +229,7 @@ export function useSessionTargetPicker(): SessionTargetSelection {
             options: environments.map((environment) => ({
               value: environmentOptionValue(environment.id),
               label: environment.name,
-              description: describeEnvironment(environment, imageStatusByEnvironment),
+              description: describeEnvironment(environment, imageStatusByScope),
             })),
           },
           { category: "Repositories", options: repositoryOptions },
