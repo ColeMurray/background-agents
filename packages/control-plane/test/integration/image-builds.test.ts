@@ -566,6 +566,7 @@ describe("Image builds", () => {
     it("requires internal auth on cron-facing routes", async () => {
       for (const [method, path] of [
         ["GET", "/image-builds/enabled"],
+        ["GET", "/image-builds/enabled-repos"],
         ["GET", "/image-builds/status"],
         ["POST", "/image-builds/mark-stale"],
         ["POST", "/image-builds/cleanup"],
@@ -1157,6 +1158,22 @@ describe("Image builds", () => {
       expect(body.units).toEqual([
         expect.objectContaining({ scopeKind: "environment", scopeId: environmentId }),
       ]);
+    });
+
+    it("GET /image-builds/enabled-repos serves persisted flags without resolution", async () => {
+      // Same SCM-less harness in which the units feed skips the repo — the
+      // persisted-flags feed still serves it, so the settings UI's toggle
+      // state never flickers off on a transient resolution failure.
+      await enableRepo();
+
+      const response = await SELF.fetch(`${BASE}/image-builds/enabled-repos`, {
+        headers: await authHeaders(),
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        repos: [{ repoOwner: "acme", repoName: "web" }],
+      });
     });
 
     it("PUT /image-builds/toggle/repo/:owner/:name resolves on enable, never on disable", async () => {

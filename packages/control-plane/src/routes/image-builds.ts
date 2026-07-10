@@ -610,6 +610,36 @@ async function handleGetEnabledUnits(
 }
 
 /**
+ * GET /image-builds/enabled-repos
+ * The persisted repo prebuild flags (a plain D1 read, no source-control
+ * resolution). This is the settings UI's toggle-state feed: unlike the
+ * units feed, a repo is never dropped on a transient resolution failure.
+ */
+async function handleGetEnabledRepos(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const providerError = requireImageBuilds(env);
+  if (providerError) return providerError;
+
+  const dbError = requireDb(env);
+  if (dbError) return dbError;
+
+  try {
+    return json({ repos: await new RepoMetadataStore(env.DB).getImageBuildEnabledRepos() });
+  } catch (e) {
+    logger.error("image_build.enabled_repos_error", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to get enabled repos", 500);
+  }
+}
+
+/**
  * GET /environment-images/enabled
  * Legacy alias for handleGetEnabledUnits preserving the old response shape
  * ({environments: [{id, name, ...}]}), which the deployed Modal cron reads.
@@ -775,6 +805,11 @@ export const imageBuildRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/image-builds/enabled"),
     handler: handleGetEnabledUnits,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/image-builds/enabled-repos"),
+    handler: handleGetEnabledRepos,
   },
   {
     method: "POST",

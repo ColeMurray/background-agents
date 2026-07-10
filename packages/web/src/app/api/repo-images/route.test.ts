@@ -90,12 +90,9 @@ describe("GET /api/repo-images translation", () => {
 
   it("reads the unified endpoints and serves the legacy RepoImage shape", async () => {
     vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
-      if (path === "/image-builds/enabled") {
+      if (path === "/image-builds/enabled-repos") {
         return Response.json({
-          units: [
-            { scopeKind: "repo", scopeId: "acme/web" },
-            { scopeKind: "environment", scopeId: "env_1" },
-          ],
+          repos: [{ repoOwner: "acme", repoName: "web" }],
         });
       }
       if (path === "/image-builds/status") {

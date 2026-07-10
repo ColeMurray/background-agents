@@ -4,9 +4,9 @@ import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
-interface ImageBuildUnit {
-  scopeKind: string;
-  scopeId: string;
+interface ImageBuildEnabledRepo {
+  repoOwner: string;
+  repoName: string;
 }
 
 /** Unified image-build row fields this translation reads (snake_case D1 columns). */
@@ -72,7 +72,7 @@ export async function GET() {
 
   try {
     const [enabledResponse, statusResponse] = await Promise.all([
-      controlPlaneFetch("/image-builds/enabled"),
+      controlPlaneFetch("/image-builds/enabled-repos"),
       controlPlaneFetch("/image-builds/status"),
     ]);
 
@@ -83,9 +83,12 @@ export async function GET() {
     const enabledData = await enabledResponse.json();
     const statusData = await statusResponse.json();
 
-    const enabledRepos = ((enabledData.units ?? []) as ImageBuildUnit[])
-      .filter((unit) => unit.scopeKind === "repo")
-      .map((unit) => unit.scopeId);
+    // The persisted-flags feed: toggle state must come from the flag rows,
+    // not the resolution-dependent units feed, so a transient source-control
+    // failure can never flip a toggle off in the UI.
+    const enabledRepos = ((enabledData.repos ?? []) as ImageBuildEnabledRepo[]).map(
+      (repo) => `${repo.repoOwner}/${repo.repoName}`
+    );
 
     const images = ((statusData.images ?? []) as ImageBuildRecord[])
       .filter((record) => record.scope_kind === "repo")
