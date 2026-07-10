@@ -36,8 +36,10 @@ export interface RepositoryShaEntry {
  * snake_case column names pass through unmapped. `scope_id` is a lowercase
  * `owner/name` pair for repo scopes and an environment id for environment
  * scopes. `repository_shas` is the JSON-encoded `RepositoryShaEntry[]`
- * column value. `provider` values come from the control plane's provider
- * union (deploy configuration, not part of this contract).
+ * column value — `JSON.parse` before use; `ImageBuildCompleteCallback`
+ * carries the same data already parsed. `provider` values come from the
+ * control plane's provider union (deploy configuration, not part of this
+ * contract).
  */
 export interface ImageBuildRecordView {
   id: string;
@@ -55,6 +57,9 @@ export interface ImageBuildRecordView {
 /**
  * Success callback POSTed by the Modal build worker
  * (`image_builder.py`) to `/image-builds/build-complete`.
+ *
+ * `repository_shas` arrives as a parsed array here and is stored
+ * JSON-encoded (see `ImageBuildRecordView.repository_shas`).
  */
 export interface ImageBuildCompleteCallback {
   build_id: string;
