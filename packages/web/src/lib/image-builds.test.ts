@@ -5,6 +5,7 @@ import {
   foldImageBuildStatusByScope,
   imageBuildScopeKey,
   parsePrimaryBuildSha,
+  type ImageBuildUnitView,
 } from "./image-builds";
 
 function record(overrides: Partial<ImageBuildRecordView>): ImageBuildRecordView {
@@ -14,11 +15,21 @@ function record(overrides: Partial<ImageBuildRecordView>): ImageBuildRecordView 
     scope_id: "env-1",
     provider: "modal",
     status: "ready",
+    repositories_fingerprint: "fp-current",
     repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
     runtime_version: "60",
     build_duration_seconds: 42,
     error_message: null,
     created_at: 1700000000000,
+    ...overrides,
+  };
+}
+
+function unit(overrides: Partial<ImageBuildUnitView> = {}): ImageBuildUnitView {
+  return {
+    scopeKind: "environment",
+    scopeId: "env-1",
+    repositoriesFingerprint: "fp-current",
     ...overrides,
   };
 }
@@ -38,31 +49,73 @@ describe("excludeSupersededBuilds", () => {
 
 describe("foldImageBuildStatusByScope", () => {
   it("folds a failed-only scope to failed (visible in the aggregate)", () => {
-    const folded = foldImageBuildStatusByScope([record({ status: "failed" })]);
+    const folded = foldImageBuildStatusByScope([record({ status: "failed" })], [unit()]);
 
     expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("failed");
   });
 
   it("ready beats building beats failed regardless of row order", () => {
-    const folded = foldImageBuildStatusByScope([
-      record({ id: "a", status: "failed", scope_id: "env-ready" }),
-      record({ id: "b", status: "building", scope_id: "env-ready" }),
-      record({ id: "c", status: "ready", scope_id: "env-ready" }),
-      record({ id: "d", status: "failed", scope_id: "env-building" }),
-      record({ id: "e", status: "building", scope_id: "env-building" }),
-    ]);
+    const folded = foldImageBuildStatusByScope(
+      [
+        record({ id: "a", status: "failed", scope_id: "env-ready" }),
+        record({ id: "b", status: "building", scope_id: "env-ready" }),
+        record({ id: "c", status: "ready", scope_id: "env-ready" }),
+        record({ id: "d", status: "failed", scope_id: "env-building" }),
+        record({ id: "e", status: "building", scope_id: "env-building" }),
+      ],
+      [unit({ scopeId: "env-ready" }), unit({ scopeId: "env-building" })]
+    );
 
     expect(folded.get(imageBuildScopeKey("environment", "env-ready"))).toBe("ready");
     expect(folded.get(imageBuildScopeKey("environment", "env-building"))).toBe("building");
   });
 
   it("folds repo and environment scopes independently", () => {
-    const folded = foldImageBuildStatusByScope([
-      record({ id: "a", scope_kind: "repo", scope_id: "acme/web", status: "failed" }),
-      record({ id: "b", scope_kind: "environment", scope_id: "env-1", status: "ready" }),
-    ]);
+    const folded = foldImageBuildStatusByScope(
+      [
+        record({ id: "a", scope_kind: "repo", scope_id: "acme/web", status: "failed" }),
+        record({ id: "b", scope_kind: "environment", scope_id: "env-1", status: "ready" }),
+      ],
+      [unit({ scopeKind: "repo", scopeId: "acme/web" }), unit()]
+    );
 
     expect(folded.get(imageBuildScopeKey("repo", "acme/web"))).toBe("failed");
+    expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("ready");
+  });
+
+  it("folds to failed when only a stale-fingerprint ready row outranks the failed current build", () => {
+    const folded = foldImageBuildStatusByScope(
+      [
+        record({ id: "a", status: "ready", repositories_fingerprint: "fp-stale" }),
+        record({ id: "b", status: "failed", repositories_fingerprint: "fp-current" }),
+      ],
+      [unit()]
+    );
+
+    expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("failed");
+  });
+
+  it("folds to ready when the ready row carries the current fingerprint", () => {
+    const folded = foldImageBuildStatusByScope(
+      [
+        record({ id: "a", status: "ready", repositories_fingerprint: "fp-current" }),
+        record({ id: "b", status: "failed", repositories_fingerprint: "fp-stale" }),
+      ],
+      [unit()]
+    );
+
+    expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("ready");
+  });
+
+  it("falls back to the unfiltered fold for a scope missing from units", () => {
+    const folded = foldImageBuildStatusByScope(
+      [
+        record({ id: "a", status: "ready", repositories_fingerprint: "fp-stale" }),
+        record({ id: "b", status: "failed", repositories_fingerprint: "fp-other" }),
+      ],
+      []
+    );
+
     expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("ready");
   });
 });

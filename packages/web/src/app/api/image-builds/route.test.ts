@@ -95,6 +95,7 @@ describe("GET /api/image-builds feed", () => {
       scope_id: "acme/web",
       provider: "modal",
       status: "ready",
+      repositories_fingerprint: "fp-repo",
       repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
       runtime_version: "60",
       build_duration_seconds: 42.5,
@@ -107,6 +108,7 @@ describe("GET /api/image-builds feed", () => {
       scope_id: "env_1",
       provider: "modal",
       status: "failed",
+      repositories_fingerprint: "fp-env",
       repository_shas: "[]",
       runtime_version: "60",
       build_duration_seconds: null,
@@ -120,13 +122,13 @@ describe("GET /api/image-builds feed", () => {
             {
               scopeKind: "repo",
               scopeId: "acme/web",
-              repositoriesFingerprint: "fp",
+              repositoriesFingerprint: "fp-repo",
               repositories: [],
             },
             {
               scopeKind: "environment",
               scopeId: "env_1",
-              repositoriesFingerprint: "fp",
+              repositoriesFingerprint: "fp-env",
               repositories: [],
             },
           ],
@@ -147,8 +149,8 @@ describe("GET /api/image-builds feed", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       units: [
-        { scopeKind: "repo", scopeId: "acme/web" },
-        { scopeKind: "environment", scopeId: "env_1" },
+        { scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp-repo" },
+        { scopeKind: "environment", scopeId: "env_1", repositoriesFingerprint: "fp-env" },
       ],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [readyRepoRow, failedEnvironmentRow],
@@ -188,6 +190,7 @@ describe("GET /api/image-builds feed", () => {
             scope_id: "env_1",
             provider: "modal",
             status: "superseded",
+            repositories_fingerprint: "fp-env",
             repository_shas: "[]",
             runtime_version: "60",
             build_duration_seconds: 10,

@@ -108,7 +108,7 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     environments.length > 0 && supportsRepoImages() ? IMAGE_BUILDS_KEY : null
   );
   const imageStatusByScope = useMemo(
-    () => foldImageBuildStatusByScope(imageBuildsData?.images ?? []),
+    () => foldImageBuildStatusByScope(imageBuildsData?.images ?? [], imageBuildsData?.units ?? []),
     [imageBuildsData]
   );
 

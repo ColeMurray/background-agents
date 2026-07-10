@@ -46,11 +46,12 @@ export async function GET() {
     const enabledReposData = await enabledReposResponse.json();
     const statusData = await statusResponse.json();
 
-    // The enabled feed carries cron detail (fingerprint, repositories) the
-    // web doesn't need — serve only the scope identities.
+    // The enabled feed also carries the cron's repository lists — serve the
+    // scope identity plus the current fingerprint the status fold keys on.
     const units = ((enabledData.units ?? []) as ImageBuildUnitView[]).map((unit) => ({
       scopeKind: unit.scopeKind,
       scopeId: unit.scopeId,
+      repositoriesFingerprint: unit.repositoriesFingerprint,
     }));
     // Persisted repo flags, unlike units, never drop a scope on a transient
     // resolution failure — the settings toggles read these.

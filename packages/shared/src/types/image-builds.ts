@@ -35,7 +35,9 @@ export interface RepositoryShaEntry {
  * Mirrors the D1 SELECT in the control plane's `db/image-builds.ts` —
  * snake_case column names pass through unmapped. `scope_id` is a lowercase
  * `owner/name` pair for repo scopes and an environment id for environment
- * scopes. `repository_shas` is the JSON-encoded `RepositoryShaEntry[]`
+ * scopes. `repositories_fingerprint` identifies the scope's repository set
+ * as of the build — rows whose fingerprint differs from the scope's current
+ * one are stale. `repository_shas` is the JSON-encoded `RepositoryShaEntry[]`
  * column value — `JSON.parse` before use; `ImageBuildCompleteCallback`
  * carries the same data already parsed. `provider` values come from the
  * control plane's provider union (deploy configuration, not part of this
@@ -47,6 +49,7 @@ export interface ImageBuildRecordView {
   scope_id: string;
   provider: string;
   status: ImageBuildStatus;
+  repositories_fingerprint: string;
   repository_shas: string;
   runtime_version: string;
   build_duration_seconds: number | null;

@@ -59,6 +59,7 @@ describe("describeEnvironment", () => {
       scope_id: "env-1",
       provider: "modal",
       status: "failed",
+      repositories_fingerprint: "fp-current",
       repository_shas: "[]",
       runtime_version: "60",
       build_duration_seconds: null,
@@ -66,7 +67,10 @@ describe("describeEnvironment", () => {
       created_at: 1700000000000,
     };
 
-    const folded = foldImageBuildStatusByScope([failedRow]);
+    const folded = foldImageBuildStatusByScope(
+      [failedRow],
+      [{ scopeKind: "environment", scopeId: "env-1", repositoriesFingerprint: "fp-current" }]
+    );
 
     expect(describeEnvironment(environment(), folded)).toBe("2 repositories · prebuild failed");
   });

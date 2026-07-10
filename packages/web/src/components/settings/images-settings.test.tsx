@@ -57,7 +57,7 @@ afterEach(() => {
 describe("ImagesSettings", () => {
   it("renders ready details from the primary repository_shas entry", () => {
     renderWithFeed({
-      units: [{ scopeKind: "repo", scopeId: "acme/web" }],
+      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [
         {
@@ -66,6 +66,7 @@ describe("ImagesSettings", () => {
           scope_id: "acme/web",
           provider: "modal",
           status: "ready",
+          repositories_fingerprint: "fp",
           repository_shas: JSON.stringify([
             { repoOwner: "acme", repoName: "web", baseSha: "abc1234def5678" },
           ]),
@@ -83,7 +84,7 @@ describe("ImagesSettings", () => {
 
   it("renders a failed build with its error message", () => {
     renderWithFeed({
-      units: [{ scopeKind: "repo", scopeId: "acme/web" }],
+      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [
         {
@@ -92,6 +93,7 @@ describe("ImagesSettings", () => {
           scope_id: "acme/web",
           provider: "modal",
           status: "failed",
+          repositories_fingerprint: "fp",
           repository_shas: "[]",
           runtime_version: "60",
           build_duration_seconds: null,

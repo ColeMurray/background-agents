@@ -18,6 +18,8 @@ export const IMAGE_BUILDS_KEY = "/api/image-builds";
 export interface ImageBuildUnitView {
   scopeKind: ImageBuildScopeKind;
   scopeId: string;
+  /** The scope's current repo-set fingerprint — build rows with any other fingerprint are stale. */
+  repositoriesFingerprint: string;
 }
 
 /** One persisted repo prebuild flag as served by GET /api/image-builds. */
@@ -64,17 +66,28 @@ const STATUS_FOLD_PRECEDENCE: Record<ImageBuildStatus, number> = {
 /**
  * Fold each scope's build rows to one status: ready > building > failed.
  *
- * Caveat (design §6, accepted): a scope holding a stale-fingerprint ready row
- * plus a failed latest build folds to "ready" while spawn will reject the
- * stale row — the feed doesn't carry fingerprints, so the fold can't tell.
- * Revisit if it bites.
+ * Only rows matching the scope's current fingerprint (per `units`) count —
+ * spawn rejects stale-fingerprint rows, so a stale ready row must not outrank
+ * a failed current build. A scope with no unit (transiently dropped from the
+ * enabled feed) falls back to the unfiltered fold over all its rows.
  */
 export function foldImageBuildStatusByScope(
-  images: ImageBuildRecordView[]
+  images: ImageBuildRecordView[],
+  units: ImageBuildUnitView[]
 ): Map<string, ImageBuildStatus> {
+  const currentFingerprintByScope = new Map(
+    units.map((unit) => [
+      imageBuildScopeKey(unit.scopeKind, unit.scopeId),
+      unit.repositoriesFingerprint,
+    ])
+  );
   const statusByScope = new Map<string, ImageBuildStatus>();
   for (const image of images) {
     const key = imageBuildScopeKey(image.scope_kind, image.scope_id);
+    const currentFingerprint = currentFingerprintByScope.get(key);
+    if (currentFingerprint !== undefined && image.repositories_fingerprint !== currentFingerprint) {
+      continue;
+    }
     const current = statusByScope.get(key);
     if (!current || STATUS_FOLD_PRECEDENCE[image.status] > STATUS_FOLD_PRECEDENCE[current]) {
       statusByScope.set(key, image.status);
