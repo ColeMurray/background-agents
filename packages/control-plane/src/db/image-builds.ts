@@ -23,10 +23,33 @@ const MAX_SCOPE_IDS_PER_QUERY = 50;
  * reads project this list rather than `SELECT *` so internal columns
  * (callback token, provider session/image ids) never reach a client — the
  * table carries columns the wire contract does not.
+ *
+ * `satisfies` rejects any key outside the wire contract (a leaking column is
+ * a compile error); the exhaustiveness assertion below rejects any wire field
+ * missing from the projection. The integration tests keep independent
+ * hand-written key-set pins on the runtime payload.
  */
-const STATUS_VIEW_COLUMNS =
-  "id, scope_kind, scope_id, provider, status, repositories_fingerprint, " +
-  "repository_shas, runtime_version, build_duration_seconds, error_message, created_at";
+const STATUS_VIEW_KEYS = [
+  "id",
+  "scope_kind",
+  "scope_id",
+  "provider",
+  "status",
+  "repositories_fingerprint",
+  "repository_shas",
+  "runtime_version",
+  "build_duration_seconds",
+  "error_message",
+  "created_at",
+] as const satisfies readonly (keyof ImageBuildRecordView)[];
+
+type MissingStatusViewKey = Exclude<keyof ImageBuildRecordView, (typeof STATUS_VIEW_KEYS)[number]>;
+// Fails to compile — naming the missing key — if ImageBuildRecordView gains a
+// field the projection does not carry.
+const _statusViewComplete: MissingStatusViewKey extends never ? true : MissingStatusViewKey = true;
+void _statusViewComplete;
+
+const STATUS_VIEW_COLUMNS = STATUS_VIEW_KEYS.join(", ");
 
 /** Row slice read by the callback-token auth checks. */
 interface CallbackTokenRow {
