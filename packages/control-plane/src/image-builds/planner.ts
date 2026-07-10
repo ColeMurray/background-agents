@@ -67,6 +67,7 @@ export class ImageBuildPlanner {
     buildId: string;
     scope: ImageBuildScope;
     callbackUrl: string;
+    failureCallbackUrl: string;
     correlation: CorrelationContext;
     target: ResolvedImageBuildTarget;
     callbackAuth: PlannedCallbackAuth;
@@ -87,6 +88,7 @@ export class ImageBuildPlanner {
       repositories,
       repositoriesFingerprint,
       callbackUrl: params.callbackUrl,
+      failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
       userEnvVars,
       correlation: {

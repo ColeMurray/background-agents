@@ -55,6 +55,7 @@ const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_BUILD_ID",
   "OI_REPO_IMAGE_CALLBACK_URL",
   "OI_REPO_IMAGE_CALLBACK_TOKEN",
+  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
 ] as const;
 const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
@@ -84,6 +85,7 @@ export interface TriggerVercelEnvironmentImageBuildConfig {
   /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   callbackUrl: string;
+  failureCallbackUrl: string;
   callbackToken: string;
   userEnvVars?: Record<string, string>;
   cloneToken?: string;
@@ -601,7 +603,12 @@ export class VercelSandboxProvider implements SandboxProvider {
   }
 
   private buildImageCallbackEnv(
-    config: { buildId: string; callbackUrl: string; callbackToken: string },
+    config: {
+      buildId: string;
+      callbackUrl: string;
+      failureCallbackUrl: string;
+      callbackToken: string;
+    },
     sessionId: string
   ): Record<string, string> {
     return {
@@ -609,6 +616,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
+      [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
     };
   }
 

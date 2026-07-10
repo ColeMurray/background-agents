@@ -125,6 +125,7 @@ function environmentBuildConfig() {
     environmentId: "env_flagship",
     repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     callbackUrl: "https://control-plane.test/image-builds/build-complete",
+    failureCallbackUrl: "https://control-plane.test/image-builds/build-failed",
     callbackToken: "callback-token",
   };
 }
@@ -589,6 +590,8 @@ describe("VercelSandboxProvider", () => {
           OI_REPO_IMAGE_BUILD_ID: "envimg-1",
           OI_REPO_IMAGE_CALLBACK_URL: "https://control-plane.test/image-builds/build-complete",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+          OI_REPO_IMAGE_FAILURE_CALLBACK_URL:
+            "https://control-plane.test/image-builds/build-failed",
         },
       }),
       undefined
@@ -609,6 +612,7 @@ describe("VercelSandboxProvider", () => {
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ],
       callbackUrl: "https://control-plane.test/environment-images/build-complete",
+      failureCallbackUrl: "https://control-plane.test/environment-images/build-failed",
       callbackToken: "callback-token",
       cloneToken: "clone-token",
       onProviderSessionCreated,
@@ -648,6 +652,8 @@ describe("VercelSandboxProvider", () => {
           OI_REPO_IMAGE_CALLBACK_URL:
             "https://control-plane.test/environment-images/build-complete",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+          OI_REPO_IMAGE_FAILURE_CALLBACK_URL:
+            "https://control-plane.test/environment-images/build-failed",
         },
       }),
       undefined

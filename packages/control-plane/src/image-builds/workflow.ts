@@ -153,6 +153,7 @@ export class ImageBuildWorkflow {
 
     const buildId = createBuildId(scope);
     const callbackUrl = `${this.env.WORKER_URL}/image-builds/build-complete`;
+    const failureCallbackUrl = `${this.env.WORKER_URL}/image-builds/build-failed`;
 
     // Everything before registerBuild must stay cheap and secret-free: the
     // secret-change supersede can only see builds that have a row, so the
@@ -221,6 +222,7 @@ export class ImageBuildWorkflow {
         buildId,
         scope,
         callbackUrl,
+        failureCallbackUrl,
         correlation: ctx,
         target,
         callbackAuth,

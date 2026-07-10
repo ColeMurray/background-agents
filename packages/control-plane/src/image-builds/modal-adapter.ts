@@ -21,6 +21,7 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter<ModalImageBuild
       scopeId: plan.scope.id,
       buildId: plan.buildId,
       callbackUrl: plan.callbackUrl,
+      failureCallbackUrl: plan.failureCallbackUrl,
       repositories: plan.repositories,
       userEnvVars: plan.userEnvVars,
       buildTimeoutMs: plan.buildTimeoutMs,

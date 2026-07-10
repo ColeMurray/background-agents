@@ -19,6 +19,7 @@ function createPlan(): ModalImageBuildPlan {
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
     repositoriesFingerprint: "fp-1",
     callbackUrl: "https://worker.test/image-builds/build-complete",
+    failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     buildTimeoutMs: 1_800_000,
     userEnvVars: { FOO: "bar" },
     correlation: {
@@ -42,6 +43,7 @@ describe("ModalImageBuildAdapter", () => {
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       callbackUrl: "https://worker.test/image-builds/build-complete",
+      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
       buildTimeoutMs: 1_800_000,
       userEnvVars: { FOO: "bar" },
       correlation: {

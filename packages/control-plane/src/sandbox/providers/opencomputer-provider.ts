@@ -48,6 +48,7 @@ const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_BUILD_ID",
   "OI_REPO_IMAGE_CALLBACK_URL",
   "OI_REPO_IMAGE_CALLBACK_TOKEN",
+  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
 ] as const;
 const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
@@ -60,6 +61,7 @@ export interface TriggerOpenComputerEnvironmentImageBuildConfig {
   /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   callbackUrl: string;
+  failureCallbackUrl: string;
   callbackToken: string;
   userEnvVars?: Record<string, string>;
   cloneToken?: string;
@@ -383,6 +385,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         },
         buildId: config.buildId,
         callbackUrl: config.callbackUrl,
+        failureCallbackUrl: config.failureCallbackUrl,
         callbackToken: config.callbackToken,
       });
       secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
@@ -521,6 +524,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     sessionConfig: Record<string, unknown>;
     buildId: string;
     callbackUrl: string;
+    failureCallbackUrl: string;
     callbackToken: string;
   }): PreparedOpenComputerEnvironment {
     const environment = this.prepareEnvironment(config.userEnvVars, {
@@ -538,6 +542,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
+      [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
     });
 
     if (this.providerConfig.scmProvider === "gitlab") {

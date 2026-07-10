@@ -413,6 +413,7 @@ class TestBuildImage:
                 scope_id="acme/repo",
                 repositories=REPOSITORIES,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
             )
 
@@ -446,6 +447,7 @@ class TestBuildImage:
                 scope_id="acme/repo",
                 repositories=REPOSITORIES,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
                 build_timeout_seconds=2400,
             )
@@ -475,6 +477,7 @@ class TestBuildImage:
                 scope_id="acme/repo",
                 repositories=REPOSITORIES,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
             )
 
@@ -505,6 +508,7 @@ class TestBuildImage:
                 scope_id="acme/repo",
                 repositories=REPOSITORIES,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
             )
 
@@ -555,6 +559,7 @@ class TestBuildImage:
                 scope_id="acme/repo",
                 repositories=REPOSITORIES,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
                 user_env_vars={"PIN": "123", "API_TOKEN": "abcd1234"},
             )

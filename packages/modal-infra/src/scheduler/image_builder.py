@@ -251,6 +251,7 @@ async def build_image(
     scope_id: str,
     repositories: list[dict],
     callback_url: str = "",
+    failure_callback_url: str = "",
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
     build_timeout_seconds: int | None = None,
@@ -272,6 +273,9 @@ async def build_image(
         repositories: SessionRepositoryConfig list ([{repo_owner, repo_name,
             branch}], position order, [0] = primary)
         callback_url: URL to POST success result to
+        failure_callback_url: URL to POST failure result to. Sent explicitly by
+            the control plane (mirrors client.ts buildImage) so the failure
+            route is never derived from callback_url's path.
         build_id: Build identifier from the control plane
         user_env_vars: Build secrets (merged by the control plane) injected
             into the build sandbox
@@ -282,16 +286,17 @@ async def build_image(
 
     sandbox_timeout_seconds = build_timeout_seconds or DEFAULT_BUILD_TIMEOUT_SECONDS
 
-    # Validate callback URL against allowed hosts to prevent SSRF
-    if callback_url and not validate_control_plane_url(callback_url):
-        log.error(
-            "image_build.invalid_callback_url",
-            url=callback_url,
-            build_id=build_id,
-            scope_kind=scope_kind,
-            scope_id=scope_id,
-        )
-        return
+    # Validate both callback URLs against allowed hosts to prevent SSRF.
+    for url in (callback_url, failure_callback_url):
+        if url and not validate_control_plane_url(url):
+            log.error(
+                "image_build.invalid_callback_url",
+                url=url,
+                build_id=build_id,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+            )
+            return
 
     start_time = time.time()
     manager = SandboxManager()
@@ -394,11 +399,9 @@ async def build_image(
             build_duration_s=round(build_duration, 1),
         )
 
-        if callback_url:
-            base_url = callback_url.rsplit("/", 1)[0]
-            failure_url = f"{base_url}/build-failed"
+        if failure_callback_url:
             await _callback_with_retry(
-                failure_url,
+                failure_callback_url,
                 {
                     "build_id": build_id,
                     "error": str(e),

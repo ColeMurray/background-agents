@@ -19,6 +19,7 @@ ERROR_MESSAGE_MAX_CHARS = 500
 
 BUILD_ID_ENV = "OI_REPO_IMAGE_BUILD_ID"
 CALLBACK_URL_ENV = "OI_REPO_IMAGE_CALLBACK_URL"
+FAILURE_CALLBACK_URL_ENV = "OI_REPO_IMAGE_FAILURE_CALLBACK_URL"
 CALLBACK_TOKEN_ENV = "OI_REPO_IMAGE_CALLBACK_TOKEN"
 PROVIDER_SESSION_ID_ENV = "OI_REPO_IMAGE_PROVIDER_SESSION_ID"
 
@@ -29,6 +30,9 @@ class RepoImageBuildCallback:
 
     build_id: str
     callback_url: str
+    # Sent explicitly by the control plane so the failure route is never derived
+    # from callback_url's path (mirrors client.ts buildImage).
+    failure_callback_url: str
     token: str
     provider_session_id: str = ""
     logger: StructuredLogger = field(default_factory=lambda: get_logger("repo_image_callback"))
@@ -38,6 +42,7 @@ class RepoImageBuildCallback:
         """Create a callback reporter from build-mode environment variables."""
         build_id = os.environ.get(BUILD_ID_ENV, "")
         callback_url = os.environ.get(CALLBACK_URL_ENV, "")
+        failure_callback_url = os.environ.get(FAILURE_CALLBACK_URL_ENV, "")
         token = os.environ.get(CALLBACK_TOKEN_ENV, "")
 
         if not build_id and not callback_url and not token:
@@ -49,6 +54,7 @@ class RepoImageBuildCallback:
             for name, value in (
                 (BUILD_ID_ENV, build_id),
                 (CALLBACK_URL_ENV, callback_url),
+                (FAILURE_CALLBACK_URL_ENV, failure_callback_url),
                 (CALLBACK_TOKEN_ENV, token),
             )
             if not value
@@ -60,6 +66,7 @@ class RepoImageBuildCallback:
         return cls(
             build_id=build_id,
             callback_url=callback_url,
+            failure_callback_url=failure_callback_url,
             token=token,
             provider_session_id=os.environ.get(PROVIDER_SESSION_ID_ENV, ""),
             logger=log,
@@ -101,7 +108,7 @@ class RepoImageBuildCallback:
         }
         if self.provider_session_id:
             payload["provider_session_id"] = self.provider_session_id
-        return await self._post_with_retry(build_failed_callback_url(self.callback_url), payload)
+        return await self._post_with_retry(self.failure_callback_url, payload)
 
     async def _post_with_retry(self, url: str, payload: dict[str, Any]) -> bool:
         for attempt in range(1, CALLBACK_MAX_RETRIES + 1):
@@ -146,11 +153,3 @@ class RepoImageBuildCallback:
             max_retries=CALLBACK_MAX_RETRIES,
         )
         return False
-
-
-def build_failed_callback_url(callback_url: str) -> str:
-    """Convert the success callback URL to the failure callback URL."""
-    suffix = "/build-complete"
-    if callback_url.endswith(suffix):
-        return f"{callback_url[: -len(suffix)]}/build-failed"
-    return callback_url

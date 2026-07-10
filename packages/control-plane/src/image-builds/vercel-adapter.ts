@@ -31,6 +31,7 @@ export class VercelImageBuildAdapter implements ImageBuildAdapter<VercelImageBui
       repositories: plan.repositories,
       buildId: plan.buildId,
       callbackUrl: plan.callbackUrl,
+      failureCallbackUrl: plan.failureCallbackUrl,
       callbackToken: plan.callbackToken,
       userEnvVars: plan.userEnvVars,
       cloneToken: plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.token : undefined,

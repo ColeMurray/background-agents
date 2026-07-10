@@ -39,6 +39,12 @@ interface BaseImageBuildPlan {
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
   callbackUrl: string;
+  /**
+   * Failure callback URL, sent explicitly alongside callbackUrl so the build
+   * worker never derives it from the success route's path (routes on either
+   * plane can be renamed without silently pointing failures at a 404).
+   */
+  failureCallbackUrl: string;
   buildTimeoutMs: number;
   userEnvVars?: Record<string, string>;
   correlation: CorrelationContext;

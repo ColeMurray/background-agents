@@ -228,6 +228,7 @@ describe("ModalClient", () => {
       scopeId: "acme/repo",
       buildId: "imgb-1",
       callbackUrl: "https://cp.test/image-builds/build-complete",
+      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       buildTimeoutSeconds: 2400,
     });
@@ -242,6 +243,7 @@ describe("ModalClient", () => {
       scope_id: "acme/repo",
       build_id: "imgb-1",
       callback_url: "https://cp.test/image-builds/build-complete",
+      failure_callback_url: "https://cp.test/image-builds/build-failed",
       repositories: [{ repo_owner: "acme", repo_name: "repo", branch: "develop" }],
       build_timeout_seconds: 2400,
     });
@@ -264,6 +266,7 @@ describe("ModalClient", () => {
       scopeId: "env_1",
       buildId: "imgb-1",
       callbackUrl: "https://cp.test/image-builds/build-complete",
+      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     });
 

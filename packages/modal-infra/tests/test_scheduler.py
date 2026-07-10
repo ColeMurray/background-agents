@@ -485,6 +485,7 @@ class TestBuildImageCallbackPayloads:
             await build_image.local(
                 **scope_kwargs,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="imgb-1",
             )
 
@@ -514,6 +515,7 @@ class TestBuildImageCallbackPayloads:
             await build_image.local(
                 **scope_kwargs,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="imgb-1",
             )
 
@@ -538,6 +540,7 @@ class TestBuildImageCallbackPayloads:
             await build_image.local(
                 **REPO_SCOPE_KWARGS,
                 callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="imgb-1",
             )
 

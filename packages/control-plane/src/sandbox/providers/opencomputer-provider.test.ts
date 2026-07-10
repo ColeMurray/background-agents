@@ -575,6 +575,7 @@ describe("OpenComputerSandboxProvider", () => {
       environmentId: "env_flagship",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
       callbackUrl: "https://control.example/image-builds/build-complete",
+      failureCallbackUrl: "https://control.example/image-builds/build-failed",
       callbackToken: "callback-token",
       cloneToken: "clone-token",
       userEnvVars: {
@@ -593,6 +594,7 @@ describe("OpenComputerSandboxProvider", () => {
           OI_REPO_IMAGE_BUILD_ID: "build-1",
           OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/image-builds/build-complete",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+          OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://control.example/image-builds/build-failed",
           VCS_CLONE_TOKEN: "clone-token",
           ANTHROPIC_API_KEY: "sk-repo",
         }),
@@ -639,6 +641,7 @@ describe("OpenComputerSandboxProvider", () => {
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ],
       callbackUrl: "https://control.example/environment-images/build-complete",
+      failureCallbackUrl: "https://control.example/environment-images/build-failed",
       callbackToken: "callback-token",
       cloneToken: "clone-token",
       onProviderSessionCreated,
@@ -655,6 +658,7 @@ describe("OpenComputerSandboxProvider", () => {
       OI_REPO_IMAGE_BUILD_ID: "envimg-1",
       OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/environment-images/build-complete",
       OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://control.example/environment-images/build-failed",
     });
     expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toEqual({
       branch: "main",
@@ -690,6 +694,7 @@ describe("OpenComputerSandboxProvider", () => {
         environmentId: "env_flagship",
         repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
         callbackUrl: "https://control.example/image-builds/build-complete",
+        failureCallbackUrl: "https://control.example/image-builds/build-failed",
         callbackToken: "callback-token",
       })
     ).rejects.toThrow("Failed to trigger OpenComputer environment image build");

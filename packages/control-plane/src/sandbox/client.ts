@@ -135,6 +135,8 @@ export interface BuildImageRequest {
   scopeId: string;
   buildId: string;
   callbackUrl: string;
+  /** Failure callback URL, sent explicitly so the worker never derives it from callbackUrl. */
+  failureCallbackUrl: string;
   /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   userEnvVars?: Record<string, string>;
@@ -499,6 +501,7 @@ export class ModalClient {
           scope_id: request.scopeId,
           build_id: request.buildId,
           callback_url: request.callbackUrl,
+          failure_callback_url: request.failureCallbackUrl,
           repositories: request.repositories.map(toRepositoryConfigPayload),
           user_env_vars: request.userEnvVars,
           build_timeout_seconds: request.buildTimeoutSeconds ?? null,
