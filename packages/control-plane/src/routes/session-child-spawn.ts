@@ -47,6 +47,7 @@ async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentUserId = parentSession?.userId ?? null;
+  const parentEnvironmentId = parentSession?.environmentId ?? null;
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
   const childSandboxSettings = parentSession
@@ -54,7 +55,7 @@ async function handleSpawnChild(
         env.DB,
         parentSession.repoOwner,
         parentSession.repoName,
-        parentSession.environmentId
+        parentEnvironmentId
       )
     : {};
   const maxConcurrentChildren =
@@ -145,7 +146,7 @@ async function handleSpawnChild(
     env.DB,
     spawnContext.repoOwner,
     spawnContext.repoName,
-    parentSession?.environmentId
+    parentEnvironmentId
   );
 
   const input: SessionInitInput = {
@@ -153,6 +154,7 @@ async function handleSpawnChild(
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,
     repoId: spawnContext.repoId,
+    environmentId: parentEnvironmentId,
     branch:
       spawnContext.repoOwner && spawnContext.repoName ? (spawnContext.baseBranch ?? "main") : null,
     title: body.title,
