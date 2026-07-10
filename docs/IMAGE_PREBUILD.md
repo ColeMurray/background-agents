@@ -68,9 +68,13 @@ each scope:
 - **No image** — Image building is enabled but no build has completed yet.
 - **Disabled** — Image building is turned off for this scope.
 
-The new-session picker also annotates prebuild-enabled environments with "prebuilt", "prebuild
-building", or "prebuild failed", so a broken prebuild is visible where you launch sessions, not just
-in settings.
+The new-session picker also annotates prebuild-enabled repositories and environments so a broken
+prebuild is visible where you launch sessions, not just in settings. Each option carries one of four
+states: "prebuilt" (a current-fingerprint image is ready), "prebuild building", "prebuild failed",
+or "prebuilds on" (enabled, but no build has completed for the current fingerprint yet). Options
+with prebuilds disabled are shown unannotated. A repository annotation reflects its default-branch
+prebuild state and does not change with the picker's branch selector, since a repo image is only
+built for the default branch.
 
 ---
 
