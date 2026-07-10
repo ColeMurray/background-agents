@@ -3,7 +3,11 @@ import { getServerSession } from "next-auth";
 import type { ImageBuildRecordView } from "@open-inspect/shared";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-import { excludeSupersededBuilds, type ImageBuildUnitView } from "@/lib/image-builds";
+import {
+  excludeSupersededBuilds,
+  type ImageBuildEnabledRepoView,
+  type ImageBuildUnitView,
+} from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 /**
@@ -28,16 +32,18 @@ export async function GET() {
   }
 
   try {
-    const [enabledResponse, statusResponse] = await Promise.all([
+    const [enabledResponse, enabledReposResponse, statusResponse] = await Promise.all([
       controlPlaneFetch("/image-builds/enabled"),
+      controlPlaneFetch("/image-builds/enabled-repos"),
       controlPlaneFetch("/image-builds/status"),
     ]);
 
-    if (!enabledResponse.ok || !statusResponse.ok) {
+    if (!enabledResponse.ok || !enabledReposResponse.ok || !statusResponse.ok) {
       return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 502 });
     }
 
     const enabledData = await enabledResponse.json();
+    const enabledReposData = await enabledReposResponse.json();
     const statusData = await statusResponse.json();
 
     // The enabled feed carries cron detail (fingerprint, repositories) the
@@ -46,9 +52,12 @@ export async function GET() {
       scopeKind: unit.scopeKind,
       scopeId: unit.scopeId,
     }));
+    // Persisted repo flags, unlike units, never drop a scope on a transient
+    // resolution failure — the settings toggles read these.
+    const enabledRepos = (enabledReposData.repos ?? []) as ImageBuildEnabledRepoView[];
     const images = excludeSupersededBuilds((statusData.images ?? []) as ImageBuildRecordView[]);
 
-    return NextResponse.json({ units, images });
+    return NextResponse.json({ units, enabledRepos, images });
   } catch (error) {
     console.error("Failed to fetch image builds:", error);
     return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 500 });

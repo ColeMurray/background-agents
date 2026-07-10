@@ -37,8 +37,10 @@ export function ImagesSettings() {
 
   const loading = reposLoading || imagesLoading;
 
+  // Toggle state reads the persisted flags, not `units` — the units feed
+  // resolves scopes through source control and can transiently drop a repo.
   const enabledRepos = new Set(
-    (data?.units ?? []).filter((unit) => unit.scopeKind === "repo").map((unit) => unit.scopeId)
+    (data?.enabledRepos ?? []).map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
   );
 
   // Repo scope_ids are lowercase `owner/name` pairs.

@@ -20,9 +20,22 @@ export interface ImageBuildUnitView {
   scopeId: string;
 }
 
-/** Response shape of GET /api/image-builds. */
+/** One persisted repo prebuild flag as served by GET /api/image-builds. */
+export interface ImageBuildEnabledRepoView {
+  repoOwner: string;
+  repoName: string;
+}
+
+/**
+ * Response shape of GET /api/image-builds.
+ *
+ * `units` and `enabledRepos` differ on purpose: units are resolved through
+ * source control and can transiently drop a scope, so toggle state must read
+ * the persisted `enabledRepos` flags instead.
+ */
 export interface ImageBuildsFeed {
   units: ImageBuildUnitView[];
+  enabledRepos: ImageBuildEnabledRepoView[];
   images: ImageBuildRecordView[];
 }
 

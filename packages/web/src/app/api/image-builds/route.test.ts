@@ -69,9 +69,9 @@ describe.each(routes)("$name", ({ call }) => {
 
   it("proxies to the control plane for authenticated users", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
-    // Fresh Response per call — the feed route consumes two bodies.
+    // Fresh Response per call — the feed route consumes three bodies.
     vi.mocked(controlPlaneFetch).mockImplementation(async () =>
-      Response.json({ units: [], images: [] })
+      Response.json({ units: [], repos: [], images: [] })
     );
 
     const response = await call();
@@ -133,6 +133,9 @@ describe("GET /api/image-builds feed", () => {
           minRuntimeVersion: 53,
         });
       }
+      if (path === "/image-builds/enabled-repos") {
+        return Response.json({ repos: [{ repoOwner: "acme", repoName: "web" }] });
+      }
       if (path === "/image-builds/status") {
         return Response.json({ images: [readyRepoRow, failedEnvironmentRow] });
       }
@@ -147,13 +150,36 @@ describe("GET /api/image-builds feed", () => {
         { scopeKind: "repo", scopeId: "acme/web" },
         { scopeKind: "environment", scopeId: "env_1" },
       ],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [readyRepoRow, failedEnvironmentRow],
+    });
+  });
+
+  it("serves persisted repo flags even when unit resolution dropped the repo", async () => {
+    vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
+      // The repo is enabled but transiently unresolvable, so the units feed
+      // omits it — the persisted flag must still come through.
+      if (path === "/image-builds/enabled") return Response.json({ units: [] });
+      if (path === "/image-builds/enabled-repos") {
+        return Response.json({ repos: [{ repoOwner: "acme", repoName: "web" }] });
+      }
+      return Response.json({ images: [] });
+    });
+
+    const response = await getFeed();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      units: [],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
+      images: [],
     });
   });
 
   it("filters superseded rows at the fetch boundary", async () => {
     vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
       if (path === "/image-builds/enabled") return Response.json({ units: [] });
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
       return Response.json({
         images: [
           {
@@ -175,7 +201,7 @@ describe("GET /api/image-builds feed", () => {
     const response = await getFeed();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ units: [], images: [] });
+    await expect(response.json()).resolves.toEqual({ units: [], enabledRepos: [], images: [] });
   });
 });
 

@@ -58,6 +58,7 @@ describe("ImagesSettings", () => {
   it("renders ready details from the primary repository_shas entry", () => {
     renderWithFeed({
       units: [{ scopeKind: "repo", scopeId: "acme/web" }],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [
         {
           id: "build-1",
@@ -83,6 +84,7 @@ describe("ImagesSettings", () => {
   it("renders a failed build with its error message", () => {
     renderWithFeed({
       units: [{ scopeKind: "repo", scopeId: "acme/web" }],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [
         {
           id: "build-1",
@@ -101,5 +103,27 @@ describe("ImagesSettings", () => {
 
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("clone exploded")).toBeInTheDocument();
+  });
+
+  it("keeps the toggle enabled when unit resolution transiently dropped the repo", () => {
+    // Enabled per the persisted flag but absent from `units` — toggle state
+    // must come from the flag, not the resolution-dependent units feed.
+    renderWithFeed({
+      units: [],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
+      images: [],
+    });
+
+    expect(
+      screen.getByRole("switch", { name: "Toggle pre-built images for acme/web" })
+    ).toBeChecked();
+  });
+
+  it("renders a disabled toggle for a repo with no persisted flag", () => {
+    renderWithFeed({ units: [], enabledRepos: [], images: [] });
+
+    expect(
+      screen.getByRole("switch", { name: "Toggle pre-built images for acme/web" })
+    ).not.toBeChecked();
   });
 });
