@@ -741,7 +741,7 @@ export class ImageBuildWorkflow {
   async cleanupImages(
     failedMaxAgeMs: number,
     ctx: ImageBuildWorkflowContext
-  ): Promise<{ deletedFailed: number; reapedSuperseded: number }> {
+  ): Promise<{ deletedFailed: number; reapedFailed: number; reapedSuperseded: number }> {
     return this.reaper.cleanupImages(failedMaxAgeMs, ctx);
   }
 

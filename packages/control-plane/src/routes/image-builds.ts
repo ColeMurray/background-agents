@@ -639,8 +639,8 @@ async function handleMarkStale(
 
 /**
  * POST /image-builds/cleanup
- * Delete old failed builds and reap superseded rows' provider artifacts.
- * Called by scheduler.
+ * Reap provider artifacts from failed and superseded rows, then delete old
+ * (artifact-free) failed rows. Called by scheduler.
  */
 async function handleCleanup(
   request: Request,
@@ -665,6 +665,7 @@ async function handleCleanup(
 
     logger.info("image_build.cleanup", {
       deleted: result.deletedFailed,
+      reaped_failed: result.reapedFailed,
       reaped_superseded: result.reapedSuperseded,
       max_age_seconds: maxAgeMs / MS_PER_SECOND,
       request_id: ctx.request_id,
@@ -674,6 +675,7 @@ async function handleCleanup(
     return json({
       ok: true,
       deleted: result.deletedFailed,
+      reapedFailed: result.reapedFailed,
       reapedSuperseded: result.reapedSuperseded,
     });
   } catch (e) {

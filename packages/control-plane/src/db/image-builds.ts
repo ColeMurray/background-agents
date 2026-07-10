@@ -52,8 +52,8 @@ export interface ImageBuildRow extends ImageBuildRecordView {
   callback_token_used_at: number | null;
 }
 
-/** Superseded row carrying its provider artifact (if any) for the reaper. */
-export interface SupersededImageBuildRow {
+/** A row carrying its provider artifact (if any) for the reaper to reclaim. */
+export interface ReapableImageBuildRow {
   id: string;
   scope_kind: ImageBuildScopeKind;
   scope_id: string;
@@ -663,7 +663,7 @@ export class ImageBuildStore {
    * (mark-ready replacing an older ready) and out-of-band (entity delete,
    * secret change), so cleanup sweeps whatever is left.
    */
-  async getSupersededImages(limit: number): Promise<SupersededImageBuildRow[]> {
+  async getSupersededImages(limit: number): Promise<ReapableImageBuildRow[]> {
     const result = await this.db
       .prepare(
         `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
@@ -671,9 +671,50 @@ export class ImageBuildStore {
          ORDER BY created_at ASC LIMIT ?`
       )
       .bind(limit)
-      .all<SupersededImageBuildRow>();
+      .all<ReapableImageBuildRow>();
 
     return result.results || [];
+  }
+
+  /**
+   * Failed rows still pointing at a provider artifact, for the reaper to
+   * reclaim. A restore-failed spawn flips a ready row to failed while it still
+   * carries a live provider_image_id (Modal snapshots never expire), so the
+   * artifact must be deleted before the age-based sweep may remove the row.
+   * The failed row itself is kept — its error_message stays visible in the
+   * status feeds — until clearFailedImageArtifact nulls its artifact columns.
+   */
+  async getFailedImagesWithArtifacts(limit: number): Promise<ReapableImageBuildRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
+         FROM image_builds WHERE status = 'failed' AND provider_image_id IS NOT NULL
+         ORDER BY created_at ASC LIMIT ?`
+      )
+      .bind(limit)
+      .all<ReapableImageBuildRow>();
+
+    return result.results || [];
+  }
+
+  /**
+   * Terminal reaper action for a failed row whose provider artifact was
+   * deleted: null the artifact columns while keeping status='failed' and its
+   * error_message. Scoped to status='failed' so a concurrent rebuild that
+   * already superseded/replaced the row can never have its live artifact
+   * cleared. Idempotent — a row with no artifact is not re-selected by
+   * getFailedImagesWithArtifacts.
+   */
+  async clearFailedImageArtifact(imageBuildId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE image_builds SET provider_image_id = NULL, provider_session_id = NULL
+         WHERE id = ? AND status = 'failed'`
+      )
+      .bind(imageBuildId)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async markStaleBuildsAsFailed(maxAgeMs: number): Promise<number> {
@@ -688,10 +729,19 @@ export class ImageBuildStore {
     return result.meta?.changes ?? 0;
   }
 
+  /**
+   * Age out failed rows once they hold no provider artifact. The
+   * provider_image_id IS NULL guard keeps a restore-failed row (which carries
+   * a live artifact) from being hard-deleted before the reaper reclaims the
+   * artifact and nulls its columns, which would otherwise orphan the snapshot.
+   */
   async deleteOldFailedBuilds(maxAgeMs: number): Promise<number> {
     const cutoff = Date.now() - maxAgeMs;
     const result = await this.db
-      .prepare("DELETE FROM image_builds WHERE status = 'failed' AND created_at < ?")
+      .prepare(
+        `DELETE FROM image_builds
+         WHERE status = 'failed' AND provider_image_id IS NULL AND created_at < ?`
+      )
       .bind(cutoff)
       .run();
 

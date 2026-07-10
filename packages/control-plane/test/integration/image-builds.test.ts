@@ -19,9 +19,13 @@ import { computeRepositoriesFingerprint } from "../../src/image-builds/fingerpri
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   repoImageBuildScope,
+  type ImageBuildProvider,
   type ImageBuildScope,
 } from "../../src/image-builds/model";
+import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
+import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
+import type { AnyImageBuildAdapter, DeleteImageInput } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
 import { cleanD1Tables } from "./cleanup";
 
@@ -526,6 +530,17 @@ describe("Image builds", () => {
         status: "superseded",
         providerImageId: "im-artifact",
       });
+      // Restore-failed row carrying a live artifact and old enough to age out:
+      // with the adapter unconfigured the artifact can't be reaped, so the row
+      // must NOT be hard-deleted (that was the leak — the snapshot would be
+      // orphaned forever). It survives, artifact intact, for a later pass.
+      await seedImageRow({
+        id: "old-failed-with-artifact",
+        environmentId,
+        status: "failed",
+        providerImageId: "im-restore-orphan",
+        createdAt: Date.now() - 100_000_000,
+      });
 
       const response = await SELF.fetch(`${BASE}/image-builds/cleanup`, {
         method: "POST",
@@ -534,12 +549,59 @@ describe("Image builds", () => {
       });
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as { deleted: number; reapedSuperseded: number };
+      const body = (await response.json()) as {
+        deleted: number;
+        reapedFailed: number;
+        reapedSuperseded: number;
+      };
       expect(body.deleted).toBe(1);
+      expect(body.reapedFailed).toBe(0);
       expect(body.reapedSuperseded).toBe(1);
       expect(await getRow("old-failed")).toBeNull();
       expect(await getRow("bare-superseded")).toBeNull();
       expect((await getRow("artifact-superseded"))?.status).toBe("superseded");
+      const survivor = await getRow("old-failed-with-artifact");
+      expect(survivor?.status).toBe("failed");
+      expect(survivor?.provider_image_id).toBe("im-restore-orphan");
+    });
+
+    it("deleteOldFailedBuilds ages out only artifact-free failed rows", async () => {
+      const environmentId = await seedEnvironment();
+      const store = new ImageBuildStore(env.DB);
+      await seedImageRow({
+        id: "clean-old",
+        environmentId,
+        status: "failed",
+        createdAt: Date.now() - 100_000_000,
+      });
+      await seedImageRow({
+        id: "artifact-old",
+        environmentId,
+        status: "failed",
+        providerImageId: "im-live",
+        createdAt: Date.now() - 100_000_000,
+      });
+
+      expect(await store.deleteOldFailedBuilds(86_400_000)).toBe(1);
+      expect(await getRow("clean-old")).toBeNull();
+      // Still points at a live snapshot — the reaper must clear it first.
+      expect((await getRow("artifact-old"))?.status).toBe("failed");
+
+      // getFailedImagesWithArtifacts exposes exactly the artifact-bearing row.
+      const reapable = await store.getFailedImagesWithArtifacts(25);
+      expect(reapable.map((r) => r.id)).toEqual(["artifact-old"]);
+
+      // clearFailedImageArtifact nulls the columns, keeps status/error_message,
+      // and is idempotent (a cleared row is no longer selected).
+      expect(await store.clearFailedImageArtifact("artifact-old")).toBe(true);
+      const cleared = await getRow("artifact-old");
+      expect(cleared?.status).toBe("failed");
+      expect(cleared?.provider_image_id).toBeNull();
+      expect(await store.getFailedImagesWithArtifacts(25)).toEqual([]);
+
+      // Now artifact-free and old — the age sweep removes it.
+      expect(await store.deleteOldFailedBuilds(86_400_000)).toBe(1);
+      expect(await getRow("artifact-old")).toBeNull();
     });
 
     it("rejects non-numeric max_age_seconds instead of treating it as 0", async () => {
@@ -596,6 +658,116 @@ describe("Image builds", () => {
         status: "failed",
         scope_id: environmentId,
       });
+    });
+  });
+
+  describe("cleanup reaper end-to-end over real D1", () => {
+    /**
+     * Stub factory standing in for the unconfigured provider adapter: records
+     * every deleted artifact and throws for a nominated "stuck" id so the
+     * best-effort retry path is exercised against real rows.
+     */
+    function stubFactory(opts?: { stuckImageId?: string }): {
+      factory: ImageBuildAdapterFactory;
+      deleted: string[];
+    } {
+      const deleted: string[] = [];
+      const adapter = {
+        async deleteImage({ image }: DeleteImageInput) {
+          if (image.providerImageId === opts?.stuckImageId) throw new Error("provider 500");
+          deleted.push(image.providerImageId);
+        },
+      } as unknown as AnyImageBuildAdapter;
+      const factory: ImageBuildAdapterFactory = {
+        create: (_provider: ImageBuildProvider) => adapter,
+      } as ImageBuildAdapterFactory;
+      return { factory, deleted };
+    }
+
+    const ctx = { request_id: "req-reap", trace_id: "trace-reap" };
+
+    it("reaps failed and superseded artifacts, retains failed rows, deletes aged-out rows", async () => {
+      const environmentId = await seedEnvironment();
+      const old = Date.now() - 100_000_000;
+
+      await seedImageRow({
+        id: "e2e-superseded",
+        environmentId,
+        status: "superseded",
+        providerImageId: "im-superseded",
+      });
+      await seedImageRow({ id: "e2e-superseded-bare", environmentId, status: "superseded" });
+      // Restore-failed row (fresh) carrying a live artifact.
+      await seedImageRow({
+        id: "e2e-failed-artifact",
+        environmentId,
+        status: "failed",
+        providerImageId: "im-restore",
+      });
+      await env.DB.prepare(`UPDATE image_builds SET error_message = ? WHERE id = ?`)
+        .bind("restore failed at spawn: image expired", "e2e-failed-artifact")
+        .run();
+      // Failed row whose artifact delete fails — artifact must not be lost.
+      await seedImageRow({
+        id: "e2e-failed-stuck",
+        environmentId,
+        status: "failed",
+        providerImageId: "im-stuck",
+      });
+      // Artifact-free failed rows: old ages out, fresh survives.
+      await seedImageRow({ id: "e2e-failed-old", environmentId, status: "failed", createdAt: old });
+      await seedImageRow({ id: "e2e-failed-fresh", environmentId, status: "failed" });
+
+      const { factory, deleted } = stubFactory({ stuckImageId: "im-stuck" });
+      const reaper = new ImageBuildReaper(new ImageBuildStore(env.DB), factory);
+
+      const result = await reaper.cleanupImages(86_400_000, ctx);
+
+      expect(result).toEqual({ deletedFailed: 1, reapedFailed: 1, reapedSuperseded: 2 });
+      expect(deleted.sort()).toEqual(["im-restore", "im-superseded"]);
+
+      // Superseded rows: artifact deleted then row removed.
+      expect(await getRow("e2e-superseded")).toBeNull();
+      expect(await getRow("e2e-superseded-bare")).toBeNull();
+
+      // Failed-with-artifact: artifact reclaimed, row kept as failed with its
+      // error_message, artifact columns nulled.
+      const reaped = await getRow("e2e-failed-artifact");
+      expect(reaped?.status).toBe("failed");
+      expect(reaped?.provider_image_id).toBeNull();
+      expect(reaped?.error_message).toBe("restore failed at spawn: image expired");
+
+      // Stuck failed row: artifact NOT lost — still on the row for the next tick.
+      const stuck = await getRow("e2e-failed-stuck");
+      expect(stuck?.status).toBe("failed");
+      expect(stuck?.provider_image_id).toBe("im-stuck");
+
+      // Artifact-free failed rows age out by cutoff only.
+      expect(await getRow("e2e-failed-old")).toBeNull();
+      expect((await getRow("e2e-failed-fresh"))?.status).toBe("failed");
+    });
+
+    it("is idempotent: a second pass reaps nothing new", async () => {
+      const environmentId = await seedEnvironment();
+      await seedImageRow({
+        id: "idem-failed-artifact",
+        environmentId,
+        status: "failed",
+        providerImageId: "im-idem",
+      });
+
+      const first = stubFactory();
+      const reaper = new ImageBuildReaper(new ImageBuildStore(env.DB), first.factory);
+      await reaper.cleanupImages(86_400_000, ctx);
+      expect(first.deleted).toEqual(["im-idem"]);
+
+      const second = stubFactory();
+      const reaper2 = new ImageBuildReaper(new ImageBuildStore(env.DB), second.factory);
+      const result = await reaper2.cleanupImages(86_400_000, ctx);
+
+      expect(second.deleted).toEqual([]);
+      expect(result.reapedFailed).toBe(0);
+      expect((await getRow("idem-failed-artifact"))?.provider_image_id).toBeNull();
     });
   });
 
