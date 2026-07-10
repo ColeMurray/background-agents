@@ -110,10 +110,14 @@ async def test_build_forwards_scope_and_repositories(monkeypatch):
         {"repositories": None},
         {"repositories": []},
         {"repositories": [{"repo_owner": "acme"}]},
+        {"repositories": [{"repo_owner": "acme", "repo_name": "repo"}]},
+        {"repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": ""}]},
+        {"repositories": [REPOSITORIES[0], {"repo_owner": "acme", "repo_name": "api"}]},
     ],
 )
 async def test_build_requires_core_fields(monkeypatch, overrides):
-    """Validation rejects missing build_id/callback_url/repositories before spawning."""
+    """Validation rejects missing build_id/callback_url and any repository
+    entry lacking repo_owner/repo_name/branch before spawning."""
     captured = {}
     _patch_auth(monkeypatch)
     _patch_build_image(monkeypatch, captured)

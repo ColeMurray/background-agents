@@ -316,7 +316,9 @@ async def build_image(
         handle = await manager.create_build_sandbox(
             repo_owner=primary.get("repo_owner", ""),
             repo_name=primary.get("repo_name", ""),
-            default_branch=primary.get("branch") or "main",
+            # Validated non-empty by the api_build_image endpoint; no silent
+            # default — a missing branch must fail loudly, not build "main".
+            default_branch=primary["branch"],
             clone_token=clone_token,
             user_env_vars=user_env_vars,
             timeout_seconds=sandbox_timeout_seconds,

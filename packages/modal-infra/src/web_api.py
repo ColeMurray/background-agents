@@ -528,10 +528,11 @@ async def api_build_image(
                 not isinstance(entry, dict)
                 or not entry.get("repo_owner")
                 or not entry.get("repo_name")
+                or not entry.get("branch")
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail="repositories entries require repo_owner and repo_name",
+                    detail="repositories entries require repo_owner, repo_name, and branch",
                 )
 
         function_timeout = build_function_timeout_seconds(build_timeout_seconds)
