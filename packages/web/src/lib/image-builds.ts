@@ -55,6 +55,24 @@ export function imageBuildScopeKey(scopeKind: ImageBuildScopeKind, scopeId: stri
   return `${scopeKind}:${scopeId}`;
 }
 
+/**
+ * The repo scope id (lowercased owner/name). Repo scopes are keyed lowercase in
+ * the feed, so both the enabled-set fold and per-repo status lookups must fold
+ * case through here to line up with folded scope ids.
+ */
+export function repoImageBuildScopeId(repoOwner: string, repoName: string): string {
+  return `${repoOwner}/${repoName}`.toLowerCase();
+}
+
+/**
+ * The set of prebuild-enabled repo scope ids from the feed's persisted flags.
+ * Reads `enabledRepos` (not `units`) so a transiently dropped scope still reads
+ * as enabled.
+ */
+export function foldEnabledRepoScopeIds(enabledRepos: ImageBuildEnabledRepoView[]): Set<string> {
+  return new Set(enabledRepos.map((flag) => repoImageBuildScopeId(flag.repoOwner, flag.repoName)));
+}
+
 const STATUS_FOLD_PRECEDENCE: Record<ImageBuildStatus, number> = {
   ready: 3,
   building: 2,

@@ -9,8 +9,10 @@ import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import {
   IMAGE_BUILDS_KEY,
+  foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
   imageBuildScopeKey,
+  repoImageBuildScopeId,
   type ImageBuildsFeed,
 } from "@/lib/image-builds";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
@@ -80,19 +82,18 @@ export function describeEnvironment(
  * a session on any other branch fingerprint-misses to the base image. This
  * annotation describes the default-branch prebuild state and is intentionally
  * static: it does not react to the picker's branch selector (which itself
- * defaults to the default branch). Enablement comes from the persisted
- * `enabledRepos` flags, and both it and the fold-map lookup use the lowercased
- * fullName because the feed keys repo scopes lowercase.
+ * defaults to the default branch). Enablement and the fold-map lookup share the
+ * repo scope id (lowercased owner/name) via `repoImageBuildScopeId`.
  */
 export function describeRepository(
   repo: Repo,
   imageStatusByScope: Map<string, ImageBuildStatus>,
-  prebuildEnabledRepoKeys: Set<string>
+  prebuildEnabledRepoScopeIds: Set<string>
 ): string {
   const base = `${repo.owner}${repo.private ? " • private" : ""}`;
-  const key = repo.fullName.toLowerCase();
-  const status = imageStatusByScope.get(imageBuildScopeKey("repo", key));
-  return withAnnotation(base, prebuildAnnotation(prebuildEnabledRepoKeys.has(key), status));
+  const scopeId = repoImageBuildScopeId(repo.owner, repo.name);
+  const status = imageStatusByScope.get(imageBuildScopeKey("repo", scopeId));
+  return withAnnotation(base, prebuildAnnotation(prebuildEnabledRepoScopeIds.has(scopeId), status));
 }
 
 /** Render contract for SessionTargetPicker: the target/branch/multi-select controls. */
@@ -158,16 +159,10 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     () => foldImageBuildStatusByScope(imageBuildsData?.images ?? [], imageBuildsData?.units ?? []),
     [imageBuildsData]
   );
-  // Persisted repo prebuild flags, keyed by lowercased fullName to match the
-  // fold map. Enablement reads these flags (not `units`) so a transiently
-  // dropped scope still annotates as enabled.
-  const prebuildEnabledRepoKeys = useMemo(
-    () =>
-      new Set(
-        (imageBuildsData?.enabledRepos ?? []).map((flag) =>
-          `${flag.repoOwner}/${flag.repoName}`.toLowerCase()
-        )
-      ),
+  // Persisted repo prebuild scope ids, folded next to the feed shape so this
+  // hook doesn't re-encode the lowercased-repo-key invariant.
+  const prebuildEnabledRepoScopeIds = useMemo(
+    () => foldEnabledRepoScopeIds(imageBuildsData?.enabledRepos ?? []),
     [imageBuildsData]
   );
 
@@ -276,7 +271,7 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     ...repos.map((repo) => ({
       value: repo.fullName,
       label: repo.name,
-      description: describeRepository(repo, imageStatusByScope, prebuildEnabledRepoKeys),
+      description: describeRepository(repo, imageStatusByScope, prebuildEnabledRepoScopeIds),
     })),
   ];
   // One unified list: environments (when any exist) alongside the repositories.

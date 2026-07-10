@@ -127,6 +127,12 @@ describe("describeRepository", () => {
     expect(describeRepository(repo(), new Map(), enabled)).toBe("acme · prebuilds on");
   });
 
+  it("falls back to prebuilds on for a superseded scope", () => {
+    expect(describeRepository(repo(), repoStatusMap("superseded"), enabled)).toBe(
+      "acme · prebuilds on"
+    );
+  });
+
   it("looks up the fold map with a lowercased fullName", () => {
     const mixedCase = repo({ fullName: "Acme/Web", owner: "Acme", name: "Web" });
     const enabledMixed = new Set(["acme/web"]);
