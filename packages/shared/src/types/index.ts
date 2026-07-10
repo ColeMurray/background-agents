@@ -150,6 +150,15 @@ export type {
   ListAutomationInvocationsResponse,
 } from "./automations";
 
+export type {
+  ImageBuildStatus,
+  ImageBuildScopeKind,
+  RepositoryShaEntry,
+  ImageBuildRecordView,
+  ImageBuildCompleteCallback,
+  ImageBuildFailedCallback,
+} from "./image-builds";
+
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {
   AnalyticsDays,
