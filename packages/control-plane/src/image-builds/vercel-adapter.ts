@@ -25,8 +25,8 @@ export class VercelImageBuildAdapter implements ImageBuildAdapter<VercelImageBui
 
   async startBuild(plan: VercelImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
     await this.provider.triggerEnvironmentImageBuild({
-      // The provider API is keyed by environment id; scope.id is that id for
-      // every scope kind that exists until the unified data plane lands.
+      // The provider build API is keyed by environmentId (used only for
+      // sandbox naming/labels); scope.id fills it for every scope kind.
       environmentId: plan.scope.id,
       repositories: plan.repositories,
       buildId: plan.buildId,

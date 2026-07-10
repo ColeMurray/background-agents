@@ -7,13 +7,9 @@
  * - The repo prebuild toggle (the repo_metadata flag write)
  * - Enabled-scope and status queries for the rebuild cron
  * - Maintenance operations (stale builds, cleanup + superseded-artifact reaping)
- *
- * The `/environment-images/*` legacy aliases keep the deployed Modal cron,
- * in-flight builds, and the web BFF working until the Modal cutover; each is
- * marked below and removed with it.
  */
 
-import type { ImageBuildScopeKind, RepositoryShaEntry } from "@open-inspect/shared";
+import type { RepositoryShaEntry } from "@open-inspect/shared";
 import { ImageBuildStore, type ImageBuildRow } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
@@ -362,7 +358,6 @@ async function triggerBuildForScope(
 /**
  * POST /image-builds/trigger/environment/:id
  * Trigger a build for an environment scope (cron, save-hooks, manual rebuild).
- * Also serves the legacy POST /environment-images/trigger/:id alias.
  */
 async function handleTriggerEnvironmentBuild(
   _request: Request,
@@ -532,45 +527,6 @@ async function handleGetStatus(
 }
 
 /**
- * GET /environment-images/status[?environment_id=...]
- * Legacy alias for handleGetStatus preserving the old row shape: consumers
- * (deployed Modal cron, web BFF) read `environment_id` off each row.
- */
-async function handleGetStatusLegacy(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const providerError = requireImageBuilds(env);
-  if (providerError) return providerError;
-
-  const dbError = requireDb(env);
-  if (dbError) return dbError;
-
-  const environmentId = new URL(request.url).searchParams.get("environment_id");
-  const scope: ImageBuildScope | null = environmentId
-    ? { kind: "environment", id: environmentId }
-    : null;
-
-  try {
-    // Environment rows only: repo-scope rows would surface a bogus
-    // environment_id to the alias's consumers (deployed cron, web BFF).
-    const rows = (await readStatusRows(env, scope)).filter(
-      (row) => row.scope_kind === ("environment" satisfies ImageBuildScopeKind)
-    );
-    return json({ images: rows.map((row) => ({ ...row, environment_id: row.scope_id })) });
-  } catch (e) {
-    logger.error("image_build.status_error", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to get image status", 500);
-  }
-}
-
-/**
  * GET /image-builds/enabled
  * Prebuild-enabled scopes with their current repositories and fingerprint,
  * plus the runtime floor — everything the cron's trigger checks need, so the
@@ -636,46 +592,6 @@ async function handleGetEnabledRepos(
       trace_id: ctx.trace_id,
     });
     return error("Failed to get enabled repos", 500);
-  }
-}
-
-/**
- * GET /environment-images/enabled
- * Legacy alias for handleGetEnabledUnits preserving the old response shape
- * ({environments: [{id, name, ...}]}), which the deployed Modal cron reads.
- */
-async function handleGetEnabledEnvironmentsLegacy(
-  _request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const providerError = requireImageBuilds(env);
-  if (providerError) return providerError;
-
-  const dbError = requireDb(env);
-  if (dbError) return dbError;
-
-  try {
-    const units = await listEnabledScopeUnits(env);
-    return json({
-      environments: units
-        .filter((unit) => unit.scope.kind === ("environment" satisfies ImageBuildScopeKind))
-        .map((unit) => ({
-          id: unit.scope.id,
-          name: unit.name,
-          repositoriesFingerprint: unit.repositoriesFingerprint,
-          repositories: unit.repositories,
-        })),
-      minRuntimeVersion: MIN_COMPATIBLE_RUNTIME_VERSION,
-    });
-  } catch (e) {
-    logger.error("image_build.enabled_error", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to get enabled environments", 500);
   }
 }
 
@@ -819,48 +735,6 @@ export const imageBuildRoutes: Route[] = [
   {
     method: "POST",
     pattern: parsePattern("/image-builds/cleanup"),
-    handler: handleCleanup,
-  },
-  // legacy alias — removed with the Modal cutover (slice 4)
-  {
-    method: "POST",
-    pattern: parsePattern("/environment-images/build-complete"),
-    handler: handleBuildComplete,
-  },
-  // legacy alias — removed with the Modal cutover (slice 4)
-  {
-    method: "POST",
-    pattern: parsePattern("/environment-images/build-failed"),
-    handler: handleBuildFailed,
-  },
-  // legacy alias — removed with the Modal cutover (slice 4)
-  {
-    method: "POST",
-    pattern: parsePattern("/environment-images/trigger/:id"),
-    handler: handleTriggerEnvironmentBuild,
-  },
-  // legacy alias — removed with the Modal cutover (slice 4)
-  {
-    method: "GET",
-    pattern: parsePattern("/environment-images/status"),
-    handler: handleGetStatusLegacy,
-  },
-  // legacy alias — removed with the Modal cutover (slice 4)
-  {
-    method: "GET",
-    pattern: parsePattern("/environment-images/enabled"),
-    handler: handleGetEnabledEnvironmentsLegacy,
-  },
-  // legacy alias — removed with the Modal cutover (slice 4)
-  {
-    method: "POST",
-    pattern: parsePattern("/environment-images/mark-stale"),
-    handler: handleMarkStale,
-  },
-  // legacy alias — removed with the Modal cutover (slice 4)
-  {
-    method: "POST",
-    pattern: parsePattern("/environment-images/cleanup"),
     handler: handleCleanup,
   },
 ];

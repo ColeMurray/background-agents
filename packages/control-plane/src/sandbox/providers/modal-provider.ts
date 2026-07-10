@@ -5,6 +5,7 @@
  * enabling unit testing and future provider abstraction.
  */
 
+import type { ImageBuildScopeKind } from "@open-inspect/shared";
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
@@ -23,36 +24,12 @@ import {
 
 const MS_PER_SECOND = 1000;
 
-export interface TriggerModalRepoImageBuildConfig {
+export interface TriggerModalImageBuildConfig {
   buildId: string;
-  repoOwner: string;
-  repoName: string;
-  defaultBranch: string;
-  callbackUrl: string;
-  userEnvVars?: Record<string, string>;
-  /**
-   * Build sandbox lifetime, in milliseconds. Already capped by the trigger.
-   * Omitted -> Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
-   */
-  buildTimeoutMs?: number;
-  correlation?: CorrelationContext;
-}
-
-export interface TriggerModalRepoImageBuildResult {
-  buildId: string;
-  status: string;
-}
-
-export interface ModalRepoImageBuildProvider {
-  triggerRepoImageBuild(
-    config: TriggerModalRepoImageBuildConfig
-  ): Promise<TriggerModalRepoImageBuildResult>;
-  deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
-}
-
-export interface TriggerModalEnvironmentImageBuildConfig {
-  buildId: string;
-  environmentId: string;
+  /** Scope kind ("repo" | "environment") — Modal accepts it for logging only. */
+  scopeKind: ImageBuildScopeKind;
+  /** Scope id (lowercase owner/name or environment id) — logging only. */
+  scopeId: string;
   /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   callbackUrl: string;
@@ -65,15 +42,13 @@ export interface TriggerModalEnvironmentImageBuildConfig {
   correlation?: CorrelationContext;
 }
 
-export interface TriggerModalEnvironmentImageBuildResult {
+export interface TriggerModalImageBuildResult {
   buildId: string;
   status: string;
 }
 
-export interface ModalEnvironmentImageBuildProvider {
-  triggerEnvironmentImageBuild(
-    config: TriggerModalEnvironmentImageBuildConfig
-  ): Promise<TriggerModalEnvironmentImageBuildResult>;
+export interface ModalImageBuildProvider {
+  triggerImageBuild(config: TriggerModalImageBuildConfig): Promise<TriggerModalImageBuildResult>;
   deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
 }
 
@@ -97,9 +72,7 @@ export interface ModalEnvironmentImageBuildProvider {
  * }
  * ```
  */
-export class ModalSandboxProvider
-  implements SandboxProvider, ModalRepoImageBuildProvider, ModalEnvironmentImageBuildProvider
-{
+export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildProvider {
   readonly name = "modal";
 
   readonly capabilities: SandboxProviderCapabilities = {
@@ -254,57 +227,16 @@ export class ModalSandboxProvider
   }
 
   /**
-   * Trigger a Modal repo-image build.
+   * Trigger a Modal scope-image build (design §4).
    */
-  async triggerRepoImageBuild(
-    config: TriggerModalRepoImageBuildConfig
-  ): Promise<TriggerModalRepoImageBuildResult> {
+  async triggerImageBuild(
+    config: TriggerModalImageBuildConfig
+  ): Promise<TriggerModalImageBuildResult> {
     try {
-      const result = await this.client.buildRepoImage(
+      const result = await this.client.buildImage(
         {
-          repoOwner: config.repoOwner,
-          repoName: config.repoName,
-          defaultBranch: config.defaultBranch,
-          buildId: config.buildId,
-          callbackUrl: config.callbackUrl,
-          userEnvVars: config.userEnvVars,
-          buildTimeoutSeconds:
-            config.buildTimeoutMs === undefined
-              ? undefined
-              : Math.ceil(config.buildTimeoutMs / MS_PER_SECOND),
-        },
-        config.correlation
-      );
-
-      return {
-        buildId: result.buildId,
-        status: result.status,
-      };
-    } catch (error) {
-      if (error instanceof ModalApiError) {
-        throw this.classifyErrorWithStatus(
-          `Repo image build failed with HTTP ${error.status}: ${error.message}`,
-          error.status,
-          error
-        );
-      }
-      if (error instanceof SandboxProviderError) {
-        throw error;
-      }
-      throw this.classifyError("Failed to trigger Modal repo image build", error);
-    }
-  }
-
-  /**
-   * Trigger a Modal environment-image build (design §7.3).
-   */
-  async triggerEnvironmentImageBuild(
-    config: TriggerModalEnvironmentImageBuildConfig
-  ): Promise<TriggerModalEnvironmentImageBuildResult> {
-    try {
-      const result = await this.client.buildEnvironmentImage(
-        {
-          environmentId: config.environmentId,
+          scopeKind: config.scopeKind,
+          scopeId: config.scopeId,
           buildId: config.buildId,
           callbackUrl: config.callbackUrl,
           repositories: config.repositories,
@@ -324,7 +256,7 @@ export class ModalSandboxProvider
     } catch (error) {
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(
-          `Environment image build failed with HTTP ${error.status}: ${error.message}`,
+          `Image build failed with HTTP ${error.status}: ${error.message}`,
           error.status,
           error
         );
@@ -332,7 +264,7 @@ export class ModalSandboxProvider
       if (error instanceof SandboxProviderError) {
         throw error;
       }
-      throw this.classifyError("Failed to trigger Modal environment image build", error);
+      throw this.classifyError("Failed to trigger Modal image build", error);
     }
   }
 

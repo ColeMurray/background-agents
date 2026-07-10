@@ -286,7 +286,6 @@ describe("listEnabledScopeUnits", () => {
     expect(units[0].scope).toEqual({ kind: "environment", id: "env_1" });
     expect(units[1]).toEqual({
       scope: { kind: "repo", id: "acme/web" },
-      name: null,
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: await computeRepositoriesFingerprint([
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },

@@ -41,8 +41,6 @@ export {
   VercelSandboxProvider,
   createVercelProvider,
   type VercelProviderConfig,
-  type TriggerVercelRepoImageBuildConfig,
-  type TriggerVercelRepoImageBuildResult,
 } from "./providers/vercel/provider";
 export {
   VercelSandboxClient,
@@ -88,7 +86,6 @@ export {
 export {
   resolveSandboxBackendName,
   isModalSandboxBackend,
-  supportsRepoImageBackend,
   type SandboxBackendName,
 } from "./provider-name";
 

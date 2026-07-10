@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ModalEnvironmentImageBuildProvider } from "../sandbox/providers/modal-provider";
+import type { ModalImageBuildProvider } from "../sandbox/providers/modal-provider";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ModalImageBuildPlan } from "./types";
 
-function createProvider(): ModalEnvironmentImageBuildProvider {
+function createProvider(): ModalImageBuildProvider {
   return {
-    triggerEnvironmentImageBuild: vi.fn(async () => ({ buildId: "build-1", status: "building" })),
+    triggerImageBuild: vi.fn(async () => ({ buildId: "build-1", status: "building" })),
     deleteProviderImage: vi.fn(async () => undefined),
   };
 }
@@ -36,8 +36,9 @@ describe("ModalImageBuildAdapter", () => {
 
     await adapter.startBuild(plan, { bindProviderSession: vi.fn() });
 
-    expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith({
-      environmentId: "acme/repo",
+    expect(provider.triggerImageBuild).toHaveBeenCalledWith({
+      scopeKind: "repo",
+      scopeId: "acme/repo",
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       callbackUrl: "https://worker.test/image-builds/build-complete",

@@ -212,28 +212,40 @@ describe("ModalClient", () => {
     ]);
   });
 
-  it("threads the build timeout into the repo image build request body", async () => {
+  it("posts image builds to the single api-build-image endpoint with scope fields", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(
         new Response(
-          JSON.stringify({ success: true, data: { build_id: "img-1", status: "building" } }),
+          JSON.stringify({ success: true, data: { build_id: "imgb-1", status: "building" } }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
       );
 
     const client = createModalClient("secret", "acme", "prod-web");
-    await client.buildRepoImage({
-      repoOwner: "acme",
-      repoName: "repo",
-      defaultBranch: "main",
-      buildId: "img-1",
-      callbackUrl: "https://cp.test/repo-images/build-complete",
+    const result = await client.buildImage({
+      scopeKind: "repo",
+      scopeId: "acme/repo",
+      buildId: "imgb-1",
+      callbackUrl: "https://cp.test/image-builds/build-complete",
+      repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       buildTimeoutSeconds: 2400,
     });
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://acme-prod-web--open-inspect-api-build-image.modal.run",
+      expect.any(Object)
+    );
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
-    expect(body.build_timeout_seconds).toBe(2400);
+    expect(body).toEqual({
+      scope_kind: "repo",
+      scope_id: "acme/repo",
+      build_id: "imgb-1",
+      callback_url: "https://cp.test/image-builds/build-complete",
+      repositories: [{ repo_owner: "acme", repo_name: "repo", branch: "develop" }],
+      build_timeout_seconds: 2400,
+    });
+    expect(result).toEqual({ buildId: "imgb-1", status: "building" });
   });
 
   it("sends a null build timeout when unset so Modal applies its default", async () => {
@@ -241,18 +253,18 @@ describe("ModalClient", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(
         new Response(
-          JSON.stringify({ success: true, data: { build_id: "img-1", status: "building" } }),
+          JSON.stringify({ success: true, data: { build_id: "imgb-1", status: "building" } }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
       );
 
     const client = createModalClient("secret", "acme", "prod-web");
-    await client.buildRepoImage({
-      repoOwner: "acme",
-      repoName: "repo",
-      defaultBranch: "main",
-      buildId: "img-1",
-      callbackUrl: "https://cp.test/repo-images/build-complete",
+    await client.buildImage({
+      scopeKind: "environment",
+      scopeId: "env_1",
+      buildId: "imgb-1",
+      callbackUrl: "https://cp.test/image-builds/build-complete",
+      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);

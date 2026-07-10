@@ -62,10 +62,6 @@ const PUBLIC_ROUTES: RegExp[] = [
   // for provider_image mode, per-build bearer token for provider_session).
   /^\/image-builds\/build-complete$/,
   /^\/image-builds\/build-failed$/,
-  // legacy alias — removed with the Modal cutover (slice 4)
-  /^\/environment-images\/build-complete$/,
-  // legacy alias — removed with the Modal cutover (slice 4)
-  /^\/environment-images\/build-failed$/,
 ];
 
 /**
@@ -324,7 +320,7 @@ const routes: Route[] = [
   ...environmentRoutes,
   ...environmentSecretsRoutes,
 
-  // Image builds (scope-generic; includes the legacy /environment-images aliases)
+  // Image builds (scope-generic)
   ...imageBuildRoutes,
 
   // Model preferences

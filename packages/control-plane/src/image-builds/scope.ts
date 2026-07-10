@@ -62,8 +62,6 @@ export type ResolvedImageBuildTarget =
 /** An enabled scope with everything the cron's trigger checks need. */
 export interface EnabledScopeUnit {
   scope: ImageBuildScope;
-  /** Display label of the owning entity; served only by the legacy alias routes. */
-  name: string | null;
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
 }
@@ -215,7 +213,6 @@ export async function listEnabledScopeUnits(env: Env): Promise<EnabledScopeUnit[
       }));
       return {
         scope: { kind: "environment" as const, id: row.id },
-        name: row.name,
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
       };
@@ -230,7 +227,6 @@ export async function listEnabledScopeUnits(env: Env): Promise<EnabledScopeUnit[
         const target = await resolveScopeTarget(env, scope);
         return {
           scope,
-          name: null,
           repositories: target.repositories,
           repositoriesFingerprint: target.repositoriesFingerprint,
         };

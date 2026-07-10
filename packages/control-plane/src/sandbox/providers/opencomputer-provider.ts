@@ -54,24 +54,6 @@ const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_CALLBACK_SECRET",
 ] as const;
 
-export interface TriggerOpenComputerRepoImageBuildConfig {
-  buildId: string;
-  repoOwner: string;
-  repoName: string;
-  defaultBranch: string;
-  callbackUrl: string;
-  callbackToken: string;
-  userEnvVars?: Record<string, string>;
-  cloneToken?: string;
-  buildTimeoutSeconds?: number;
-  onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
-}
-
-export interface TriggerOpenComputerRepoImageBuildResult {
-  buildId: string;
-  status: string;
-}
-
 export interface TriggerOpenComputerEnvironmentImageBuildConfig {
   buildId: string;
   environmentId: string;
@@ -372,80 +354,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
   }
 
-  async triggerRepoImageBuild(
-    config: TriggerOpenComputerRepoImageBuildConfig
-  ): Promise<TriggerOpenComputerRepoImageBuildResult> {
-    let secretStore: OpenComputerSecretStoreResponse | undefined;
-    let providerObjectId: string | undefined;
-    try {
-      const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
-      const environment = this.buildBuildEnvironment({
-        userEnvVars: config.userEnvVars,
-        cloneToken: config.cloneToken,
-        sandboxId: `build-${config.repoOwner}-${config.repoName}`,
-        repoOwner: config.repoOwner,
-        repoName: config.repoName,
-        sessionConfig: { branch: config.defaultBranch },
-        buildId: config.buildId,
-        callbackUrl: config.callbackUrl,
-        callbackToken: config.callbackToken,
-      });
-      secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
-      const sandbox = await this.client.createSandbox({
-        name: sandboxName,
-        template: this.client.config.template,
-        env: environment.envVars,
-        labels: {
-          openinspect_framework: "open-inspect",
-          openinspect_provider: "opencomputer",
-          openinspect_kind: "repo-image-build",
-          openinspect_build_id: config.buildId,
-          openinspect_repo: `${config.repoOwner}/${config.repoName}`,
-        },
-        timeoutSeconds: config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
-        secretStore: secretStore?.name,
-      });
-      providerObjectId = sandbox.id;
-
-      if (config.onProviderSessionCreated) {
-        await config.onProviderSessionCreated(sandbox.id);
-      }
-
-      await this.client.startRuntime(sandbox.id, {
-        [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sandbox.id,
-      });
-      log.info("opencomputer.repo_image_build_triggered", {
-        build_id: config.buildId,
-        repo_owner: config.repoOwner,
-        repo_name: config.repoName,
-        sandbox_id: sandbox.id,
-      });
-
-      return { buildId: config.buildId, status: "building" };
-    } catch (error) {
-      if (providerObjectId) {
-        await this.cleanupSandboxAfterFailedCreate(providerObjectId, config.buildId);
-      }
-      if (secretStore) {
-        try {
-          await this.client.deleteSecretStore(secretStore.id);
-        } catch (cleanupError) {
-          log.warn("opencomputer.secret_store_cleanup_failed", {
-            build_id: config.buildId,
-            secret_store_id: secretStore.id,
-            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          });
-        }
-      }
-      if (error instanceof SandboxProviderError) throw error;
-      throw this.classifyError("Failed to trigger OpenComputer repo image build", error);
-    }
-  }
-
   /**
-   * Trigger an OpenComputer environment-image build (design §7.3). Same
-   * lifecycle as the repo-image build; the SESSION_CONFIG carries the repository
-   * list so the list-native runtime clones and sets up every repository.
+   * Trigger an OpenComputer environment-image build (design §7.3). The
+   * SESSION_CONFIG carries the repository list so the list-native runtime
+   * clones and sets up every repository.
    */
   async triggerEnvironmentImageBuild(
     config: TriggerOpenComputerEnvironmentImageBuildConfig
