@@ -36,18 +36,28 @@ import type { ImageBuildRepository } from "./types";
 
 const logger = createLogger("image-builds:scope");
 
-/** Repositories + fingerprint, resolved before a build row exists. */
-export interface ResolvedImageBuildTarget {
+interface ResolvedImageBuildTargetBase {
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
-  /**
-   * Source-control numeric id of a repo scope's repository — the repo_secrets
-   * key, resolved together with the target so the secrets fold
-   * (loadScopeBuildSecrets) needs no second source-control round trip. Null
-   * for environment scopes.
-   */
-  repoId: number | null;
 }
+
+/**
+ * Repositories + fingerprint, resolved before a build row exists.
+ * Discriminated on the scope kind that produced it, so per-kind extras (a
+ * repo scope's repoId) exist exactly on the arm that has them.
+ */
+export type ResolvedImageBuildTarget =
+  | (ResolvedImageBuildTargetBase & { kind: "environment" })
+  | (ResolvedImageBuildTargetBase & {
+      kind: "repo";
+      /**
+       * Source-control numeric id of the repo scope's repository — the
+       * repo_secrets key, resolved together with the target so the secrets
+       * fold (loadScopeBuildSecrets) needs no second source-control round
+       * trip.
+       */
+      repoId: number;
+    });
 
 /** An enabled scope with everything the cron's trigger checks need. */
 export interface EnabledScopeUnit {
@@ -85,9 +95,9 @@ export async function resolveScopeTarget(
       }));
 
       return {
+        kind: "environment",
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
-        repoId: null,
       };
     }
     case "repo": {
@@ -113,6 +123,7 @@ export async function resolveScopeTarget(
       ];
 
       return {
+        kind: "repo",
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
         repoId: resolved.repoId,
@@ -316,7 +327,7 @@ async function loadScopeSecretSources(
     });
   }
 
-  switch (scope.kind) {
+  switch (target.kind) {
     case "environment": {
       let environmentSecrets: Record<string, string> = {};
       try {
@@ -343,11 +354,6 @@ async function loadScopeSecretSources(
       };
     }
     case "repo": {
-      if (target.repoId === null) {
-        // resolveScopeTarget always carries the repo id for repo scopes; a
-        // null here means the target came from another scope's resolution.
-        throw new ImageBuildPlanningError(`Repo scope target is missing its repo id: ${scope.id}`);
-      }
       let repoSecrets: Record<string, string> = {};
       try {
         repoSecrets = await new RepoSecretsStore(env.DB, encryptionKey).getDecryptedSecrets(

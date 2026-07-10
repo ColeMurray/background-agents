@@ -105,8 +105,9 @@ function envWith(db: D1Database, overrides: Partial<Env> = {}): Env {
   return { DB: db, ...overrides } as Env;
 }
 
-function repoTarget(repoId: number | null = 123): ResolvedImageBuildTarget {
+function repoTarget(repoId = 123): ResolvedImageBuildTarget {
   return {
+    kind: "repo",
     repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     repositoriesFingerprint: "fp-repo",
     repoId,
@@ -140,7 +141,9 @@ describe("resolveScopeTarget", () => {
     expect(target.repositoriesFingerprint).toBe(
       await computeRepositoriesFingerprint(target.repositories)
     );
-    expect(target.repoId).toBeNull();
+    // The environment arm carries no repo-only extras.
+    expect(target.kind).toBe("environment");
+    expect(target).not.toHaveProperty("repoId");
   });
 
   it("throws scope-not-found for a missing environment", async () => {
@@ -181,7 +184,7 @@ describe("resolveScopeTarget", () => {
     );
     // The repo id rides along so the secrets fold (repo_secrets is keyed by
     // it) needs no second source-control round trip.
-    expect(target.repoId).toBe(123);
+    expect(target).toMatchObject({ kind: "repo", repoId: 123 });
   });
 
   it("throws scope-not-found when the repository is not installed", async () => {
@@ -343,9 +346,9 @@ describe("loadScopeBuildSecrets", () => {
     secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
 
     const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), ENV_SCOPE, {
+      kind: "environment",
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-env",
-      repoId: null,
     });
 
     expect(secretsStores.environment).toHaveBeenCalledWith("env_1");
@@ -371,12 +374,6 @@ describe("loadScopeBuildSecrets", () => {
     const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget());
 
     expect(merged).toEqual({ GLOBAL_ONLY: "g" });
-  });
-
-  it("fails planning on a repo target without a repo id", async () => {
-    await expect(
-      loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget(null))
-    ).rejects.toBeInstanceOf(ImageBuildPlanningError);
   });
 
   it("returns undefined when the fold is empty", async () => {
