@@ -15,13 +15,16 @@ import {
 } from "../source-control";
 import type { Env } from "../types";
 import {
-  generateRepoImageCallbackToken,
-  hashRepoImageCallbackToken,
-  REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
-} from "./auth";
+  generateImageBuildCallbackToken,
+  hashImageBuildCallbackToken,
+  IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
+} from "../image-builds/callback-auth";
 import { RepoImagePlanningError, RepoImageRepositoryNotInstalledError } from "./errors";
 import type { RepoImageProvider } from "./model";
-import { getRepoImageCallbackMode, getRepoImageCloneAuthMode } from "./provider-policy";
+import {
+  getImageBuildCallbackMode,
+  getImageBuildCloneAuthMode,
+} from "../image-builds/provider-policy";
 import type { PlannedRepoImageBuild, RepoImageCloneAuth } from "./types";
 
 const logger = createLogger("repo-images:planner");
@@ -132,16 +135,16 @@ export class RepoImageBuildPlanner {
   }
 
   private async createCallbackAuth(now: number): Promise<PlannedCallbackAuth> {
-    if (getRepoImageCallbackMode(this.provider) !== "provider_session") {
+    if (getImageBuildCallbackMode(this.provider) !== "provider_session") {
       return { kind: "none" };
     }
 
-    const token = generateRepoImageCallbackToken();
+    const token = generateImageBuildCallbackToken();
     return {
       kind: "bearer_token",
       token,
-      tokenHash: await hashRepoImageCallbackToken(token, this.env),
-      expiresAt: now + REPO_IMAGE_CALLBACK_TOKEN_TTL_MS,
+      tokenHash: await hashImageBuildCallbackToken(token, this.env),
+      expiresAt: now + IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
     };
   }
 
@@ -262,7 +265,7 @@ export class RepoImageBuildPlanner {
     repoOwner: string;
     repoName: string;
   }): Promise<RepoImageCloneAuth> {
-    if (getRepoImageCloneAuthMode(this.provider) !== "credential_helper") {
+    if (getImageBuildCloneAuthMode(this.provider) !== "credential_helper") {
       return { type: "unavailable" };
     }
 

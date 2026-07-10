@@ -12,7 +12,7 @@ import { RepoImageStore } from "../db/repo-images";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { RepoImageError } from "../repo-images/errors";
-import { getRepoImagesUnsupportedMessage } from "../repo-images/provider-policy";
+import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
 import { createRepoImageBuildWorkflowFromEnv } from "../repo-images/workflow";
 import type {
   CompleteRepoImageBuildCallback,
@@ -31,7 +31,7 @@ import {
   parseMaxAgeMs,
   parsePattern,
 } from "./shared";
-import { getRepoImageCallbackBearerToken } from "./repo-image-callback-auth";
+import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 
 const logger = createLogger("router:repo-images");
 const MS_PER_SECOND = 1000;
@@ -54,7 +54,7 @@ interface RepoImageBuildFailedBody {
 }
 
 function requireRepoImages(env: Env): Response | null {
-  const message = getRepoImagesUnsupportedMessage(env);
+  const message = getImageBuildsUnsupportedMessage(env);
   return message ? error(message, 501) : null;
 }
 
@@ -252,7 +252,7 @@ async function handleBuildComplete(
     const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildComplete({
       completion,
       authorizationHeader: request.headers.get("Authorization"),
-      callbackToken: getRepoImageCallbackBearerToken(request),
+      callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
     return workflowResultToResponse(result, ctx);
@@ -285,7 +285,7 @@ async function handleBuildFailed(
     const result = await createRepoImageBuildWorkflowFromEnv(env).acceptBuildFailed({
       failure,
       authorizationHeader: request.headers.get("Authorization"),
-      callbackToken: getRepoImageCallbackBearerToken(request),
+      callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
     return workflowResultToResponse(result, ctx);

@@ -47,12 +47,12 @@ import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { normalizeSandboxSettings } from "../settings";
 import {
-  evaluateEnvironmentImageForSpawn,
-  type EnvironmentImageLookup,
-  type SelectedEnvironmentImage,
-} from "./environment-image-selection";
+  evaluateImageBuildForSpawn,
+  type ImageBuildLookup,
+  type SelectedImageBuild,
+} from "./image-selection";
 
-export type { EnvironmentImageLookup } from "./environment-image-selection";
+export type { ImageBuildLookup } from "./image-selection";
 
 const log = createLogger("lifecycle-manager");
 
@@ -307,7 +307,7 @@ export class SandboxLifecycleManager {
     private readonly config: SandboxLifecycleConfig,
     private readonly callbacks: LifecycleCallbacks = {},
     private readonly repoImageLookup?: RepoImageLookup,
-    private readonly environmentImageLookup?: EnvironmentImageLookup
+    private readonly imageBuildLookup?: ImageBuildLookup
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
   }
@@ -450,9 +450,12 @@ export class SandboxLifecycleManager {
       // images never apply to them — a repo image bakes one checkout and that
       // repository's setup, not the environment's — so a miss falls straight
       // through to the base image.
-      let environmentImage: SelectedEnvironmentImage | null = null;
+      let environmentImage: SelectedImageBuild | null = null;
       if (session.environment_id) {
-        environmentImage = await this.lookupEnvironmentImage(session.environment_id, repositories);
+        environmentImage = await this.lookupEnvironmentImageBuild(
+          session.environment_id,
+          repositories
+        );
       }
 
       // Look up pre-built repo image (graceful fallback on failure).
@@ -529,7 +532,7 @@ export class SandboxLifecycleManager {
         // retry surfaces them through the normal failure path anyway.
         this.log.warn("Environment image spawn failed, retrying from base image", {
           event: "sandbox.environment_image_restore_failed",
-          environment_image_id: environmentImage.environmentImageId,
+          environment_image_id: environmentImage.imageBuildId,
           error: error instanceof Error ? error.message : String(error),
         });
         await this.markEnvironmentImageRestoreFailed(environmentImage, error);
@@ -628,19 +631,19 @@ export class SandboxLifecycleManager {
    * (never blocked, design §7.3) — logging the reason either way; miss-reason
    * counts are the numbers that justify (or kill) the prebuild fast-follows.
    */
-  private async lookupEnvironmentImage(
+  private async lookupEnvironmentImageBuild(
     environmentId: string,
     repositories: SessionRepositoryInfo[]
-  ): Promise<SelectedEnvironmentImage | null> {
-    if (!this.environmentImageLookup || repositories.length === 0) return null;
+  ): Promise<SelectedImageBuild | null> {
+    if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
-      const image = await this.environmentImageLookup.getLatestReady(environmentId);
-      const result = await evaluateEnvironmentImageForSpawn(image, repositories);
+      const image = await this.imageBuildLookup.getLatestReady(environmentId);
+      const result = await evaluateImageBuildForSpawn(image, repositories);
       if (result.outcome === "selected") {
         this.log.info("Using pre-built environment image", {
           event: "sandbox.environment_image_selected",
           environment_id: environmentId,
-          environment_image_id: result.image.environmentImageId,
+          environment_image_id: result.image.imageBuildId,
           runtime_version: result.image.runtimeVersion,
         });
         return result.image;
@@ -649,7 +652,7 @@ export class SandboxLifecycleManager {
         event: "sandbox.environment_image_miss",
         environment_id: environmentId,
         reason: result.reason,
-        environment_image_id: result.environmentImageId,
+        environment_image_id: result.imageBuildId,
       });
       return null;
     } catch (e) {
@@ -669,18 +672,18 @@ export class SandboxLifecycleManager {
    * next spawn, not a broken session.
    */
   private async markEnvironmentImageRestoreFailed(
-    image: SelectedEnvironmentImage,
+    image: SelectedImageBuild,
     error: unknown
   ): Promise<void> {
-    if (!this.environmentImageLookup) return;
+    if (!this.imageBuildLookup) return;
     try {
-      await this.environmentImageLookup.markRestoreFailed(
-        image.environmentImageId,
+      await this.imageBuildLookup.markRestoreFailed(
+        image.imageBuildId,
         `restore failed at spawn: ${error instanceof Error ? error.message : String(error)}`
       );
     } catch (e) {
       this.log.warn("Failed to mark environment image restore-failed", {
-        environment_image_id: image.environmentImageId,
+        environment_image_id: image.imageBuildId,
         error: e instanceof Error ? e.message : String(e),
       });
     }

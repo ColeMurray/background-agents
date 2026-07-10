@@ -15,7 +15,7 @@ import {
   type EnvironmentScalarFields,
 } from "../db/environments";
 import { generateId } from "../auth/crypto";
-import { scheduleEnvironmentImageBuildOnSave } from "../environment-images/save-hooks";
+import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -159,7 +159,7 @@ async function handleCreateEnvironment(
   });
 
   if (row.prebuild_enabled === 1) {
-    scheduleEnvironmentImageBuildOnSave(env, id, ctx);
+    scheduleImageBuildOnSave(env, { kind: "environment", id }, ctx);
   }
 
   return json(
@@ -243,7 +243,7 @@ async function handleUpdateEnvironment(
   });
 
   if (updated.prebuild_enabled === 1) {
-    scheduleEnvironmentImageBuildOnSave(env, id, ctx);
+    scheduleImageBuildOnSave(env, { kind: "environment", id }, ctx);
   }
 
   return json({

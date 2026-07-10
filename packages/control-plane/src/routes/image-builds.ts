@@ -1,32 +1,33 @@
 /**
- * Environment image build routes (design §7.3).
+ * Image build routes.
  *
  * Handles:
- * - Build callbacks from async environment image builders (build-complete, build-failed)
+ * - Build callbacks from async image builders (build-complete, build-failed)
  * - Build triggers (cron pass, save-hooks, manual rebuild)
- * - Enabled-environments and status queries for the rebuild cron
+ * - Enabled-scope and status queries for the rebuild cron
  * - Maintenance operations (stale builds, cleanup + superseded-artifact reaping)
+ *
+ * The `/environment-images/*` legacy aliases keep the deployed Modal cron,
+ * in-flight builds, and the web BFF working until the Modal cutover; each is
+ * marked below and removed with it.
  */
 
-import { EnvironmentImageStore } from "../db/environment-images";
-import { EnvironmentStore } from "../db/environments";
+import type { ImageBuildScopeKind, RepositoryShaEntry } from "@open-inspect/shared";
+import { ImageBuildStore, type ImageBuildRow } from "../db/image-builds";
 import { createLogger } from "../logger";
-import { EnvironmentImageError } from "../environment-images/errors";
-import { computeRepositoriesFingerprint } from "../environment-images/fingerprint";
-import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
-  type EnvironmentImageRepositorySha,
-} from "../environment-images/model";
-import { createEnvironmentImageBuildWorkflowFromEnv } from "../environment-images/workflow";
+import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
+import { ImageBuildError } from "../image-builds/errors";
+import { MIN_COMPATIBLE_RUNTIME_VERSION, type ImageBuildScope } from "../image-builds/model";
+import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
+import { listEnabledScopes, listEnabledScopeUnits } from "../image-builds/scope";
+import { createImageBuildWorkflowFromEnv } from "../image-builds/workflow";
 import type {
-  CompleteEnvironmentImageBuildCallback,
-  EnvironmentImageWorkflowContext,
-  EnvironmentImageWorkflowResult,
-  FailEnvironmentImageBuildCallback,
-} from "../environment-images/types";
-import { getRepoImagesUnsupportedMessage } from "../repo-images/provider-policy";
+  CompleteImageBuildCallback,
+  FailImageBuildCallback,
+  ImageBuildWorkflowContext,
+  ImageBuildWorkflowResult,
+} from "../image-builds/types";
 import type { Env } from "../types";
-import { getRepoImageCallbackBearerToken } from "./repo-image-callback-auth";
 import {
   type RequestContext,
   type Route,
@@ -36,13 +37,13 @@ import {
   parsePattern,
 } from "./shared";
 
-const logger = createLogger("router:environment-images");
+const logger = createLogger("router:image-builds");
 const MS_PER_SECOND = 1000;
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
 const DEFAULT_STALE_BUILD_MAX_AGE_MS = 4200 * MS_PER_SECOND;
 const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * MS_PER_SECOND;
 
-interface EnvironmentImageBuildCompleteBody {
+interface ImageBuildCompleteBody {
   build_id?: unknown;
   provider_image_id?: unknown;
   provider_session_id?: unknown;
@@ -51,15 +52,14 @@ interface EnvironmentImageBuildCompleteBody {
   build_duration_seconds?: unknown;
 }
 
-interface EnvironmentImageBuildFailedBody {
+interface ImageBuildFailedBody {
   build_id?: unknown;
   provider_session_id?: unknown;
   error?: unknown;
 }
 
-function requireEnvironmentImages(env: Env): Response | null {
-  // Environment images run on the repo-image provider set (design §7.3).
-  const message = getRepoImagesUnsupportedMessage(env);
+function requireImageBuilds(env: Env): Response | null {
+  const message = getImageBuildsUnsupportedMessage(env);
   return message ? error(message, 501) : null;
 }
 
@@ -67,7 +67,7 @@ function requireDb(env: Env): Response | null {
   return env.DB ? null : error("Database not configured", 503);
 }
 
-function workflowContext(ctx: RequestContext): EnvironmentImageWorkflowContext {
+function workflowContext(ctx: RequestContext): ImageBuildWorkflowContext {
   return {
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
@@ -75,7 +75,7 @@ function workflowContext(ctx: RequestContext): EnvironmentImageWorkflowContext {
 }
 
 async function workflowResultToResponse(
-  result: EnvironmentImageWorkflowResult,
+  result: ImageBuildWorkflowResult,
   ctx: RequestContext
 ): Promise<Response> {
   if (result.type === "completion_accepted") {
@@ -103,11 +103,11 @@ async function workflowResultToResponse(
   }
 }
 
-function environmentImageErrorToResponse(errorValue: unknown): Response {
-  if (!(errorValue instanceof EnvironmentImageError)) throw errorValue;
+function imageBuildErrorToResponse(errorValue: unknown): Response {
+  if (!(errorValue instanceof ImageBuildError)) throw errorValue;
 
   switch (errorValue.code) {
-    case "environment_not_found":
+    case "scope_not_found":
       return error(errorValue.message, 404);
     case "invalid_callback":
       return error(errorValue.message, 400);
@@ -127,7 +127,7 @@ function environmentImageErrorToResponse(errorValue: unknown): Response {
       return error(errorValue.message, 500);
     default: {
       const exhaustive: never = errorValue.code;
-      return error(`Unhandled environment image error: ${String(exhaustive)}`, 500);
+      return error(`Unhandled image build error: ${String(exhaustive)}`, 500);
     }
   }
 }
@@ -183,13 +183,11 @@ function optionalStringField(value: unknown, fallback: string): string {
  * single cross-language shape produced by the runtime). Malformed entries are
  * a 400 — deeper requirements (non-empty) are the workflow's fail-close.
  */
-function parseRepositoryShas(
-  value: unknown
-): EnvironmentImageRepositorySha[] | undefined | Response {
+function parseRepositoryShas(value: unknown): RepositoryShaEntry[] | undefined | Response {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return error("repository_shas must be an array", 400);
 
-  const shas: EnvironmentImageRepositorySha[] = [];
+  const shas: RepositoryShaEntry[] = [];
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       return error("repository_shas entries must be objects", 400);
@@ -210,9 +208,7 @@ function parseRepositoryShas(
   return shas;
 }
 
-function buildCompleteCommand(
-  body: EnvironmentImageBuildCompleteBody
-): CompleteEnvironmentImageBuildCallback | Response {
+function buildCompleteCommand(body: ImageBuildCompleteBody): CompleteImageBuildCallback | Response {
   const buildId = requireStringField(body.build_id, "build_id");
   if (buildId instanceof Response) return buildId;
 
@@ -246,9 +242,7 @@ function buildCompleteCommand(
   };
 }
 
-function buildFailedCommand(
-  body: EnvironmentImageBuildFailedBody
-): FailEnvironmentImageBuildCallback | Response {
+function buildFailedCommand(body: ImageBuildFailedBody): FailImageBuildCallback | Response {
   const buildId = requireStringField(body.build_id, "build_id");
   if (buildId instanceof Response) return buildId;
 
@@ -263,8 +257,8 @@ function buildFailedCommand(
 }
 
 /**
- * POST /environment-images/build-complete
- * Callback from environment image builders on success.
+ * POST /image-builds/build-complete
+ * Callback from image builders on success.
  */
 async function handleBuildComplete(
   request: Request,
@@ -275,28 +269,28 @@ async function handleBuildComplete(
   const dbError = requireDb(env);
   if (dbError) return dbError;
 
-  const body = await parseCallbackBody<EnvironmentImageBuildCompleteBody>(request);
+  const body = await parseCallbackBody<ImageBuildCompleteBody>(request);
   if (body instanceof Response) return body;
 
   const completion = buildCompleteCommand(body);
   if (completion instanceof Response) return completion;
 
   try {
-    const result = await createEnvironmentImageBuildWorkflowFromEnv(env).acceptBuildComplete({
+    const result = await createImageBuildWorkflowFromEnv(env).acceptBuildComplete({
       completion,
       authorizationHeader: request.headers.get("Authorization"),
-      callbackToken: getRepoImageCallbackBearerToken(request),
+      callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
     return workflowResultToResponse(result, ctx);
   } catch (e) {
-    return environmentImageErrorToResponse(e);
+    return imageBuildErrorToResponse(e);
   }
 }
 
 /**
- * POST /environment-images/build-failed
- * Callback from environment image builders on failure.
+ * POST /image-builds/build-failed
+ * Callback from image builders on failure.
  */
 async function handleBuildFailed(
   request: Request,
@@ -307,36 +301,37 @@ async function handleBuildFailed(
   const dbError = requireDb(env);
   if (dbError) return dbError;
 
-  const body = await parseCallbackBody<EnvironmentImageBuildFailedBody>(request);
+  const body = await parseCallbackBody<ImageBuildFailedBody>(request);
   if (body instanceof Response) return body;
 
   const failure = buildFailedCommand(body);
   if (failure instanceof Response) return failure;
 
   try {
-    const result = await createEnvironmentImageBuildWorkflowFromEnv(env).acceptBuildFailed({
+    const result = await createImageBuildWorkflowFromEnv(env).acceptBuildFailed({
       failure,
       authorizationHeader: request.headers.get("Authorization"),
-      callbackToken: getRepoImageCallbackBearerToken(request),
+      callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
     return workflowResultToResponse(result, ctx);
   } catch (e) {
-    return environmentImageErrorToResponse(e);
+    return imageBuildErrorToResponse(e);
   }
 }
 
 /**
- * POST /environment-images/trigger/:id
- * Trigger a build for an environment (cron, save-hooks, manual rebuild).
+ * POST /image-builds/trigger/environment/:id
+ * Trigger a build for an environment scope (cron, save-hooks, manual rebuild).
+ * Also serves the legacy POST /environment-images/trigger/:id alias.
  */
-async function handleTriggerBuild(
+async function handleTriggerEnvironmentBuild(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireEnvironmentImages(env);
+  const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
   const dbError = requireDb(env);
@@ -345,9 +340,11 @@ async function handleTriggerBuild(
   const environmentId = match.groups?.id;
   if (!environmentId) return error("Environment ID required", 400);
 
+  const scope: ImageBuildScope = { kind: "environment", id: environmentId };
+
   try {
-    const result = await createEnvironmentImageBuildWorkflowFromEnv(env).triggerBuild(
-      environmentId,
+    const result = await createImageBuildWorkflowFromEnv(env).triggerBuild(
+      scope,
       workflowContext(ctx)
     );
     if (result.type === "up_to_date") {
@@ -361,17 +358,37 @@ async function handleTriggerBuild(
       alreadyBuilding: result.type === "already_building",
     });
   } catch (e) {
-    return environmentImageErrorToResponse(e);
+    return imageBuildErrorToResponse(e);
   }
 }
 
+function parseScopeParams(request: Request): ImageBuildScope | null | Response {
+  const params = new URL(request.url).searchParams;
+  const scopeKind = params.get("scope_kind");
+  const scopeId = params.get("scope_id");
+  if (scopeKind === null && scopeId === null) return null;
+  if (scopeKind !== "repo" && scopeKind !== "environment") {
+    return error("scope_kind must be 'repo' or 'environment'", 400);
+  }
+  if (!scopeId) {
+    return error("scope_id is required with scope_kind", 400);
+  }
+  return { kind: scopeKind, id: scopeId };
+}
+
+async function readStatusRows(env: Env, scope: ImageBuildScope | null): Promise<ImageBuildRow[]> {
+  const store = new ImageBuildStore(env.DB);
+  if (scope) return store.getStatus(scope);
+  return store.getStatusForEnabledScopes(await listEnabledScopes(env.DB));
+}
+
 /**
- * GET /environment-images/status[?environment_id=...]
- * With environment_id: that environment's recent non-superseded rows (the
- * settings UI / debugging view, failed rows included). Without: the cron's
- * view — ready and building rows across all prebuild-enabled environments.
- * Rows are returned verbatim (snake_case columns; repository_shas is a JSON
- * document).
+ * GET /image-builds/status[?scope_kind=&scope_id=]
+ * With a scope: that scope's recent non-superseded rows (the settings UI /
+ * debugging view). Without: the cron's cross-scope view over every
+ * prebuild-enabled scope — non-superseded, so failed builds are visible in
+ * the aggregate feed. Rows are returned verbatim (snake_case columns;
+ * repository_shas is a JSON document).
  */
 async function handleGetStatus(
   request: Request,
@@ -379,22 +396,19 @@ async function handleGetStatus(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireEnvironmentImages(env);
+  const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
   const dbError = requireDb(env);
   if (dbError) return dbError;
 
-  const environmentId = new URL(request.url).searchParams.get("environment_id");
-  const store = new EnvironmentImageStore(env.DB);
+  const scope = parseScopeParams(request);
+  if (scope instanceof Response) return scope;
 
   try {
-    const images = environmentId
-      ? await store.getStatus(environmentId)
-      : await store.getStatusForEnabledEnvironments();
-    return json({ images });
+    return json({ images: await readStatusRows(env, scope) });
   } catch (e) {
-    logger.error("environment_image.status_error", {
+    logger.error("image_build.status_error", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -404,54 +418,111 @@ async function handleGetStatus(
 }
 
 /**
- * GET /environment-images/enabled
- * Prebuild-enabled environments with their current repositories and fingerprint,
- * plus the runtime floor — everything the cron's trigger checks need, so the
- * fingerprint algorithm never leaves the control plane (design §7.3).
+ * GET /environment-images/status[?environment_id=...]
+ * Legacy alias for handleGetStatus preserving the old row shape: consumers
+ * (deployed Modal cron, web BFF) read `environment_id` off each row.
  */
-async function handleGetEnabledEnvironments(
-  _request: Request,
+async function handleGetStatusLegacy(
+  request: Request,
   env: Env,
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireEnvironmentImages(env);
+  const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
   const dbError = requireDb(env);
   if (dbError) return dbError;
 
-  const store = new EnvironmentStore(env.DB);
+  const environmentId = new URL(request.url).searchParams.get("environment_id");
+  const scope: ImageBuildScope | null = environmentId
+    ? { kind: "environment", id: environmentId }
+    : null;
 
   try {
-    const { environments } = await store.list();
-    const enabled = environments.filter((row) => row.prebuild_enabled === 1);
-    const repositoriesById = await store.getRepositoriesForEnvironmentIds(
-      enabled.map((row) => row.id)
-    );
+    const rows = await readStatusRows(env, scope);
+    return json({ images: rows.map((row) => ({ ...row, environment_id: row.scope_id })) });
+  } catch (e) {
+    logger.error("image_build.status_error", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to get image status", 500);
+  }
+}
 
-    const payload = await Promise.all(
-      enabled.map(async (row) => {
-        const repositories = (repositoriesById.get(row.id) ?? []).map((repo) => ({
-          repoOwner: repo.repo_owner,
-          repoName: repo.repo_name,
-          baseBranch: repo.base_branch,
-        }));
-        return {
-          id: row.id,
-          name: row.name,
-          repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
-          repositories,
-        };
-      })
-    );
+/**
+ * GET /image-builds/enabled
+ * Prebuild-enabled scopes with their current repositories and fingerprint,
+ * plus the runtime floor — everything the cron's trigger checks need, so the
+ * fingerprint algorithm never leaves the control plane.
+ */
+async function handleGetEnabledUnits(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const providerError = requireImageBuilds(env);
+  if (providerError) return providerError;
 
+  const dbError = requireDb(env);
+  if (dbError) return dbError;
+
+  try {
+    const units = await listEnabledScopeUnits(env.DB);
     return json({
-      environments: payload,
+      units: units.map((unit) => ({
+        scopeKind: unit.scope.kind,
+        scopeId: unit.scope.id,
+        repositoriesFingerprint: unit.repositoriesFingerprint,
+        repositories: unit.repositories,
+      })),
       minRuntimeVersion: MIN_COMPATIBLE_RUNTIME_VERSION,
     });
   } catch (e) {
-    logger.error("environment_image.enabled_error", {
+    logger.error("image_build.enabled_error", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to get enabled scopes", 500);
+  }
+}
+
+/**
+ * GET /environment-images/enabled
+ * Legacy alias for handleGetEnabledUnits preserving the old response shape
+ * ({environments: [{id, name, ...}]}), which the deployed Modal cron reads.
+ */
+async function handleGetEnabledEnvironmentsLegacy(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const providerError = requireImageBuilds(env);
+  if (providerError) return providerError;
+
+  const dbError = requireDb(env);
+  if (dbError) return dbError;
+
+  try {
+    const units = await listEnabledScopeUnits(env.DB);
+    return json({
+      environments: units
+        .filter((unit) => unit.scope.kind === ("environment" satisfies ImageBuildScopeKind))
+        .map((unit) => ({
+          id: unit.scope.id,
+          name: unit.name,
+          repositoriesFingerprint: unit.repositoriesFingerprint,
+          repositories: unit.repositories,
+        })),
+      minRuntimeVersion: MIN_COMPATIBLE_RUNTIME_VERSION,
+    });
+  } catch (e) {
+    logger.error("image_build.enabled_error", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -461,7 +532,7 @@ async function handleGetEnabledEnvironments(
 }
 
 /**
- * POST /environment-images/mark-stale
+ * POST /image-builds/mark-stale
  * Mark old building rows as failed. Called by scheduler.
  */
 async function handleMarkStale(
@@ -470,7 +541,7 @@ async function handleMarkStale(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireEnvironmentImages(env);
+  const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
   const dbError = requireDb(env);
@@ -479,12 +550,12 @@ async function handleMarkStale(
   const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_STALE_BUILD_MAX_AGE_MS);
   if (maxAgeMs instanceof Response) return maxAgeMs;
 
-  const store = new EnvironmentImageStore(env.DB);
+  const store = new ImageBuildStore(env.DB);
 
   try {
     const count = await store.markStaleBuildsAsFailed(maxAgeMs);
 
-    logger.info("environment_image.stale_marked", {
+    logger.info("image_build.stale_marked", {
       count,
       max_age_seconds: maxAgeMs / MS_PER_SECOND,
       request_id: ctx.request_id,
@@ -493,7 +564,7 @@ async function handleMarkStale(
 
     return json({ ok: true, markedFailed: count });
   } catch (e) {
-    logger.error("environment_image.mark_stale_error", {
+    logger.error("image_build.mark_stale_error", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -503,7 +574,7 @@ async function handleMarkStale(
 }
 
 /**
- * POST /environment-images/cleanup
+ * POST /image-builds/cleanup
  * Delete old failed builds and reap superseded rows' provider artifacts.
  * Called by scheduler.
  */
@@ -513,7 +584,7 @@ async function handleCleanup(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireEnvironmentImages(env);
+  const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
   const dbError = requireDb(env);
@@ -523,12 +594,12 @@ async function handleCleanup(
   if (maxAgeMs instanceof Response) return maxAgeMs;
 
   try {
-    const result = await createEnvironmentImageBuildWorkflowFromEnv(env).cleanupImages(
+    const result = await createImageBuildWorkflowFromEnv(env).cleanupImages(
       maxAgeMs,
       workflowContext(ctx)
     );
 
-    logger.info("environment_image.cleanup", {
+    logger.info("image_build.cleanup", {
       deleted: result.deletedFailed,
       reaped_superseded: result.reapedSuperseded,
       max_age_seconds: maxAgeMs / MS_PER_SECOND,
@@ -542,7 +613,7 @@ async function handleCleanup(
       reapedSuperseded: result.reapedSuperseded,
     });
   } catch (e) {
-    logger.error("environment_image.cleanup_error", {
+    logger.error("image_build.cleanup_error", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -551,37 +622,79 @@ async function handleCleanup(
   }
 }
 
-export const environmentImageRoutes: Route[] = [
+export const imageBuildRoutes: Route[] = [
+  {
+    method: "POST",
+    pattern: parsePattern("/image-builds/build-complete"),
+    handler: handleBuildComplete,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/image-builds/build-failed"),
+    handler: handleBuildFailed,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/image-builds/trigger/environment/:id"),
+    handler: handleTriggerEnvironmentBuild,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/image-builds/status"),
+    handler: handleGetStatus,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/image-builds/enabled"),
+    handler: handleGetEnabledUnits,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/image-builds/mark-stale"),
+    handler: handleMarkStale,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/image-builds/cleanup"),
+    handler: handleCleanup,
+  },
+  // legacy alias — removed with the Modal cutover (slice 4)
   {
     method: "POST",
     pattern: parsePattern("/environment-images/build-complete"),
     handler: handleBuildComplete,
   },
+  // legacy alias — removed with the Modal cutover (slice 4)
   {
     method: "POST",
     pattern: parsePattern("/environment-images/build-failed"),
     handler: handleBuildFailed,
   },
+  // legacy alias — removed with the Modal cutover (slice 4)
   {
     method: "POST",
     pattern: parsePattern("/environment-images/trigger/:id"),
-    handler: handleTriggerBuild,
+    handler: handleTriggerEnvironmentBuild,
   },
+  // legacy alias — removed with the Modal cutover (slice 4)
   {
     method: "GET",
     pattern: parsePattern("/environment-images/status"),
-    handler: handleGetStatus,
+    handler: handleGetStatusLegacy,
   },
+  // legacy alias — removed with the Modal cutover (slice 4)
   {
     method: "GET",
     pattern: parsePattern("/environment-images/enabled"),
-    handler: handleGetEnabledEnvironments,
+    handler: handleGetEnabledEnvironmentsLegacy,
   },
+  // legacy alias — removed with the Modal cutover (slice 4)
   {
     method: "POST",
     pattern: parsePattern("/environment-images/mark-stale"),
     handler: handleMarkStale,
   },
+  // legacy alias — removed with the Modal cutover (slice 4)
   {
     method: "POST",
     pattern: parsePattern("/environment-images/cleanup"),

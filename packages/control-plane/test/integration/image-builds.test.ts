@@ -1,27 +1,33 @@
 /**
- * Environment image lifecycle against real D1 (design §7.3): store state
- * machine (register → ready → supersede → reap), the cron-facing routes
- * (enabled/status/mark-stale/cleanup), the build callbacks with internal
- * HMAC auth and their fail-closed registration, and the secret-change
- * supersede save-hook (§7.4).
+ * Image-build lifecycle against real D1: store state machine (register →
+ * ready → supersede → reap), the cron-facing routes (enabled/status/
+ * mark-stale/cleanup) on both the unified paths and their legacy
+ * /environment-images aliases, the build callbacks with internal HMAC auth
+ * and their fail-closed registration, and the secret-change supersede
+ * save-hook.
  *
- * Builds are seeded via EnvironmentImageStore (or raw SQL when a test needs
- * to control created_at) — actually triggering one needs a live Modal
+ * Builds are seeded via ImageBuildStore (or raw SQL when a test needs to
+ * control created_at) — actually triggering one needs a live Modal
  * deployment, and the SCM-less harness split is the same as PR-4/PR-8.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
-import { EnvironmentImageStore } from "../../src/db/environment-images";
+import { ImageBuildStore } from "../../src/db/image-builds";
 import { EnvironmentStore } from "../../src/db/environments";
-import { computeRepositoriesFingerprint } from "../../src/environment-images/fingerprint";
-import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../src/environment-images/model";
+import { computeRepositoriesFingerprint } from "../../src/image-builds/fingerprint";
+import { MIN_COMPATIBLE_RUNTIME_VERSION, type ImageBuildScope } from "../../src/image-builds/model";
+import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import { cleanD1Tables } from "./cleanup";
 
 const BASE = "https://test.local";
 const RUNTIME_VERSION = "v53-list-native-runtime";
 const REPOSITORY_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
+
+function environmentScope(id: string): ImageBuildScope {
+  return { kind: "environment", id };
+}
 
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
@@ -69,10 +75,10 @@ async function seedImageRow(row: {
   createdAt?: number;
 }): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO environment_images
-       (id, environment_id, provider, provider_image_id, repositories_fingerprint,
+    `INSERT INTO image_builds
+       (id, scope_kind, scope_id, provider, provider_image_id, repositories_fingerprint,
         repository_shas, runtime_version, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, 'environment', ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       row.id,
@@ -89,21 +95,32 @@ async function seedImageRow(row: {
 }
 
 async function getRow(id: string) {
-  return env.DB.prepare("SELECT * FROM environment_images WHERE id = ?")
+  return env.DB.prepare("SELECT * FROM image_builds WHERE id = ?")
     .bind(id)
     .first<Record<string, unknown>>();
 }
 
-describe("Environment images", () => {
+/**
+ * The spawn-selection path as the Durable Object composes it: the scope
+ * resolver answers enablement (and entity existence), then the store serves
+ * the plain row read.
+ */
+async function selectForSpawn(environmentId: string, provider: "modal" | "vercel") {
+  const scope = environmentScope(environmentId);
+  if (!(await resolveScopeEnabled(env.DB, scope))) return null;
+  return new ImageBuildStore(env.DB).getLatestReadyForSpawn(scope, provider);
+}
+
+describe("Image builds", () => {
   beforeEach(cleanD1Tables);
 
-  describe("EnvironmentImageStore state machine", () => {
+  describe("ImageBuildStore state machine", () => {
     it("registers, marks ready, and supersedes older ready images", async () => {
       const environmentId = await seedEnvironment();
-      const store = new EnvironmentImageStore(env.DB);
+      const store = new ImageBuildStore(env.DB);
 
       await seedImageRow({
-        id: "envimg-old",
+        id: "imgb-old",
         environmentId,
         status: "ready",
         providerImageId: "im-old",
@@ -111,15 +128,17 @@ describe("Environment images", () => {
       });
 
       await store.registerBuild({
-        id: "envimg-new",
-        environmentId,
+        id: "imgb-new",
+        scope: environmentScope(environmentId),
         provider: "modal",
         repositoriesFingerprint: "fp-new",
       });
-      expect(await store.getActiveBuild(environmentId, "modal")).toEqual({ id: "envimg-new" });
+      expect(await store.getActiveBuild(environmentScope(environmentId), "modal")).toEqual({
+        id: "imgb-new",
+      });
 
-      const result = await store.tryMarkEnvironmentImageReady(
-        "envimg-new",
+      const result = await store.tryMarkImageBuildReady(
+        "imgb-new",
         "modal",
         "im-new",
         REPOSITORY_SHAS,
@@ -131,40 +150,42 @@ describe("Environment images", () => {
       if (result.type !== "marked_ready") throw new Error("unreachable");
       expect(result.supersededImages).toEqual([
         {
-          environmentImageId: "envimg-old",
+          imageBuildId: "imgb-old",
           image: { providerImageId: "im-old", providerSessionId: null },
         },
       ]);
 
-      const readyRow = await getRow("envimg-new");
+      const readyRow = await getRow("imgb-new");
       expect(readyRow?.status).toBe("ready");
+      expect(readyRow?.scope_kind).toBe("environment");
+      expect(readyRow?.scope_id).toBe(environmentId);
       expect(readyRow?.provider_image_id).toBe("im-new");
       expect(readyRow?.runtime_version).toBe(RUNTIME_VERSION);
       expect(JSON.parse(readyRow?.repository_shas as string)).toEqual(REPOSITORY_SHAS);
       expect(readyRow?.build_duration_seconds).toBe(12.5);
-      expect((await getRow("envimg-old"))?.status).toBe("superseded");
-      expect(await store.getActiveBuild(environmentId, "modal")).toBeNull();
+      expect((await getRow("imgb-old"))?.status).toBe("superseded");
+      expect(await store.getActiveBuild(environmentScope(environmentId), "modal")).toBeNull();
     });
 
     it("supersedes a late-finishing build when a newer ready image exists", async () => {
       const environmentId = await seedEnvironment();
-      const store = new EnvironmentImageStore(env.DB);
+      const store = new ImageBuildStore(env.DB);
 
       await seedImageRow({
-        id: "envimg-late",
+        id: "imgb-late",
         environmentId,
         status: "building",
         createdAt: Date.now() - 5000,
       });
       await seedImageRow({
-        id: "envimg-winner",
+        id: "imgb-winner",
         environmentId,
         status: "ready",
         providerImageId: "im-winner",
       });
 
-      const result = await store.tryMarkEnvironmentImageReady(
-        "envimg-late",
+      const result = await store.tryMarkImageBuildReady(
+        "imgb-late",
         "modal",
         "im-late",
         REPOSITORY_SHAS,
@@ -173,18 +194,18 @@ describe("Environment images", () => {
       );
 
       expect(result.type).toBe("superseded_by_newer_ready");
-      expect((await getRow("envimg-late"))?.status).toBe("superseded");
+      expect((await getRow("imgb-late"))?.status).toBe("superseded");
       // The late build recorded its artifact so the reaper can reclaim it.
-      expect((await getRow("envimg-late"))?.provider_image_id).toBe("im-late");
-      expect((await getRow("envimg-winner"))?.status).toBe("ready");
+      expect((await getRow("imgb-late"))?.provider_image_id).toBe("im-late");
+      expect((await getRow("imgb-winner"))?.status).toBe("ready");
     });
 
-    it("registerBuild admits exactly one in-flight build per environment/provider", async () => {
+    it("registerBuild admits exactly one in-flight build per scope/provider", async () => {
       const environmentId = await seedEnvironment();
-      const store = new EnvironmentImageStore(env.DB);
+      const store = new ImageBuildStore(env.DB);
       const build = (id: string) => ({
         id,
-        environmentId,
+        scope: environmentScope(environmentId),
         provider: "modal" as const,
         repositoriesFingerprint: "fp-race",
       });
@@ -197,18 +218,18 @@ describe("Environment images", () => {
 
       // Out-of-band supersede (secret change) releases the slot so the
       // corrective rebuild can register.
-      await store.supersedeActiveImages(environmentId);
+      await store.supersedeActiveImages(environmentScope(environmentId));
       expect(await store.registerBuild(build("race-c"))).toBe(true);
     });
 
     it("supersedeActiveImages flips building and ready rows for the secret-change hook", async () => {
       const environmentId = await seedEnvironment();
-      const store = new EnvironmentImageStore(env.DB);
+      const store = new ImageBuildStore(env.DB);
       await seedImageRow({ id: "a-ready", environmentId, status: "ready", providerImageId: "im" });
       await seedImageRow({ id: "a-building", environmentId, status: "building" });
       await seedImageRow({ id: "a-failed", environmentId, status: "failed" });
 
-      const superseded = await store.supersedeActiveImages(environmentId);
+      const superseded = await store.supersedeActiveImages(environmentScope(environmentId));
 
       expect(superseded).toBe(2);
       expect((await getRow("a-ready"))?.status).toBe("superseded");
@@ -218,7 +239,7 @@ describe("Environment images", () => {
 
     it("hasReadyImageForFingerprint matches only ready rows with the exact fingerprint", async () => {
       const environmentId = await seedEnvironment();
-      const store = new EnvironmentImageStore(env.DB);
+      const store = new ImageBuildStore(env.DB);
       await seedImageRow({
         id: "fp-row",
         environmentId,
@@ -227,16 +248,16 @@ describe("Environment images", () => {
         repositoriesFingerprint: "fp-x",
       });
 
-      expect(await store.hasReadyImageForFingerprint(environmentId, "modal", "fp-x")).toBe(true);
-      expect(await store.hasReadyImageForFingerprint(environmentId, "modal", "fp-y")).toBe(false);
+      const scope = environmentScope(environmentId);
+      expect(await store.hasReadyImageForFingerprint(scope, "modal", "fp-x")).toBe(true);
+      expect(await store.hasReadyImageForFingerprint(scope, "modal", "fp-y")).toBe(false);
     });
   });
 
-  describe("spawn-time selection (design §7.3)", () => {
-    it("serves the latest ready image for the environment and provider only", async () => {
+  describe("spawn-time selection", () => {
+    it("serves the latest ready image for the scope and provider only", async () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
       const otherId = await seedEnvironment({ prebuildEnabled: true });
-      const store = new EnvironmentImageStore(env.DB);
       const now = Date.now();
 
       await seedImageRow({
@@ -278,16 +299,15 @@ describe("Environment images", () => {
         createdAt: now,
       });
 
-      const selected = await store.getLatestReadyForSpawn(environmentId, "modal");
+      const selected = await selectForSpawn(environmentId, "modal");
 
       expect(selected?.id).toBe("sp-latest");
       expect(selected?.provider_image_id).toBe("im-latest");
-      expect((await store.getLatestReadyForSpawn(environmentId, "vercel"))?.id).toBe("sp-vercel");
+      expect((await selectForSpawn(environmentId, "vercel"))?.id).toBe("sp-vercel");
     });
 
     it("never serves a deleted environment's lingering row", async () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
-      const store = new EnvironmentImageStore(env.DB);
       await seedImageRow({
         id: "sp-lingering",
         environmentId,
@@ -295,19 +315,19 @@ describe("Environment images", () => {
         providerImageId: "im-lingering",
       });
 
-      expect((await store.getLatestReadyForSpawn(environmentId, "modal"))?.id).toBe("sp-lingering");
+      expect((await selectForSpawn(environmentId, "modal"))?.id).toBe("sp-lingering");
 
       // Raw delete bypasses EnvironmentStore.delete's supersede batch — the
-      // lingering ready row must still never be served (environments join).
+      // lingering ready row must still never be served (the scope resolver's
+      // enablement answer is false for a missing environment).
       await env.DB.prepare("DELETE FROM environments WHERE id = ?").bind(environmentId).run();
 
-      expect(await store.getLatestReadyForSpawn(environmentId, "modal")).toBeNull();
+      expect(await selectForSpawn(environmentId, "modal")).toBeNull();
       expect((await getRow("sp-lingering"))?.status).toBe("ready");
     });
 
     it("does not serve images of prebuild-disabled environments", async () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: false });
-      const store = new EnvironmentImageStore(env.DB);
       await seedImageRow({
         id: "sp-disabled",
         environmentId,
@@ -315,12 +335,12 @@ describe("Environment images", () => {
         providerImageId: "im-disabled",
       });
 
-      expect(await store.getLatestReadyForSpawn(environmentId, "modal")).toBeNull();
+      expect(await selectForSpawn(environmentId, "modal")).toBeNull();
     });
 
     it("markRestoreFailed fails only a ready row, exactly once", async () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
-      const store = new EnvironmentImageStore(env.DB);
+      const store = new ImageBuildStore(env.DB);
       await seedImageRow({
         id: "sp-restore",
         environmentId,
@@ -349,7 +369,7 @@ describe("Environment images", () => {
   });
 
   describe("cron-facing routes", () => {
-    it("GET /environment-images/enabled returns prebuild-enabled environments with fingerprints", async () => {
+    it("GET /image-builds/enabled returns prebuild-enabled units with fingerprints", async () => {
       const enabledId = await seedEnvironment({
         prebuildEnabled: true,
         repositories: [
@@ -359,32 +379,34 @@ describe("Environment images", () => {
       });
       await seedEnvironment({ prebuildEnabled: false });
 
-      const response = await SELF.fetch(`${BASE}/environment-images/enabled`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/enabled`, {
         headers: await authHeaders(),
       });
 
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
-        environments: Array<{
-          id: string;
+        units: Array<{
+          scopeKind: string;
+          scopeId: string;
           repositoriesFingerprint: string;
           repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
         }>;
         minRuntimeVersion: number;
       };
       expect(body.minRuntimeVersion).toBe(MIN_COMPATIBLE_RUNTIME_VERSION);
-      expect(body.environments).toHaveLength(1);
-      expect(body.environments[0].id).toBe(enabledId);
-      expect(body.environments[0].repositories).toEqual([
+      expect(body.units).toHaveLength(1);
+      expect(body.units[0].scopeKind).toBe("environment");
+      expect(body.units[0].scopeId).toBe(enabledId);
+      expect(body.units[0].repositories).toEqual([
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ]);
-      expect(body.environments[0].repositoriesFingerprint).toBe(
-        await computeRepositoriesFingerprint(body.environments[0].repositories)
+      expect(body.units[0].repositoriesFingerprint).toBe(
+        await computeRepositoriesFingerprint(body.units[0].repositories)
       );
     });
 
-    it("GET /environment-images/status serves the cron view unfiltered and the debug view per environment", async () => {
+    it("GET /image-builds/status serves the cross-scope view and the per-scope debug view", async () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
       const otherId = await seedEnvironment({ prebuildEnabled: true });
       const disabledId = await seedEnvironment();
@@ -404,25 +426,42 @@ describe("Environment images", () => {
         providerImageId: "im-d",
       });
 
-      // Cron view: ready + building rows of prebuild-enabled environments
-      // only — failed rows and disabled environments never crowd it, so a
-      // ready image can't drop out of the scheduler's sight.
-      const all = await SELF.fetch(`${BASE}/environment-images/status`, {
+      // Cross-scope view: every non-superseded row of prebuild-enabled
+      // scopes — failed builds are visible in the aggregate feed (they were
+      // silently filtered before the unification); disabled scopes never
+      // crowd it.
+      const all = await SELF.fetch(`${BASE}/image-builds/status`, {
         headers: await authHeaders(),
       });
-      const allBody = (await all.json()) as { images: Array<{ id: string }> };
-      expect(allBody.images.map((i) => i.id).sort()).toEqual(["st-other", "st-ready"]);
+      const allBody = (await all.json()) as {
+        images: Array<{ id: string; scope_kind: string; scope_id: string }>;
+      };
+      expect(allBody.images.map((i) => i.id).sort()).toEqual(["st-failed", "st-other", "st-ready"]);
+      expect(allBody.images.every((i) => i.scope_kind === "environment")).toBe(true);
 
-      // Per-environment debug view keeps failed rows, drops only superseded.
+      // Per-scope debug view keeps failed rows, drops only superseded.
       const filtered = await SELF.fetch(
-        `${BASE}/environment-images/status?environment_id=${environmentId}`,
+        `${BASE}/image-builds/status?scope_kind=environment&scope_id=${environmentId}`,
         { headers: await authHeaders() }
       );
       const filteredBody = (await filtered.json()) as { images: Array<{ id: string }> };
       expect(filteredBody.images.map((i) => i.id)).toEqual(["st-ready", "st-failed"]);
     });
 
-    it("POST /environment-images/mark-stale fails old building rows", async () => {
+    it("GET /image-builds/status rejects a scope_kind/scope_id half-pair", async () => {
+      for (const query of [
+        "?scope_kind=environment",
+        "?scope_id=env_x",
+        "?scope_kind=bogus&scope_id=x",
+      ]) {
+        const response = await SELF.fetch(`${BASE}/image-builds/status${query}`, {
+          headers: await authHeaders(),
+        });
+        expect(response.status, query).toBe(400);
+      }
+    });
+
+    it("POST /image-builds/mark-stale fails old building rows", async () => {
       const environmentId = await seedEnvironment();
       await seedImageRow({
         id: "stale-build",
@@ -432,7 +471,7 @@ describe("Environment images", () => {
       });
       await seedImageRow({ id: "fresh-build", environmentId, status: "building" });
 
-      const response = await SELF.fetch(`${BASE}/environment-images/mark-stale`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/mark-stale`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({ max_age_seconds: 3600 }),
@@ -444,7 +483,7 @@ describe("Environment images", () => {
       expect((await getRow("fresh-build"))?.status).toBe("building");
     });
 
-    it("POST /environment-images/cleanup deletes old failed rows and reaps artifact-less superseded rows", async () => {
+    it("POST /image-builds/cleanup deletes old failed rows and reaps artifact-less superseded rows", async () => {
       const environmentId = await seedEnvironment();
       await seedImageRow({
         id: "old-failed",
@@ -452,8 +491,8 @@ describe("Environment images", () => {
         status: "failed",
         createdAt: Date.now() - 100_000_000,
       });
-      // Superseded before any artifact was recorded (environment delete or
-      // secret change mid-build) — reaped directly.
+      // Superseded before any artifact was recorded (entity delete or secret
+      // change mid-build) — reaped directly.
       await seedImageRow({ id: "bare-superseded", environmentId, status: "superseded" });
       // Superseded with an artifact: reclaiming it needs the provider adapter,
       // which is unconfigured in the test env (no MODAL_WORKSPACE) — the row
@@ -465,7 +504,7 @@ describe("Environment images", () => {
         providerImageId: "im-artifact",
       });
 
-      const response = await SELF.fetch(`${BASE}/environment-images/cleanup`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/cleanup`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({ max_age_seconds: 86400 }),
@@ -486,7 +525,7 @@ describe("Environment images", () => {
       await seedImageRow({ id: "guard-failed", environmentId, status: "failed" });
 
       for (const path of ["mark-stale", "cleanup"]) {
-        const response = await SELF.fetch(`${BASE}/environment-images/${path}`, {
+        const response = await SELF.fetch(`${BASE}/image-builds/${path}`, {
           method: "POST",
           headers: await authHeaders(),
           body: JSON.stringify({ max_age_seconds: null }),
@@ -501,6 +540,11 @@ describe("Environment images", () => {
 
     it("requires internal auth on cron-facing routes", async () => {
       for (const [method, path] of [
+        ["GET", "/image-builds/enabled"],
+        ["GET", "/image-builds/status"],
+        ["POST", "/image-builds/mark-stale"],
+        ["POST", "/image-builds/cleanup"],
+        ["POST", "/image-builds/trigger/environment/env_x"],
         ["GET", "/environment-images/enabled"],
         ["GET", "/environment-images/status"],
         ["POST", "/environment-images/mark-stale"],
@@ -513,21 +557,148 @@ describe("Environment images", () => {
     });
   });
 
+  describe("legacy /environment-images aliases (removed with the Modal cutover)", () => {
+    it("GET /environment-images/enabled preserves the old environments shape", async () => {
+      const enabledId = await seedEnvironment({
+        prebuildEnabled: true,
+        name: "Legacy Shape",
+        repositories: [["acme", "web", 1, "main"]],
+      });
+      await seedEnvironment({ prebuildEnabled: false });
+
+      const response = await SELF.fetch(`${BASE}/environment-images/enabled`, {
+        headers: await authHeaders(),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        environments: Array<{
+          id: string;
+          name: string;
+          repositoriesFingerprint: string;
+          repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+        }>;
+        minRuntimeVersion: number;
+      };
+      expect(body.minRuntimeVersion).toBe(MIN_COMPATIBLE_RUNTIME_VERSION);
+      expect(body.environments).toHaveLength(1);
+      expect(body.environments[0].id).toBe(enabledId);
+      expect(body.environments[0].name).toBe("Legacy Shape");
+      expect(body.environments[0].repositories).toEqual([
+        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+      ]);
+      expect(body.environments[0].repositoriesFingerprint).toBe(
+        await computeRepositoriesFingerprint(body.environments[0].repositories)
+      );
+    });
+
+    it("GET /environment-images/status serves rows keyed by environment_id", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await seedImageRow({ id: "al-ready", environmentId, status: "ready", providerImageId: "im" });
+      await seedImageRow({ id: "al-failed", environmentId, status: "failed" });
+
+      const all = await SELF.fetch(`${BASE}/environment-images/status`, {
+        headers: await authHeaders(),
+      });
+      const allBody = (await all.json()) as {
+        images: Array<{ id: string; environment_id: string }>;
+      };
+      expect(allBody.images.map((i) => i.id).sort()).toEqual(["al-failed", "al-ready"]);
+      expect(allBody.images.every((i) => i.environment_id === environmentId)).toBe(true);
+
+      const filtered = await SELF.fetch(
+        `${BASE}/environment-images/status?environment_id=${environmentId}`,
+        { headers: await authHeaders() }
+      );
+      const filteredBody = (await filtered.json()) as {
+        images: Array<{ id: string; environment_id: string }>;
+      };
+      expect(filteredBody.images.map((i) => i.id).sort()).toEqual(["al-failed", "al-ready"]);
+      expect(filteredBody.images[0].environment_id).toBe(environmentId);
+    });
+
+    it("POST /environment-images/mark-stale reaches the unified handler", async () => {
+      const environmentId = await seedEnvironment();
+      await seedImageRow({
+        id: "al-stale",
+        environmentId,
+        status: "building",
+        createdAt: Date.now() - 10_000_000,
+      });
+
+      const response = await SELF.fetch(`${BASE}/environment-images/mark-stale`, {
+        method: "POST",
+        headers: await authHeaders(),
+        body: JSON.stringify({ max_age_seconds: 3600 }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { markedFailed: number }).markedFailed).toBe(1);
+      expect((await getRow("al-stale"))?.status).toBe("failed");
+    });
+
+    it("POST /environment-images/build-complete reaches the unified callback handler", async () => {
+      const environmentId = await seedEnvironment();
+      await new ImageBuildStore(env.DB).registerBuild({
+        id: "al-cb",
+        scope: environmentScope(environmentId),
+        provider: "modal",
+        repositoriesFingerprint: "fp-al",
+      });
+
+      const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
+        method: "POST",
+        headers: await authHeaders(),
+        body: JSON.stringify({
+          build_id: "al-cb",
+          provider_image_id: "im-al",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 5,
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect((await getRow("al-cb"))?.status).toBe("ready");
+    });
+  });
+
+  describe("cross-scope status regression (aggregate feed includes failed)", () => {
+    it("surfaces a scope whose only build failed instead of silently dropping it", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await seedImageRow({ id: "only-failed", environmentId, status: "failed" });
+
+      const response = await SELF.fetch(`${BASE}/image-builds/status`, {
+        headers: await authHeaders(),
+      });
+      const body = (await response.json()) as {
+        images: Array<{ id: string; status: string; scope_id: string }>;
+      };
+
+      expect(body.images).toHaveLength(1);
+      expect(body.images[0]).toMatchObject({
+        id: "only-failed",
+        status: "failed",
+        scope_id: environmentId,
+      });
+    });
+  });
+
   describe("build callbacks", () => {
     async function registerBuild(environmentId: string, buildId: string): Promise<void> {
-      await new EnvironmentImageStore(env.DB).registerBuild({
+      await new ImageBuildStore(env.DB).registerBuild({
         id: buildId,
-        environmentId,
+        scope: environmentScope(environmentId),
         provider: "modal",
         repositoriesFingerprint: "fp-cb",
       });
     }
 
-    it("POST /environment-images/build-complete registers the image", async () => {
+    it("POST /image-builds/build-complete registers the image", async () => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-build");
 
-      const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({
@@ -551,7 +722,7 @@ describe("Environment images", () => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-noauth");
 
-      const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -579,7 +750,7 @@ describe("Environment images", () => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-invalid");
 
-      const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({
@@ -596,11 +767,11 @@ describe("Environment images", () => {
       expect((await getRow("cb-invalid"))?.status).toBe("building");
     });
 
-    it("POST /environment-images/build-failed marks the build failed", async () => {
+    it("POST /image-builds/build-failed marks the build failed", async () => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-failed");
 
-      const response = await SELF.fetch(`${BASE}/environment-images/build-failed`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/build-failed`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({ build_id: "cb-failed", error: "setup.failed: boom" }),
@@ -616,9 +787,9 @@ describe("Environment images", () => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-late");
       // Secret-change save-hook flips the in-flight build to superseded.
-      await new EnvironmentImageStore(env.DB).supersedeActiveImages(environmentId);
+      await new ImageBuildStore(env.DB).supersedeActiveImages(environmentScope(environmentId));
 
-      const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({
@@ -640,7 +811,7 @@ describe("Environment images", () => {
     });
 
     it("rejects completion for unknown builds with 409", async () => {
-      const response = await SELF.fetch(`${BASE}/environment-images/build-complete`, {
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({
@@ -656,7 +827,7 @@ describe("Environment images", () => {
     });
   });
 
-  describe("secret-change save-hook (design §7.4)", () => {
+  describe("secret-change save-hook", () => {
     it("PUT /environments/:id/secrets supersedes live images", async () => {
       const environmentId = await seedEnvironment();
       await seedImageRow({

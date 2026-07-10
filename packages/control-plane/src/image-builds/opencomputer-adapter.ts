@@ -1,34 +1,36 @@
 import { createLogger } from "../logger";
 import type { OpenComputerSandboxProvider } from "../sandbox/providers/opencomputer-provider";
-import type { EnvironmentImageProviderImageRef } from "./model";
+import type { ImageBuildProviderImageRef } from "./model";
 import type {
-  DeleteEnvironmentImageInput,
-  EnvironmentImageBuildAdapter,
-  EnvironmentImageBuildStartCallbacks,
-  FailedEnvironmentImageBuildInput,
-  FinalizeEnvironmentImageBuildInput,
-  OpenComputerEnvironmentImageBuildPlan,
+  DeleteImageInput,
+  FailedImageBuildInput,
+  FinalizeImageBuildInput,
+  ImageBuildAdapter,
+  ImageBuildStartCallbacks,
+  OpenComputerImageBuildPlan,
 } from "./types";
 
-const logger = createLogger("environment-images:opencomputer-adapter");
+const logger = createLogger("image-builds:opencomputer-adapter");
 const MS_PER_SECOND = 1000;
 
 /**
- * OpenComputer adapter for provider-session environment image builds.
+ * OpenComputer adapter for provider-session image builds.
  *
  * Builds run in a temporary OpenComputer sandbox. On success, the adapter
- * checkpoints that sandbox into the environment image artifact; cleanup hooks
- * handle teardown.
+ * checkpoints that sandbox into the image artifact; cleanup hooks handle
+ * teardown.
  */
-export class OpenComputerEnvironmentImageBuildAdapter implements EnvironmentImageBuildAdapter<OpenComputerEnvironmentImageBuildPlan> {
+export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComputerImageBuildPlan> {
   constructor(private readonly provider: OpenComputerSandboxProvider) {}
 
   async startBuild(
-    plan: OpenComputerEnvironmentImageBuildPlan,
-    callbacks: EnvironmentImageBuildStartCallbacks
+    plan: OpenComputerImageBuildPlan,
+    callbacks: ImageBuildStartCallbacks
   ): Promise<void> {
     await this.provider.triggerEnvironmentImageBuild({
-      environmentId: plan.environmentId,
+      // The provider API is keyed by environment id; scope.id is that id for
+      // every scope kind that exists until the unified data plane lands.
+      environmentId: plan.scope.id,
       repositories: plan.repositories,
       buildId: plan.buildId,
       callbackUrl: plan.callbackUrl,
@@ -41,8 +43,8 @@ export class OpenComputerEnvironmentImageBuildAdapter implements EnvironmentImag
   }
 
   async finalizeSuccessfulBuild(
-    input: FinalizeEnvironmentImageBuildInput
-  ): Promise<EnvironmentImageProviderImageRef> {
+    input: FinalizeImageBuildInput
+  ): Promise<ImageBuildProviderImageRef> {
     const snapshot = await this.provider.takeSnapshot({
       providerObjectId: input.providerSessionId,
       sessionId: input.buildId,
@@ -63,15 +65,15 @@ export class OpenComputerEnvironmentImageBuildAdapter implements EnvironmentImag
     };
   }
 
-  async cleanupCompletedBuild(input: FinalizeEnvironmentImageBuildInput): Promise<void> {
+  async cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void> {
     await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
   }
 
-  async cleanupFailedBuild(input: FailedEnvironmentImageBuildInput): Promise<void> {
+  async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
     await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
   }
 
-  async deleteImage(input: DeleteEnvironmentImageInput): Promise<void> {
+  async deleteImage(input: DeleteImageInput): Promise<void> {
     await this.provider.deleteProviderImage(
       input.image.providerImageId,
       input.image.providerSessionId
@@ -81,12 +83,12 @@ export class OpenComputerEnvironmentImageBuildAdapter implements EnvironmentImag
   private async deleteBuildSandbox(
     buildId: string,
     providerSessionId: string,
-    correlation: FinalizeEnvironmentImageBuildInput["correlation"]
+    correlation: FinalizeImageBuildInput["correlation"]
   ): Promise<void> {
     try {
       await this.provider.deleteSandbox(providerSessionId, { deleteSecretStore: true });
     } catch (error) {
-      logger.warn("environment_image.opencomputer_build_cleanup_failed", {
+      logger.warn("image_build.opencomputer_build_cleanup_failed", {
         build_id: buildId,
         provider_session_id: providerSessionId,
         error: error instanceof Error ? error.message : String(error),

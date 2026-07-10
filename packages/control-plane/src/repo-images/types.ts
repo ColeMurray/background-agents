@@ -1,3 +1,7 @@
+import type {
+  ImageBuildCallbackMode,
+  ImageBuildCloneAuthMode,
+} from "../image-builds/provider-policy";
 import type { CorrelationContext } from "../logger";
 import type { RepoImageProviderImageRef, SupersededRepoImage } from "./model";
 
@@ -8,7 +12,7 @@ import type { RepoImageProviderImageRef, SupersededRepoImage } from "./model";
  * provider_session: the callback identifies a build sandbox; the control plane
  * then snapshots/checkpoints that sandbox into the repo image artifact.
  */
-export type RepoImageCallbackMode = "provider_image" | "provider_session";
+export type RepoImageCallbackMode = ImageBuildCallbackMode;
 export type RepoImageWorkflowContext = CorrelationContext;
 
 export type ReplacedRepoImage = SupersededRepoImage;
@@ -45,7 +49,7 @@ export type RepoImageCloneAuth =
   | { type: "credential_helper"; token: string }
   | { type: "unavailable" };
 
-export type RepoImageCloneAuthMode = "credential_helper" | "none";
+export type RepoImageCloneAuthMode = ImageBuildCloneAuthMode;
 
 export type VercelCloneAuth = RepoImageCloneAuth;
 

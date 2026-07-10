@@ -1,13 +1,10 @@
 /**
- * Unit tests for spawn-time environment-image selection (design §7.3).
+ * Unit tests for spawn-time prebuilt-image selection.
  */
 
 import { describe, it, expect } from "vitest";
-import {
-  evaluateEnvironmentImageForSpawn,
-  type EnvironmentImageSpawnRow,
-} from "./environment-image-selection";
-import { computeRepositoriesFingerprint } from "../../environment-images/fingerprint";
+import { evaluateImageBuildForSpawn, type ImageBuildSpawnRow } from "./image-selection";
+import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 
 const SESSION_REPOSITORIES = [
   { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -15,10 +12,10 @@ const SESSION_REPOSITORIES = [
 ];
 
 async function readyImage(
-  overrides: Partial<EnvironmentImageSpawnRow> = {}
-): Promise<EnvironmentImageSpawnRow> {
+  overrides: Partial<ImageBuildSpawnRow> = {}
+): Promise<ImageBuildSpawnRow> {
   return {
-    id: "envimg-1",
+    id: "imgb-1",
     provider_image_id: "im-abc123",
     repositories_fingerprint: await computeRepositoriesFingerprint(SESSION_REPOSITORIES),
     repository_shas: JSON.stringify([
@@ -30,14 +27,14 @@ async function readyImage(
   };
 }
 
-describe("evaluateEnvironmentImageForSpawn", () => {
+describe("evaluateImageBuildForSpawn", () => {
   it("selects a ready image matching the session's own snapshot", async () => {
-    const result = await evaluateEnvironmentImageForSpawn(await readyImage(), SESSION_REPOSITORIES);
+    const result = await evaluateImageBuildForSpawn(await readyImage(), SESSION_REPOSITORIES);
 
     expect(result).toEqual({
       outcome: "selected",
       image: {
-        environmentImageId: "envimg-1",
+        imageBuildId: "imgb-1",
         providerImageId: "im-abc123",
         primaryBaseSha: "sha-web",
         runtimeVersion: "v53-list-native-runtime",
@@ -52,7 +49,7 @@ describe("evaluateEnvironmentImageForSpawn", () => {
         { repoOwner: "ACME", repoName: "api", baseBranch: "develop" },
       ]),
     });
-    expect((await evaluateEnvironmentImageForSpawn(image, SESSION_REPOSITORIES)).outcome).toBe(
+    expect((await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).outcome).toBe(
       "selected"
     );
 
@@ -62,15 +59,15 @@ describe("evaluateEnvironmentImageForSpawn", () => {
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ]),
     });
-    expect(await evaluateEnvironmentImageForSpawn(branchCased, SESSION_REPOSITORIES)).toEqual({
+    expect(await evaluateImageBuildForSpawn(branchCased, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "fingerprint_mismatch",
-      environmentImageId: "envimg-1",
+      imageBuildId: "imgb-1",
     });
   });
 
   it("misses when no ready image exists", async () => {
-    expect(await evaluateEnvironmentImageForSpawn(null, SESSION_REPOSITORIES)).toEqual({
+    expect(await evaluateImageBuildForSpawn(null, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "no_ready_image",
     });
@@ -79,10 +76,10 @@ describe("evaluateEnvironmentImageForSpawn", () => {
   it("misses on a ready row without a provider artifact", async () => {
     const image = await readyImage({ provider_image_id: null });
 
-    expect(await evaluateEnvironmentImageForSpawn(image, SESSION_REPOSITORIES)).toEqual({
+    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "missing_artifact",
-      environmentImageId: "envimg-1",
+      imageBuildId: "imgb-1",
     });
   });
 
@@ -90,10 +87,10 @@ describe("evaluateEnvironmentImageForSpawn", () => {
     for (const runtimeVersion of ["v52-pre-list-runtime", "dev", ""]) {
       const image = await readyImage({ runtime_version: runtimeVersion });
 
-      expect(await evaluateEnvironmentImageForSpawn(image, SESSION_REPOSITORIES)).toEqual({
+      expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({
         outcome: "miss",
         reason: "runtime_below_floor",
-        environmentImageId: "envimg-1",
+        imageBuildId: "imgb-1",
       });
     }
   });
@@ -108,25 +105,23 @@ describe("evaluateEnvironmentImageForSpawn", () => {
       ]),
     });
 
-    expect(await evaluateEnvironmentImageForSpawn(image, SESSION_REPOSITORIES)).toEqual({
+    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "fingerprint_mismatch",
-      environmentImageId: "envimg-1",
+      imageBuildId: "imgb-1",
     });
   });
 
   it("misses when the session's repositories are reordered relative to the build", async () => {
     const reordered = [SESSION_REPOSITORIES[1], SESSION_REPOSITORIES[0]];
 
-    expect((await evaluateEnvironmentImageForSpawn(await readyImage(), reordered)).outcome).toBe(
-      "miss"
-    );
+    expect((await evaluateImageBuildForSpawn(await readyImage(), reordered)).outcome).toBe("miss");
   });
 
   it("still selects when the provenance document is malformed — the SHA is informational", async () => {
     for (const repositoryShas of ["not json", "[]", '[{"repoOwner":"acme"}]', '"scalar"']) {
       const image = await readyImage({ repository_shas: repositoryShas });
-      const result = await evaluateEnvironmentImageForSpawn(image, SESSION_REPOSITORIES);
+      const result = await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES);
 
       expect(result.outcome).toBe("selected");
       if (result.outcome === "selected") {

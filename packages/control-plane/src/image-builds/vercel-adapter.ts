@@ -1,34 +1,33 @@
 import { createLogger } from "../logger";
 import type { VercelSandboxProvider } from "../sandbox/providers/vercel/provider";
-import type { EnvironmentImageProviderImageRef } from "./model";
+import type { ImageBuildProviderImageRef } from "./model";
 import type {
-  DeleteEnvironmentImageInput,
-  EnvironmentImageBuildAdapter,
-  EnvironmentImageBuildStartCallbacks,
-  FailedEnvironmentImageBuildInput,
-  FinalizeEnvironmentImageBuildInput,
-  VercelEnvironmentImageBuildPlan,
+  DeleteImageInput,
+  FailedImageBuildInput,
+  FinalizeImageBuildInput,
+  ImageBuildAdapter,
+  ImageBuildStartCallbacks,
+  VercelImageBuildPlan,
 } from "./types";
 
-const logger = createLogger("environment-images:vercel-adapter");
+const logger = createLogger("image-builds:vercel-adapter");
 const MS_PER_SECOND = 1000;
 
 /**
- * Vercel adapter for provider-session environment image builds.
+ * Vercel adapter for provider-session image builds.
  *
  * Builds run in a temporary Vercel sandbox. On success, the adapter turns
- * that sandbox into the durable environment image artifact; cleanup hooks
- * handle teardown.
+ * that sandbox into the durable image artifact; cleanup hooks handle
+ * teardown.
  */
-export class VercelEnvironmentImageBuildAdapter implements EnvironmentImageBuildAdapter<VercelEnvironmentImageBuildPlan> {
+export class VercelImageBuildAdapter implements ImageBuildAdapter<VercelImageBuildPlan> {
   constructor(private readonly provider: VercelSandboxProvider) {}
 
-  async startBuild(
-    plan: VercelEnvironmentImageBuildPlan,
-    callbacks: EnvironmentImageBuildStartCallbacks
-  ): Promise<void> {
+  async startBuild(plan: VercelImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
     await this.provider.triggerEnvironmentImageBuild({
-      environmentId: plan.environmentId,
+      // The provider API is keyed by environment id; scope.id is that id for
+      // every scope kind that exists until the unified data plane lands.
+      environmentId: plan.scope.id,
       repositories: plan.repositories,
       buildId: plan.buildId,
       callbackUrl: plan.callbackUrl,
@@ -42,8 +41,8 @@ export class VercelEnvironmentImageBuildAdapter implements EnvironmentImageBuild
   }
 
   async finalizeSuccessfulBuild(
-    input: FinalizeEnvironmentImageBuildInput
-  ): Promise<EnvironmentImageProviderImageRef> {
+    input: FinalizeImageBuildInput
+  ): Promise<ImageBuildProviderImageRef> {
     try {
       const snapshot = await this.provider.takeSnapshot({
         providerObjectId: input.providerSessionId,
@@ -68,18 +67,18 @@ export class VercelEnvironmentImageBuildAdapter implements EnvironmentImageBuild
     }
   }
 
-  async cleanupFailedBuild(input: FailedEnvironmentImageBuildInput): Promise<void> {
+  async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
     await this.stopBuildSandbox(input);
   }
 
-  async deleteImage(input: DeleteEnvironmentImageInput): Promise<void> {
+  async deleteImage(input: DeleteImageInput): Promise<void> {
     await this.provider.deleteProviderImage(input.image.providerImageId);
   }
 
   private async stopBuildSandbox(input: {
     buildId: string;
     providerSessionId: string;
-    correlation: FinalizeEnvironmentImageBuildInput["correlation"];
+    correlation: FinalizeImageBuildInput["correlation"];
   }): Promise<void> {
     try {
       const stopResult = await this.provider.stopSandbox({
@@ -95,7 +94,7 @@ export class VercelEnvironmentImageBuildAdapter implements EnvironmentImageBuild
         throw new Error(stopResult.error || "Failed to stop Vercel build sandbox");
       }
     } catch (error) {
-      logger.warn("environment_image.vercel_build_stop_failed", {
+      logger.warn("image_build.vercel_build_stop_failed", {
         build_id: input.buildId,
         provider_session_id: input.providerSessionId,
         error: error instanceof Error ? error.message : String(error),

@@ -1,92 +1,99 @@
-import { timingSafeEqual } from "@open-inspect/shared";
+import {
+  timingSafeEqual,
+  type ImageBuildRecordView,
+  type ImageBuildScopeKind,
+  type ImageBuildStatus,
+  type RepositoryShaEntry,
+} from "@open-inspect/shared";
 import type {
-  EnvironmentImageBuildStatus,
-  EnvironmentImageCallbackBuild,
-  EnvironmentImageRepositorySha,
-  EnvironmentImageProvider,
-  MarkEnvironmentImageReadyResult,
-  SupersededEnvironmentImage,
-} from "../environment-images/model";
+  ImageBuildCallbackBuild,
+  ImageBuildProvider,
+  ImageBuildScope,
+  MarkImageBuildReadyResult,
+  SupersededImageBuild,
+} from "../image-builds/model";
 
 const MS_PER_SECOND = 1000;
+
+/** D1 caps bound parameters per statement; IN-list queries chunk below it. */
+const MAX_SCOPE_IDS_PER_QUERY = 50;
 
 /** Row slice read by the callback-token auth checks. */
 interface CallbackTokenRow {
   id: string;
-  environment_id: string;
-  provider: EnvironmentImageProvider;
+  scope_kind: ImageBuildScopeKind;
+  scope_id: string;
+  provider: ImageBuildProvider;
   provider_session_id: string | null;
-  status: EnvironmentImageBuildStatus;
+  status: ImageBuildStatus;
   callback_token_hash: string | null;
   callback_token_expires_at: number | null;
   callback_token_used_at: number | null;
 }
 
-export interface EnvironmentImageBuild {
+/** Registration input for a new building row. */
+export interface ImageBuildRegistration {
   id: string;
-  environmentId: string;
-  provider: EnvironmentImageProvider;
+  scope: ImageBuildScope;
+  provider: ImageBuildProvider;
   repositoriesFingerprint: string;
   callbackTokenHash?: string;
   callbackTokenExpiresAt?: number;
 }
 
-export interface EnvironmentImage {
-  id: string;
-  environment_id: string;
-  provider: EnvironmentImageProvider;
+/** One full row. Mirrors the `image_builds` table (migration 0039). */
+export interface ImageBuildRow extends ImageBuildRecordView {
+  provider: ImageBuildProvider;
   provider_image_id: string | null;
   repositories_fingerprint: string;
-  repository_shas: string; // JSON EnvironmentImageRepositorySha[]
-  runtime_version: string;
-  status: EnvironmentImageBuildStatus;
-  build_duration_seconds: number | null;
-  error_message: string | null;
   provider_session_id: string | null;
   callback_token_hash: string | null;
   callback_token_expires_at: number | null;
   callback_token_used_at: number | null;
-  created_at: number;
 }
 
 /** Superseded row carrying its provider artifact (if any) for the reaper. */
-export interface SupersededEnvironmentImageRow {
+export interface SupersededImageBuildRow {
   id: string;
-  environment_id: string;
-  provider: EnvironmentImageProvider;
+  scope_kind: ImageBuildScopeKind;
+  scope_id: string;
+  provider: ImageBuildProvider;
   provider_image_id: string | null;
   provider_session_id: string | null;
 }
 
 /**
- * D1-backed environment image registry and state machine.
+ * D1-backed image-build registry and state machine.
  *
- * Mirrors RepoImageStore semantics (conditional updates so duplicate
- * callbacks and newer-build races need no provider-specific branching), with
- * two differences owed to the environment model: the supersede scope is
- * (environment_id, provider) — the fingerprint covers branches, so there is
- * no branch dimension and at most one live image per environment/provider —
- * and rows can be superseded out-of-band (environment delete, secret change),
- * so a reaper query exposes superseded artifacts for cleanup instead of
- * relying solely on inline deletion at mark-ready time.
+ * Conditional updates keep duplicate callbacks and newer-build races free of
+ * provider-specific branching. The supersede scope is
+ * (scope_kind, scope_id, provider) — the fingerprint covers branches, so
+ * there is no branch dimension and at most one live image per scope/provider —
+ * and rows can be superseded out-of-band (entity delete, secret change), so a
+ * reaper query exposes superseded artifacts for cleanup instead of relying
+ * solely on inline deletion at mark-ready time.
+ *
+ * Scope kind is data here, never dispatch: enablement and any other per-kind
+ * question belong to image-builds/scope.ts.
  */
-export class EnvironmentImageStore {
+export class ImageBuildStore {
   constructor(private readonly db: D1Database) {}
 
   /**
    * Registers a build unless one is already in flight for the same
-   * (environment, provider). The NOT EXISTS guard is the authoritative
+   * (scope, provider). The NOT EXISTS guard is the authoritative
    * concurrency-1 gate: it is atomic within the single INSERT statement, so
    * concurrent triggers cannot both insert (the workflow's earlier
    * getActiveBuild read is only a cheap short-circuit). Returns false when a
    * building row already existed and nothing was inserted.
    */
-  async registerBuild(build: EnvironmentImageBuild): Promise<boolean> {
+  async registerBuild(build: ImageBuildRegistration): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `INSERT INTO environment_images (
+        `INSERT INTO image_builds (
            id,
-           environment_id,
+           scope_kind,
+           scope_id,
            provider,
            repositories_fingerprint,
            repository_shas,
@@ -96,21 +103,23 @@ export class EnvironmentImageStore {
            callback_token_expires_at,
            created_at
          )
-         SELECT ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
          WHERE NOT EXISTS (
-           SELECT 1 FROM environment_images
-           WHERE environment_id = ? AND provider = ? AND status = 'building'
+           SELECT 1 FROM image_builds
+           WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
          )`
       )
       .bind(
         build.id,
-        build.environmentId,
+        build.scope.kind,
+        build.scope.id,
         build.provider,
         build.repositoriesFingerprint,
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
         Date.now(),
-        build.environmentId,
+        build.scope.kind,
+        build.scope.id,
         build.provider
       )
       .run();
@@ -120,12 +129,12 @@ export class EnvironmentImageStore {
 
   async bindProviderSession(
     buildId: string,
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     providerSessionId: string
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE environment_images SET provider_session_id = ? WHERE id = ? AND provider = ? AND status = 'building'"
+        "UPDATE image_builds SET provider_session_id = ? WHERE id = ? AND provider = ? AND status = 'building'"
       )
       .bind(providerSessionId, buildId, provider)
       .run();
@@ -135,17 +144,17 @@ export class EnvironmentImageStore {
 
   async consumeCallbackToken(params: {
     buildId: string;
-    provider: EnvironmentImageProvider;
+    provider: ImageBuildProvider;
     tokenHash: string;
     providerSessionId: string;
     now: number;
-  }): Promise<EnvironmentImageCallbackBuild | null> {
+  }): Promise<ImageBuildCallbackBuild | null> {
     const build = await this.readCallbackTokenRow(params.buildId, params.provider);
     if (!this.callbackTokenRowIsUsable(build, params)) return null;
 
     const result = await this.db
       .prepare(
-        `UPDATE environment_images SET callback_token_used_at = ?
+        `UPDATE image_builds SET callback_token_used_at = ?
          WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
            AND callback_token_hash = ?
            AND callback_token_expires_at >= ?
@@ -165,7 +174,7 @@ export class EnvironmentImageStore {
 
     return {
       id: build.id,
-      environmentId: build.environment_id,
+      scope: { kind: build.scope_kind, id: build.scope_id },
       provider: build.provider,
       providerSessionId: build.provider_session_id,
       status: build.status,
@@ -174,7 +183,7 @@ export class EnvironmentImageStore {
 
   async markBuildFailedWithCallbackToken(params: {
     buildId: string;
-    provider: EnvironmentImageProvider;
+    provider: ImageBuildProvider;
     tokenHash: string;
     providerSessionId: string;
     error: string;
@@ -185,7 +194,7 @@ export class EnvironmentImageStore {
 
     const result = await this.db
       .prepare(
-        `UPDATE environment_images
+        `UPDATE image_builds
          SET status = 'failed', error_message = ?, callback_token_used_at = ?
          WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
            AND callback_token_hash = ?
@@ -208,13 +217,13 @@ export class EnvironmentImageStore {
 
   private async readCallbackTokenRow(
     buildId: string,
-    provider: EnvironmentImageProvider
+    provider: ImageBuildProvider
   ): Promise<CallbackTokenRow | null> {
     return this.db
       .prepare(
-        `SELECT id, environment_id, provider, provider_session_id, status,
+        `SELECT id, scope_kind, scope_id, provider, provider_session_id, status,
                 callback_token_hash, callback_token_expires_at, callback_token_used_at
-         FROM environment_images WHERE id = ? AND provider = ?`
+         FROM image_builds WHERE id = ? AND provider = ?`
       )
       .bind(buildId, provider)
       .first<CallbackTokenRow>();
@@ -234,77 +243,80 @@ export class EnvironmentImageStore {
     return true;
   }
 
-  /** The per-environment concurrency guard: at most one in-flight build (design §7.3). */
+  /** The per-scope concurrency guard: at most one in-flight build. */
   async getActiveBuild(
-    environmentId: string,
-    provider: EnvironmentImageProvider
+    scope: ImageBuildScope,
+    provider: ImageBuildProvider
   ): Promise<{ id: string } | null> {
     return this.db
       .prepare(
-        `SELECT id FROM environment_images
-         WHERE environment_id = ? AND provider = ? AND status = 'building'
+        `SELECT id FROM image_builds
+         WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
          ORDER BY created_at DESC LIMIT 1`
       )
-      .bind(environmentId, provider)
+      .bind(scope.kind, scope.id, provider)
       .first<{ id: string }>();
   }
 
   /** Save-hook short-circuit: a ready image already matches the current repository set. */
   async hasReadyImageForFingerprint(
-    environmentId: string,
-    provider: EnvironmentImageProvider,
+    scope: ImageBuildScope,
+    provider: ImageBuildProvider,
     repositoriesFingerprint: string
   ): Promise<boolean> {
     const row = await this.db
       .prepare(
-        `SELECT 1 AS present FROM environment_images
-         WHERE environment_id = ? AND provider = ? AND status = 'ready' AND repositories_fingerprint = ?
+        `SELECT 1 AS present FROM image_builds
+         WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
+           AND repositories_fingerprint = ?
          LIMIT 1`
       )
-      .bind(environmentId, provider, repositoriesFingerprint)
+      .bind(scope.kind, scope.id, provider, repositoriesFingerprint)
       .first<{ present: number }>();
     return row !== null;
   }
 
-  async getCallbackBuild(buildId: string): Promise<EnvironmentImageCallbackBuild | null> {
+  async getCallbackBuild(buildId: string): Promise<ImageBuildCallbackBuild | null> {
     const build = await this.db
       .prepare(
-        "SELECT id, environment_id, provider, provider_session_id, status FROM environment_images WHERE id = ?"
+        "SELECT id, scope_kind, scope_id, provider, provider_session_id, status FROM image_builds WHERE id = ?"
       )
       .bind(buildId)
       .first<{
         id: string;
-        environment_id: string;
-        provider: EnvironmentImageProvider;
+        scope_kind: ImageBuildScopeKind;
+        scope_id: string;
+        provider: ImageBuildProvider;
         provider_session_id: string | null;
-        status: EnvironmentImageBuildStatus;
+        status: ImageBuildStatus;
       }>();
 
     if (!build || build.status !== "building") return null;
     return {
       id: build.id,
-      environmentId: build.environment_id,
+      scope: { kind: build.scope_kind, id: build.scope_id },
       provider: build.provider,
       providerSessionId: build.provider_session_id,
       status: build.status,
     };
   }
 
-  async tryMarkEnvironmentImageReady(
+  async tryMarkImageBuildReady(
     buildId: string,
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     providerImageId: string,
-    repositoryShas: EnvironmentImageRepositorySha[],
+    repositoryShas: RepositoryShaEntry[],
     runtimeVersion: string,
     buildDurationMs: number
-  ): Promise<MarkEnvironmentImageReadyResult> {
+  ): Promise<MarkImageBuildReadyResult> {
     const build = await this.db
       .prepare(
-        "SELECT environment_id, provider_session_id, created_at FROM environment_images WHERE id = ? AND provider = ? AND status = 'building'"
+        "SELECT scope_kind, scope_id, provider_session_id, created_at FROM image_builds WHERE id = ? AND provider = ? AND status = 'building'"
       )
       .bind(buildId, provider)
       .first<{
-        environment_id: string;
+        scope_kind: ImageBuildScopeKind;
+        scope_id: string;
         provider_session_id: string | null;
         created_at: number;
       }>();
@@ -315,12 +327,13 @@ export class EnvironmentImageStore {
 
     const updateResult = await this.db
       .prepare(
-        `UPDATE environment_images
+        `UPDATE image_builds
          SET status = 'ready', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?
          WHERE id = ? AND provider = ? AND status = 'building'
            AND NOT EXISTS (
-             SELECT 1 FROM environment_images newer
-             WHERE newer.environment_id = ?
+             SELECT 1 FROM image_builds newer
+             WHERE newer.scope_kind = ?
+               AND newer.scope_id = ?
                AND newer.provider = ?
                AND newer.status = 'ready'
                AND (
@@ -336,7 +349,8 @@ export class EnvironmentImageStore {
         buildDurationMs / MS_PER_SECOND,
         buildId,
         provider,
-        build.environment_id,
+        build.scope_kind,
+        build.scope_id,
         provider,
         build.created_at,
         build.created_at,
@@ -354,7 +368,8 @@ export class EnvironmentImageStore {
           repositoryShas,
           runtimeVersion,
           buildDurationMs,
-          environmentId: build.environment_id,
+          scopeKind: build.scope_kind,
+          scopeId: build.scope_id,
           createdAt: build.created_at,
         })) ?? { type: "not_accepting_completion" }
       );
@@ -362,8 +377,9 @@ export class EnvironmentImageStore {
 
     const superseded = await this.db
       .prepare(
-        `SELECT id, provider_image_id, provider_session_id FROM environment_images
-         WHERE environment_id = ?
+        `SELECT id, provider_image_id, provider_session_id FROM image_builds
+         WHERE scope_kind = ?
+           AND scope_id = ?
            AND provider = ?
            AND status = 'ready'
            AND id <> ?
@@ -373,25 +389,31 @@ export class EnvironmentImageStore {
            )
          ORDER BY created_at DESC, id DESC`
       )
-      .bind(build.environment_id, provider, buildId, build.created_at, build.created_at, buildId)
+      .bind(
+        build.scope_kind,
+        build.scope_id,
+        provider,
+        buildId,
+        build.created_at,
+        build.created_at,
+        buildId
+      )
       .all<{ id: string; provider_image_id: string | null; provider_session_id: string | null }>();
 
-    const supersededImages: SupersededEnvironmentImage[] = (superseded.results || []).map(
-      (image) => ({
-        environmentImageId: image.id,
-        image: {
-          providerImageId: image.provider_image_id ?? "",
-          providerSessionId: image.provider_session_id,
-        },
-      })
-    );
+    const supersededImages: SupersededImageBuild[] = (superseded.results || []).map((image) => ({
+      imageBuildId: image.id,
+      image: {
+        providerImageId: image.provider_image_id ?? "",
+        providerSessionId: image.provider_session_id,
+      },
+    }));
 
     if (superseded.results?.length) {
       await this.db.batch(
         superseded.results.map((image) =>
           this.db
             .prepare(
-              "UPDATE environment_images SET status = 'superseded' WHERE id = ? AND status = 'ready'"
+              "UPDATE image_builds SET status = 'superseded' WHERE id = ? AND status = 'ready'"
             )
             .bind(image.id)
         )
@@ -406,26 +428,25 @@ export class EnvironmentImageStore {
 
   private async tryMarkBuildingBuildSuperseded(params: {
     buildId: string;
-    provider: EnvironmentImageProvider;
+    provider: ImageBuildProvider;
     providerImageId: string;
     providerSessionId: string | null;
-    repositoryShas: EnvironmentImageRepositorySha[];
+    repositoryShas: RepositoryShaEntry[];
     runtimeVersion: string;
     buildDurationMs: number;
-    environmentId: string;
+    scopeKind: ImageBuildScopeKind;
+    scopeId: string;
     createdAt: number;
-  }): Promise<Extract<
-    MarkEnvironmentImageReadyResult,
-    { type: "superseded_by_newer_ready" }
-  > | null> {
+  }): Promise<Extract<MarkImageBuildReadyResult, { type: "superseded_by_newer_ready" }> | null> {
     const result = await this.db
       .prepare(
-        `UPDATE environment_images
+        `UPDATE image_builds
          SET status = 'superseded', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?
          WHERE id = ? AND provider = ? AND status = 'building'
            AND EXISTS (
-             SELECT 1 FROM environment_images newer
-             WHERE newer.environment_id = ?
+             SELECT 1 FROM image_builds newer
+             WHERE newer.scope_kind = ?
+               AND newer.scope_id = ?
                AND newer.provider = ?
                AND newer.status = 'ready'
                AND (
@@ -441,7 +462,8 @@ export class EnvironmentImageStore {
         params.buildDurationMs / MS_PER_SECOND,
         params.buildId,
         params.provider,
-        params.environmentId,
+        params.scopeKind,
+        params.scopeId,
         params.provider,
         params.createdAt,
         params.createdAt,
@@ -454,7 +476,7 @@ export class EnvironmentImageStore {
     return {
       type: "superseded_by_newer_ready",
       supersededImage: {
-        environmentImageId: params.buildId,
+        imageBuildId: params.buildId,
         image: {
           providerImageId: params.providerImageId,
           providerSessionId: params.providerSessionId,
@@ -466,24 +488,26 @@ export class EnvironmentImageStore {
   /** Any-status row lookup for late-completion handling. */
   async getBuildRow(buildId: string): Promise<{
     id: string;
-    environment_id: string;
-    provider: EnvironmentImageProvider;
-    status: EnvironmentImageBuildStatus;
+    scope_kind: ImageBuildScopeKind;
+    scope_id: string;
+    provider: ImageBuildProvider;
+    status: ImageBuildStatus;
   } | null> {
     return this.db
-      .prepare("SELECT id, environment_id, provider, status FROM environment_images WHERE id = ?")
+      .prepare("SELECT id, scope_kind, scope_id, provider, status FROM image_builds WHERE id = ?")
       .bind(buildId)
       .first<{
         id: string;
-        environment_id: string;
-        provider: EnvironmentImageProvider;
-        status: EnvironmentImageBuildStatus;
+        scope_kind: ImageBuildScopeKind;
+        scope_id: string;
+        provider: ImageBuildProvider;
+        status: ImageBuildStatus;
       }>();
   }
 
   /**
-   * Late completion for a build superseded out-of-band (environment delete,
-   * secret change) while it was in flight: the callback is rejected, but the
+   * Late completion for a build superseded out-of-band (entity delete, secret
+   * change) while it was in flight: the callback is rejected, but the
    * provider artifact it reports already exists — record it on the superseded
    * row so the reaper reclaims it instead of leaking it (Modal snapshots
    * never expire). Only artifact-less superseded rows are written, so a
@@ -491,12 +515,12 @@ export class EnvironmentImageStore {
    */
   async recordArtifactOnSupersededBuild(
     buildId: string,
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     providerImageId: string
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE environment_images SET provider_image_id = ?
+        `UPDATE image_builds SET provider_image_id = ?
          WHERE id = ? AND provider = ? AND status = 'superseded' AND provider_image_id IS NULL`
       )
       .bind(providerImageId, buildId, provider)
@@ -505,10 +529,10 @@ export class EnvironmentImageStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async deleteSupersededImage(environmentImageId: string): Promise<boolean> {
+  async deleteSupersededImage(imageBuildId: string): Promise<boolean> {
     const result = await this.db
-      .prepare("DELETE FROM environment_images WHERE id = ? AND status = 'superseded'")
-      .bind(environmentImageId)
+      .prepare("DELETE FROM image_builds WHERE id = ? AND status = 'superseded'")
+      .bind(imageBuildId)
       .run();
 
     return (result.meta?.changes ?? 0) > 0;
@@ -516,12 +540,12 @@ export class EnvironmentImageStore {
 
   async markBuildFailed(
     buildId: string,
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     error: string
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE environment_images SET status = 'failed', error_message = ? WHERE id = ? AND provider = ? AND status = 'building'"
+        "UPDATE image_builds SET status = 'failed', error_message = ? WHERE id = ? AND provider = ? AND status = 'building'"
       )
       .bind(error, buildId, provider)
       .run();
@@ -530,113 +554,124 @@ export class EnvironmentImageStore {
   }
 
   /**
-   * Spawn-side twin of markBuildFailed (design §7.3): a ready image whose
-   * provider artifact failed to restore is failed by id, so the rebuild cron
-   * sees no matching ready image and rebuilds it on the next tick. Scoped to
-   * status='ready' — building rows belong to the build workflow's failure
-   * paths and superseded rows to the reaper.
+   * Spawn-side twin of markBuildFailed: a ready image whose provider artifact
+   * failed to restore is failed by id, so the rebuild cron sees no matching
+   * ready image and rebuilds it on the next tick. Scoped to status='ready' —
+   * building rows belong to the build workflow's failure paths and superseded
+   * rows to the reaper.
    */
-  async markRestoreFailed(environmentImageId: string, error: string): Promise<boolean> {
+  async markRestoreFailed(imageBuildId: string, error: string): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE environment_images SET status = 'failed', error_message = ? WHERE id = ? AND status = 'ready'"
+        "UPDATE image_builds SET status = 'failed', error_message = ? WHERE id = ? AND status = 'ready'"
       )
-      .bind(error, environmentImageId)
+      .bind(error, imageBuildId)
       .run();
 
     return (result.meta?.changes ?? 0) > 0;
   }
 
   /**
-   * Secret-change invalidation (design §7.4): flip every live image —
-   * including in-flight builds, which are baking the outdated values — to
-   * superseded. The status flip is the load-bearing part and happens in the
-   * save-hook; provider artifacts are reclaimed later by the reaper.
+   * Secret-change invalidation: flip every live image — including in-flight
+   * builds, which are baking the outdated values — to superseded. The status
+   * flip is the load-bearing part and happens in the save-hook; provider
+   * artifacts are reclaimed later by the reaper.
    */
-  async supersedeActiveImages(environmentId: string): Promise<number> {
+  async supersedeActiveImages(scope: ImageBuildScope): Promise<number> {
     const result = await this.db
       .prepare(
-        `UPDATE environment_images SET status = 'superseded'
-         WHERE environment_id = ? AND status IN ('building', 'ready')`
+        `UPDATE image_builds SET status = 'superseded'
+         WHERE scope_kind = ? AND scope_id = ? AND status IN ('building', 'ready')`
       )
-      .bind(environmentId)
+      .bind(scope.kind, scope.id)
       .run();
 
     return result.meta?.changes ?? 0;
   }
 
   /**
-   * Spawn-time selection read (design §7.3): the latest ready image for an
-   * environment on the active provider. The environments join mirrors the
-   * repo_metadata join in RepoImageStore: it is defense-in-depth against a
-   * lingering row serving a deleted environment (delete supersedes rows in
-   * the same batch, but a partial write must not hand out an image), and the
-   * prebuild_enabled gate mirrors image_build_enabled — a disabled
-   * environment's frozen image never rebuilds, so serving it would drift
-   * unboundedly.
+   * Spawn-time selection read: the latest ready image for a scope on the
+   * active provider. Purely a row read — scope existence and prebuild
+   * enablement are the scope resolver's answer (image-builds/scope.ts), which
+   * callers consult before serving the row.
    */
   async getLatestReadyForSpawn(
-    environmentId: string,
-    provider: EnvironmentImageProvider
-  ): Promise<EnvironmentImage | null> {
+    scope: ImageBuildScope,
+    provider: ImageBuildProvider
+  ): Promise<ImageBuildRow | null> {
     return await this.db
       .prepare(
-        `SELECT ei.* FROM environment_images ei
-         INNER JOIN environments e ON e.id = ei.environment_id AND e.prebuild_enabled = 1
-         WHERE ei.environment_id = ? AND ei.provider = ? AND ei.status = 'ready'
-         ORDER BY ei.created_at DESC LIMIT 1`
+        `SELECT * FROM image_builds
+         WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
+         ORDER BY created_at DESC LIMIT 1`
       )
-      .bind(environmentId, provider)
-      .first<EnvironmentImage>();
+      .bind(scope.kind, scope.id, provider)
+      .first<ImageBuildRow>();
   }
 
-  async getStatus(environmentId: string): Promise<EnvironmentImage[]> {
+  /** Per-scope recent non-superseded rows (settings UI / debugging view). */
+  async getStatus(scope: ImageBuildScope): Promise<ImageBuildRow[]> {
     const result = await this.db
       .prepare(
-        "SELECT * FROM environment_images WHERE environment_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10"
+        "SELECT * FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10"
       )
-      .bind(environmentId)
-      .all<EnvironmentImage>();
+      .bind(scope.kind, scope.id)
+      .all<ImageBuildRow>();
 
     return result.results || [];
   }
 
   /**
-   * Scheduler-facing status: every row the cron's rebuild checks read —
-   * ready and building rows of prebuild-enabled environments. Unbounded on
-   * purpose: the state machine caps live rows per (environment, provider) at
-   * one ready (mark-ready supersedes older readies) plus one building (the
-   * registerBuild guard), so a row cap would just reintroduce the risk of
-   * ready images dropping out of view and the cron re-triggering forever.
+   * Cross-scope status for the given (enabled) scopes: every non-superseded
+   * row, so failed builds are visible in the aggregate feed alongside ready
+   * and building rows. Unbounded per scope on purpose: the state machine caps
+   * live rows per (scope, provider) at one ready (mark-ready supersedes older
+   * readies) plus one building (the registerBuild guard), failed rows age out
+   * via the cleanup pass, and a row cap would just reintroduce the risk of
+   * ready images dropping out of the cron's view and re-triggering forever.
    */
-  async getStatusForEnabledEnvironments(): Promise<EnvironmentImage[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT ei.* FROM environment_images ei
-         JOIN environments e ON e.id = ei.environment_id AND e.prebuild_enabled = 1
-         WHERE ei.status IN ('building', 'ready')
-         ORDER BY ei.created_at DESC`
-      )
-      .all<EnvironmentImage>();
+  async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildRow[]> {
+    const idsByKind = new Map<ImageBuildScopeKind, string[]>();
+    for (const scope of scopes) {
+      const ids = idsByKind.get(scope.kind) ?? [];
+      ids.push(scope.id);
+      idsByKind.set(scope.kind, ids);
+    }
 
-    return result.results || [];
+    const rows: ImageBuildRow[] = [];
+    for (const [kind, ids] of idsByKind) {
+      for (let offset = 0; offset < ids.length; offset += MAX_SCOPE_IDS_PER_QUERY) {
+        const chunk = ids.slice(offset, offset + MAX_SCOPE_IDS_PER_QUERY);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const result = await this.db
+          .prepare(
+            `SELECT * FROM image_builds
+             WHERE scope_kind = ? AND scope_id IN (${placeholders}) AND status <> 'superseded'`
+          )
+          .bind(kind, ...chunk)
+          .all<ImageBuildRow>();
+        rows.push(...(result.results || []));
+      }
+    }
+
+    rows.sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? 1 : -1));
+    return rows;
   }
 
   /**
-   * Superseded rows for the cleanup reaper. Unlike repo images — whose
-   * superseded rows are deleted inline right after artifact deletion at
-   * mark-ready time — environment images are also superseded out-of-band
-   * (environment delete, secret change), so cleanup sweeps whatever is left.
+   * Superseded rows for the cleanup reaper. Rows are superseded both inline
+   * (mark-ready replacing an older ready) and out-of-band (entity delete,
+   * secret change), so cleanup sweeps whatever is left.
    */
-  async getSupersededImages(limit: number): Promise<SupersededEnvironmentImageRow[]> {
+  async getSupersededImages(limit: number): Promise<SupersededImageBuildRow[]> {
     const result = await this.db
       .prepare(
-        `SELECT id, environment_id, provider, provider_image_id, provider_session_id
-         FROM environment_images WHERE status = 'superseded'
+        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
+         FROM image_builds WHERE status = 'superseded'
          ORDER BY created_at ASC LIMIT ?`
       )
       .bind(limit)
-      .all<SupersededEnvironmentImageRow>();
+      .all<SupersededImageBuildRow>();
 
     return result.results || [];
   }
@@ -645,7 +680,7 @@ export class EnvironmentImageStore {
     const cutoff = Date.now() - maxAgeMs;
     const result = await this.db
       .prepare(
-        "UPDATE environment_images SET status = 'failed', error_message = ? WHERE status = 'building' AND created_at < ?"
+        "UPDATE image_builds SET status = 'failed', error_message = ? WHERE status = 'building' AND created_at < ?"
       )
       .bind("build timed out (no callback received)", cutoff)
       .run();
@@ -656,7 +691,7 @@ export class EnvironmentImageStore {
   async deleteOldFailedBuilds(maxAgeMs: number): Promise<number> {
     const cutoff = Date.now() - maxAgeMs;
     const result = await this.db
-      .prepare("DELETE FROM environment_images WHERE status = 'failed' AND created_at < ?")
+      .prepare("DELETE FROM image_builds WHERE status = 'failed' AND created_at < ?")
       .bind(cutoff)
       .run();
 

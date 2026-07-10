@@ -5,7 +5,10 @@
  * an image id, Vercel stores a snapshot id, and OpenComputer stores a checkpoint
  * id. Code outside provider adapters should treat those ids as opaque.
  */
-export type RepoImageProvider = "modal" | "vercel" | "opencomputer";
+import type { ImageBuildProvider } from "../image-builds/model";
+
+/** Same provider set as the unified image-build subsystem. */
+export type RepoImageProvider = ImageBuildProvider;
 export type RepoImageBuildStatus = "building" | "ready" | "failed" | "superseded";
 
 /** Opaque provider artifact reference, optionally tied to the build sandbox that produced it. */

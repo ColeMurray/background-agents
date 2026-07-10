@@ -4,7 +4,7 @@ import { RepoImageStore } from "../db/repo-images";
 import type { RepoImageBuild } from "../db/repo-images";
 import { createLogger, type CorrelationContext } from "../logger";
 import type { Env } from "../types";
-import { hashRepoImageCallbackToken } from "./auth";
+import { hashImageBuildCallbackToken } from "../image-builds/callback-auth";
 import {
   RepoImageBuildCompleteFailedError,
   RepoImageBuildFailedUpdateError,
@@ -20,7 +20,10 @@ import {
   RepoImageWorkflowUnavailableError,
 } from "./errors";
 import type { RepoImageCallbackBuild, RepoImageProvider } from "./model";
-import { getRepoImageCallbackMode, resolveRepoImageProvider } from "./provider-policy";
+import {
+  getImageBuildCallbackMode,
+  resolveImageBuildProvider,
+} from "../image-builds/provider-policy";
 import { RepoImageBuildPlanner } from "./planner";
 import {
   createRepoImageBuildAdapterFactory,
@@ -459,7 +462,7 @@ export class RepoImageBuildWorkflow {
   private callbackPolicyFor(provider: RepoImageProvider): RepoImageCallbackPolicy {
     return {
       provider,
-      mode: getRepoImageCallbackMode(provider),
+      mode: getImageBuildCallbackMode(provider),
     };
   }
 
@@ -744,7 +747,7 @@ export class RepoImageBuildWorkflow {
     }
 
     try {
-      return await hashRepoImageCallbackToken(token, this.env);
+      return await hashImageBuildCallbackToken(token, this.env);
     } catch (e) {
       logger.error("repo_image.callback_auth_misconfigured", {
         build_id: params.buildId,
@@ -1012,7 +1015,7 @@ export function createRepoImageBuildWorkflowFromEnv(env: Env): RepoImageBuildWor
     env,
     new RepoImageStore(env.DB),
     createRepoImageBuildAdapterFactory(env),
-    resolveRepoImageProvider(env.SANDBOX_PROVIDER)
+    resolveImageBuildProvider(env.SANDBOX_PROVIDER)
   );
 }
 

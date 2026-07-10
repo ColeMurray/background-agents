@@ -16,11 +16,11 @@ import {
   type SandboxLifecycleConfig,
   type McpServerLookup,
   type RepoImageLookup,
-  type EnvironmentImageLookup,
+  type ImageBuildLookup,
   type SlackAgentNotifyLookup,
 } from "./manager";
-import type { EnvironmentImageSpawnRow } from "./environment-image-selection";
-import { computeRepositoriesFingerprint } from "../../environment-images/fingerprint";
+import type { ImageBuildSpawnRow } from "./image-selection";
+import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import {
   SandboxProviderError,
   type SandboxProvider,
@@ -1863,10 +1863,10 @@ describe("SandboxLifecycleManager", () => {
     ];
 
     async function envImageRow(
-      overrides: Partial<EnvironmentImageSpawnRow> = {}
-    ): Promise<EnvironmentImageSpawnRow> {
+      overrides: Partial<ImageBuildSpawnRow> = {}
+    ): Promise<ImageBuildSpawnRow> {
       return {
-        id: "envimg-1",
+        id: "imgb-1",
         provider_image_id: "im-env-123",
         repositories_fingerprint: await computeRepositoriesFingerprint(ENV_MEMBERS),
         repository_shas: JSON.stringify([
@@ -1880,7 +1880,7 @@ describe("SandboxLifecycleManager", () => {
 
     function createEnvironmentSessionManager(overrides?: {
       provider?: SandboxProvider;
-      environmentImageLookup?: EnvironmentImageLookup;
+      environmentImageLookup?: ImageBuildLookup;
       repoImageLookup?: RepoImageLookup;
       sessionRepositories?: SessionRepositoryInfo[];
     }) {
@@ -1908,7 +1908,7 @@ describe("SandboxLifecycleManager", () => {
     }
 
     it("boots from the environment image when it matches the session's snapshot", async () => {
-      const environmentImageLookup: EnvironmentImageLookup = {
+      const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => envImageRow()),
         markRestoreFailed: vi.fn(async () => true),
       };
@@ -1927,7 +1927,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("boots from base when the image does not match the session's own snapshot", async () => {
-      const environmentImageLookup: EnvironmentImageLookup = {
+      const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () =>
           envImageRow({
             repositories_fingerprint: await computeRepositoriesFingerprint([
@@ -1951,7 +1951,7 @@ describe("SandboxLifecycleManager", () => {
       // Even a single-repo environment session must not fall back to that
       // repository's repo image: it bakes the repo's setup and secrets, not
       // the environment's.
-      const environmentImageLookup: EnvironmentImageLookup = {
+      const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => null),
         markRestoreFailed: vi.fn(async () => true),
       };
@@ -1976,7 +1976,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("falls back to base when the environment image lookup fails", async () => {
-      const environmentImageLookup: EnvironmentImageLookup = {
+      const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => {
           throw new Error("D1 unavailable");
         }),
@@ -2005,7 +2005,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("marks the image restore-failed and retries from base when the provider rejects it", async () => {
-      const environmentImageLookup: EnvironmentImageLookup = {
+      const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => envImageRow()),
         markRestoreFailed: vi.fn(async () => true),
       };
@@ -2026,7 +2026,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(environmentImageLookup.markRestoreFailed).toHaveBeenCalledWith(
-        "envimg-1",
+        "imgb-1",
         expect.stringContaining("image expired")
       );
       expect(createSandbox).toHaveBeenCalledTimes(2);
@@ -2049,7 +2049,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("fails the spawn when the base-image retry also fails", async () => {
-      const environmentImageLookup: EnvironmentImageLookup = {
+      const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => envImageRow()),
         markRestoreFailed: vi.fn(async () => true),
       };
@@ -2069,7 +2069,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("still retries from base when marking the row restore-failed fails", async () => {
-      const environmentImageLookup: EnvironmentImageLookup = {
+      const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => envImageRow()),
         markRestoreFailed: vi.fn(async () => {
           throw new Error("D1 unavailable");

@@ -1,171 +1,167 @@
 import { generateId } from "../auth/crypto";
-import { verifyInternalToken } from "../auth/internal";
-import { EnvironmentImageStore, type EnvironmentImageBuild } from "../db/environment-images";
+import { ImageBuildStore, type ImageBuildRegistration } from "../db/image-builds";
 import { createLogger } from "../logger";
-// Shared with repo images by design (§7.3): same token scheme, same provider policy.
-import { hashRepoImageCallbackToken } from "../repo-images/auth";
-import { getRepoImageCallbackMode, resolveRepoImageProvider } from "../repo-images/provider-policy";
 import type { Env } from "../types";
 import {
-  EnvironmentImageBuildCompleteFailedError,
-  EnvironmentImageBuildFailedUpdateError,
-  EnvironmentImageCallbackAuthRejectedError,
-  EnvironmentImageCallbackAuthUnavailableError,
-  EnvironmentImageCompletionNotAcceptedError,
-  EnvironmentImageEnvironmentNotFoundError,
-  EnvironmentImageFailureNotAcceptedError,
-  EnvironmentImageInvalidCallbackError,
-  EnvironmentImagePlanningError,
-  EnvironmentImageProviderUnconfiguredError,
-  EnvironmentImageTriggerFailedError,
-  EnvironmentImageWorkflowUnavailableError,
+  consumeImageBuildCallbackTokenOrThrow,
+  ImageBuildCallbackAuthError,
+  markImageBuildFailedWithCallbackTokenOrThrow,
+  requireInternalImageBuildCallbackAuth,
+} from "./callback-auth";
+import {
+  ImageBuildCallbackAuthRejectedError,
+  ImageBuildCallbackAuthUnavailableError,
+  ImageBuildCompleteFailedError,
+  ImageBuildCompletionNotAcceptedError,
+  ImageBuildFailedUpdateError,
+  ImageBuildFailureNotAcceptedError,
+  ImageBuildInvalidCallbackError,
+  ImageBuildPlanningError,
+  ImageBuildProviderUnconfiguredError,
+  ImageBuildScopeNotFoundError,
+  ImageBuildTriggerFailedError,
+  ImageBuildWorkflowUnavailableError,
 } from "./errors";
 import {
   parseRuntimeVersionNumber,
-  type EnvironmentImageRepositorySha,
-  type EnvironmentImageProvider,
-  type EnvironmentImageProviderImageRef,
-  type SupersededEnvironmentImage,
+  type ImageBuildProvider,
+  type ImageBuildProviderImageRef,
+  type ImageBuildScope,
 } from "./model";
-import { EnvironmentImageBuildPlanner, type PlannedCallbackAuth } from "./planner";
-import {
-  createEnvironmentImageBuildAdapterFactory,
-  type EnvironmentImageBuildAdapterFactory,
-} from "./provider-factory";
+import { ImageBuildPlanner, type PlannedCallbackAuth } from "./planner";
+import { ImageBuildReaper } from "./reaper";
+import { getImageBuildCallbackMode, resolveImageBuildProvider } from "./provider-policy";
+import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
+import type { RepositoryShaEntry } from "@open-inspect/shared";
 import type {
-  AnyEnvironmentImageBuildAdapter,
-  CompleteEnvironmentImageBuildCallback,
-  EnvironmentImageWorkflowContext,
-  EnvironmentImageWorkflowResult,
-  EnvironmentImageBuildStartCallbacks,
-  FailEnvironmentImageBuildCallback,
-  PlannedEnvironmentImageBuild,
-  TriggerEnvironmentImageBuildResult,
+  AnyImageBuildAdapter,
+  CompleteImageBuildCallback,
+  FailImageBuildCallback,
+  ImageBuildStartCallbacks,
+  ImageBuildWorkflowContext,
+  ImageBuildWorkflowResult,
+  PlannedImageBuild,
+  TriggerImageBuildResult,
 } from "./types";
 
-const logger = createLogger("environment-images:workflow");
+const logger = createLogger("image-builds:workflow");
 
-/** Superseded rows reclaimed per cleanup pass; leftovers wait for the next tick. */
-const SUPERSEDED_REAP_BATCH_LIMIT = 25;
-
-type EnvironmentImageBuildPlannerLike = Pick<
-  EnvironmentImageBuildPlanner,
+type ImageBuildPlannerLike = Pick<
+  ImageBuildPlanner,
   "resolveTarget" | "createCallbackAuth" | "planBuild"
 >;
 
-export interface AcceptEnvironmentBuildCompleteCommand {
-  completion: CompleteEnvironmentImageBuildCallback;
+export interface AcceptBuildCompleteCommand {
+  completion: CompleteImageBuildCallback;
   authorizationHeader?: string | null;
   callbackToken?: string | null;
-  context: EnvironmentImageWorkflowContext;
+  context: ImageBuildWorkflowContext;
 }
 
-export interface AcceptEnvironmentBuildFailedCommand {
-  failure: FailEnvironmentImageBuildCallback;
+export interface AcceptBuildFailedCommand {
+  failure: FailImageBuildCallback;
   authorizationHeader?: string | null;
   callbackToken?: string | null;
-  context: EnvironmentImageWorkflowContext;
+  context: ImageBuildWorkflowContext;
 }
 
 /** Fields common to both callback modes; provider_image adds the artifact id. */
-interface ValidatedEnvironmentBuildCompletion {
+interface ValidatedBuildCompletion {
   buildId: string;
-  repositoryShas: EnvironmentImageRepositorySha[];
+  repositoryShas: RepositoryShaEntry[];
   runtimeVersion: string;
   buildDurationMs: number;
 }
 
 type PlannedBuildStart = {
-  adapter: AnyEnvironmentImageBuildAdapter;
-  start(callbacks: EnvironmentImageBuildStartCallbacks): Promise<void>;
+  adapter: AnyImageBuildAdapter;
+  start(callbacks: ImageBuildStartCallbacks): Promise<void>;
 };
 
 /**
- * Application service for the environment image build lifecycle (design §7.3).
+ * Application service for the image-build lifecycle.
  *
  * Sequences planning, provider adapter calls, callback authorization, store
- * state transitions, and best-effort artifact cleanup — the environment twin
- * of RepoImageBuildWorkflow, trimmed to the provider_image callback mode
- * Modal uses. HTTP parsing stays in routes, environment/secrets resolution in
- * the planner, and provider API details in adapters.
+ * state transitions, and best-effort artifact cleanup. HTTP parsing stays in
+ * routes, scope/secrets resolution in the planner (via scope.ts), and
+ * provider API details in adapters.
  *
- * Public methods return successful domain outcomes and throw
- * EnvironmentImageError subclasses for route-level error mapping.
+ * Public methods return successful domain outcomes and throw ImageBuildError
+ * subclasses for route-level error mapping.
  */
-export class EnvironmentImageBuildWorkflow {
-  private readonly planner: EnvironmentImageBuildPlannerLike | null;
+export class ImageBuildWorkflow {
+  private readonly planner: ImageBuildPlannerLike | null;
+  private readonly reaper: ImageBuildReaper;
 
   constructor(
     private readonly env: Env,
-    private readonly store: EnvironmentImageStore,
-    private readonly adapterFactory: EnvironmentImageBuildAdapterFactory,
-    private readonly provider: EnvironmentImageProvider | null,
-    planner?: EnvironmentImageBuildPlannerLike
+    private readonly store: ImageBuildStore,
+    private readonly adapterFactory: ImageBuildAdapterFactory,
+    private readonly provider: ImageBuildProvider | null,
+    planner?: ImageBuildPlannerLike
   ) {
-    this.planner = planner ?? (provider ? new EnvironmentImageBuildPlanner(env, provider) : null);
+    this.planner = planner ?? (provider ? new ImageBuildPlanner(env, provider) : null);
+    this.reaper = new ImageBuildReaper(store, adapterFactory);
   }
 
   /**
-   * Trigger a build for an environment. All trigger sources — the cron pass,
-   * save-hooks, and manual rebuilds — converge here, so the per-environment
+   * Trigger a build for a scope. All trigger sources — the cron pass,
+   * save-hooks, and manual rebuilds — converge here, so the per-scope
    * concurrency-1 rule is enforced here rather than in any one caller.
    */
   async triggerBuild(
-    environmentId: string,
-    ctx: EnvironmentImageWorkflowContext
-  ): Promise<TriggerEnvironmentImageBuildResult> {
-    return this.trigger(environmentId, ctx, { onlyIfStale: false });
+    scope: ImageBuildScope,
+    ctx: ImageBuildWorkflowContext
+  ): Promise<TriggerImageBuildResult> {
+    return this.trigger(scope, ctx, { onlyIfStale: false });
   }
 
   /**
-   * Save-hook variant (design §7.3 "saving an environment triggers an
-   * immediate build"): skips the build when a ready image already matches the
-   * current repository set — that is the cron's trigger-1 check evaluated
-   * eagerly. Unconditional rebuild reasons (sha drift, runtime floor) remain
-   * the cron's job.
+   * Save-hook variant (saving the owning entity triggers an immediate build):
+   * skips the build when a ready image already matches the current repository
+   * set — that is the cron's trigger-1 check evaluated eagerly. Unconditional
+   * rebuild reasons (sha drift, runtime floor) remain the cron's job.
    */
   async triggerBuildIfStale(
-    environmentId: string,
-    ctx: EnvironmentImageWorkflowContext
-  ): Promise<TriggerEnvironmentImageBuildResult> {
-    return this.trigger(environmentId, ctx, { onlyIfStale: true });
+    scope: ImageBuildScope,
+    ctx: ImageBuildWorkflowContext
+  ): Promise<TriggerImageBuildResult> {
+    return this.trigger(scope, ctx, { onlyIfStale: true });
   }
 
   private async trigger(
-    environmentId: string,
-    ctx: EnvironmentImageWorkflowContext,
+    scope: ImageBuildScope,
+    ctx: ImageBuildWorkflowContext,
     options: { onlyIfStale: boolean }
-  ): Promise<TriggerEnvironmentImageBuildResult> {
+  ): Promise<TriggerImageBuildResult> {
     if (!this.provider || !this.planner) {
-      throw new EnvironmentImageWorkflowUnavailableError(
-        "Environment image provider is not configured"
-      );
+      throw new ImageBuildWorkflowUnavailableError("Image build provider is not configured");
     }
     if (!this.env.WORKER_URL) {
-      throw new EnvironmentImageWorkflowUnavailableError("WORKER_URL not configured");
+      throw new ImageBuildWorkflowUnavailableError("WORKER_URL not configured");
     }
 
     const provider = this.provider;
-    const active = await this.store.getActiveBuild(environmentId, provider);
+    const active = await this.store.getActiveBuild(scope, provider);
     if (active) {
       return { type: "already_building", buildId: active.id };
     }
 
-    const buildId = createBuildId(environmentId);
-    const callbackUrl = `${this.env.WORKER_URL}/environment-images/build-complete`;
+    const buildId = createBuildId(scope);
+    const callbackUrl = `${this.env.WORKER_URL}/image-builds/build-complete`;
 
     // Everything before registerBuild must stay cheap and secret-free: the
-    // §7.4 secret-change supersede can only see builds that have a row, so
-    // the row is registered BEFORE secrets are decrypted (planBuild below).
+    // secret-change supersede can only see builds that have a row, so the
+    // row is registered BEFORE secrets are decrypted (planBuild below).
     let target;
     let callbackAuth;
     try {
-      target = await this.planner.resolveTarget(environmentId);
+      target = await this.planner.resolveTarget(scope);
 
       if (
         options.onlyIfStale &&
         (await this.store.hasReadyImageForFingerprint(
-          environmentId,
+          scope,
           provider,
           target.repositoriesFingerprint
         ))
@@ -179,28 +175,29 @@ export class EnvironmentImageBuildWorkflow {
       callbackAuth = await this.planner.createCallbackAuth();
     } catch (e) {
       if (
-        e instanceof EnvironmentImageEnvironmentNotFoundError ||
-        e instanceof EnvironmentImagePlanningError ||
-        e instanceof EnvironmentImageProviderUnconfiguredError
+        e instanceof ImageBuildScopeNotFoundError ||
+        e instanceof ImageBuildPlanningError ||
+        e instanceof ImageBuildProviderUnconfiguredError
       ) {
         throw e;
       }
 
-      logger.error("environment_image.trigger_error", {
+      logger.error("image_build.trigger_error", {
         error: errorMessage(e),
-        environment_id: environmentId,
+        scope_kind: scope.kind,
+        scope_id: scope.id,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      throw new EnvironmentImageTriggerFailedError("Failed to trigger build", e);
+      throw new ImageBuildTriggerFailedError("Failed to trigger build", e);
     }
 
     let providerSessionIdForCleanup: string | null = null;
-    let startAdapter: AnyEnvironmentImageBuildAdapter | null = null;
+    let startAdapter: AnyImageBuildAdapter | null = null;
     try {
       const registered = await this.store.registerBuild({
         id: buildId,
-        environmentId,
+        scope,
         provider,
         repositoriesFingerprint: target.repositoriesFingerprint,
         ...callbackAuthRegistration(callbackAuth),
@@ -209,7 +206,7 @@ export class EnvironmentImageBuildWorkflow {
         // A concurrent trigger won the registerBuild NOT EXISTS guard (the
         // getActiveBuild read above is only a cheap short-circuit, not
         // atomic with the insert). Report the winner's build.
-        const winner = await this.store.getActiveBuild(environmentId, provider);
+        const winner = await this.store.getActiveBuild(scope, provider);
         if (!winner) {
           throw new Error("Concurrent trigger raced registerBuild and its build is already gone");
         }
@@ -218,7 +215,7 @@ export class EnvironmentImageBuildWorkflow {
 
       const planned = await this.planner.planBuild({
         buildId,
-        environmentId,
+        scope,
         callbackUrl,
         correlation: ctx,
         target,
@@ -237,9 +234,10 @@ export class EnvironmentImageBuildWorkflow {
         },
       });
 
-      logger.info("environment_image.build_triggered", {
+      logger.info("image_build.build_triggered", {
         build_id: buildId,
-        environment_id: environmentId,
+        scope_kind: scope.kind,
+        scope_id: scope.id,
         repositories_fingerprint: planned.plan.repositoriesFingerprint,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
@@ -256,7 +254,7 @@ export class EnvironmentImageBuildWorkflow {
             correlation: ctx,
           })
           .catch((cleanupError) => {
-            logger.warn(`environment_image.${provider}_trigger_cleanup_failed`, {
+            logger.warn(`image_build.${provider}_trigger_cleanup_failed`, {
               build_id: buildId,
               provider_session_id: providerSessionIdForCleanup,
               error: errorMessage(cleanupError),
@@ -269,7 +267,7 @@ export class EnvironmentImageBuildWorkflow {
       try {
         await this.store.markBuildFailed(buildId, provider, errorMessage(e));
       } catch (markFailedError) {
-        logger.warn("environment_image.trigger_mark_failed_error", {
+        logger.warn("image_build.trigger_mark_failed_error", {
           error: errorMessage(markFailedError),
           build_id: buildId,
           request_id: ctx.request_id,
@@ -277,20 +275,21 @@ export class EnvironmentImageBuildWorkflow {
         });
       }
 
-      logger.error("environment_image.trigger_error", {
+      logger.error("image_build.trigger_error", {
         error: errorMessage(e),
-        environment_id: environmentId,
+        scope_kind: scope.kind,
+        scope_id: scope.id,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      throw new EnvironmentImageTriggerFailedError("Failed to trigger build", e);
+      throw new ImageBuildTriggerFailedError("Failed to trigger build", e);
     }
   }
 
   /** Provider-typed start dispatch: each case keeps the plan/adapter pairing intact. */
   private preparePlannedBuildStart(
-    planned: PlannedEnvironmentImageBuild,
-    ctx: EnvironmentImageWorkflowContext
+    planned: PlannedImageBuild,
+    ctx: ImageBuildWorkflowContext
   ): PlannedBuildStart {
     const plan = planned.plan;
     switch (plan.provider) {
@@ -326,35 +325,35 @@ export class EnvironmentImageBuildWorkflow {
       }
       default: {
         const exhaustive: never = plan;
-        throw new EnvironmentImageProviderUnconfiguredError(
-          `Unsupported environment image provider: ${String(exhaustive)}`
+        throw new ImageBuildProviderUnconfiguredError(
+          `Unsupported image build provider: ${String(exhaustive)}`
         );
       }
     }
   }
 
   async acceptBuildComplete(
-    command: AcceptEnvironmentBuildCompleteCommand
-  ): Promise<EnvironmentImageWorkflowResult> {
+    command: AcceptBuildCompleteCommand
+  ): Promise<ImageBuildWorkflowResult> {
     const { completion, context: ctx } = command;
     const build = await this.store.getCallbackBuild(completion.buildId);
     if (!build) {
-      // The build may have been superseded out-of-band (environment delete,
+      // The build may have been superseded out-of-band (entity delete,
       // secret change) while in flight — record its artifact for the reaper
       // before rejecting, or the provider-side snapshot leaks forever.
       await this.recordLateProviderImageArtifact(completion, command, ctx);
-      throw new EnvironmentImageCompletionNotAcceptedError("Build is not accepting completion");
+      throw new ImageBuildCompletionNotAcceptedError("Build is not accepting completion");
     }
 
     const provider = build.provider;
 
-    if (getRepoImageCallbackMode(provider) === "provider_session") {
+    if (getImageBuildCallbackMode(provider) === "provider_session") {
       const validated = this.validateCompletion(completion);
       // The sandbox itself reports completion with a bearer token; the
       // artifact does not exist yet — snapshotting is the deferred
       // finalization the route schedules via waitUntil.
       if (!completion.providerSessionId) {
-        throw new EnvironmentImageInvalidCallbackError("provider_session_id is required");
+        throw new ImageBuildInvalidCallbackError("provider_session_id is required");
       }
       const providerSessionId = completion.providerSessionId;
 
@@ -365,9 +364,10 @@ export class EnvironmentImageBuildWorkflow {
         ctx,
       });
 
-      logger.info("environment_image.build_complete_received", {
+      logger.info("image_build.build_complete_received", {
         build_id: validated.buildId,
-        environment_id: build.environmentId,
+        scope_kind: build.scope.kind,
+        scope_id: build.scope.id,
         provider,
         provider_session_id: providerSessionId,
         runtime_version: validated.runtimeVersion,
@@ -380,7 +380,7 @@ export class EnvironmentImageBuildWorkflow {
         {
           ...validated,
           providerSessionId,
-          environmentId: build.environmentId,
+          scope: build.scope,
         },
         ctx
       );
@@ -389,17 +389,17 @@ export class EnvironmentImageBuildWorkflow {
     }
 
     // Internal-HMAC mode: authenticate before revealing anything about the
-    // payload's validity (parity with the repo-image workflow).
+    // payload's validity.
     await this.requireInternalBuildCallbackAuth(command.authorizationHeader, build.id, ctx);
     const validated = this.validateCompletion(completion);
     if (!completion.providerImageId) {
-      throw new EnvironmentImageInvalidCallbackError("provider_image_id is required");
+      throw new ImageBuildInvalidCallbackError("provider_image_id is required");
     }
     const providerImageId = completion.providerImageId;
 
     let result;
     try {
-      result = await this.store.tryMarkEnvironmentImageReady(
+      result = await this.store.tryMarkImageBuildReady(
         validated.buildId,
         provider,
         providerImageId,
@@ -408,20 +408,21 @@ export class EnvironmentImageBuildWorkflow {
         validated.buildDurationMs
       );
     } catch (e) {
-      logger.error("environment_image.build_complete_error", {
+      logger.error("image_build.build_complete_error", {
         error: errorMessage(e),
         build_id: validated.buildId,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      throw new EnvironmentImageBuildCompleteFailedError("Failed to mark build as ready", e);
+      throw new ImageBuildCompleteFailedError("Failed to mark build as ready", e);
     }
 
     switch (result.type) {
       case "marked_ready": {
-        logger.info("environment_image.build_complete", {
+        logger.info("image_build.build_complete", {
           build_id: validated.buildId,
-          environment_id: build.environmentId,
+          scope_kind: build.scope.kind,
+          scope_id: build.scope.id,
           provider,
           provider_image_id: providerImageId,
           runtime_version: validated.runtimeVersion,
@@ -429,21 +430,22 @@ export class EnvironmentImageBuildWorkflow {
           request_id: ctx.request_id,
           trace_id: ctx.trace_id,
         });
-        const cleanup = this.deleteReplacedImages(provider, result.supersededImages, ctx);
+        const cleanup = this.reaper.deleteReplacedImages(provider, result.supersededImages, ctx);
         return cleanup
           ? { type: "build_ready", replacedImages: result.supersededImages, cleanup }
           : { type: "build_ready", replacedImages: result.supersededImages };
       }
       case "superseded_by_newer_ready": {
-        logger.info("environment_image.build_superseded", {
+        logger.info("image_build.build_superseded", {
           build_id: validated.buildId,
-          environment_id: build.environmentId,
+          scope_kind: build.scope.kind,
+          scope_id: build.scope.id,
           provider,
           provider_image_id: result.supersededImage.image.providerImageId,
           request_id: ctx.request_id,
           trace_id: ctx.trace_id,
         });
-        const cleanup = this.deleteReplacedImages(provider, [result.supersededImage], ctx);
+        const cleanup = this.reaper.deleteReplacedImages(provider, [result.supersededImage], ctx);
         return cleanup ? { type: "build_superseded", cleanup } : { type: "build_superseded" };
       }
       case "not_accepting_completion":
@@ -454,7 +456,7 @@ export class EnvironmentImageBuildWorkflow {
           provider,
           providerImageId
         );
-        throw new EnvironmentImageCompletionNotAcceptedError("Build is not accepting completion");
+        throw new ImageBuildCompletionNotAcceptedError("Build is not accepting completion");
     }
   }
 
@@ -466,14 +468,14 @@ export class EnvironmentImageBuildWorkflow {
    * so nothing has leaked when the callback is rejected.
    */
   private async recordLateProviderImageArtifact(
-    completion: CompleteEnvironmentImageBuildCallback,
-    command: AcceptEnvironmentBuildCompleteCommand,
-    ctx: EnvironmentImageWorkflowContext
+    completion: CompleteImageBuildCallback,
+    command: AcceptBuildCompleteCommand,
+    ctx: ImageBuildWorkflowContext
   ): Promise<void> {
     if (!completion.providerImageId) return;
 
     const row = await this.store.getBuildRow(completion.buildId);
-    if (!row || getRepoImageCallbackMode(row.provider) !== "provider_image") return;
+    if (!row || getImageBuildCallbackMode(row.provider) !== "provider_image") return;
 
     await this.requireInternalBuildCallbackAuth(command.authorizationHeader, row.id, ctx);
 
@@ -483,9 +485,10 @@ export class EnvironmentImageBuildWorkflow {
       completion.providerImageId
     );
     if (recorded) {
-      logger.info("environment_image.late_artifact_recorded", {
+      logger.info("image_build.late_artifact_recorded", {
         build_id: row.id,
-        environment_id: row.environment_id,
+        scope_kind: row.scope_kind,
+        scope_id: row.scope_id,
         provider: row.provider,
         provider_image_id: completion.providerImageId,
         request_id: ctx.request_id,
@@ -501,17 +504,17 @@ export class EnvironmentImageBuildWorkflow {
    * marked failed when no artifact was produced.
    */
   private async finalizeAndCommit(
-    provider: EnvironmentImageProvider,
-    input: ValidatedEnvironmentBuildCompletion & {
+    provider: ImageBuildProvider,
+    input: ValidatedBuildCompletion & {
       providerSessionId: string;
-      environmentId: string;
+      scope: ImageBuildScope;
     },
-    ctx: EnvironmentImageWorkflowContext
+    ctx: ImageBuildWorkflowContext
   ): Promise<void> {
     const startedAt = Date.now();
-    let finalized: EnvironmentImageProviderImageRef | null = null;
+    let finalized: ImageBuildProviderImageRef | null = null;
     let commitResolved = false;
-    let adapter: AnyEnvironmentImageBuildAdapter | null = null;
+    let adapter: AnyImageBuildAdapter | null = null;
 
     try {
       adapter = this.createAdapterForOperation(provider, "build_complete", ctx, input.buildId);
@@ -525,7 +528,7 @@ export class EnvironmentImageBuildWorkflow {
         correlation: ctx,
       });
 
-      const result = await this.store.tryMarkEnvironmentImageReady(
+      const result = await this.store.tryMarkImageBuildReady(
         input.buildId,
         provider,
         finalized.providerImageId,
@@ -540,9 +543,10 @@ export class EnvironmentImageBuildWorkflow {
 
       switch (result.type) {
         case "marked_ready": {
-          logger.info("environment_image.build_complete", {
+          logger.info("image_build.build_complete", {
             build_id: input.buildId,
-            environment_id: input.environmentId,
+            scope_kind: input.scope.kind,
+            scope_id: input.scope.id,
             provider,
             provider_image_id: finalized.providerImageId,
             runtime_version: input.runtimeVersion,
@@ -550,26 +554,27 @@ export class EnvironmentImageBuildWorkflow {
             request_id: ctx.request_id,
             trace_id: ctx.trace_id,
           });
-          await this.deleteReplacedImages(provider, result.supersededImages, ctx);
+          await this.reaper.deleteReplacedImages(provider, result.supersededImages, ctx);
           break;
         }
         case "superseded_by_newer_ready": {
-          logger.info("environment_image.build_superseded", {
+          logger.info("image_build.build_superseded", {
             build_id: input.buildId,
-            environment_id: input.environmentId,
+            scope_kind: input.scope.kind,
+            scope_id: input.scope.id,
             provider,
             provider_image_id: result.supersededImage.image.providerImageId,
             request_id: ctx.request_id,
             trace_id: ctx.trace_id,
           });
-          await this.deleteReplacedImages(provider, [result.supersededImage], ctx);
+          await this.reaper.deleteReplacedImages(provider, [result.supersededImage], ctx);
           break;
         }
         case "not_accepting_completion": {
           // A newer build won while we were snapshotting — the artifact just
           // produced would orphan, so reclaim it now.
-          await this.deleteImageBestEffort(provider, finalized, ctx, adapter);
-          logger.warn("environment_image.finalize_not_applied", {
+          await this.reaper.deleteImageBestEffort(provider, finalized, ctx, adapter);
+          logger.warn("image_build.finalize_not_applied", {
             build_id: input.buildId,
             provider,
             provider_image_id: finalized.providerImageId,
@@ -591,12 +596,12 @@ export class EnvironmentImageBuildWorkflow {
         // records its id for the reaper — so reclaim it before failing the
         // build.
         if (finalized && adapter) {
-          await this.deleteImageBestEffort(provider, finalized, ctx, adapter);
+          await this.reaper.deleteImageBestEffort(provider, finalized, ctx, adapter);
         }
         try {
           await this.store.markBuildFailed(input.buildId, provider, errorMessage(e));
         } catch (markFailedError) {
-          logger.error("environment_image.mark_failed_after_finalize_error", {
+          logger.error("image_build.mark_failed_after_finalize_error", {
             build_id: input.buildId,
             error: errorMessage(markFailedError),
             request_id: ctx.request_id,
@@ -604,7 +609,7 @@ export class EnvironmentImageBuildWorkflow {
           });
         }
       }
-      logger.error("environment_image.finalize_error", {
+      logger.error("image_build.finalize_error", {
         build_id: input.buildId,
         provider,
         provider_session_id: input.providerSessionId,
@@ -618,10 +623,10 @@ export class EnvironmentImageBuildWorkflow {
   }
 
   private async cleanupCompletedBuild(
-    provider: EnvironmentImageProvider,
-    adapter: AnyEnvironmentImageBuildAdapter,
+    provider: ImageBuildProvider,
+    adapter: AnyImageBuildAdapter,
     input: { buildId: string; providerSessionId: string },
-    ctx: EnvironmentImageWorkflowContext
+    ctx: ImageBuildWorkflowContext
   ): Promise<void> {
     if (!adapter.cleanupCompletedBuild) return;
     try {
@@ -631,7 +636,7 @@ export class EnvironmentImageBuildWorkflow {
         correlation: ctx,
       });
     } catch (e) {
-      logger.warn(`environment_image.${provider}_completed_build_cleanup_failed`, {
+      logger.warn(`image_build.${provider}_completed_build_cleanup_failed`, {
         build_id: input.buildId,
         provider_session_id: input.providerSessionId,
         error: errorMessage(e),
@@ -641,18 +646,16 @@ export class EnvironmentImageBuildWorkflow {
     }
   }
 
-  async acceptBuildFailed(
-    command: AcceptEnvironmentBuildFailedCommand
-  ): Promise<EnvironmentImageWorkflowResult> {
+  async acceptBuildFailed(command: AcceptBuildFailedCommand): Promise<ImageBuildWorkflowResult> {
     const { failure, context: ctx } = command;
     const build = await this.store.getCallbackBuild(failure.buildId);
     if (!build) {
-      throw new EnvironmentImageFailureNotAcceptedError("Build is not accepting failure");
+      throw new ImageBuildFailureNotAcceptedError("Build is not accepting failure");
     }
 
-    if (getRepoImageCallbackMode(build.provider) === "provider_session") {
+    if (getImageBuildCallbackMode(build.provider) === "provider_session") {
       if (!failure.providerSessionId) {
-        throw new EnvironmentImageInvalidCallbackError("provider_session_id is required");
+        throw new ImageBuildInvalidCallbackError("provider_session_id is required");
       }
       const providerSessionId = failure.providerSessionId;
 
@@ -663,9 +666,10 @@ export class EnvironmentImageBuildWorkflow {
         ctx
       );
 
-      logger.info("environment_image.build_failed", {
+      logger.info("image_build.build_failed", {
         build_id: failure.buildId,
-        environment_id: build.environmentId,
+        scope_kind: build.scope.kind,
+        scope_id: build.scope.id,
         provider: build.provider,
         error_message: failure.errorMessage,
         provider_session_id: providerSessionId,
@@ -691,22 +695,23 @@ export class EnvironmentImageBuildWorkflow {
         failure.errorMessage
       );
     } catch (e) {
-      logger.error("environment_image.build_failed_error", {
+      logger.error("image_build.build_failed_error", {
         error: errorMessage(e),
         build_id: failure.buildId,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      throw new EnvironmentImageBuildFailedUpdateError("Failed to mark build as failed", e);
+      throw new ImageBuildFailedUpdateError("Failed to mark build as failed", e);
     }
 
     if (!updated) {
-      throw new EnvironmentImageFailureNotAcceptedError("Build is not accepting failure");
+      throw new ImageBuildFailureNotAcceptedError("Build is not accepting failure");
     }
 
-    logger.info("environment_image.build_failed", {
+    logger.info("image_build.build_failed", {
       build_id: failure.buildId,
-      environment_id: build.environmentId,
+      scope_kind: build.scope.kind,
+      scope_id: build.scope.id,
       provider: build.provider,
       error_message: failure.errorMessage,
       request_id: ctx.request_id,
@@ -716,69 +721,25 @@ export class EnvironmentImageBuildWorkflow {
     return { type: "build_failed" };
   }
 
-  /**
-   * Cleanup pass: delete old failed rows, then reap superseded rows — delete
-   * the provider artifact (when one was recorded) and only then the row, so a
-   * failed artifact delete is retried on the next pass. Covers both inline
-   * supersedes whose deletion failed and out-of-band supersedes (environment
-   * delete, secret change), which nothing deletes inline.
-   */
+  /** Cleanup pass over failed and superseded rows (reaper.ts). */
   async cleanupImages(
     failedMaxAgeMs: number,
-    ctx: EnvironmentImageWorkflowContext
+    ctx: ImageBuildWorkflowContext
   ): Promise<{ deletedFailed: number; reapedSuperseded: number }> {
-    const deletedFailed = await this.store.deleteOldFailedBuilds(failedMaxAgeMs);
-
-    const superseded = await this.store.getSupersededImages(SUPERSEDED_REAP_BATCH_LIMIT);
-    let reapedSuperseded = 0;
-    const adaptersByProvider = new Map<
-      EnvironmentImageProvider,
-      AnyEnvironmentImageBuildAdapter | null
-    >();
-    await Promise.all(
-      superseded.map(async (row) => {
-        if (row.provider_image_id) {
-          if (!adaptersByProvider.has(row.provider)) {
-            adaptersByProvider.set(
-              row.provider,
-              this.createAdapterForBestEffortCleanup(row.provider, row.id, ctx)
-            );
-          }
-          const adapter = adaptersByProvider.get(row.provider) ?? null;
-          if (!adapter) return;
-          const deleted = await this.deleteImageBestEffort(
-            row.provider,
-            {
-              providerImageId: row.provider_image_id,
-              providerSessionId: row.provider_session_id,
-            },
-            ctx,
-            adapter
-          );
-          if (!deleted) return;
-        }
-        if (await this.store.deleteSupersededImage(row.id)) {
-          reapedSuperseded += 1;
-        }
-      })
-    );
-
-    return { deletedFailed, reapedSuperseded };
+    return this.reaper.cleanupImages(failedMaxAgeMs, ctx);
   }
 
-  private validateCompletion(
-    completion: CompleteEnvironmentImageBuildCallback
-  ): ValidatedEnvironmentBuildCompletion {
+  private validateCompletion(completion: CompleteImageBuildCallback): ValidatedBuildCompletion {
     if (!completion.repositoryShas || completion.repositoryShas.length === 0) {
-      throw new EnvironmentImageInvalidCallbackError("repository_shas is required");
+      throw new ImageBuildInvalidCallbackError("repository_shas is required");
     }
     if (
       typeof completion.runtimeVersion !== "string" ||
       parseRuntimeVersionNumber(completion.runtimeVersion) === null
     ) {
-      // Fail closed (design §7.3): an unversioned image must never be
-      // registered, or it could pass spawn selection's floor check.
-      throw new EnvironmentImageInvalidCallbackError(
+      // Fail closed: an unversioned image must never be registered, or it
+      // could pass spawn selection's floor check.
+      throw new ImageBuildInvalidCallbackError(
         "runtime_version is required and must start with v<number>"
       );
     }
@@ -787,7 +748,7 @@ export class EnvironmentImageBuildWorkflow {
       !Number.isFinite(completion.buildDurationMs) ||
       completion.buildDurationMs < 0
     ) {
-      throw new EnvironmentImageInvalidCallbackError(
+      throw new ImageBuildInvalidCallbackError(
         "build_duration_seconds must be a non-negative finite number"
       );
     }
@@ -804,121 +765,111 @@ export class EnvironmentImageBuildWorkflow {
     token: string | null | undefined,
     params: {
       buildId: string;
-      provider: EnvironmentImageProvider;
+      provider: ImageBuildProvider;
       providerSessionId: string;
-      ctx: EnvironmentImageWorkflowContext;
+      ctx: ImageBuildWorkflowContext;
     }
   ): Promise<void> {
-    const tokenHash = await this.hashRequiredCallbackToken(token, params);
-
-    const build = await this.store.consumeCallbackToken({
-      buildId: params.buildId,
-      provider: params.provider,
-      providerSessionId: params.providerSessionId,
-      tokenHash,
-      now: Date.now(),
-    });
-
-    if (!build) {
-      this.logCallbackAuthFailed(params);
-      throw new EnvironmentImageCallbackAuthRejectedError("Unauthorized");
+    try {
+      await consumeImageBuildCallbackTokenOrThrow(this.store, this.env, token, {
+        buildId: params.buildId,
+        provider: params.provider,
+        providerSessionId: params.providerSessionId,
+        now: Date.now(),
+      });
+    } catch (e) {
+      throw this.loggedCallbackAuthError(e, params);
     }
   }
 
   private async markProviderSessionBuildFailedWithCallbackToken(
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     failure: { buildId: string; providerSessionId: string; errorMessage: string },
     callbackToken: string | null | undefined,
-    ctx: EnvironmentImageWorkflowContext
+    ctx: ImageBuildWorkflowContext
   ): Promise<void> {
-    const tokenHash = await this.hashRequiredCallbackToken(callbackToken, {
-      buildId: failure.buildId,
-      provider,
-      providerSessionId: failure.providerSessionId,
-      ctx,
-    });
-
-    let updated: boolean;
     try {
-      updated = await this.store.markBuildFailedWithCallbackToken({
+      await markImageBuildFailedWithCallbackTokenOrThrow(this.store, this.env, callbackToken, {
         buildId: failure.buildId,
         provider,
         providerSessionId: failure.providerSessionId,
-        tokenHash,
-        error: failure.errorMessage,
+        errorMessage: failure.errorMessage,
         now: Date.now(),
       });
     } catch (e) {
-      logger.error("environment_image.build_failed_error", {
-        error: errorMessage(e),
-        build_id: failure.buildId,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
+      if (!(e instanceof ImageBuildCallbackAuthError)) {
+        logger.error("image_build.build_failed_error", {
+          error: errorMessage(e),
+          build_id: failure.buildId,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+        throw new ImageBuildFailedUpdateError("Failed to mark build as failed", e);
+      }
+      throw this.loggedCallbackAuthError(e, {
+        buildId: failure.buildId,
+        provider,
+        providerSessionId: failure.providerSessionId,
+        ctx,
       });
-      throw new EnvironmentImageBuildFailedUpdateError("Failed to mark build as failed", e);
     }
-
-    if (updated) return;
-
-    this.logCallbackAuthFailed({
-      buildId: failure.buildId,
-      provider,
-      providerSessionId: failure.providerSessionId,
-      ctx,
-    });
-    throw new EnvironmentImageCallbackAuthRejectedError("Unauthorized");
   }
 
-  private async hashRequiredCallbackToken(
-    token: string | null | undefined,
+  private async requireInternalBuildCallbackAuth(
+    authorizationHeader: string | null | undefined,
+    buildId: string,
+    ctx: ImageBuildWorkflowContext
+  ): Promise<void> {
+    try {
+      await requireInternalImageBuildCallbackAuth(this.env, authorizationHeader);
+    } catch (e) {
+      throw this.loggedCallbackAuthError(e, { buildId, ctx });
+    }
+  }
+
+  /**
+   * Log a callback-auth failure from the pure callback-auth helpers and map
+   * it to the route-facing taxonomy. Non-auth errors rethrow unwrapped.
+   */
+  private loggedCallbackAuthError(
+    e: unknown,
     params: {
       buildId: string;
-      provider: EnvironmentImageProvider;
-      providerSessionId: string;
-      ctx: EnvironmentImageWorkflowContext;
+      provider?: ImageBuildProvider;
+      providerSessionId?: string;
+      ctx: ImageBuildWorkflowContext;
     }
-  ): Promise<string> {
-    if (!token) {
-      this.logCallbackAuthFailed(params);
-      throw new EnvironmentImageCallbackAuthRejectedError("Unauthorized");
+  ): Error {
+    if (!(e instanceof ImageBuildCallbackAuthError)) {
+      throw e;
     }
 
-    try {
-      return await hashRepoImageCallbackToken(token, this.env);
-    } catch (e) {
-      logger.error("environment_image.callback_auth_misconfigured", {
+    if (e.failure === "misconfigured") {
+      logger.error("image_build.callback_auth_misconfigured", {
         build_id: params.buildId,
-        error: errorMessage(e),
+        error: e.cause instanceof Error ? e.cause.message : undefined,
         request_id: params.ctx.request_id,
         trace_id: params.ctx.trace_id,
       });
-      throw new EnvironmentImageCallbackAuthUnavailableError(
-        "Internal authentication not configured"
-      );
+      return new ImageBuildCallbackAuthUnavailableError("Internal authentication not configured");
     }
-  }
 
-  private logCallbackAuthFailed(params: {
-    buildId: string;
-    provider: EnvironmentImageProvider;
-    providerSessionId: string;
-    ctx: EnvironmentImageWorkflowContext;
-  }): void {
-    logger.warn("environment_image.callback_auth_failed", {
+    logger.warn("image_build.callback_auth_failed", {
       build_id: params.buildId,
       provider: params.provider,
       provider_session_id: params.providerSessionId,
       request_id: params.ctx.request_id,
       trace_id: params.ctx.trace_id,
     });
+    return new ImageBuildCallbackAuthRejectedError("Unauthorized");
   }
 
   private cleanupFailedBuildBestEffort(
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     failure: { buildId: string; providerSessionId: string; errorMessage: string },
-    ctx: EnvironmentImageWorkflowContext
+    ctx: ImageBuildWorkflowContext
   ): Promise<void> | undefined {
-    const adapter = this.createAdapterForBestEffortCleanup(provider, failure.buildId, ctx);
+    const adapter = this.reaper.createAdapterForBestEffortCleanup(provider, failure.buildId, ctx);
     if (!adapter?.cleanupFailedBuild) return undefined;
 
     return adapter
@@ -927,7 +878,7 @@ export class EnvironmentImageBuildWorkflow {
         correlation: ctx,
       })
       .catch((e) => {
-        logger.warn(`environment_image.${provider}_build_cleanup_failed`, {
+        logger.warn(`image_build.${provider}_build_cleanup_failed`, {
           build_id: failure.buildId,
           provider_session_id: failure.providerSessionId,
           error: errorMessage(e),
@@ -937,42 +888,12 @@ export class EnvironmentImageBuildWorkflow {
       });
   }
 
-  private async requireInternalBuildCallbackAuth(
-    authorizationHeader: string | null | undefined,
-    buildId: string,
-    ctx: EnvironmentImageWorkflowContext
-  ): Promise<void> {
-    if (!this.env.INTERNAL_CALLBACK_SECRET) {
-      logger.error("environment_image.callback_auth_misconfigured", {
-        build_id: buildId,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      throw new EnvironmentImageCallbackAuthUnavailableError(
-        "Internal authentication not configured"
-      );
-    }
-
-    const authorized = await verifyInternalToken(
-      authorizationHeader ?? null,
-      this.env.INTERNAL_CALLBACK_SECRET
-    );
-    if (authorized) return;
-
-    logger.warn("environment_image.callback_auth_failed", {
-      build_id: buildId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    throw new EnvironmentImageCallbackAuthRejectedError("Unauthorized");
-  }
-
   private createAdapterForOperation(
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     operation: string,
-    ctx: EnvironmentImageWorkflowContext,
+    ctx: ImageBuildWorkflowContext,
     buildId?: string
-  ): AnyEnvironmentImageBuildAdapter {
+  ): AnyImageBuildAdapter {
     return this.createAdapterGuarded(
       provider,
       operation,
@@ -983,16 +904,16 @@ export class EnvironmentImageBuildWorkflow {
   }
 
   private createAdapterGuarded<TAdapter>(
-    provider: EnvironmentImageProvider,
+    provider: ImageBuildProvider,
     operation: string,
-    ctx: EnvironmentImageWorkflowContext,
+    ctx: ImageBuildWorkflowContext,
     create: () => TAdapter,
     buildId?: string
   ): TAdapter {
     try {
       return create();
     } catch (e) {
-      logger.error("environment_image.adapter_config_error", {
+      logger.error("image_build.adapter_config_error", {
         operation,
         build_id: buildId,
         provider,
@@ -1000,111 +921,28 @@ export class EnvironmentImageBuildWorkflow {
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      throw new EnvironmentImageProviderUnconfiguredError(
-        "Environment image provider is not configured",
-        e
-      );
-    }
-  }
-
-  private createAdapterForBestEffortCleanup(
-    provider: EnvironmentImageProvider,
-    buildId: string,
-    ctx: EnvironmentImageWorkflowContext
-  ): AnyEnvironmentImageBuildAdapter | null {
-    try {
-      return this.createAdapterForOperation(provider, "cleanup", ctx, buildId);
-    } catch (e) {
-      if (e instanceof EnvironmentImageProviderUnconfiguredError) return null;
-      throw e;
-    }
-  }
-
-  private deleteReplacedImages(
-    provider: EnvironmentImageProvider,
-    replacedImages: SupersededEnvironmentImage[],
-    ctx: EnvironmentImageWorkflowContext
-  ): Promise<void> | undefined {
-    if (replacedImages.length === 0) return undefined;
-
-    const adapter = this.createAdapterForBestEffortCleanup(
-      provider,
-      replacedImages[0].environmentImageId,
-      ctx
-    );
-    if (!adapter) return undefined;
-
-    return Promise.all(
-      replacedImages.map(async (replacedImage) => {
-        // Rows superseded before an artifact was recorded have nothing to
-        // delete provider-side; the reaper removes the row.
-        if (!replacedImage.image.providerImageId) return;
-        const deleted = await this.deleteImageBestEffort(
-          provider,
-          replacedImage.image,
-          ctx,
-          adapter
-        );
-        if (deleted) {
-          try {
-            await this.store.deleteSupersededImage(replacedImage.environmentImageId);
-          } catch (e) {
-            logger.warn("environment_image.delete_superseded_row_failed", {
-              environment_image_id: replacedImage.environmentImageId,
-              provider_image_id: replacedImage.image.providerImageId,
-              error: errorMessage(e),
-              request_id: ctx.request_id,
-              trace_id: ctx.trace_id,
-            });
-          }
-        }
-      })
-    ).then(() => undefined);
-  }
-
-  private async deleteImageBestEffort(
-    provider: EnvironmentImageProvider,
-    image: { providerImageId: string; providerSessionId?: string | null },
-    ctx: EnvironmentImageWorkflowContext,
-    adapter: AnyEnvironmentImageBuildAdapter
-  ): Promise<boolean> {
-    try {
-      await adapter.deleteImage({
-        image,
-        correlation: ctx,
-      });
-      return true;
-    } catch (e) {
-      logger.warn("environment_image.delete_old_failed", {
-        provider,
-        provider_image_id: image.providerImageId,
-        error: errorMessage(e),
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return false;
+      throw new ImageBuildProviderUnconfiguredError("Image build provider is not configured", e);
     }
   }
 }
 
-export function createEnvironmentImageBuildWorkflowFromEnv(
-  env: Env
-): EnvironmentImageBuildWorkflow {
-  return new EnvironmentImageBuildWorkflow(
+export function createImageBuildWorkflowFromEnv(env: Env): ImageBuildWorkflow {
+  return new ImageBuildWorkflow(
     env,
-    new EnvironmentImageStore(env.DB),
-    createEnvironmentImageBuildAdapterFactory(env),
-    resolveRepoImageProvider(env.SANDBOX_PROVIDER)
+    new ImageBuildStore(env.DB),
+    createImageBuildAdapterFactory(env),
+    resolveImageBuildProvider(env.SANDBOX_PROVIDER)
   );
 }
 
-function createBuildId(environmentId: string, now = Date.now()): string {
-  return `envimg-${environmentId}-${now}-${generateId(4)}`;
+/** One prefix for every scope kind; the scope id keeps ids greppable per entity. */
+function createBuildId(scope: ImageBuildScope, now = Date.now()): string {
+  return `imgb-${scope.id}-${now}-${generateId(4)}`;
 }
 
 function callbackAuthRegistration(
   callbackAuth: PlannedCallbackAuth
-): Partial<Pick<EnvironmentImageBuild, "callbackTokenHash" | "callbackTokenExpiresAt">> {
+): Partial<Pick<ImageBuildRegistration, "callbackTokenHash" | "callbackTokenExpiresAt">> {
   return callbackAuth.kind === "bearer_token"
     ? {
         callbackTokenHash: callbackAuth.tokenHash,
