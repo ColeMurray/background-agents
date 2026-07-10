@@ -29,6 +29,25 @@ const BASE = "https://test.local";
 const RUNTIME_VERSION = "v53-list-native-runtime";
 const REPOSITORY_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
 
+/**
+ * The exact key set of the `ImageBuildRecordView` wire contract. The status
+ * endpoints must serve these and only these — no callback-token or
+ * provider-internal columns.
+ */
+const WIRE_KEYS = [
+  "id",
+  "scope_kind",
+  "scope_id",
+  "provider",
+  "status",
+  "repositories_fingerprint",
+  "repository_shas",
+  "runtime_version",
+  "build_duration_seconds",
+  "error_message",
+  "created_at",
+].sort();
+
 function environmentScope(id: string): ImageBuildScope {
   return { kind: "environment", id };
 }
@@ -112,6 +131,41 @@ async function seedImageRow(row: {
   createdAt?: number;
 }): Promise<void> {
   await seedImageRowForScope(environmentScope(row.environmentId), row);
+}
+
+/**
+ * The Vercel/OpenComputer shape: a row whose internal columns carry real
+ * values (Modal rows leave them null). If a status read leaks columns, this is
+ * the row that exposes a live callback-token hash and provider ids.
+ */
+async function seedRowWithInternalColumns(scope: ImageBuildScope, id: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO image_builds
+       (id, scope_kind, scope_id, provider, provider_image_id, provider_session_id,
+        callback_token_hash, callback_token_expires_at, callback_token_used_at,
+        repositories_fingerprint, repository_shas, runtime_version, status,
+        build_duration_seconds, error_message, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      id,
+      scope.kind,
+      scope.id,
+      "vercel",
+      "vercel-image-secret",
+      "vercel-session-secret",
+      "callback-token-hash-secret",
+      Date.now() + 60_000,
+      null,
+      "fp-seeded",
+      JSON.stringify(REPOSITORY_SHAS),
+      RUNTIME_VERSION,
+      "ready",
+      12,
+      null,
+      Date.now()
+    )
+    .run();
 }
 
 async function getRow(id: string) {
@@ -469,6 +523,41 @@ describe("Image builds", () => {
       );
       const filteredBody = (await filtered.json()) as { images: Array<{ id: string }> };
       expect(filteredBody.images.map((i) => i.id)).toEqual(["st-ready", "st-failed"]);
+    });
+
+    it("GET /image-builds/status projects only the wire columns (no internal fields)", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await seedRowWithInternalColumns(environmentScope(environmentId), "leak-check");
+
+      const assertWireKeysOnly = (images: Array<Record<string, unknown>>) => {
+        expect(images).toHaveLength(1);
+        expect(Object.keys(images[0]).sort()).toEqual(WIRE_KEYS);
+        // Redundant with the exact-key-set check, but names the offenders.
+        for (const internal of [
+          "callback_token_hash",
+          "callback_token_expires_at",
+          "callback_token_used_at",
+          "provider_session_id",
+          "provider_image_id",
+        ]) {
+          expect(images[0]).not.toHaveProperty(internal);
+        }
+      };
+
+      const cross = await SELF.fetch(`${BASE}/image-builds/status`, {
+        headers: await authHeaders(),
+      });
+      assertWireKeysOnly(
+        ((await cross.json()) as { images: Array<Record<string, unknown>> }).images
+      );
+
+      const perScope = await SELF.fetch(
+        `${BASE}/image-builds/status?scope_kind=environment&scope_id=${environmentId}`,
+        { headers: await authHeaders() }
+      );
+      assertWireKeysOnly(
+        ((await perScope.json()) as { images: Array<Record<string, unknown>> }).images
+      );
     });
 
     it("GET /image-builds/status rejects a scope_kind/scope_id half-pair", async () => {

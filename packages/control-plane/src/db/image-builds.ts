@@ -18,6 +18,16 @@ const MS_PER_SECOND = 1000;
 /** D1 caps bound parameters per statement; IN-list queries chunk below it. */
 const MAX_SCOPE_IDS_PER_QUERY = 50;
 
+/**
+ * The exact `ImageBuildRecordView` wire columns, in declaration order. Status
+ * reads project this list rather than `SELECT *` so internal columns
+ * (callback token, provider session/image ids) never reach a client — the
+ * table carries columns the wire contract does not.
+ */
+const STATUS_VIEW_COLUMNS =
+  "id, scope_kind, scope_id, provider, status, repositories_fingerprint, " +
+  "repository_shas, runtime_version, build_duration_seconds, error_message, created_at";
+
 /** Row slice read by the callback-token auth checks. */
 interface CallbackTokenRow {
   id: string;
@@ -41,7 +51,12 @@ export interface ImageBuildRegistration {
   callbackTokenExpiresAt?: number;
 }
 
-/** One full row. Mirrors the `image_builds` table (migration 0039). */
+/**
+ * One full row, including the internal columns (callback token, provider
+ * session/image ids). Mirrors the `image_builds` table (migration 0039).
+ * Internal row — never serialized to clients; the outward wire contract is
+ * `ImageBuildRecordView`, and status reads project exactly its columns.
+ */
 export interface ImageBuildRow extends ImageBuildRecordView {
   provider: ImageBuildProvider;
   provider_image_id: string | null;
@@ -610,13 +625,13 @@ export class ImageBuildStore {
   }
 
   /** Per-scope recent non-superseded rows (settings UI / debugging view). */
-  async getStatus(scope: ImageBuildScope): Promise<ImageBuildRow[]> {
+  async getStatus(scope: ImageBuildScope): Promise<ImageBuildRecordView[]> {
     const result = await this.db
       .prepare(
-        "SELECT * FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10"
+        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10`
       )
       .bind(scope.kind, scope.id)
-      .all<ImageBuildRow>();
+      .all<ImageBuildRecordView>();
 
     return result.results || [];
   }
@@ -630,7 +645,7 @@ export class ImageBuildStore {
    * via the cleanup pass, and a row cap would just reintroduce the risk of
    * ready images dropping out of the cron's view and re-triggering forever.
    */
-  async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildRow[]> {
+  async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildRecordView[]> {
     const idsByKind = new Map<ImageBuildScopeKind, string[]>();
     for (const scope of scopes) {
       const ids = idsByKind.get(scope.kind) ?? [];
@@ -638,18 +653,18 @@ export class ImageBuildStore {
       idsByKind.set(scope.kind, ids);
     }
 
-    const rows: ImageBuildRow[] = [];
+    const rows: ImageBuildRecordView[] = [];
     for (const [kind, ids] of idsByKind) {
       for (let offset = 0; offset < ids.length; offset += MAX_SCOPE_IDS_PER_QUERY) {
         const chunk = ids.slice(offset, offset + MAX_SCOPE_IDS_PER_QUERY);
         const placeholders = chunk.map(() => "?").join(", ");
         const result = await this.db
           .prepare(
-            `SELECT * FROM image_builds
+            `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
              WHERE scope_kind = ? AND scope_id IN (${placeholders}) AND status <> 'superseded'`
           )
           .bind(kind, ...chunk)
-          .all<ImageBuildRow>();
+          .all<ImageBuildRecordView>();
         rows.push(...(result.results || []));
       }
     }
