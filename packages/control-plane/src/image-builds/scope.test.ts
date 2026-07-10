@@ -1,31 +1,88 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SourceControlModule from "../source-control";
+import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 import type { Env } from "../types";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
-import type { ImageBuildScope } from "./model";
+import { repoImageBuildScope, type ImageBuildScope } from "./model";
 import {
-  ImageBuildScopeUnsupportedError,
+  listEnabledScopes,
+  listEnabledScopeUnits,
   loadScopeBuildSecrets,
   resolveScopeEnabled,
   resolveScopeSandboxSettings,
   resolveScopeTarget,
+  type ResolvedImageBuildTarget,
 } from "./scope";
 
-const REPO_SCOPE: ImageBuildScope = { kind: "repo", id: "acme/web" };
+const scmProvider = vi.hoisted(() => ({
+  checkRepositoryAccess: vi.fn(),
+}));
+
+const integrationSettings = vi.hoisted(() => ({
+  resolveSandboxSettings: vi.fn(async () => ({})),
+}));
+
+const secretsStores = vi.hoisted(() => ({
+  global: vi.fn(async (): Promise<Record<string, string>> => ({})),
+  repo: vi.fn(async (_repoId: number): Promise<Record<string, string>> => ({})),
+  environment: vi.fn(async (_id: string): Promise<Record<string, string>> => ({})),
+}));
+
+vi.mock("../source-control", async (importOriginal) => {
+  const actual = await importOriginal<typeof SourceControlModule>();
+  return {
+    ...actual,
+    createSourceControlProviderFromEnv: vi.fn(() => scmProvider),
+  };
+});
+
+vi.mock("../session/integration-settings-resolution", async (importOriginal) => {
+  const actual = await importOriginal<typeof IntegrationSettingsResolutionModule>();
+  return {
+    ...actual,
+    resolveSandboxSettings: integrationSettings.resolveSandboxSettings,
+  };
+});
+
+vi.mock("../db/global-secrets", () => ({
+  GlobalSecretsStore: class {
+    getDecryptedSecrets = secretsStores.global;
+  },
+}));
+
+vi.mock("../db/repo-secrets", () => ({
+  RepoSecretsStore: class {
+    getDecryptedSecrets = secretsStores.repo;
+  },
+}));
+
+vi.mock("../db/environment-secrets", () => ({
+  EnvironmentSecretsStore: class {
+    getDecryptedSecrets = secretsStores.environment;
+  },
+}));
+
+const REPO_SCOPE: ImageBuildScope = repoImageBuildScope("acme", "web");
 const ENV_SCOPE: ImageBuildScope = { kind: "environment", id: "env_1" };
 
 /**
- * Scripted D1 double for the two EnvironmentStore reads the environment arm
- * makes (environments by id, environment_repositories by environment id).
+ * Scripted D1 double for the store reads the resolver arms make: environments
+ * and environment_repositories (environment arm), repo_metadata (repo arm).
  */
 function fakeDb(tables: {
   environment?: Record<string, unknown> | null;
   repositories?: Record<string, unknown>[];
+  repoMetadata?: Record<string, { image_build_enabled: number }>;
+  enabledRepos?: Array<{ repo_owner: string; repo_name: string }>;
 }): D1Database {
-  const statement = (sql: string) => ({
-    bind: () => statement(sql),
+  const statement = (sql: string, binds: unknown[] = []) => ({
+    bind: (...args: unknown[]) => statement(sql, args),
     first: async () => {
       if (sql.includes("FROM environments")) return tables.environment ?? null;
+      if (sql.includes("FROM repo_metadata")) {
+        return tables.repoMetadata?.[`${String(binds[0])}/${String(binds[1])}`] ?? null;
+      }
       throw new Error(`unexpected first(): ${sql}`);
     },
     all: async () => {
@@ -35,15 +92,34 @@ function fakeDb(tables: {
       if (sql.includes("FROM environments")) {
         return { results: tables.environment ? [tables.environment] : [] };
       }
+      if (sql.includes("FROM repo_metadata")) {
+        return { results: tables.enabledRepos ?? [] };
+      }
       throw new Error(`unexpected all(): ${sql}`);
     },
   });
   return { prepare: statement } as unknown as D1Database;
 }
 
-function envWith(db: D1Database): Env {
-  return { DB: db } as Env;
+function envWith(db: D1Database, overrides: Partial<Env> = {}): Env {
+  return { DB: db, ...overrides } as Env;
 }
+
+function repoTarget(repoId: number | null = 123): ResolvedImageBuildTarget {
+  return {
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    repositoriesFingerprint: "fp-repo",
+    repoId,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  integrationSettings.resolveSandboxSettings.mockResolvedValue({});
+  secretsStores.global.mockResolvedValue({});
+  secretsStores.repo.mockResolvedValue({});
+  secretsStores.environment.mockResolvedValue({});
+});
 
 describe("resolveScopeTarget", () => {
   it("resolves an environment's repositories in position order with their fingerprint", async () => {
@@ -64,6 +140,7 @@ describe("resolveScopeTarget", () => {
     expect(target.repositoriesFingerprint).toBe(
       await computeRepositoriesFingerprint(target.repositories)
     );
+    expect(target.repoId).toBeNull();
   });
 
   it("throws scope-not-found for a missing environment", async () => {
@@ -82,10 +159,52 @@ describe("resolveScopeTarget", () => {
     );
   });
 
-  it("rejects the repo scope kind until its arm lands", async () => {
-    await expect(resolveScopeTarget(envWith(fakeDb({})), REPO_SCOPE)).rejects.toBeInstanceOf(
-      ImageBuildScopeUnsupportedError
+  it("resolves a repo scope to a one-element set on the default branch", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue({
+      repoId: 123,
+      repoOwner: "acme",
+      repoName: "web",
+      defaultBranch: "develop",
+    });
+
+    const target = await resolveScopeTarget(envWith(fakeDb({})), REPO_SCOPE);
+
+    expect(scmProvider.checkRepositoryAccess).toHaveBeenCalledWith({
+      owner: "acme",
+      name: "web",
+    });
+    expect(target.repositories).toEqual([
+      { repoOwner: "acme", repoName: "web", baseBranch: "develop" },
+    ]);
+    expect(target.repositoriesFingerprint).toBe(
+      await computeRepositoriesFingerprint(target.repositories)
     );
+    // The repo id rides along so the secrets fold (repo_secrets is keyed by
+    // it) needs no second source-control round trip.
+    expect(target.repoId).toBe(123);
+  });
+
+  it("throws scope-not-found when the repository is not installed", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(null);
+
+    await expect(resolveScopeTarget(envWith(fakeDb({})), REPO_SCOPE)).rejects.toBeInstanceOf(
+      ImageBuildScopeNotFoundError
+    );
+  });
+
+  it("fails planning when repository resolution fails", async () => {
+    scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
+
+    await expect(resolveScopeTarget(envWith(fakeDb({})), REPO_SCOPE)).rejects.toBeInstanceOf(
+      ImageBuildPlanningError
+    );
+  });
+
+  it("fails planning on a malformed repo scope id without touching source control", async () => {
+    await expect(
+      resolveScopeTarget(envWith(fakeDb({})), { kind: "repo", id: "not-a-pair" })
+    ).rejects.toBeInstanceOf(ImageBuildPlanningError);
+    expect(scmProvider.checkRepositoryAccess).not.toHaveBeenCalled();
   });
 });
 
@@ -109,27 +228,160 @@ describe("resolveScopeEnabled", () => {
     expect(await resolveScopeEnabled(fakeDb({ environment: null }), ENV_SCOPE)).toBe(false);
   });
 
-  it("rejects the repo scope kind until its arm lands", async () => {
-    await expect(resolveScopeEnabled(fakeDb({}), REPO_SCOPE)).rejects.toBeInstanceOf(
-      ImageBuildScopeUnsupportedError
-    );
+  it("reads repo enablement from repo_metadata.image_build_enabled", async () => {
+    const db = fakeDb({
+      repoMetadata: {
+        "acme/web": { image_build_enabled: 1 },
+        "acme/api": { image_build_enabled: 0 },
+      },
+    });
+
+    expect(await resolveScopeEnabled(db, REPO_SCOPE)).toBe(true);
+    expect(await resolveScopeEnabled(db, repoImageBuildScope("acme", "api"))).toBe(false);
+  });
+
+  it("is false for a repo without a repo_metadata row", async () => {
+    expect(await resolveScopeEnabled(fakeDb({}), REPO_SCOPE)).toBe(false);
+  });
+
+  it("is false for a malformed repo scope id", async () => {
+    expect(await resolveScopeEnabled(fakeDb({}), { kind: "repo", id: "not-a-pair" })).toBe(false);
   });
 });
 
-describe("repo arm of the remaining resolvers", () => {
-  it("resolveScopeSandboxSettings rejects the repo scope kind", async () => {
-    await expect(
-      resolveScopeSandboxSettings(fakeDb({}), REPO_SCOPE, {
-        repoOwner: "acme",
-        repoName: "web",
-        baseBranch: "main",
-      })
-    ).rejects.toBeInstanceOf(ImageBuildScopeUnsupportedError);
+describe("listEnabledScopes", () => {
+  it("lists prebuild-enabled environments and repos as scopes", async () => {
+    const db = fakeDb({
+      environment: { id: "env_1", prebuild_enabled: 1 },
+      enabledRepos: [{ repo_owner: "acme", repo_name: "web" }],
+    });
+
+    expect(await listEnabledScopes(db)).toEqual([
+      { kind: "environment", id: "env_1" },
+      { kind: "repo", id: "acme/web" },
+    ]);
+  });
+});
+
+describe("listEnabledScopeUnits", () => {
+  it("emits repo units with the default-branch one-element set", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue({
+      repoId: 123,
+      repoOwner: "acme",
+      repoName: "web",
+      defaultBranch: "main",
+    });
+    const db = fakeDb({
+      environment: { id: "env_1", prebuild_enabled: 1, name: "Env One" },
+      repositories: [{ position: 0, repo_owner: "acme", repo_name: "api", base_branch: "dev" }],
+      enabledRepos: [{ repo_owner: "acme", repo_name: "web" }],
+    });
+
+    const units = await listEnabledScopeUnits(envWith(db));
+
+    expect(units).toHaveLength(2);
+    expect(units[0].scope).toEqual({ kind: "environment", id: "env_1" });
+    expect(units[1]).toEqual({
+      scope: { kind: "repo", id: "acme/web" },
+      name: null,
+      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+      repositoriesFingerprint: await computeRepositoriesFingerprint([
+        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+      ]),
+    });
   });
 
-  it("loadScopeBuildSecrets rejects the repo scope kind", async () => {
-    await expect(loadScopeBuildSecrets(envWith(fakeDb({})), REPO_SCOPE)).rejects.toBeInstanceOf(
-      ImageBuildScopeUnsupportedError
+  it("skips a repo unit whose repository cannot be resolved, keeping the rest", async () => {
+    scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
+    const db = fakeDb({
+      environment: { id: "env_1", prebuild_enabled: 1, name: "Env One" },
+      repositories: [{ position: 0, repo_owner: "acme", repo_name: "api", base_branch: "dev" }],
+      enabledRepos: [{ repo_owner: "acme", repo_name: "web" }],
+    });
+
+    const units = await listEnabledScopeUnits(envWith(db));
+
+    expect(units.map((unit) => unit.scope.kind)).toEqual(["environment"]);
+  });
+});
+
+describe("resolveScopeSandboxSettings", () => {
+  const primary = { repoOwner: "acme", repoName: "web", baseBranch: "main" };
+
+  it("layers the environment's overrides for environment scopes (4-arg)", async () => {
+    const db = fakeDb({});
+    await resolveScopeSandboxSettings(db, ENV_SCOPE, primary);
+
+    expect(integrationSettings.resolveSandboxSettings).toHaveBeenCalledWith(
+      db,
+      "acme",
+      "web",
+      "env_1"
+    );
+  });
+
+  it("resolves repo scopes without an environment layer (3-arg)", async () => {
+    const db = fakeDb({});
+    await resolveScopeSandboxSettings(db, REPO_SCOPE, primary);
+
+    expect(integrationSettings.resolveSandboxSettings).toHaveBeenCalledWith(db, "acme", "web");
+  });
+});
+
+describe("loadScopeBuildSecrets", () => {
+  const encryptedEnv = (db: D1Database) => envWith(db, { REPO_SECRETS_ENCRYPTION_KEY: "key" });
+
+  it("returns undefined without an encryption key", async () => {
+    expect(await loadScopeBuildSecrets(envWith(fakeDb({})), REPO_SCOPE, repoTarget())).toBe(
+      undefined
+    );
+    expect(secretsStores.global).not.toHaveBeenCalled();
+  });
+
+  it("folds global + environment secrets for environment scopes", async () => {
+    secretsStores.global.mockResolvedValue({ SHARED: "global", GLOBAL_ONLY: "g" });
+    secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
+
+    const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), ENV_SCOPE, {
+      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+      repositoriesFingerprint: "fp-env",
+      repoId: null,
+    });
+
+    expect(secretsStores.environment).toHaveBeenCalledWith("env_1");
+    expect(secretsStores.repo).not.toHaveBeenCalled();
+    expect(merged).toEqual({ SHARED: "environment", GLOBAL_ONLY: "g" });
+  });
+
+  it("folds global + repo secrets for repo scopes, keyed by the target's repo id", async () => {
+    secretsStores.global.mockResolvedValue({ SHARED: "global", GLOBAL_ONLY: "g" });
+    secretsStores.repo.mockResolvedValue({ SHARED: "repo", REPO_ONLY: "r" });
+
+    const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget());
+
+    expect(secretsStores.repo).toHaveBeenCalledWith(123);
+    expect(secretsStores.environment).not.toHaveBeenCalled();
+    expect(merged).toEqual({ SHARED: "repo", GLOBAL_ONLY: "g", REPO_ONLY: "r" });
+  });
+
+  it("still folds global secrets when repo secret decryption fails", async () => {
+    secretsStores.global.mockResolvedValue({ GLOBAL_ONLY: "g" });
+    secretsStores.repo.mockRejectedValue(new Error("decrypt failed"));
+
+    const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget());
+
+    expect(merged).toEqual({ GLOBAL_ONLY: "g" });
+  });
+
+  it("fails planning on a repo target without a repo id", async () => {
+    await expect(
+      loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget(null))
+    ).rejects.toBeInstanceOf(ImageBuildPlanningError);
+  });
+
+  it("returns undefined when the fold is empty", async () => {
+    expect(await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget())).toBe(
+      undefined
     );
   });
 });

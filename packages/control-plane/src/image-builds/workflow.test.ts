@@ -294,6 +294,63 @@ describe("ImageBuildWorkflow", () => {
     });
   });
 
+  describe("repo scopes flow through the same machinery", () => {
+    const REPO_SCOPE: ImageBuildScope = { kind: "repo", id: "acme/web" };
+
+    it("registers and starts a repo-scope build under the unified id scheme", async () => {
+      const { workflow, store } = createWorkflow({});
+
+      const result = await workflow.triggerBuild(REPO_SCOPE, ctx);
+
+      expect(result.type).toBe("triggered");
+      if (result.type !== "triggered") throw new Error("unreachable");
+      // One prefix for every scope kind; the repo scope id's `/` flattens so
+      // build ids stay safe as path segments and provider labels.
+      expect(result.buildId).toMatch(/^imgb-acme-web-\d+-/);
+      expect(store.registerBuild).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: REPO_SCOPE, provider: "modal" })
+      );
+    });
+
+    it("enforces concurrency-1 on a repo scope: a second trigger reports the in-flight build", async () => {
+      // Deliberate behavior change: the old repo subsystem stacked concurrent
+      // builds and raced them to mark-ready.
+      const store = createStore();
+      store.getActiveBuild.mockResolvedValue({ id: "imgb-acme-web-existing" });
+      const { workflow, planBuild } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(REPO_SCOPE, ctx);
+
+      expect(result).toEqual({ type: "already_building", buildId: "imgb-acme-web-existing" });
+      expect(store.registerBuild).not.toHaveBeenCalled();
+      expect(planBuild).not.toHaveBeenCalled();
+    });
+
+    it("registers the repo build row before secrets are read (§7.4 supersede window)", async () => {
+      // Deliberate behavior change: the old repo planner decrypted secrets
+      // before any row existed, leaving a secret change nothing to supersede.
+      const { workflow, store, planBuild } = createWorkflow({});
+
+      await workflow.triggerBuild(REPO_SCOPE, ctx);
+
+      expect(store.registerBuild.mock.invocationCallOrder[0]).toBeLessThan(
+        planBuild.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("propagates repo-not-installed from target resolution without writing a row", async () => {
+      const resolveTarget = vi
+        .fn()
+        .mockRejectedValue(new ImageBuildScopeNotFoundError("repo", "acme/web"));
+      const { workflow, store } = createWorkflow({ resolveTarget });
+
+      await expect(workflow.triggerBuild(REPO_SCOPE, ctx)).rejects.toBeInstanceOf(
+        ImageBuildScopeNotFoundError
+      );
+      expect(store.registerBuild).not.toHaveBeenCalled();
+    });
+  });
+
   describe("triggerBuildIfStale", () => {
     it("skips when a ready image matches the current fingerprint", async () => {
       const store = createStore();

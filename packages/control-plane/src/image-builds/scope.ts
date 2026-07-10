@@ -5,44 +5,48 @@
  *
  * Resolution is split into phases rather than one monolithic call because the
  * planner's register-before-secrets ordering depends on it: the repository
- * set is resolved BEFORE the build row is registered (cheap, secret-free),
- * while secrets and sandbox settings are loaded AFTER, so a concurrent secret
+ * set is resolved BEFORE the build row is registered (secret-free), while
+ * secrets and sandbox settings are loaded AFTER, so a concurrent secret
  * change always sees a row to supersede.
- *
- * Only the environment arm is implemented; the repo arm lands with the
- * repo-scope slice and throws ImageBuildScopeUnsupportedError until then.
  */
 
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
 import { EnvironmentStore } from "../db/environments";
 import { GlobalSecretsStore } from "../db/global-secrets";
+import { RepoMetadataStore } from "../db/repo-metadata";
+import { RepoSecretsStore } from "../db/repo-secrets";
 import {
   auditSecretsMerge,
   mergeSecretSources,
   parseSecretsCapMode,
+  type SecretSource,
 } from "../db/secrets-validation";
 import { createLogger } from "../logger";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
+import {
+  createSourceControlProviderFromEnv,
+  SourceControlProviderError,
+  type RepositoryAccessResult,
+} from "../source-control";
 import type { Env } from "../types";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
-import type { ImageBuildScope } from "./model";
+import { parseRepoScopeId, repoImageBuildScope, type ImageBuildScope } from "./model";
 import type { ImageBuildRepository } from "./types";
 
 const logger = createLogger("image-builds:scope");
-
-/** A scope kind no arm of the resolver implements (repo, until its slice lands). */
-export class ImageBuildScopeUnsupportedError extends Error {
-  constructor(kind: string) {
-    super(`Image build scope kind is not supported yet: ${kind}`);
-    this.name = "ImageBuildScopeUnsupportedError";
-  }
-}
 
 /** Repositories + fingerprint, resolved before a build row exists. */
 export interface ResolvedImageBuildTarget {
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
+  /**
+   * Source-control numeric id of a repo scope's repository — the repo_secrets
+   * key, resolved together with the target so the secrets fold
+   * (loadScopeBuildSecrets) needs no second source-control round trip. Null
+   * for environment scopes.
+   */
+  repoId: number | null;
 }
 
 /** An enabled scope with everything the cron's trigger checks need. */
@@ -83,10 +87,60 @@ export async function resolveScopeTarget(
       return {
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+        repoId: null,
       };
     }
-    case "repo":
-      throw new ImageBuildScopeUnsupportedError(scope.kind);
+    case "repo": {
+      const repo = parseRepoScopeId(scope.id);
+      if (!repo) {
+        throw new ImageBuildPlanningError(`Malformed repo scope id: ${scope.id}`);
+      }
+
+      const resolved = await resolveRepositoryAccess(env, scope, repo);
+      if (!resolved) {
+        throw new ImageBuildScopeNotFoundError(scope.kind, scope.id);
+      }
+
+      // A repo scope always builds the repository's default branch; a session
+      // on any other branch computes a different fingerprint and falls back
+      // to the base image, reproducing the old base_branch spawn filter.
+      const repositories: ImageBuildRepository[] = [
+        {
+          repoOwner: repo.repoOwner,
+          repoName: repo.repoName,
+          baseBranch: resolved.defaultBranch,
+        },
+      ];
+
+      return {
+        repositories,
+        repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+        repoId: resolved.repoId,
+      };
+    }
+  }
+}
+
+async function resolveRepositoryAccess(
+  env: Env,
+  scope: ImageBuildScope,
+  repo: { repoOwner: string; repoName: string }
+): Promise<RepositoryAccessResult | null> {
+  try {
+    const provider = createSourceControlProviderFromEnv(env);
+    return await provider.checkRepositoryAccess({ owner: repo.repoOwner, name: repo.repoName });
+  } catch (e) {
+    const message = errorMessage(e);
+    logger.error("image_build.scope_resolve_failed", {
+      error: message,
+      scope_kind: scope.kind,
+      scope_id: scope.id,
+    });
+    // Permanent non-HTTP provider errors are configuration problems whose
+    // message is safe and actionable; anything else stays generic.
+    const isConfigError =
+      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
+    throw new ImageBuildPlanningError(isConfigError ? message : "Failed to resolve repository", e);
   }
 }
 
@@ -105,33 +159,43 @@ export async function resolveScopeEnabled(
       const environment = await new EnvironmentStore(db).getById(scope.id);
       return environment?.prebuild_enabled === 1;
     }
-    case "repo":
-      throw new ImageBuildScopeUnsupportedError(scope.kind);
+    case "repo": {
+      const repo = parseRepoScopeId(scope.id);
+      if (!repo) return false;
+      return new RepoMetadataStore(db).getImageBuildEnabled(repo.repoOwner, repo.repoName);
+    }
   }
 }
 
 /** Every prebuild-enabled scope, cheap form (ids only) for status aggregation. */
 export async function listEnabledScopes(db: D1Database): Promise<ImageBuildScope[]> {
   const { environments } = await new EnvironmentStore(db).list();
-  return environments
+  const environmentScopes = environments
     .filter((row) => row.prebuild_enabled === 1)
     .map((row) => ({ kind: "environment" as const, id: row.id }));
+
+  const repos = await new RepoMetadataStore(db).getImageBuildEnabledRepos();
+  const repoScopes = repos.map((repo) => repoImageBuildScope(repo.repoOwner, repo.repoName));
+
+  return [...environmentScopes, ...repoScopes];
 }
 
 /**
  * Every prebuild-enabled scope with its current repositories and fingerprint —
  * everything the rebuild cron's trigger checks need, so the fingerprint
- * algorithm never leaves the control plane.
+ * algorithm never leaves the control plane. A repo scope whose repository
+ * cannot be resolved (uninstalled, source-control outage) is skipped with a
+ * warning rather than failing the whole feed.
  */
-export async function listEnabledScopeUnits(db: D1Database): Promise<EnabledScopeUnit[]> {
-  const store = new EnvironmentStore(db);
+export async function listEnabledScopeUnits(env: Env): Promise<EnabledScopeUnit[]> {
+  const store = new EnvironmentStore(env.DB);
   const { environments } = await store.list();
   const enabled = environments.filter((row) => row.prebuild_enabled === 1);
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
     enabled.map((row) => row.id)
   );
 
-  return Promise.all(
+  const environmentUnits = await Promise.all(
     enabled.map(async (row) => {
       const repositories = (repositoriesById.get(row.id) ?? []).map((repo) => ({
         repoOwner: repo.repo_owner,
@@ -146,12 +210,37 @@ export async function listEnabledScopeUnits(db: D1Database): Promise<EnabledScop
       };
     })
   );
+
+  const enabledRepos = await new RepoMetadataStore(env.DB).getImageBuildEnabledRepos();
+  const repoUnits = await Promise.all(
+    enabledRepos.map(async (repo): Promise<EnabledScopeUnit | null> => {
+      const scope = repoImageBuildScope(repo.repoOwner, repo.repoName);
+      try {
+        const target = await resolveScopeTarget(env, scope);
+        return {
+          scope,
+          name: null,
+          repositories: target.repositories,
+          repositoriesFingerprint: target.repositoriesFingerprint,
+        };
+      } catch (e) {
+        logger.warn("image_build.enabled_unit_skipped", {
+          error: errorMessage(e),
+          scope_kind: scope.kind,
+          scope_id: scope.id,
+        });
+        return null;
+      }
+    })
+  );
+
+  return [...environmentUnits, ...repoUnits.filter((unit) => unit !== null)];
 }
 
 /**
  * Sandbox settings governing the build (timeout): the primary repository's
- * settings with the environment's own overrides layered on top for
- * environment scopes.
+ * settings, with the environment's own overrides layered on top for
+ * environment scopes (a repo scope has no environment layer by definition).
  */
 export async function resolveScopeSandboxSettings(
   db: D1Database,
@@ -162,54 +251,33 @@ export async function resolveScopeSandboxSettings(
     case "environment":
       return resolveSandboxSettings(db, primary.repoOwner, primary.repoName, scope.id);
     case "repo":
-      throw new ImageBuildScopeUnsupportedError(scope.kind);
+      return resolveSandboxSettings(db, primary.repoOwner, primary.repoName);
   }
 }
 
 /**
- * Build-time secrets: the same fold the scope's sessions get. For environment
- * scopes that is global + environment — repo-scoped secrets never inherit
- * (build/session parity). Source labels match the session fold
+ * Build-time secrets: the same fold the scope's sessions get. Environment
+ * scopes fold global + environment — repo-scoped secrets never inherit —
+ * and repo scopes fold global + that repository's secrets (build/session
+ * parity in both cases). Source labels match the session fold
  * (session-target-secrets.ts) so collision/cap logs attribute identically at
  * build and session time.
  */
 export async function loadScopeBuildSecrets(
   env: Env,
-  scope: ImageBuildScope
+  scope: ImageBuildScope,
+  target: ResolvedImageBuildTarget
 ): Promise<Record<string, string> | undefined> {
-  if (scope.kind === "repo") {
-    throw new ImageBuildScopeUnsupportedError(scope.kind);
-  }
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) return undefined;
 
-  let globalSecrets: Record<string, string> = {};
-  try {
-    const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-    globalSecrets = await globalStore.getDecryptedSecrets();
-  } catch (e) {
-    logger.warn("image_build.global_secrets_failed", {
-      error: errorMessage(e),
-      scope_kind: scope.kind,
-      scope_id: scope.id,
-    });
-  }
+  const { sources, counts } = await loadScopeSecretSources(
+    env,
+    scope,
+    target,
+    env.REPO_SECRETS_ENCRYPTION_KEY
+  );
 
-  let environmentSecrets: Record<string, string> = {};
-  try {
-    const environmentStore = new EnvironmentSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-    environmentSecrets = await environmentStore.getDecryptedSecrets(scope.id);
-  } catch (e) {
-    logger.warn("image_build.environment_secrets_failed", {
-      error: errorMessage(e),
-      scope_kind: scope.kind,
-      scope_id: scope.id,
-    });
-  }
-
-  const merge = mergeSecretSources([
-    { label: "global", secrets: globalSecrets },
-    { label: "environment", secrets: environmentSecrets },
-  ]);
+  const merge = mergeSecretSources(sources);
   auditSecretsMerge({
     merge,
     mode: parseSecretsCapMode(env.SECRETS_CAP_ENFORCEMENT),
@@ -220,8 +288,7 @@ export async function loadScopeBuildSecrets(
   if (Object.keys(merge.merged).length === 0) return undefined;
 
   logger.info("image_build.secrets_loaded", {
-    global_count: Object.keys(globalSecrets).length,
-    environment_count: Object.keys(environmentSecrets).length,
+    ...counts,
     merged_count: Object.keys(merge.merged).length,
     payload_bytes: merge.totalBytes,
     exceeds_limit: merge.exceedsLimit,
@@ -230,6 +297,81 @@ export async function loadScopeBuildSecrets(
   });
 
   return merge.merged;
+}
+
+async function loadScopeSecretSources(
+  env: Env,
+  scope: ImageBuildScope,
+  target: ResolvedImageBuildTarget,
+  encryptionKey: string
+): Promise<{ sources: SecretSource[]; counts: Record<string, number> }> {
+  let globalSecrets: Record<string, string> = {};
+  try {
+    globalSecrets = await new GlobalSecretsStore(env.DB, encryptionKey).getDecryptedSecrets();
+  } catch (e) {
+    logger.warn("image_build.global_secrets_failed", {
+      error: errorMessage(e),
+      scope_kind: scope.kind,
+      scope_id: scope.id,
+    });
+  }
+
+  switch (scope.kind) {
+    case "environment": {
+      let environmentSecrets: Record<string, string> = {};
+      try {
+        environmentSecrets = await new EnvironmentSecretsStore(
+          env.DB,
+          encryptionKey
+        ).getDecryptedSecrets(scope.id);
+      } catch (e) {
+        logger.warn("image_build.environment_secrets_failed", {
+          error: errorMessage(e),
+          scope_kind: scope.kind,
+          scope_id: scope.id,
+        });
+      }
+      return {
+        sources: [
+          { label: "global", secrets: globalSecrets },
+          { label: "environment", secrets: environmentSecrets },
+        ],
+        counts: {
+          global_count: Object.keys(globalSecrets).length,
+          environment_count: Object.keys(environmentSecrets).length,
+        },
+      };
+    }
+    case "repo": {
+      if (target.repoId === null) {
+        // resolveScopeTarget always carries the repo id for repo scopes; a
+        // null here means the target came from another scope's resolution.
+        throw new ImageBuildPlanningError(`Repo scope target is missing its repo id: ${scope.id}`);
+      }
+      let repoSecrets: Record<string, string> = {};
+      try {
+        repoSecrets = await new RepoSecretsStore(env.DB, encryptionKey).getDecryptedSecrets(
+          target.repoId
+        );
+      } catch (e) {
+        logger.warn("image_build.repo_secrets_failed", {
+          error: errorMessage(e),
+          scope_kind: scope.kind,
+          scope_id: scope.id,
+        });
+      }
+      return {
+        sources: [
+          { label: "global", secrets: globalSecrets },
+          { label: scope.id, secrets: repoSecrets },
+        ],
+        counts: {
+          global_count: Object.keys(globalSecrets).length,
+          repo_count: Object.keys(repoSecrets).length,
+        },
+      };
+    }
+  }
 }
 
 function errorMessage(errorValue: unknown): string {

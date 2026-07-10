@@ -16,9 +16,15 @@ import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
 import { ImageBuildStore } from "../../src/db/image-builds";
 import { EnvironmentStore } from "../../src/db/environments";
+import { RepoMetadataStore } from "../../src/db/repo-metadata";
 import { computeRepositoriesFingerprint } from "../../src/image-builds/fingerprint";
-import { MIN_COMPATIBLE_RUNTIME_VERSION, type ImageBuildScope } from "../../src/image-builds/model";
+import {
+  MIN_COMPATIBLE_RUNTIME_VERSION,
+  repoImageBuildScope,
+  type ImageBuildScope,
+} from "../../src/image-builds/model";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
+import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
 import { cleanD1Tables } from "./cleanup";
 
 const BASE = "https://test.local";
@@ -65,6 +71,39 @@ async function seedEnvironment(opts?: {
 }
 
 /** Raw insert when a test needs to control created_at/status/artifact. */
+async function seedImageRowForScope(
+  scope: ImageBuildScope,
+  row: {
+    id: string;
+    status: string;
+    provider?: string;
+    providerImageId?: string | null;
+    repositoriesFingerprint?: string;
+    runtimeVersion?: string;
+    createdAt?: number;
+  }
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO image_builds
+       (id, scope_kind, scope_id, provider, provider_image_id, repositories_fingerprint,
+        repository_shas, runtime_version, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      row.id,
+      scope.kind,
+      scope.id,
+      row.provider ?? "modal",
+      row.providerImageId ?? null,
+      row.repositoriesFingerprint ?? "fp-seeded",
+      JSON.stringify(REPOSITORY_SHAS),
+      row.runtimeVersion ?? RUNTIME_VERSION,
+      row.status,
+      row.createdAt ?? Date.now()
+    )
+    .run();
+}
+
 async function seedImageRow(row: {
   id: string;
   environmentId: string;
@@ -74,24 +113,7 @@ async function seedImageRow(row: {
   repositoriesFingerprint?: string;
   createdAt?: number;
 }): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO image_builds
-       (id, scope_kind, scope_id, provider, provider_image_id, repositories_fingerprint,
-        repository_shas, runtime_version, status, created_at)
-     VALUES (?, 'environment', ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      row.id,
-      row.environmentId,
-      row.provider ?? "modal",
-      row.providerImageId ?? null,
-      row.repositoriesFingerprint ?? "fp-seeded",
-      JSON.stringify(REPOSITORY_SHAS),
-      RUNTIME_VERSION,
-      row.status,
-      row.createdAt ?? Date.now()
-    )
-    .run();
+  await seedImageRowForScope(environmentScope(row.environmentId), row);
 }
 
 async function getRow(id: string) {
@@ -105,10 +127,13 @@ async function getRow(id: string) {
  * resolver answers enablement (and entity existence), then the store serves
  * the plain row read.
  */
-async function selectForSpawn(environmentId: string, provider: "modal" | "vercel") {
-  const scope = environmentScope(environmentId);
+async function selectScopeForSpawn(scope: ImageBuildScope, provider: "modal" | "vercel") {
   if (!(await resolveScopeEnabled(env.DB, scope))) return null;
   return new ImageBuildStore(env.DB).getLatestReadyForSpawn(scope, provider);
+}
+
+async function selectForSpawn(environmentId: string, provider: "modal" | "vercel") {
+  return selectScopeForSpawn(environmentScope(environmentId), provider);
 }
 
 describe("Image builds", () => {
@@ -545,6 +570,8 @@ describe("Image builds", () => {
         ["POST", "/image-builds/mark-stale"],
         ["POST", "/image-builds/cleanup"],
         ["POST", "/image-builds/trigger/environment/env_x"],
+        ["POST", "/image-builds/trigger/repo/acme/web"],
+        ["PUT", "/image-builds/toggle/repo/acme/web"],
         ["GET", "/environment-images/enabled"],
         ["GET", "/environment-images/status"],
         ["POST", "/environment-images/mark-stale"],
@@ -592,10 +619,17 @@ describe("Image builds", () => {
       );
     });
 
-    it("GET /environment-images/status serves rows keyed by environment_id", async () => {
+    it("GET /environment-images/status serves environment rows keyed by environment_id", async () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
       await seedImageRow({ id: "al-ready", environmentId, status: "ready", providerImageId: "im" });
       await seedImageRow({ id: "al-failed", environmentId, status: "failed" });
+      // Repo rows must not leak a bogus environment_id into the legacy feed.
+      await new RepoMetadataStore(env.DB).setImageBuildEnabled("acme", "web", true);
+      await seedImageRowForScope(repoImageBuildScope("acme", "web"), {
+        id: "al-repo",
+        status: "ready",
+        providerImageId: "im-repo",
+      });
 
       const all = await SELF.fetch(`${BASE}/environment-images/status`, {
         headers: await authHeaders(),
@@ -824,6 +858,337 @@ describe("Image builds", () => {
       });
 
       expect(response.status).toBe(409);
+    });
+  });
+
+  describe("callback-token auth on the unified store (provider_session builds)", () => {
+    // Folded from the deleted repo-images store suite: the single-use,
+    // session-bound, expiring token semantics survive unchanged on the
+    // unified table.
+    const TOKEN_SCOPE = repoImageBuildScope("acme", "web");
+
+    async function seedTokenBuild(
+      id: string,
+      opts?: { expiresAt?: number }
+    ): Promise<ImageBuildStore> {
+      const store = new ImageBuildStore(env.DB);
+      await store.registerBuild({
+        id,
+        scope: TOKEN_SCOPE,
+        provider: "vercel",
+        repositoriesFingerprint: "fp-token",
+        callbackTokenHash: "hash-1",
+        callbackTokenExpiresAt: opts?.expiresAt ?? Date.now() + 60_000,
+      });
+      await store.bindProviderSession(id, "vercel", "vercel-session-1");
+      return store;
+    }
+
+    it("consumes a valid token exactly once and rejects replays", async () => {
+      const store = await seedTokenBuild("tok-once");
+      const params = {
+        buildId: "tok-once",
+        provider: "vercel" as const,
+        tokenHash: "hash-1",
+        providerSessionId: "vercel-session-1",
+        now: Date.now(),
+      };
+
+      const consumed = await store.consumeCallbackToken(params);
+      expect(consumed).toMatchObject({ id: "tok-once", scope: TOKEN_SCOPE, provider: "vercel" });
+
+      expect(await store.consumeCallbackToken(params)).toBeNull();
+    });
+
+    it("rejects a mismatched provider session without consuming the token", async () => {
+      const store = await seedTokenBuild("tok-session");
+
+      const consumed = await store.consumeCallbackToken({
+        buildId: "tok-session",
+        provider: "vercel",
+        tokenHash: "hash-1",
+        providerSessionId: "vercel-session-other",
+        now: Date.now(),
+      });
+
+      expect(consumed).toBeNull();
+      expect((await getRow("tok-session"))?.callback_token_used_at).toBeNull();
+    });
+
+    it("rejects an expired token without marking it used", async () => {
+      const store = await seedTokenBuild("tok-expired", { expiresAt: Date.now() - 1000 });
+
+      const consumed = await store.consumeCallbackToken({
+        buildId: "tok-expired",
+        provider: "vercel",
+        tokenHash: "hash-1",
+        providerSessionId: "vercel-session-1",
+        now: Date.now(),
+      });
+
+      expect(consumed).toBeNull();
+      expect((await getRow("tok-expired"))?.callback_token_used_at).toBeNull();
+    });
+
+    it("marks the build failed and consumes the token in one transition", async () => {
+      const store = await seedTokenBuild("tok-fail");
+
+      const failed = await store.markBuildFailedWithCallbackToken({
+        buildId: "tok-fail",
+        provider: "vercel",
+        tokenHash: "hash-1",
+        providerSessionId: "vercel-session-1",
+        error: "setup.failed: boom",
+        now: Date.now(),
+      });
+
+      expect(failed).toBe(true);
+      const row = await getRow("tok-fail");
+      expect(row?.status).toBe("failed");
+      expect(row?.error_message).toBe("setup.failed: boom");
+      expect(row?.callback_token_used_at).not.toBeNull();
+
+      // The consumed token authorizes nothing further.
+      expect(
+        await store.consumeCallbackToken({
+          buildId: "tok-fail",
+          provider: "vercel",
+          tokenHash: "hash-1",
+          providerSessionId: "vercel-session-1",
+          now: Date.now(),
+        })
+      ).toBeNull();
+    });
+  });
+
+  describe("repo scope", () => {
+    const REPO_SCOPE = repoImageBuildScope("acme", "web");
+
+    async function enableRepo(owner = "acme", name = "web"): Promise<void> {
+      await new RepoMetadataStore(env.DB).setImageBuildEnabled(owner, name, true);
+    }
+
+    it("spawn selection serves an enabled repo's latest ready image on the provider", async () => {
+      await enableRepo();
+      const now = Date.now();
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "rp-older",
+        status: "ready",
+        providerImageId: "im-older",
+        createdAt: now - 2000,
+      });
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "rp-latest",
+        status: "ready",
+        providerImageId: "im-latest",
+        createdAt: now - 1000,
+      });
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "rp-vercel",
+        status: "ready",
+        provider: "vercel",
+        providerImageId: "im-vercel",
+        createdAt: now,
+      });
+
+      expect((await selectScopeForSpawn(REPO_SCOPE, "modal"))?.id).toBe("rp-latest");
+      expect((await selectScopeForSpawn(REPO_SCOPE, "vercel"))?.id).toBe("rp-vercel");
+    });
+
+    it("never serves a disabled or unknown repo's lingering rows", async () => {
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "rp-unknown",
+        status: "ready",
+        providerImageId: "im-unknown",
+      });
+
+      // No repo_metadata row at all: never served.
+      expect(await selectScopeForSpawn(REPO_SCOPE, "modal")).toBeNull();
+
+      await enableRepo();
+      expect((await selectScopeForSpawn(REPO_SCOPE, "modal"))?.id).toBe("rp-unknown");
+
+      // Toggled off: the frozen image would drift unboundedly, so it stops
+      // being served (spawns fall back to base; the row itself survives).
+      await new RepoMetadataStore(env.DB).setImageBuildEnabled("acme", "web", false);
+      expect(await selectScopeForSpawn(REPO_SCOPE, "modal")).toBeNull();
+    });
+
+    it("matches sessions by the one-element fingerprint; non-default-branch sessions miss", async () => {
+      // Repo images are built on the default branch; the fingerprint match
+      // reproduces the old base_branch spawn filter for a one-repo set.
+      await enableRepo();
+      const defaultBranchSet = [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }];
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "rp-fp",
+        status: "ready",
+        providerImageId: "im-fp",
+        repositoriesFingerprint: await computeRepositoriesFingerprint(defaultBranchSet),
+      });
+
+      const row = await selectScopeForSpawn(REPO_SCOPE, "modal");
+      expect(row?.id).toBe("rp-fp");
+
+      const onDefault = await evaluateImageBuildForSpawn(row, defaultBranchSet);
+      expect(onDefault.outcome).toBe("selected");
+
+      const onFeature = await evaluateImageBuildForSpawn(row, [
+        { repoOwner: "acme", repoName: "web", baseBranch: "feature/x" },
+      ]);
+      expect(onFeature).toEqual({
+        outcome: "miss",
+        reason: "fingerprint_mismatch",
+        imageBuildId: "rp-fp",
+      });
+    });
+
+    it("rejects a ready repo image below the runtime floor at selection", async () => {
+      // Deliberate behavior change: the old repo path had no floor, so a
+      // stale image (v52 restoring into a v53 world) kept being selected.
+      await enableRepo();
+      const repositories = [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }];
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "rp-stale",
+        status: "ready",
+        providerImageId: "im-stale",
+        runtimeVersion: "v52-legacy-runtime",
+        repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+      });
+
+      const row = await selectScopeForSpawn(REPO_SCOPE, "modal");
+      const result = await evaluateImageBuildForSpawn(row, repositories);
+
+      expect(result).toEqual({
+        outcome: "miss",
+        reason: "runtime_below_floor",
+        imageBuildId: "rp-stale",
+      });
+    });
+
+    it("registerBuild admits exactly one in-flight build per repo scope", async () => {
+      // Deliberate behavior change: the old repo subsystem stacked concurrent
+      // builds and raced them to mark-ready.
+      const store = new ImageBuildStore(env.DB);
+      const build = (id: string) => ({
+        id,
+        scope: REPO_SCOPE,
+        provider: "modal" as const,
+        repositoriesFingerprint: "fp-race",
+      });
+
+      expect(await store.registerBuild(build("rp-race-a"))).toBe(true);
+      expect(await store.registerBuild(build("rp-race-b"))).toBe(false);
+      expect(await getRow("rp-race-b")).toBeNull();
+    });
+
+    it("cross-scope status includes enabled repos' rows alongside environment rows", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await seedImageRow({
+        id: "cs-env",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-env",
+      });
+      await enableRepo();
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "cs-repo-ready",
+        status: "ready",
+        providerImageId: "im-repo",
+      });
+      await seedImageRowForScope(REPO_SCOPE, { id: "cs-repo-failed", status: "failed" });
+      // Disabled repo rows never crowd the aggregate feed.
+      await seedImageRowForScope(repoImageBuildScope("acme", "other"), {
+        id: "cs-disabled",
+        status: "ready",
+        providerImageId: "im-disabled",
+      });
+
+      const response = await SELF.fetch(`${BASE}/image-builds/status`, {
+        headers: await authHeaders(),
+      });
+      const body = (await response.json()) as {
+        images: Array<{ id: string; scope_kind: string; scope_id: string }>;
+      };
+
+      expect(body.images.map((i) => i.id).sort()).toEqual([
+        "cs-env",
+        "cs-repo-failed",
+        "cs-repo-ready",
+      ]);
+      expect(body.images.find((i) => i.id === "cs-repo-ready")).toMatchObject({
+        scope_kind: "repo",
+        scope_id: "acme/web",
+      });
+    });
+
+    it("serves the per-scope debug view for a repo scope", async () => {
+      await enableRepo();
+      await seedImageRowForScope(REPO_SCOPE, {
+        id: "ps-ready",
+        status: "ready",
+        providerImageId: "im",
+      });
+      await seedImageRowForScope(REPO_SCOPE, { id: "ps-superseded", status: "superseded" });
+
+      const response = await SELF.fetch(
+        `${BASE}/image-builds/status?scope_kind=repo&scope_id=acme/web`,
+        { headers: await authHeaders() }
+      );
+      const body = (await response.json()) as { images: Array<{ id: string }> };
+
+      expect(body.images.map((i) => i.id)).toEqual(["ps-ready"]);
+    });
+
+    it("GET /image-builds/enabled skips repo units whose repository cannot be resolved", async () => {
+      // The integration harness has no source-control provider configured, so
+      // the repo unit's default-branch resolution fails — the feed must skip
+      // it with a warning instead of failing, keeping environment units live.
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await enableRepo();
+
+      const response = await SELF.fetch(`${BASE}/image-builds/enabled`, {
+        headers: await authHeaders(),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        units: Array<{ scopeKind: string; scopeId: string }>;
+      };
+      expect(body.units).toEqual([
+        expect.objectContaining({ scopeKind: "environment", scopeId: environmentId }),
+      ]);
+    });
+
+    it("PUT /image-builds/toggle/repo/:owner/:name writes the repo_metadata flag", async () => {
+      const store = new RepoMetadataStore(env.DB);
+
+      const enable = await SELF.fetch(`${BASE}/image-builds/toggle/repo/Acme/Web`, {
+        method: "PUT",
+        headers: await authHeaders(),
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(enable.status).toBe(200);
+      await expect(enable.json()).resolves.toEqual({ ok: true, enabled: true });
+      expect(await store.getImageBuildEnabled("acme", "web")).toBe(true);
+
+      const disable = await SELF.fetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
+        method: "PUT",
+        headers: await authHeaders(),
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(disable.status).toBe(200);
+      expect(await store.getImageBuildEnabled("acme", "web")).toBe(false);
+    });
+
+    it("rejects a non-boolean toggle body", async () => {
+      const response = await SELF.fetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
+        method: "PUT",
+        headers: await authHeaders(),
+        body: JSON.stringify({ enabled: "yes" }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await new RepoMetadataStore(env.DB).getImageBuildEnabled("acme", "web")).toBe(false);
     });
   });
 

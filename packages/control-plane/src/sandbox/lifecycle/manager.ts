@@ -45,6 +45,7 @@ import {
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
+import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
 import { normalizeSandboxSettings } from "../settings";
 import {
   evaluateImageBuildForSpawn,
@@ -242,20 +243,6 @@ export interface McpServerLookup {
   ): Promise<McpServerConfig[]>;
 }
 
-// ==================== Repo Image Lookup ====================
-
-/**
- * Provider-scoped lookup interface for pre-built repo images.
- * The Durable Object binds this to the active sandbox backend before injection.
- */
-export interface RepoImageLookup {
-  getLatestReady(
-    repoOwner: string,
-    repoName: string,
-    baseBranch?: string
-  ): Promise<{ provider_image_id: string; base_sha: string } | null>;
-}
-
 // ==================== Slack Agent-Notify Lookup ====================
 
 /**
@@ -306,7 +293,6 @@ export class SandboxLifecycleManager {
     private readonly idGenerator: IdGenerator,
     private readonly config: SandboxLifecycleConfig,
     private readonly callbacks: LifecycleCallbacks = {},
-    private readonly repoImageLookup?: RepoImageLookup,
     private readonly imageBuildLookup?: ImageBuildLookup
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
@@ -445,50 +431,30 @@ export class SandboxLifecycleManager {
       const repositories = this.storage.getSessionRepositories();
       const multiRepoFields = multiRepoSpawnFields(repositories);
 
-      // Environment sessions boot from their environment image when one
-      // matches the session's own repository snapshot (design §7.3). Repo
-      // images never apply to them — a repo image bakes one checkout and that
-      // repository's setup, not the environment's — so a miss falls straight
-      // through to the base image.
-      let environmentImage: SelectedImageBuild | null = null;
+      // Prebuilt-image selection: an environment session matches its
+      // environment's image against the session's own repository snapshot
+      // (design §7.3); a single-repo ad-hoc session matches its repo scope's
+      // image the same way, where the one-element fingerprint reproduces the
+      // old base_branch filter (non-default-branch sessions miss to base).
+      // Environment sessions never fall back to a repo image — it bakes that
+      // repository's setup and secrets, not the environment's — and
+      // multi-repo ad-hoc sessions never use prebuilt images (a repo image
+      // bakes a single checkout), so both miss straight to the base image.
+      let selectedImage: SelectedImageBuild | null = null;
       if (session.environment_id) {
-        environmentImage = await this.lookupEnvironmentImageBuild(
-          session.environment_id,
+        selectedImage = await this.lookupImageBuildForSpawn(
+          { kind: "environment", id: session.environment_id },
+          repositories
+        );
+      } else if (hasRepository && repositories.length === 1) {
+        selectedImage = await this.lookupImageBuildForSpawn(
+          repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
           repositories
         );
       }
 
-      // Look up pre-built repo image (graceful fallback on failure).
-      // Repo images bake a single checkout, so multi-repo sessions boot from
-      // the base image and clone every member.
-      let prebuiltImageId: string | null = environmentImage?.providerImageId ?? null;
-      let prebuiltImageSha: string | null = environmentImage?.primaryBaseSha ?? null;
-      if (
-        hasRepository &&
-        !session.environment_id &&
-        !multiRepoFields.repositories &&
-        this.repoImageLookup
-      ) {
-        try {
-          const repoImage = await this.repoImageLookup.getLatestReady(
-            session.repo_owner,
-            session.repo_name,
-            session.base_branch ?? undefined
-          );
-          if (repoImage) {
-            prebuiltImageId = repoImage.provider_image_id;
-            prebuiltImageSha = repoImage.base_sha;
-            this.log.info("Using pre-built repo image", {
-              provider_image_id: prebuiltImageId,
-              base_sha: prebuiltImageSha,
-            });
-          }
-        } catch (e) {
-          this.log.warn("Failed to look up repo image, using base image", {
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
+      const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
+      const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
 
       // Child sessions get a shorter timeout
       const timeoutSeconds =
@@ -524,18 +490,18 @@ export class SandboxLifecycleManager {
       try {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
-        if (!environmentImage) throw error;
+        if (!selectedImage) throw error;
         // A provider restore failure is "no image" (design §7.3): fail the
         // row so the cron rebuilds it and boot this session from base rather
         // than failing the spawn. Unrelated create failures (quota, network)
         // can false-positive here — the cost is one rebuild, and the base
         // retry surfaces them through the normal failure path anyway.
-        this.log.warn("Environment image spawn failed, retrying from base image", {
-          event: "sandbox.environment_image_restore_failed",
-          environment_image_id: environmentImage.imageBuildId,
+        this.log.warn("Prebuilt-image spawn failed, retrying from base image", {
+          event: "image_build.restore_failed",
+          image_build_id: selectedImage.imageBuildId,
           error: error instanceof Error ? error.message : String(error),
         });
-        await this.markEnvironmentImageRestoreFailed(environmentImage, error);
+        await this.markImageBuildRestoreFailed(selectedImage, error);
         // The retry gets a fresh spawn identity: the failed attempt may have
         // actually created a sandbox provider-side (post-create errors are
         // indistinguishable here), and rotating the token hash and sandbox id
@@ -626,39 +592,42 @@ export class SandboxLifecycleManager {
   }
 
   /**
-   * Resolve the environment image for an environment session's fresh spawn.
-   * Returns null on any miss or lookup failure — the session boots from base
-   * (never blocked, design §7.3) — logging the reason either way; miss-reason
-   * counts are the numbers that justify (or kill) the prebuild fast-follows.
+   * Resolve the scope's prebuilt image for a fresh spawn. Returns null on any
+   * miss or lookup failure — the session boots from base (never blocked,
+   * design §7.3) — logging the reason either way; miss-reason counts are the
+   * numbers that justify (or kill) the prebuild fast-follows.
    */
-  private async lookupEnvironmentImageBuild(
-    environmentId: string,
+  private async lookupImageBuildForSpawn(
+    scope: ImageBuildScope,
     repositories: SessionRepositoryInfo[]
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
-      const image = await this.imageBuildLookup.getLatestReady(environmentId);
+      const image = await this.imageBuildLookup.getLatestReady(scope);
       const result = await evaluateImageBuildForSpawn(image, repositories);
       if (result.outcome === "selected") {
-        this.log.info("Using pre-built environment image", {
-          event: "sandbox.environment_image_selected",
-          environment_id: environmentId,
-          environment_image_id: result.image.imageBuildId,
+        this.log.info("Using prebuilt image", {
+          event: "image_build.spawn_selected",
+          scope_kind: scope.kind,
+          scope_id: scope.id,
+          image_build_id: result.image.imageBuildId,
           runtime_version: result.image.runtimeVersion,
         });
         return result.image;
       }
-      this.log.info("Environment image miss, using base image", {
-        event: "sandbox.environment_image_miss",
-        environment_id: environmentId,
+      this.log.info("Prebuilt image miss, using base image", {
+        event: "image_build.spawn_miss",
+        scope_kind: scope.kind,
+        scope_id: scope.id,
         reason: result.reason,
-        environment_image_id: result.imageBuildId,
+        image_build_id: result.imageBuildId,
       });
       return null;
     } catch (e) {
-      this.log.warn("Failed to look up environment image, using base image", {
-        event: "sandbox.environment_image_miss",
-        environment_id: environmentId,
+      this.log.warn("Failed to look up prebuilt image, using base image", {
+        event: "image_build.spawn_miss",
+        scope_kind: scope.kind,
+        scope_id: scope.id,
         reason: "lookup_failed",
         error: e instanceof Error ? e.message : String(e),
       });
@@ -671,7 +640,7 @@ export class SandboxLifecycleManager {
    * that is down. An unmarked row costs one more failed image boot on the
    * next spawn, not a broken session.
    */
-  private async markEnvironmentImageRestoreFailed(
+  private async markImageBuildRestoreFailed(
     image: SelectedImageBuild,
     error: unknown
   ): Promise<void> {
@@ -682,8 +651,8 @@ export class SandboxLifecycleManager {
         `restore failed at spawn: ${error instanceof Error ? error.message : String(error)}`
       );
     } catch (e) {
-      this.log.warn("Failed to mark environment image restore-failed", {
-        environment_image_id: image.imageBuildId,
+      this.log.warn("Failed to mark prebuilt image restore-failed", {
+        image_build_id: image.imageBuildId,
         error: e instanceof Error ? e.message : String(e),
       });
     }

@@ -113,7 +113,10 @@ export class ImageBuildWorkflow {
     scope: ImageBuildScope,
     ctx: ImageBuildWorkflowContext
   ): Promise<TriggerImageBuildResult> {
-    return this.trigger(scope, ctx, { onlyIfStale: false });
+    // `await` (not bare promise adoption) so a synchronous rejection already
+    // has its handler attached when the microtask queue drains — workerd
+    // reports the one-job adoption gap as an unhandled rejection.
+    return await this.trigger(scope, ctx, { onlyIfStale: false });
   }
 
   /**
@@ -126,7 +129,8 @@ export class ImageBuildWorkflow {
     scope: ImageBuildScope,
     ctx: ImageBuildWorkflowContext
   ): Promise<TriggerImageBuildResult> {
-    return this.trigger(scope, ctx, { onlyIfStale: true });
+    // See triggerBuild for the `return await`.
+    return await this.trigger(scope, ctx, { onlyIfStale: true });
   }
 
   private async trigger(
@@ -947,9 +951,13 @@ export function createImageBuildWorkflowFromEnv(env: Env): ImageBuildWorkflow {
   );
 }
 
-/** One prefix for every scope kind; the scope id keeps ids greppable per entity. */
+/**
+ * One prefix for every scope kind; the scope id keeps ids greppable per
+ * entity. A repo scope id's `/` flattens to `-` so build ids stay safe as
+ * path segments and provider labels.
+ */
 function createBuildId(scope: ImageBuildScope, now = Date.now()): string {
-  return `imgb-${scope.id}-${now}-${generateId(4)}`;
+  return `imgb-${scope.id.replace("/", "-")}-${now}-${generateId(4)}`;
 }
 
 function callbackAuthRegistration(

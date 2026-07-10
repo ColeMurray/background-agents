@@ -30,7 +30,7 @@ export async function PUT(
     const body = await request.json();
 
     const response = await controlPlaneFetch(
-      `/repo-images/toggle/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      `/image-builds/toggle/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
       {
         method: "PUT",
         body: JSON.stringify(body),

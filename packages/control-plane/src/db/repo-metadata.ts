@@ -110,6 +110,18 @@ export class RepoMetadataStore {
     return map;
   }
 
+  /** False when no repo_metadata row exists — an unknown repo is never prebuild-enabled. */
+  async getImageBuildEnabled(owner: string, name: string): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        "SELECT image_build_enabled FROM repo_metadata WHERE repo_owner = ? AND repo_name = ?"
+      )
+      .bind(owner.toLowerCase(), name.toLowerCase())
+      .first<{ image_build_enabled: number }>();
+
+    return row?.image_build_enabled === 1;
+  }
+
   async getImageBuildEnabledRepos(): Promise<ImageBuildEnabledRepo[]> {
     const result = await this.db
       .prepare("SELECT repo_owner, repo_name FROM repo_metadata WHERE image_build_enabled = 1")

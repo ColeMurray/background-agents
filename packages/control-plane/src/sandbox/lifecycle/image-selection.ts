@@ -1,13 +1,16 @@
 /**
  * Spawn-time prebuilt-image selection.
  *
- * An environment session boots from its prebuilt image iff the latest ready
- * image on the active provider passes the runtime-compatibility floor and its
+ * A session boots from its scope's prebuilt image iff the latest ready image
+ * on the active provider passes the runtime-compatibility floor and its
  * repositories fingerprint equals the fingerprint of the session's OWN
- * repository snapshot — not the environment's current repositories, so an
- * environment edited after the session was created can never hand the session
- * a mismatched image. A miss on any condition falls back to the base image;
- * sessions are never blocked on builds.
+ * repository snapshot — not the scope's current repositories, so an entity
+ * edited after the session was created can never hand the session a
+ * mismatched image. For a repo scope (one-element set built on the default
+ * branch) the fingerprint check reproduces the old base_branch filter: a
+ * non-default-branch session computes a different fingerprint and misses. A
+ * miss on any condition falls back to the base image; sessions are never
+ * blocked on builds.
  *
  * Pure decision logic in the decisions.ts style: the lifecycle manager owns
  * the lookup call, logging, and fallback plumbing.
@@ -20,6 +23,7 @@ import {
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
+  type ImageBuildScope,
 } from "../../image-builds/model";
 
 /**
@@ -37,11 +41,11 @@ export interface ImageBuildSpawnRow {
 
 /**
  * Provider-scoped lookup interface for prebuilt images, bound by the Durable
- * Object. Environment-keyed until the repo scope joins the unified selection.
+ * Object.
  */
 export interface ImageBuildLookup {
-  /** Latest ready image for the environment on the active provider, enablement-gated. */
-  getLatestReady(environmentId: string): Promise<ImageBuildSpawnRow | null>;
+  /** Latest ready image for the scope on the active provider, enablement-gated. */
+  getLatestReady(scope: ImageBuildScope): Promise<ImageBuildSpawnRow | null>;
   /**
    * Fail a ready image whose provider artifact could not be restored, so the
    * rebuild cron sees no ready image and rebuilds it.

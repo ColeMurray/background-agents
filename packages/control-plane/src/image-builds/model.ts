@@ -19,12 +19,29 @@ export type ImageBuildProvider = "modal" | "vercel" | "opencomputer";
 
 /**
  * What an image bakes. `id` is a lowercase `owner/name` pair for repo scopes
- * and an environment id for environment scopes. Everything downstream of
- * scope resolution (scope.ts) is scope-agnostic.
+ * (construct via repoImageBuildScope so the normalization has one home) and
+ * an environment id for environment scopes. Everything downstream of scope
+ * resolution (scope.ts) is scope-agnostic.
  */
 export interface ImageBuildScope {
   kind: ImageBuildScopeKind;
   id: string;
+}
+
+/** The repo scope for a repository, id normalized to lowercase `owner/name`. */
+export function repoImageBuildScope(repoOwner: string, repoName: string): ImageBuildScope {
+  return { kind: "repo", id: `${repoOwner.toLowerCase()}/${repoName.toLowerCase()}` };
+}
+
+/**
+ * Split a repo scope id back into its owner/name halves. Null on anything
+ * that is not exactly `owner/name` — callers fail closed (a malformed id can
+ * only come from a raw store write, never from repoImageBuildScope).
+ */
+export function parseRepoScopeId(scopeId: string): { repoOwner: string; repoName: string } | null {
+  const segments = scopeId.split("/");
+  if (segments.length !== 2 || !segments[0] || !segments[1]) return null;
+  return { repoOwner: segments[0], repoName: segments[1] };
 }
 
 /** Opaque provider artifact reference, optionally tied to the build sandbox that produced it. */

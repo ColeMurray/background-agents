@@ -25,7 +25,6 @@ import {
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
-import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { environmentRoutes } from "./routes/environments";
 import { environmentSecretsRoutes } from "./routes/environment-secrets";
@@ -59,10 +58,8 @@ const PUBLIC_ROUTES: RegExp[] = [
   /^\/health$/,
   /^\/webhooks\/sentry\/[^/]+$/,
   /^\/webhooks\/automation\/[^/]+$/,
-  /^\/repo-images\/build-complete$/,
-  /^\/repo-images\/build-failed$/,
   // Image-build callbacks authenticate inside the workflow (internal HMAC
-  // for provider_image mode), same as the repo-image callbacks above.
+  // for provider_image mode, per-build bearer token for provider_session).
   /^\/image-builds\/build-complete$/,
   /^\/image-builds\/build-failed$/,
   // legacy alias — removed with the Modal cutover (slice 4)
@@ -335,9 +332,6 @@ const routes: Route[] = [
 
   // Integration settings
   ...integrationSettingsRoutes,
-
-  // Repo image builds
-  ...repoImageRoutes,
 
   // Automations
   ...automationRoutes,

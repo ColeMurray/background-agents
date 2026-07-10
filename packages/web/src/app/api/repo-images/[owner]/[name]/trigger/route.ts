@@ -28,7 +28,7 @@ export async function POST(
 
   try {
     const response = await controlPlaneFetch(
-      `/repo-images/trigger/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      `/image-builds/trigger/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
       { method: "POST" }
     );
 

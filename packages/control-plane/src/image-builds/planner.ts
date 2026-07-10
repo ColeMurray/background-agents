@@ -77,7 +77,7 @@ export class ImageBuildPlanner {
 
     const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
       resolveScopeSandboxSettings(this.env.DB, params.scope, primary),
-      loadScopeBuildSecrets(this.env, params.scope),
+      loadScopeBuildSecrets(this.env, params.scope, params.target),
       this.resolveCloneAuth(params.scope),
     ]);
 
