@@ -22,8 +22,8 @@ import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypt
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
+import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
-import { resolveScopeEnabled } from "../image-builds/scope";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -38,7 +38,6 @@ import {
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
-import { ImageBuildStore } from "../db/image-builds";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
@@ -730,18 +729,7 @@ export class SessionDO extends DurableObject<Env> {
     let imageBuildLookup: ImageBuildLookup | undefined;
     const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
     if (this.env.DB && imageBuildProvider) {
-      const db = this.env.DB;
-      const imageBuildStore = new ImageBuildStore(db);
-      imageBuildLookup = {
-        getLatestReady: async (scope) => {
-          // Enablement (and entity existence) is the scope resolver's answer;
-          // the store read is a plain row lookup.
-          if (!(await resolveScopeEnabled(db, scope))) return null;
-          return imageBuildStore.getLatestReadyForSpawn(scope, imageBuildProvider);
-        },
-        markRestoreFailed: (imageBuildId, error) =>
-          imageBuildStore.markRestoreFailed(imageBuildId, error),
-      };
+      imageBuildLookup = createImageBuildLookup(this.env.DB, imageBuildProvider);
     }
 
     return new SandboxLifecycleManager(
