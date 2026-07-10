@@ -50,7 +50,7 @@ export class ImageBuildReaper {
       await this.store.getFailedImagesWithArtifacts(REAP_BATCH_LIMIT),
       ctx,
       adapters,
-      (row) => this.store.clearFailedImageArtifact(row.id)
+      (row) => this.store.clearFailedImageArtifact(row.id, row.provider_image_id)
     );
 
     const deletedFailed = await this.store.deleteOldFailedBuilds(failedMaxAgeMs);

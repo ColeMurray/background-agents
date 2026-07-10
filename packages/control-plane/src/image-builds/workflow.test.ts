@@ -961,7 +961,7 @@ describe("ImageBuildWorkflow", () => {
       );
       // The failed row itself is kept for visibility — only the artifact
       // columns are nulled; it is never reaped as a superseded row.
-      expect(store.clearFailedImageArtifact).toHaveBeenCalledWith("f-restore");
+      expect(store.clearFailedImageArtifact).toHaveBeenCalledWith("f-restore", "im-restore");
       expect(store.deleteSupersededImage).not.toHaveBeenCalledWith("f-restore");
     });
 

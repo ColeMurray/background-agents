@@ -702,16 +702,22 @@ export class ImageBuildStore {
    * deleted: null the artifact columns while keeping status='failed' and its
    * error_message. Scoped to status='failed' so a concurrent rebuild that
    * already superseded/replaced the row can never have its live artifact
-   * cleared. Idempotent — a row with no artifact is not re-selected by
-   * getFailedImagesWithArtifacts.
+   * cleared, and to the exact provider_image_id the caller reaped so a newer
+   * artifact attached to the same failed row between select and clear is never
+   * nulled without being deleted provider-side. Idempotent — a row with no
+   * artifact is not re-selected by getFailedImagesWithArtifacts. A null id
+   * (never produced by that selector) matches nothing and clears no row.
    */
-  async clearFailedImageArtifact(imageBuildId: string): Promise<boolean> {
+  async clearFailedImageArtifact(
+    imageBuildId: string,
+    reapedProviderImageId: string | null
+  ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE image_builds SET provider_image_id = NULL, provider_session_id = NULL
-         WHERE id = ? AND status = 'failed'`
+         WHERE id = ? AND status = 'failed' AND provider_image_id = ?`
       )
-      .bind(imageBuildId)
+      .bind(imageBuildId, reapedProviderImageId)
       .run();
 
     return (result.meta?.changes ?? 0) > 0;

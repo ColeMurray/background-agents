@@ -591,9 +591,14 @@ describe("Image builds", () => {
       const reapable = await store.getFailedImagesWithArtifacts(25);
       expect(reapable.map((r) => r.id)).toEqual(["artifact-old"]);
 
+      // A stale artifact id (not the one on the row) clears nothing, so a
+      // newer artifact could never be nulled without being reaped first.
+      expect(await store.clearFailedImageArtifact("artifact-old", "im-stale")).toBe(false);
+      expect((await getRow("artifact-old"))?.provider_image_id).toBe("im-live");
+
       // clearFailedImageArtifact nulls the columns, keeps status/error_message,
       // and is idempotent (a cleared row is no longer selected).
-      expect(await store.clearFailedImageArtifact("artifact-old")).toBe(true);
+      expect(await store.clearFailedImageArtifact("artifact-old", "im-live")).toBe(true);
       const cleared = await getRow("artifact-old");
       expect(cleared?.status).toBe("failed");
       expect(cleared?.provider_image_id).toBeNull();
