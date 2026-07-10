@@ -190,6 +190,26 @@ describe("SessionMessageQueue", () => {
     expect(h.setSessionStatus).toHaveBeenCalledWith("active");
   });
 
+  it("uses the provider-agnostic auth name for user messages without SCM identity", () => {
+    const h = buildQueue();
+    const participant = createParticipant({
+      scm_name: null,
+      scm_login: null,
+      auth_name: "Pat PM",
+    });
+
+    h.queue.writeUserMessageEvent(participant, "hello", "msg-1", 1000);
+
+    expect(h.broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "sandbox_event",
+        event: expect.objectContaining({
+          author: expect.objectContaining({ name: "Pat PM" }),
+        }),
+      })
+    );
+  });
+
   it("dispatches prompt command when sandbox socket exists", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
