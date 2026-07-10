@@ -60,6 +60,7 @@ export interface ParticipantRow {
   scm_login: string | null;
   scm_email: string | null;
   scm_name: string | null;
+  auth_name: string | null;
   role: ParticipantRole;
   scm_access_token_encrypted: string | null;
   scm_refresh_token_encrypted: string | null;

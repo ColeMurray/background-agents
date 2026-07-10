@@ -10,6 +10,7 @@ const generateWsTokenRequestSchema = z.object({
   scmUserId: nullableOptionalString,
   scmLogin: nullableOptionalString,
   scmName: nullableOptionalString,
+  authName: nullableOptionalString,
   scmEmail: nullableOptionalString,
   scmTokenEncrypted: nullableOptionalString,
   scmRefreshTokenEncrypted: nullableOptionalString,
@@ -81,6 +82,7 @@ export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
           scmUserId: body.scmUserId ?? null,
           scmLogin: body.scmLogin ?? null,
           scmName: body.scmName ?? null,
+          authName: body.authName ?? null,
           scmEmail: body.scmEmail ?? null,
           scmAccessTokenEncrypted: shouldUpdateTokens ? (body.scmTokenEncrypted ?? null) : null,
           scmRefreshTokenEncrypted: shouldUpdateRefreshToken
@@ -96,6 +98,7 @@ export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
           scmUserId: body.scmUserId ?? null,
           scmLogin: body.scmLogin ?? null,
           scmName: body.scmName ?? null,
+          authName: body.authName ?? null,
           scmEmail: body.scmEmail ?? null,
           scmAccessTokenEncrypted: body.scmTokenEncrypted ?? null,
           scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,

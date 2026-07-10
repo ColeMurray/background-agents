@@ -22,6 +22,7 @@ async function handleSessionWsToken(
     scmUserId?: string;
     scmLogin?: string;
     scmName?: string;
+    authName?: string;
     scmEmail?: string;
     scmToken?: string;
     scmTokenExpiresAt?: number;
@@ -35,6 +36,7 @@ async function handleSessionWsToken(
   const scmUserId = body.scmUserId;
   const scmLogin = body.scmLogin;
   const scmName = body.scmName;
+  const authName = body.authName;
   const scmEmail = body.scmEmail;
   const scmToken = body.scmToken;
   const scmTokenExpiresAt = body.scmTokenExpiresAt;
@@ -85,6 +87,7 @@ async function handleSessionWsToken(
         scmUserId,
         scmLogin,
         scmName,
+        authName,
         scmEmail,
         scmTokenEncrypted,
         scmRefreshTokenEncrypted,

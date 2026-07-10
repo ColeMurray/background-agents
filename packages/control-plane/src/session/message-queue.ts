@@ -23,6 +23,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
+import { resolveParticipantName } from "./participant-name";
 
 interface PromptMessageData {
   content: string;
@@ -315,7 +316,7 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
       author: {
         participantId: participant.id,
-        name: participant.scm_name || participant.scm_login || participant.user_id,
+        name: resolveParticipantName(participant),
         avatar: getAvatarUrl(participant.scm_login, this.deps.scmProvider),
       },
     };

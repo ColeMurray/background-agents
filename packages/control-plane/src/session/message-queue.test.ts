@@ -11,6 +11,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: null,
     scm_name: "Octo Cat",
+    auth_name: null,
     role: "member",
     scm_access_token_encrypted: null,
     scm_refresh_token_encrypted: null,
@@ -187,6 +188,26 @@ describe("SessionMessageQueue", () => {
     await h.queue.handlePromptMessage({} as WebSocket, { content: "hello" });
 
     expect(h.setSessionStatus).toHaveBeenCalledWith("active");
+  });
+
+  it("uses the provider-agnostic auth name for user messages without SCM identity", () => {
+    const h = buildQueue();
+    const participant = createParticipant({
+      scm_name: null,
+      scm_login: null,
+      auth_name: "Pat PM",
+    });
+
+    h.queue.writeUserMessageEvent(participant, "hello", "msg-1", 1000);
+
+    expect(h.broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "sandbox_event",
+        event: expect.objectContaining({
+          author: expect.objectContaining({ name: "Pat PM" }),
+        }),
+      })
+    );
   });
 
   it("dispatches prompt command when sandbox socket exists", async () => {

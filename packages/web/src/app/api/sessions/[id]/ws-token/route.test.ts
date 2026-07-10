@@ -78,6 +78,7 @@ describe("ws-token API route", () => {
     );
     expect(sentBody()).toEqual({
       userId: "12345",
+      authName: "Ada Lovelace",
       scmUserId: "12345",
       scmLogin: "ada",
       scmName: "Ada Lovelace",
@@ -108,6 +109,6 @@ describe("ws-token API route", () => {
     const response = await POST(request(), params("sess2"));
 
     expect(response.status).toBe(200);
-    expect(sentBody()).toEqual({ userId: "google-sub-1" });
+    expect(sentBody()).toEqual({ userId: "google-sub-1", authName: "Pat PM" });
   });
 });
