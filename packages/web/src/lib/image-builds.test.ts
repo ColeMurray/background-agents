@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared";
 import {
   excludeSupersededBuilds,
+  foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
   imageBuildScopeKey,
   parsePrimaryBuildSha,
+  repoImageBuildScopeId,
   type ImageBuildUnitView,
 } from "./image-builds";
 
@@ -117,6 +119,27 @@ describe("foldImageBuildStatusByScope", () => {
     );
 
     expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("ready");
+  });
+});
+
+describe("repoImageBuildScopeId", () => {
+  it("lowercases owner/name to match the feed's repo scope keys", () => {
+    expect(repoImageBuildScopeId("Acme", "Web")).toBe("acme/web");
+  });
+});
+
+describe("foldEnabledRepoScopeIds", () => {
+  it("folds the persisted flags to a set of lowercased scope ids", () => {
+    const ids = foldEnabledRepoScopeIds([
+      { repoOwner: "Acme", repoName: "Web" },
+      { repoOwner: "acme", repoName: "api" },
+    ]);
+
+    expect(ids).toEqual(new Set(["acme/web", "acme/api"]));
+  });
+
+  it("returns an empty set for no flags", () => {
+    expect(foldEnabledRepoScopeIds([])).toEqual(new Set());
   });
 });
 

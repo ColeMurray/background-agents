@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Environment, ImageBuildRecordView, ImageBuildStatus } from "@open-inspect/shared";
 import { foldImageBuildStatusByScope, imageBuildScopeKey } from "@/lib/image-builds";
-import { describeEnvironment } from "./use-session-target-picker";
+import type { Repo } from "@/hooks/use-repos";
+import { describeEnvironment, describeRepository } from "./use-session-target-picker";
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -73,5 +74,70 @@ describe("describeEnvironment", () => {
     );
 
     expect(describeEnvironment(environment(), folded)).toBe("2 repositories · prebuild failed");
+  });
+});
+
+function repo(overrides: Partial<Repo> = {}): Repo {
+  return {
+    id: 1,
+    fullName: "acme/web",
+    owner: "acme",
+    name: "web",
+    description: null,
+    private: false,
+    defaultBranch: "main",
+    ...overrides,
+  };
+}
+
+function repoStatusMap(status: ImageBuildStatus): Map<string, ImageBuildStatus> {
+  return new Map([[imageBuildScopeKey("repo", "acme/web"), status]]);
+}
+
+describe("describeRepository", () => {
+  const enabled = new Set(["acme/web"]);
+
+  it("shows only the base description when prebuilds are off for the repo", () => {
+    expect(describeRepository(repo(), new Map(), new Set())).toBe("acme");
+  });
+
+  it("marks private repos without a prebuild when prebuilds are off", () => {
+    expect(describeRepository(repo({ private: true }), new Map(), new Set())).toBe(
+      "acme • private"
+    );
+  });
+
+  it("shows prebuilt for a ready scope", () => {
+    expect(describeRepository(repo(), repoStatusMap("ready"), enabled)).toBe("acme · prebuilt");
+  });
+
+  it("shows prebuild building for a building scope", () => {
+    expect(describeRepository(repo(), repoStatusMap("building"), enabled)).toBe(
+      "acme · prebuild building"
+    );
+  });
+
+  it("shows prebuild failed for a failed scope", () => {
+    expect(describeRepository(repo(), repoStatusMap("failed"), enabled)).toBe(
+      "acme · prebuild failed"
+    );
+  });
+
+  it("falls back to prebuilds on when enabled with no build rows", () => {
+    expect(describeRepository(repo(), new Map(), enabled)).toBe("acme · prebuilds on");
+  });
+
+  it("falls back to prebuilds on for a superseded scope", () => {
+    expect(describeRepository(repo(), repoStatusMap("superseded"), enabled)).toBe(
+      "acme · prebuilds on"
+    );
+  });
+
+  it("looks up the fold map with a lowercased fullName", () => {
+    const mixedCase = repo({ fullName: "Acme/Web", owner: "Acme", name: "Web" });
+    const enabledMixed = new Set(["acme/web"]);
+    expect(describeRepository(mixedCase, repoStatusMap("ready"), enabledMixed)).toBe(
+      "Acme · prebuilt"
+    );
   });
 });

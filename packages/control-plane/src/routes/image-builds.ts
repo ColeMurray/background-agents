@@ -9,8 +9,8 @@
  * - Maintenance operations (stale builds, cleanup + superseded-artifact reaping)
  */
 
-import type { RepositoryShaEntry } from "@open-inspect/shared";
-import { ImageBuildStore, type ImageBuildRow } from "../db/image-builds";
+import type { ImageBuildRecordView, RepositoryShaEntry } from "@open-inspect/shared";
+import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
@@ -485,7 +485,10 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
   return { kind: scopeKind, id: scopeId };
 }
 
-async function readStatusRows(env: Env, scope: ImageBuildScope | null): Promise<ImageBuildRow[]> {
+async function readStatusRows(
+  env: Env,
+  scope: ImageBuildScope | null
+): Promise<ImageBuildRecordView[]> {
   const store = new ImageBuildStore(env.DB);
   if (scope) return store.getStatus(scope);
   return store.getStatusForEnabledScopes(await listEnabledScopes(env.DB));
@@ -496,8 +499,9 @@ async function readStatusRows(env: Env, scope: ImageBuildScope | null): Promise<
  * With a scope: that scope's recent non-superseded rows (the settings UI /
  * debugging view). Without: the cron's cross-scope view over every
  * prebuild-enabled scope — non-superseded, so failed builds are visible in
- * the aggregate feed. Rows are returned verbatim (snake_case columns;
- * repository_shas is a JSON document).
+ * the aggregate feed. Rows are the `ImageBuildRecordView` projection
+ * (snake_case columns; repository_shas is a JSON document) — the store drops
+ * internal columns, so no callback token or provider id reaches a client.
  */
 async function handleGetStatus(
   request: Request,
@@ -639,8 +643,8 @@ async function handleMarkStale(
 
 /**
  * POST /image-builds/cleanup
- * Delete old failed builds and reap superseded rows' provider artifacts.
- * Called by scheduler.
+ * Reap provider artifacts from failed and superseded rows, then delete old
+ * (artifact-free) failed rows. Called by scheduler.
  */
 async function handleCleanup(
   request: Request,
@@ -665,6 +669,7 @@ async function handleCleanup(
 
     logger.info("image_build.cleanup", {
       deleted: result.deletedFailed,
+      reaped_failed: result.reapedFailed,
       reaped_superseded: result.reapedSuperseded,
       max_age_seconds: maxAgeMs / MS_PER_SECOND,
       request_id: ctx.request_id,
@@ -674,6 +679,7 @@ async function handleCleanup(
     return json({
       ok: true,
       deleted: result.deletedFailed,
+      reapedFailed: result.reapedFailed,
       reapedSuperseded: result.reapedSuperseded,
     });
   } catch (e) {

@@ -18,6 +18,39 @@ const MS_PER_SECOND = 1000;
 /** D1 caps bound parameters per statement; IN-list queries chunk below it. */
 const MAX_SCOPE_IDS_PER_QUERY = 50;
 
+/**
+ * The exact `ImageBuildRecordView` wire columns, in declaration order. Status
+ * reads project this list rather than `SELECT *` so internal columns
+ * (callback token, provider session/image ids) never reach a client — the
+ * table carries columns the wire contract does not.
+ *
+ * `satisfies` rejects any key outside the wire contract (a leaking column is
+ * a compile error); the exhaustiveness assertion below rejects any wire field
+ * missing from the projection. The integration tests keep independent
+ * hand-written key-set pins on the runtime payload.
+ */
+const STATUS_VIEW_KEYS = [
+  "id",
+  "scope_kind",
+  "scope_id",
+  "provider",
+  "status",
+  "repositories_fingerprint",
+  "repository_shas",
+  "runtime_version",
+  "build_duration_seconds",
+  "error_message",
+  "created_at",
+] as const satisfies readonly (keyof ImageBuildRecordView)[];
+
+type MissingStatusViewKey = Exclude<keyof ImageBuildRecordView, (typeof STATUS_VIEW_KEYS)[number]>;
+// Fails to compile — naming the missing key — if ImageBuildRecordView gains a
+// field the projection does not carry.
+const _statusViewComplete: MissingStatusViewKey extends never ? true : MissingStatusViewKey = true;
+void _statusViewComplete;
+
+const STATUS_VIEW_COLUMNS = STATUS_VIEW_KEYS.join(", ");
+
 /** Row slice read by the callback-token auth checks. */
 interface CallbackTokenRow {
   id: string;
@@ -41,7 +74,12 @@ export interface ImageBuildRegistration {
   callbackTokenExpiresAt?: number;
 }
 
-/** One full row. Mirrors the `image_builds` table (migration 0039). */
+/**
+ * One full row, including the internal columns (callback token, provider
+ * session/image ids). Mirrors the `image_builds` table (migration 0039).
+ * Internal row — never serialized to clients; the outward wire contract is
+ * `ImageBuildRecordView`, and status reads project exactly its columns.
+ */
 export interface ImageBuildRow extends ImageBuildRecordView {
   provider: ImageBuildProvider;
   provider_image_id: string | null;
@@ -52,8 +90,8 @@ export interface ImageBuildRow extends ImageBuildRecordView {
   callback_token_used_at: number | null;
 }
 
-/** Superseded row carrying its provider artifact (if any) for the reaper. */
-export interface SupersededImageBuildRow {
+/** A row carrying its provider artifact (if any) for the reaper to reclaim. */
+export interface ReapableImageBuildRow {
   id: string;
   scope_kind: ImageBuildScopeKind;
   scope_id: string;
@@ -610,13 +648,13 @@ export class ImageBuildStore {
   }
 
   /** Per-scope recent non-superseded rows (settings UI / debugging view). */
-  async getStatus(scope: ImageBuildScope): Promise<ImageBuildRow[]> {
+  async getStatus(scope: ImageBuildScope): Promise<ImageBuildRecordView[]> {
     const result = await this.db
       .prepare(
-        "SELECT * FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10"
+        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10`
       )
       .bind(scope.kind, scope.id)
-      .all<ImageBuildRow>();
+      .all<ImageBuildRecordView>();
 
     return result.results || [];
   }
@@ -630,7 +668,7 @@ export class ImageBuildStore {
    * via the cleanup pass, and a row cap would just reintroduce the risk of
    * ready images dropping out of the cron's view and re-triggering forever.
    */
-  async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildRow[]> {
+  async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildRecordView[]> {
     const idsByKind = new Map<ImageBuildScopeKind, string[]>();
     for (const scope of scopes) {
       const ids = idsByKind.get(scope.kind) ?? [];
@@ -638,18 +676,18 @@ export class ImageBuildStore {
       idsByKind.set(scope.kind, ids);
     }
 
-    const rows: ImageBuildRow[] = [];
+    const rows: ImageBuildRecordView[] = [];
     for (const [kind, ids] of idsByKind) {
       for (let offset = 0; offset < ids.length; offset += MAX_SCOPE_IDS_PER_QUERY) {
         const chunk = ids.slice(offset, offset + MAX_SCOPE_IDS_PER_QUERY);
         const placeholders = chunk.map(() => "?").join(", ");
         const result = await this.db
           .prepare(
-            `SELECT * FROM image_builds
+            `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
              WHERE scope_kind = ? AND scope_id IN (${placeholders}) AND status <> 'superseded'`
           )
           .bind(kind, ...chunk)
-          .all<ImageBuildRow>();
+          .all<ImageBuildRecordView>();
         rows.push(...(result.results || []));
       }
     }
@@ -663,7 +701,7 @@ export class ImageBuildStore {
    * (mark-ready replacing an older ready) and out-of-band (entity delete,
    * secret change), so cleanup sweeps whatever is left.
    */
-  async getSupersededImages(limit: number): Promise<SupersededImageBuildRow[]> {
+  async getSupersededImages(limit: number): Promise<ReapableImageBuildRow[]> {
     const result = await this.db
       .prepare(
         `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
@@ -671,9 +709,56 @@ export class ImageBuildStore {
          ORDER BY created_at ASC LIMIT ?`
       )
       .bind(limit)
-      .all<SupersededImageBuildRow>();
+      .all<ReapableImageBuildRow>();
 
     return result.results || [];
+  }
+
+  /**
+   * Failed rows still pointing at a provider artifact, for the reaper to
+   * reclaim. A restore-failed spawn flips a ready row to failed while it still
+   * carries a live provider_image_id (Modal snapshots never expire), so the
+   * artifact must be deleted before the age-based sweep may remove the row.
+   * The failed row itself is kept — its error_message stays visible in the
+   * status feeds — until clearFailedImageArtifact nulls its artifact columns.
+   */
+  async getFailedImagesWithArtifacts(limit: number): Promise<ReapableImageBuildRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
+         FROM image_builds WHERE status = 'failed' AND provider_image_id IS NOT NULL
+         ORDER BY created_at ASC LIMIT ?`
+      )
+      .bind(limit)
+      .all<ReapableImageBuildRow>();
+
+    return result.results || [];
+  }
+
+  /**
+   * Terminal reaper action for a failed row whose provider artifact was
+   * deleted: null the artifact columns while keeping status='failed' and its
+   * error_message. Scoped to status='failed' so a concurrent rebuild that
+   * already superseded/replaced the row can never have its live artifact
+   * cleared, and to the exact provider_image_id the caller reaped so a newer
+   * artifact attached to the same failed row between select and clear is never
+   * nulled without being deleted provider-side. Idempotent — a row with no
+   * artifact is not re-selected by getFailedImagesWithArtifacts. A null id
+   * (never produced by that selector) matches nothing and clears no row.
+   */
+  async clearFailedImageArtifact(
+    imageBuildId: string,
+    reapedProviderImageId: string | null
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE image_builds SET provider_image_id = NULL, provider_session_id = NULL
+         WHERE id = ? AND status = 'failed' AND provider_image_id = ?`
+      )
+      .bind(imageBuildId, reapedProviderImageId)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async markStaleBuildsAsFailed(maxAgeMs: number): Promise<number> {
@@ -688,10 +773,19 @@ export class ImageBuildStore {
     return result.meta?.changes ?? 0;
   }
 
+  /**
+   * Age out failed rows once they hold no provider artifact. The
+   * provider_image_id IS NULL guard keeps a restore-failed row (which carries
+   * a live artifact) from being hard-deleted before the reaper reclaims the
+   * artifact and nulls its columns, which would otherwise orphan the snapshot.
+   */
   async deleteOldFailedBuilds(maxAgeMs: number): Promise<number> {
     const cutoff = Date.now() - maxAgeMs;
     const result = await this.db
-      .prepare("DELETE FROM image_builds WHERE status = 'failed' AND created_at < ?")
+      .prepare(
+        `DELETE FROM image_builds
+         WHERE status = 'failed' AND provider_image_id IS NULL AND created_at < ?`
+      )
       .bind(cutoff)
       .run();
 
