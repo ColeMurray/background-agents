@@ -704,6 +704,25 @@ describe("ImageBuildWorkflow", () => {
       ).rejects.toBeInstanceOf(ImageBuildInvalidCallbackError);
     });
 
+    it("authenticates the token before validating the completion payload", async () => {
+      const store = sessionBuildStore();
+      store.consumeCallbackToken.mockResolvedValue(null);
+      const { workflow } = createWorkflow({ store });
+
+      // Malformed payload (no session id, no runtime version) + bad token:
+      // the caller must see the auth failure, not a validation error.
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion({
+            providerImageId: undefined,
+            runtimeVersion: undefined,
+          }),
+          callbackToken: "stale-token",
+          context: ctx,
+        })
+      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
+    });
+
     it("marks the build failed when deferred finalization fails", async () => {
       const store = sessionBuildStore();
       const adapter = createAdapter();
@@ -803,6 +822,23 @@ describe("ImageBuildWorkflow", () => {
           failure: {
             buildId: "imgb-env_1-1-abcd",
             providerSessionId: "vercel-session-1",
+            errorMessage: "boom",
+          },
+          callbackToken: "stale-token",
+          context: ctx,
+        })
+      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
+    });
+
+    it("authenticates the token before requiring provider_session_id on failures", async () => {
+      const store = sessionBuildStore();
+      store.markBuildFailedWithCallbackToken.mockResolvedValue(false);
+      const { workflow } = createWorkflow({ store });
+
+      await expect(
+        workflow.acceptBuildFailed({
+          failure: {
+            buildId: "imgb-env_1-1-abcd",
             errorMessage: "boom",
           },
           callbackToken: "stale-token",

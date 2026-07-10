@@ -348,21 +348,25 @@ export class ImageBuildWorkflow {
     const provider = build.provider;
 
     if (getImageBuildCallbackMode(provider) === "provider_session") {
+      // Authenticate before revealing anything about the payload's validity —
+      // same ordering as the internal-HMAC path below. A missing
+      // provider_session_id can never match the token's stored binding, so it
+      // fails here as an auth error, indistinguishable from a bad token.
+      await this.requireTokenBuildCallbackAuth(command.callbackToken, {
+        buildId: build.id,
+        provider,
+        providerSessionId: completion.providerSessionId ?? "",
+        ctx,
+      });
+
       const validated = this.validateCompletion(completion);
       // The sandbox itself reports completion with a bearer token; the
       // artifact does not exist yet — snapshotting is the deferred
       // finalization the route schedules via waitUntil.
-      if (!completion.providerSessionId) {
+      const providerSessionId = completion.providerSessionId;
+      if (!providerSessionId) {
         throw new ImageBuildInvalidCallbackError("provider_session_id is required");
       }
-      const providerSessionId = completion.providerSessionId;
-
-      await this.requireTokenBuildCallbackAuth(command.callbackToken, {
-        buildId: build.id,
-        provider,
-        providerSessionId,
-        ctx,
-      });
 
       logger.info("image_build.build_complete_received", {
         build_id: validated.buildId,
@@ -654,17 +658,25 @@ export class ImageBuildWorkflow {
     }
 
     if (getImageBuildCallbackMode(build.provider) === "provider_session") {
-      if (!failure.providerSessionId) {
-        throw new ImageBuildInvalidCallbackError("provider_session_id is required");
-      }
-      const providerSessionId = failure.providerSessionId;
-
+      // Token auth runs (inside the mark helper) before any payload check —
+      // a missing provider_session_id can never match the token's stored
+      // binding, so it fails as an auth error, indistinguishable from a bad
+      // token.
       await this.markProviderSessionBuildFailedWithCallbackToken(
         build.provider,
-        { buildId: failure.buildId, providerSessionId, errorMessage: failure.errorMessage },
+        {
+          buildId: failure.buildId,
+          providerSessionId: failure.providerSessionId ?? "",
+          errorMessage: failure.errorMessage,
+        },
         command.callbackToken,
         ctx
       );
+
+      const providerSessionId = failure.providerSessionId;
+      if (!providerSessionId) {
+        throw new ImageBuildInvalidCallbackError("provider_session_id is required");
+      }
 
       logger.info("image_build.build_failed", {
         build_id: failure.buildId,
