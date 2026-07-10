@@ -493,6 +493,21 @@ export class SessionDO extends DurableObject<Env> {
           return webAppUrl + "/session/" + sessionId;
         },
         createPullRequest: async (input) => {
+          let prLabel: string | undefined;
+          const session = this.getSession();
+          if (session && this.env.DB) {
+            try {
+              const settingsStore = new IntegrationSettingsStore(this.env.DB);
+              const { settings } = await settingsStore.getResolvedConfig(
+                "github",
+                `${session.repo_owner}/${session.repo_name}`
+              );
+              prLabel = settings.prLabel || undefined;
+            } catch {
+              // Best-effort — don't fail PR creation if settings read fails
+            }
+          }
+
           const pullRequestService = new SessionPullRequestService({
             repository: this.repository,
             claims: this.prCreationClaims,
@@ -515,6 +530,7 @@ export class SessionDO extends DurableObject<Env> {
               });
             },
             appName: resolveAppName(this.env),
+            prLabel,
           });
 
           return pullRequestService.createPullRequest(input);

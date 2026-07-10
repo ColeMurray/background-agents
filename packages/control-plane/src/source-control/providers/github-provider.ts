@@ -181,6 +181,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
     // Add labels if requested
     if (config.labels && config.labels.length > 0) {
+      await this.ensureLabels(
+        auth.token,
+        config.repository.owner,
+        config.repository.name,
+        config.labels
+      );
       await this.addLabels(
         auth.token,
         config.repository.owner,
@@ -372,6 +378,41 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       repoName: config.name,
       force,
     };
+  }
+
+  /**
+   * Ensure labels exist in a repository, creating any that are missing.
+   * This is a best-effort operation - failures are logged but don't fail the PR creation.
+   */
+  private async ensureLabels(
+    accessToken: string,
+    owner: string,
+    repo: string,
+    labels: string[]
+  ): Promise<void> {
+    for (const label of labels) {
+      try {
+        const response = await fetchWithTimeout(
+          `${GITHUB_API_BASE}/repos/${owner}/${repo}/labels`,
+          {
+            method: "POST",
+            headers: {
+              Accept: "application/vnd.github.v3+json",
+              Authorization: `Bearer ${accessToken}`,
+              "User-Agent": this.userAgent,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ name: label, color: "ededed" }),
+          }
+        );
+        // 201 = created, 422 = already exists — both are fine
+        if (!response.ok && response.status !== 422) {
+          console.warn(`Failed to ensure label "${label}" in ${owner}/${repo}: ${response.status}`);
+        }
+      } catch (error) {
+        console.warn(`Failed to ensure label "${label}" in ${owner}/${repo}:`, error);
+      }
+    }
   }
 
   /**

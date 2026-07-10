@@ -142,6 +142,7 @@ function GlobalSettingsSection({
   const [commentActionInstructions, setCommentActionInstructions] = useState(
     settings?.defaults?.commentActionInstructions ?? ""
   );
+  const [prLabel, setPrLabel] = useState(settings?.defaults?.prLabel ?? "");
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -161,6 +162,7 @@ function GlobalSettingsSection({
         );
         setCodeReviewInstructions(settings.defaults?.codeReviewInstructions ?? "");
         setCommentActionInstructions(settings.defaults?.commentActionInstructions ?? "");
+        setPrLabel(settings.defaults?.prLabel ?? "");
       }
       setInitialized(true);
     }
@@ -188,6 +190,7 @@ function GlobalSettingsSection({
         setTriggerUserMode("write_access");
         setCodeReviewInstructions("");
         setCommentActionInstructions("");
+        setPrLabel("");
         setNewUsername("");
         setDirty(false);
         toast.success("Settings reset to defaults.");
@@ -205,6 +208,7 @@ function GlobalSettingsSection({
   const handleSave = async () => {
     setSaving(true);
     setError("");
+    const normalizedPrLabel = prLabel.trim();
 
     const body: GitHubGlobalConfig = {
       defaults: {
@@ -212,6 +216,7 @@ function GlobalSettingsSection({
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
         ...(commentActionInstructions ? { commentActionInstructions } : {}),
+        ...(normalizedPrLabel ? { prLabel: normalizedPrLabel } : {}),
       },
     };
 
@@ -228,6 +233,7 @@ function GlobalSettingsSection({
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
+        setPrLabel(normalizedPrLabel);
         toast.success("Settings saved.");
         setDirty(false);
       } else {
@@ -470,6 +476,26 @@ function GlobalSettingsSection({
           rows={3}
           placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
           className="resize-y"
+        />
+      </div>
+
+      <div className="mb-4">
+        <label htmlFor="pr-label" className="block text-sm font-medium text-foreground mb-1">
+          PR Label
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Label applied to every agent-created pull request. The label is created in the target
+          repository if it does not already exist. Leave blank to apply no label.
+        </p>
+        <Input
+          id="pr-label"
+          value={prLabel}
+          onChange={(e) => {
+            setPrLabel(e.target.value);
+            setDirty(true);
+            setError("");
+          }}
+          placeholder="e.g., contractor"
         />
       </div>
 
