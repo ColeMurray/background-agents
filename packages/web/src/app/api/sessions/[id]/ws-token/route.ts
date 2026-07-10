@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
-import { buildScmCredentials } from "@/lib/build-auth-identity";
+import { buildAuthIdentity, buildScmCredentials } from "@/lib/build-auth-identity";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 /**
@@ -31,6 +31,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Extract user info from NextAuth session
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
+    const { authName } = buildAuthIdentity(user);
 
     const jwtStart = Date.now();
     const jwt = await getToken({ req: request });
@@ -41,9 +42,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       method: "POST",
       body: JSON.stringify({
         userId,
-        // Provider-agnostic display name for presence, so non-GitHub providers
-        // (e.g. Google) show a real name instead of falling back to the raw user id.
-        authName: user.name ?? undefined,
+        authName,
         // GitHub-only SCM credentials + attribution; empty for Google, which
         // keeps participant identity via userId and writes no SCM token.
         ...buildScmCredentials(user, jwt),
