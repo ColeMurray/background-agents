@@ -160,7 +160,7 @@ One session can work across several repositories in a single sandbox:
 - **Environments** — Save a repository set as a named environment with its own secrets scope and
   optional prebuilt images, then launch it from the picker like any repository
 - See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#environments) for the model and
-  [docs/IMAGE_PREBUILD.md](docs/IMAGE_PREBUILD.md#environment-images) for environment prebuilds
+  [docs/IMAGE_PREBUILD.md](docs/IMAGE_PREBUILD.md) for environment prebuilds
 
 ### Multiplayer Sessions
 
@@ -266,9 +266,9 @@ docker compose up -d postgres redis
 ```
 
 - `setup.sh` runs for image builds and fresh sessions
-- `setup.sh` is skipped for repo-image and snapshot-restore starts
+- `setup.sh` is skipped for prebuilt-image and snapshot-restore starts
 - `setup.sh` failures are non-fatal for fresh sessions, but fatal in image build mode
-- `start.sh` runs for every non-build session startup (fresh, repo-image, snapshot-restore)
+- `start.sh` runs for every non-build session startup (fresh, prebuilt-image, snapshot-restore)
 - `start.sh` failures are strict: if present and it fails, session startup fails
 - Default timeouts:
   - `SETUP_TIMEOUT_SECONDS` (default `300`)

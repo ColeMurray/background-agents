@@ -88,22 +88,29 @@ Wide events use `outcome` to indicate result:
 | -------------- | ----------- | ------------------------------------------------------------------- | ----------------------------- |
 | `http.request` | info, error | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome` | One per incoming HTTP request |
 
-#### Repo Image Builds (`component: "router"`)
+#### Image Builds (`component: "image-builds:*"` / `"router:image-builds"`)
 
-| Event                                        | Level | Key Fields                                                                                                                                            | Description                                                                  |
-| -------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `repo_image.build_triggered`                 | info  | `build_id`, `repo_owner`, `repo_name`, `trace_id`, `request_id`                                                                                       | Repo image build accepted by the active backend                              |
-| `repo_image.build_complete_received`         | info  | `build_id`, `provider`, `provider_session_id`, `base_sha`, `trace_id`, `request_id`                                                                   | Provider-session runtime reported success; control-plane finalization begins |
-| `repo_image.<provider>_finalize_start`       | info  | `build_id`, `provider_session_id`, `trace_id`, `request_id`                                                                                           | Control plane started finalizing the provider image artifact                 |
-| `repo_image.build_complete`                  | info  | `build_id`, `provider`, `provider_image_id`, `provider_session_id`, `base_sha`, `replaced_image_id`, `snapshot_duration_ms`, `trace_id`, `request_id` | Repo image artifact marked ready                                             |
-| `repo_image.build_superseded`                | info  | `build_id`, `provider`, `provider_image_id`, `provider_session_id`, `duration_ms`, `trace_id`, `request_id`                                           | Build completed after a newer ready image already existed                    |
-| `repo_image.build_failed`                    | info  | `build_id`, `provider`, `error_message`, `provider_session_id`, `trace_id`, `request_id`                                                              | Runtime reported a failed repo image build                                   |
-| `repo_image.callback_auth_failed`            | warn  | `build_id`, `provider`, `provider_session_id`, `trace_id`, `request_id`                                                                               | Repo image callback had invalid auth, replay, or session binding             |
-| `repo_image.build_complete_error`            | error | `build_id`, `finalized_image_id`, `error`, `trace_id`, `request_id`                                                                                   | Provider-image completion path threw before ready state                      |
-| `repo_image.<provider>_finalize_error`       | error | `build_id`, `provider_session_id`, `provider_image_id`, `error`, `duration_ms`, `trace_id`, `request_id`                                              | Provider-session finalization threw before or after creating an image        |
-| `repo_image.<provider>_finalize_not_applied` | warn  | `build_id`, `provider_session_id`, `provider_image_id`, `duration_ms`, `trace_id`, `request_id`                                                       | Finalization succeeded after the build row stopped accepting completion      |
-| `repo_image.trigger_mark_failed_error`       | warn  | `build_id`, `error`, `trace_id`, `request_id`                                                                                                         | Build trigger failed and the route could not mark the build failed           |
-| `repo_image.trigger_error`                   | error | `repo_owner`, `repo_name`, `error`, `trace_id`, `request_id`                                                                                          | Manual or scheduled build trigger failed                                     |
+One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind` (`repo` |
+`environment`) and `scope_id` (lowercase `owner/name` or an environment id).
+
+| Event                                              | Level | Key Fields                                                                                                                              | Description                                                              |
+| -------------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `image_build.build_triggered`                      | info  | `build_id`, `scope_kind`, `scope_id`, `repositories_fingerprint`, `trace_id`, `request_id`                                              | Build registered and accepted by the active provider                     |
+| `image_build.build_complete_received`              | info  | `build_id`, `scope_kind`, `scope_id`, `provider`, `provider_session_id`, `runtime_version`, `trace_id`, `request_id`                    | Runtime reported success; control-plane finalization begins              |
+| `image_build.build_complete`                       | info  | `build_id`, `scope_kind`, `scope_id`, `provider`, `provider_image_id`, `runtime_version`, `replaced_image_id`, `trace_id`, `request_id` | Image artifact marked ready                                              |
+| `image_build.build_superseded`                     | info  | `build_id`, `scope_kind`, `scope_id`, `provider`, `provider_image_id`, `trace_id`, `request_id`                                         | Build completed after a newer ready image already existed                |
+| `image_build.build_failed`                         | info  | `build_id`, `scope_kind`, `scope_id`, `provider`, `error_message`, `provider_session_id`, `trace_id`, `request_id`                      | Runtime reported a failed build                                          |
+| `image_build.callback_auth_failed`                 | warn  | `build_id`, `provider`, `provider_session_id`, `trace_id`, `request_id`                                                                 | Build callback had invalid auth, replay, or session binding              |
+| `image_build.build_complete_error`                 | error | `build_id`, `error`, `trace_id`, `request_id`                                                                                           | Completion path threw before ready state                                 |
+| `image_build.finalize_error`                       | error | `build_id`, `provider`, `provider_session_id`, `error`, `trace_id`, `request_id`                                                        | Provider-session finalization threw before or after creating an image    |
+| `image_build.finalize_not_applied`                 | warn  | `build_id`, `provider`, `provider_image_id`, `trace_id`, `request_id`                                                                   | Finalization succeeded after the build row stopped accepting completion  |
+| `image_build.trigger_mark_failed_error`            | warn  | `build_id`, `error`, `trace_id`, `request_id`                                                                                           | Build trigger failed and the workflow could not mark the build failed    |
+| `image_build.trigger_error`                        | error | `scope_kind`, `scope_id`, `error`, `trace_id`, `request_id`                                                                             | Manual or scheduled build trigger failed                                 |
+| `image_build.late_artifact_recorded`               | info  | `build_id`, `provider`, `provider_image_id`, `trace_id`, `request_id`                                                                   | Artifact reported after the row left `building`; recorded for the reaper |
+| `image_build.save_hook_trigger`                    | info  | `scope_kind`, `scope_id`, `result`, `build_id`, `trace_id`, `request_id`                                                                | Entity save (env save, repo toggle-on) kicked a prebuild                 |
+| `image_build.secrets_change_superseded`            | info  | `scope_kind`, `scope_id`, `superseded`, `trace_id`, `request_id`                                                                        | Secret change retired the scope's live images before the rebuild         |
+| `image_build.toggle`                               | info  | `scope_kind`, `scope_id`, `enabled`, `trace_id`, `request_id`                                                                           | Repo prebuild toggle written                                             |
+| `image_build.cleanup` / `image_build.stale_marked` | info  | `deleted`, `reaped_superseded` / `count`, `trace_id`, `request_id`                                                                      | Scheduler-driven maintenance results                                     |
 
 #### Session Durable Object (`component: "session-do"`)
 
@@ -154,6 +161,22 @@ Wide events use `outcome` to indicate result:
 | `sandbox.create`   | info  | `sandbox_id`, `modal_object_id`, `repo_owner`, `repo_name`, `duration_ms`, `outcome` | Sandbox creation |
 | `sandbox.snapshot` | info  | `sandbox_id`, `snapshot_id`, `image_id`, `duration_ms`, `outcome`                    | Snapshot taken   |
 | `sandbox.restore`  | info  | `sandbox_id`, `modal_object_id`, `snapshot_image_id`, `duration_ms`, `outcome`       | Sandbox restored |
+
+#### Image Builder (`component: "image_builder"`)
+
+The `build_image` worker and the 30-minute `rebuild_images` cron. Worker events carry
+`scope_kind`/`scope_id` like the control-plane side.
+
+| Event                                                                                   | Level | Key Fields                                                                                       | Description                                                      |
+| --------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `image_build.start`                                                                     | info  | `build_id`, `scope_kind`, `scope_id`, `repository_count`                                         | Build worker started                                             |
+| `image_build.success`                                                                   | info  | `build_id`, `scope_kind`, `scope_id`, `provider_image_id`, `runtime_version`, `build_duration_s` | Filesystem snapshotted; success callback follows                 |
+| `image_build.failed`                                                                    | error | `build_id`, `scope_kind`, `scope_id`, `error`, `build_duration_s`                                | Build failed; failure callback follows                           |
+| `scheduler.start` / `scheduler.done`                                                    | info  | `builds_triggered`, `duration_s` (on done)                                                       | One cron pass over all enabled scope units                       |
+| `scheduler.build_triggered`                                                             | info  | `scope_kind`, `scope_id`                                                                         | Cron triggered a rebuild for a unit                              |
+| `scheduler.no_ready_image` / `scheduler.runtime_below_floor` / `scheduler.sha_mismatch` | info  | `scope_kind`, `scope_id` (+ trigger-specific fields)                                             | Which rebuild trigger fired for a unit                           |
+| `scheduler.skip_building`                                                               | info  | `scope_kind`, `scope_id`                                                                         | Unit skipped: a build is already in flight                       |
+| `scheduler.trigger_cap_reached`                                                         | info  | `cap`                                                                                            | Per-tick trigger cap hit; remaining units wait for the next tick |
 
 #### Supervisor (`component: "supervisor"`)
 

@@ -197,7 +197,7 @@ The control plane calls the Daytona REST API directly — no shim service to dep
    in `terraform.tfvars`.
 
 The control plane calls the Vercel Sandbox API directly from Cloudflare Workers. No Modal-style shim
-service is deployed. Vercel supports filesystem snapshots and repo prebuilt images; if you have a
+service is deployed. Vercel supports filesystem snapshots and prebuilt images; if you have a
 reusable base snapshot, set `vercel_base_snapshot_id` to use it instead of Terraform's managed base
 snapshot build.
 

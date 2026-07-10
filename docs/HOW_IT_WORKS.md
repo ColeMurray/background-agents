@@ -115,8 +115,7 @@ An environment defines:
   environment's secrets (repository secrets do not flow in; see
   [Secrets Management](./SECRETS.md#which-secrets-a-session-receives))
 - **Optional prebuilt images** — the whole environment (all clones + all setup scripts) is built
-  ahead of time so sessions boot in seconds (see
-  [Pre-Built Images](./IMAGE_PREBUILD.md#environment-images))
+  ahead of time so sessions boot in seconds (see [Pre-Built Images](./IMAGE_PREBUILD.md))
 
 Sessions snapshot the environment at creation time: editing or deleting an environment never changes
 what an existing session works on (the session page shows "Environment deleted" if the source is
@@ -203,13 +202,14 @@ Open-Inspect supports these sandbox backends:
 
 - **Modal**: near-instant startup plus filesystem snapshot restore
 - **Daytona**: persistent stop/start sandboxes via direct REST API calls
-- **Vercel Sandboxes**: filesystem snapshot restore and repo-image builds via the Vercel Sandbox API
-- **OpenComputer**: template-based sandboxes with checkpoint-backed repo-image builds via the
+- **Vercel Sandboxes**: filesystem snapshot restore and prebuilt-image builds via the Vercel Sandbox
+  API
+- **OpenComputer**: template-based sandboxes with checkpoint-backed prebuilt-image builds via the
   OpenComputer REST API
 
-Repo-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can be
-restored on those same providers for session resumes; Daytona uses persistent sandboxes instead. For
-Daytona, the control plane stops the sandbox on inactivity or stale heartbeat, then resumes that
+Prebuilt-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can
+be restored on those same providers for session resumes; Daytona uses persistent sandboxes instead.
+For Daytona, the control plane stops the sandbox on inactivity or stale heartbeat, then resumes that
 same sandbox later with the same logical sandbox ID and auth token.
 
 ### Clients
@@ -282,11 +282,11 @@ follow-up prompts in an existing session are much faster than the first prompt.
 
 ### Prebuilt Image Start
 
-When starting from a pre-built image (a repository image, or an environment image for sessions
-launched from a prebuild-enabled environment):
+When starting from a pre-built image (built for the session's repository or, for sessions launched
+from a prebuild-enabled environment, the environment's whole repository set):
 
 1. **Incremental git sync**: Fast fetch + hard reset to latest branch head (per repository for
-   environment images)
+   multi-repository sets)
 2. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built
 3. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
 4. **Ready**: Agent starts once runtime hook succeeds
@@ -498,8 +498,8 @@ active provider supports saved filesystem state.
 For Vercel, Terraform builds a base-runtime snapshot from the local checkout and wires a
 deterministic snapshot name into `VERCEL_BASE_SNAPSHOT_NAME`. Fresh Vercel sandboxes resolve that
 name to the newest created snapshot instead of cloning and installing the sandbox runtime on every
-session. OpenComputer uses a managed template plus checkpoints for the same repo-image lifecycle.
-See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
+session. OpenComputer uses a managed template plus checkpoints for the same prebuilt-image
+lifecycle. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md) for provider-specific details.
 
 ### Image Prebuilding
@@ -543,8 +543,8 @@ was built for internal use where all employees have access to company repositori
 | Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
 | WebSocket Token    | Authenticate client connections            | Single session                   |
 
-Fresh and repo-image sandboxes fetch git credentials on demand through the control plane instead of
-relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
+Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
+of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
 env-token fallbacks so legacy snapshots can boot through the credential-helper migration. The helper
 authorizes HTTPS requests for the configured SCM host, preserving existing setup/start hooks that
 clone other private repositories available to the installation. This primarily protects continuously

@@ -8,7 +8,7 @@ Modal-style shim service for this provider.
 
 Use `sandbox_provider = "vercel"` when you want sandbox sessions to run in Vercel Sandboxes while
 keeping the same Open-Inspect control plane and web app deployment flow. Vercel supports filesystem
-snapshots, so Open-Inspect can restore a base runtime snapshot, create repo-specific snapshots, and
+snapshots, so Open-Inspect can restore a base runtime snapshot, create prebuilt-image snapshots, and
 resume user sessions from saved filesystem state.
 
 ## Required Configuration
@@ -48,8 +48,8 @@ VERCEL_SANDBOX_API_BASE_URL # optional advanced Sandbox API override
 `VERCEL_SANDBOX_API_BASE_URL` is honored by Terraform and the control plane for advanced testing
 against a non-default Sandbox API endpoint. Normal deployments should leave it unset.
 
-`VERCEL_SNAPSHOT_EXPIRATION_MS` applies to repo/session snapshots created at runtime. `0` means no
-expiration. The managed base-runtime snapshot is created without expiration, overriding Vercel's
+`VERCEL_SNAPSHOT_EXPIRATION_MS` applies to prebuild/session snapshots created at runtime. `0` means
+no expiration. The managed base-runtime snapshot is created without expiration, overriding Vercel's
 default snapshot expiration for that deploy artifact.
 
 ## Managed Base Runtime Snapshot
@@ -73,26 +73,27 @@ the same Terraform apply path as the rest of the sandbox infrastructure.
 
 `vercel_base_snapshot_id` still exists as a manual fallback for local Terraform applies or emergency
 pinning. When it is set, Terraform skips the managed base snapshot build and the control plane uses
-`VERCEL_BASE_SNAPSHOT_ID` directly. Vercel fresh sessions require either a repo image snapshot, a
-manual base snapshot ID, or this managed base-runtime snapshot name.
+`VERCEL_BASE_SNAPSHOT_ID` directly. Vercel fresh sessions require either a prebuilt-image snapshot,
+a manual base snapshot ID, or this managed base-runtime snapshot name.
 
 ## Session Startup Sources
 
 Vercel sessions choose their source in this order:
 
-1. Repo image snapshot, when a repo-specific prebuild exists.
+1. Prebuilt-image snapshot, when a matching prebuild exists for the session's repository or
+   environment.
 2. Manual base-runtime snapshot from `VERCEL_BASE_SNAPSHOT_ID`, when configured.
 3. Managed base-runtime snapshot resolved from `VERCEL_BASE_SNAPSHOT_NAME`.
 
-Repo image snapshots still take precedence over the base runtime snapshot because they contain both
-the base runtime and repository-specific setup work.
+Prebuilt-image snapshots still take precedence over the base runtime snapshot because they contain
+both the base runtime and repository-specific setup work.
 
-## Repo Image Build Callbacks
+## Image Build Callbacks
 
-Vercel repo-image builds run inside a Vercel sandbox rather than a trusted Modal shim. The control
-plane therefore does not pass `INTERNAL_CALLBACK_SECRET` into the build sandbox.
+Vercel image builds run inside a Vercel sandbox rather than a trusted Modal shim. The control plane
+therefore does not pass `INTERNAL_CALLBACK_SECRET` into the build sandbox.
 
-When a Vercel repo-image build is triggered, the control plane:
+When a Vercel image build is triggered, the control plane:
 
 1. Generates a random callback token for that build only.
 2. Stores only a hash of that token in D1 with the build row.
@@ -105,14 +106,14 @@ When a Vercel repo-image build is triggered, the control plane:
 
 On success, the runtime callback does not provide a provider image ID. It only reports that setup
 finished. The control plane then snapshots the bound Vercel session and records that snapshot ID as
-the repo image.
+the prebuilt image.
 
 ## Shutdown and Snapshots
 
 Vercel sandboxes are explicitly stopped by Open-Inspect when they should no longer run:
 
 - The temporary base-snapshot build sandbox is stopped after its snapshot is created.
-- A Vercel repo-image build sandbox is stopped after the control plane snapshots the completed build
+- A Vercel image-build sandbox is stopped after the control plane snapshots the completed build
   session.
 - Inactive Vercel sessions are snapshotted and stopped by the lifecycle manager.
 - Runtime-created snapshots use `VERCEL_SNAPSHOT_EXPIRATION_MS`; the base runtime snapshot does not
