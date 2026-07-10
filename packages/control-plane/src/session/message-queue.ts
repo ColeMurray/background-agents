@@ -56,6 +56,20 @@ interface StopExecutionOptions {
   suppressStatusReconcile?: boolean;
 }
 
+const MAX_ATTACHMENTS_PER_PROMPT = 6;
+const MAX_PERSISTED_ATTACHMENTS_BYTES = 1_500_000;
+
+export class PromptAttachmentError extends Error {}
+
+function isValidBase64(content: string): boolean {
+  const normalized = content.replace(/\s/g, "");
+  return (
+    normalized.length > 0 &&
+    normalized.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]*={0,2}$/.test(normalized)
+  );
+}
+
 export class SessionMessageQueue {
   constructor(private readonly deps: MessageQueueDeps) {}
 
@@ -66,6 +80,18 @@ export class SessionMessageQueue {
         type: "error",
         code: "NOT_SUBSCRIBED",
         message: "Must subscribe first",
+      });
+      return;
+    }
+
+    let attachments: Attachment[] | undefined;
+    try {
+      attachments = this.normalizeAttachments(data.attachments);
+    } catch (error) {
+      this.deps.wsManager.send(ws, {
+        type: "error",
+        code: "INVALID_ATTACHMENTS",
+        message: error instanceof Error ? error.message : "Invalid attachments",
       });
       return;
     }
@@ -100,15 +126,15 @@ export class SessionMessageQueue {
       source: "web",
       model: messageModel,
       reasoningEffort: messageReasoningEffort,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
+      attachments: attachments ? JSON.stringify(attachments) : null,
       status: "pending",
       createdAt: now,
     });
-    this.markAttachmentUploadsReferenced(data.attachments, messageId);
+    this.markAttachmentUploadsReferenced(attachments, messageId);
 
     await this.deps.setSessionStatus("active");
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now, data.attachments);
+    this.writeUserMessageEvent(participant, data.content, messageId, now, attachments);
 
     const position = this.deps.repository.getPendingOrProcessingCount();
 
@@ -121,8 +147,8 @@ export class SessionMessageQueue {
       model: messageModel,
       reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
-      has_attachments: !!data.attachments?.length,
-      attachments_count: data.attachments?.length ?? 0,
+      has_attachments: !!attachments?.length,
+      attachments_count: attachments?.length ?? 0,
       queue_position: position,
     });
 
@@ -320,6 +346,58 @@ export class SessionMessageQueue {
     }
   }
 
+  /** Validate once at the queue boundary and hydrate upload metadata from durable rows. */
+  private normalizeAttachments(attachments: Attachment[] | undefined): Attachment[] | undefined {
+    if (!attachments || attachments.length === 0) return undefined;
+    if (attachments.length > MAX_ATTACHMENTS_PER_PROMPT) {
+      throw new PromptAttachmentError(
+        `You can attach up to ${MAX_ATTACHMENTS_PER_PROMPT} files per message`
+      );
+    }
+    if (
+      attachments.some(
+        (attachment) => typeof attachment.content === "string" && !isValidBase64(attachment.content)
+      )
+    ) {
+      throw new PromptAttachmentError("Inline attachment content must be valid base64");
+    }
+
+    const uploadIds = attachments.flatMap((attachment) =>
+      typeof attachment.uploadId === "string" ? [attachment.uploadId] : []
+    );
+    if (new Set(uploadIds).size !== uploadIds.length) {
+      throw new PromptAttachmentError("An upload can only be attached once per message");
+    }
+    const uploads = new Map(
+      this.deps.repository
+        .getUnreferencedUploads(uploadIds)
+        .map((upload) => [upload.id, upload] as const)
+    );
+    if (uploads.size !== uploadIds.length) {
+      throw new PromptAttachmentError("One or more uploads are missing, expired, or already used");
+    }
+
+    const normalized = attachments.map((attachment): Attachment => {
+      if (typeof attachment.uploadId !== "string") return attachment;
+      const upload = uploads.get(attachment.uploadId);
+      if (!upload) throw new PromptAttachmentError("Upload not found");
+      return {
+        type: upload.kind === "image" ? "image" : "file",
+        name: attachment.name,
+        mimeType: upload.mime_type,
+        uploadId: upload.id,
+      };
+    });
+
+    if (
+      new TextEncoder().encode(JSON.stringify(normalized)).byteLength >
+      MAX_PERSISTED_ATTACHMENTS_BYTES
+    ) {
+      throw new PromptAttachmentError("Inline attachments are too large; upload the files instead");
+    }
+    return normalized;
+  }
+
   writeUserMessageEvent(
     participant: ParticipantRow,
     content: string,
@@ -364,6 +442,7 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
+    const attachments = this.normalizeAttachments(data.attachments);
     let participant = this.deps.participantService.getByUserId(data.authorId);
     if (!participant) {
       participant = this.deps.participantService.create(
@@ -417,16 +496,16 @@ export class SessionMessageQueue {
       source: data.source as MessageSource,
       model: messageModel,
       reasoningEffort: messageReasoningEffort,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
+      attachments: attachments ? JSON.stringify(attachments) : null,
       callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
       status: "pending",
       createdAt: now,
     });
-    this.markAttachmentUploadsReferenced(data.attachments, messageId);
+    this.markAttachmentUploadsReferenced(attachments, messageId);
 
     await this.deps.setSessionStatus("active");
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now, data.attachments);
+    this.writeUserMessageEvent(participant, data.content, messageId, now, attachments);
 
     const queuePosition = this.deps.repository.getPendingOrProcessingCount();
 
@@ -439,8 +518,8 @@ export class SessionMessageQueue {
       model: messageModel,
       reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
-      has_attachments: !!data.attachments?.length,
-      attachments_count: data.attachments?.length ?? 0,
+      has_attachments: !!attachments?.length,
+      attachments_count: attachments?.length ?? 0,
       has_callback_context: !!data.callbackContext,
       queue_position: queuePosition,
     });

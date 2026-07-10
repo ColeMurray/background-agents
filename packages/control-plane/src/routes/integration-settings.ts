@@ -7,6 +7,7 @@ import {
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   isValidReasoningEffort,
   type CodeServerSettings,
+  type EnvironmentSettingsIntegrationId,
   type GitHubBotSettings,
   type IntegrationId,
   type LinearBotSettings,
@@ -16,7 +17,9 @@ import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
   isValidIntegrationId,
+  supportsEnvironmentSettings,
 } from "../db/integration-settings";
+import { EnvironmentStore } from "../db/environments";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import {
@@ -35,6 +38,44 @@ function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
   const id = match.groups?.id;
   if (!id || !isValidIntegrationId(id)) return null;
   return id;
+}
+
+/**
+ * Common validation for the environment-level settings handlers: a known
+ * integration that supports the environment level (design §13.5), an
+ * environment id, and — because the settings table is an owned child of
+ * `environments` — an environment that actually exists.
+ */
+async function extractEnvironmentSettingsParams(
+  env: Env,
+  match: RegExpMatchArray
+): Promise<
+  | {
+      integrationId: EnvironmentSettingsIntegrationId;
+      environmentId: string;
+      store: IntegrationSettingsStore;
+    }
+  | Response
+> {
+  const id = extractIntegrationId(match);
+  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!supportsEnvironmentSettings(id)) {
+    return error(`Integration ${id} does not support environment-level settings`, 400);
+  }
+
+  const environmentId = match.groups?.environmentId;
+  if (!environmentId) return error("Environment ID required", 400);
+
+  if (!env.DB) {
+    return error("Integration settings storage is not configured", 503);
+  }
+
+  const environmentStore = new EnvironmentStore(env.DB);
+  if (!(await environmentStore.getById(environmentId))) {
+    return error("Environment not found", 404);
+  }
+
+  return { integrationId: id, environmentId, store: new IntegrationSettingsStore(env.DB) };
 }
 
 async function handleGetIntegrationSettings(
@@ -273,6 +314,94 @@ async function handleDeleteRepoSettings(
   }
 }
 
+async function handleGetEnvironmentSettings(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const params = await extractEnvironmentSettingsParams(env, match);
+  if (params instanceof Response) return params;
+  const { integrationId, environmentId, store } = params;
+
+  const settings = await store.getEnvironmentSettings(integrationId, environmentId);
+  return json({ integrationId, environmentId, settings });
+}
+
+async function handleSetEnvironmentSettings(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const params = await extractEnvironmentSettingsParams(env, match);
+  if (params instanceof Response) return params;
+  const { integrationId, environmentId, store } = params;
+
+  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
+  if (body instanceof Response) return body;
+
+  if (!body?.settings || typeof body.settings !== "object") {
+    return error("Request body must include settings object", 400);
+  }
+
+  try {
+    await store.setEnvironmentSettings(integrationId, environmentId, body.settings);
+
+    logger.info("integration_environment_settings.updated", {
+      event: "integration_environment_settings.updated",
+      integration_id: integrationId,
+      environment_id: environmentId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({ status: "updated", integrationId, environmentId });
+  } catch (e) {
+    if (e instanceof IntegrationSettingsValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to update environment integration settings", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Integration settings storage unavailable", 503);
+  }
+}
+
+async function handleDeleteEnvironmentSettings(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const params = await extractEnvironmentSettingsParams(env, match);
+  if (params instanceof Response) return params;
+  const { integrationId, environmentId, store } = params;
+
+  try {
+    await store.deleteEnvironmentSettings(integrationId, environmentId);
+
+    logger.info("integration_environment_settings.deleted", {
+      event: "integration_environment_settings.deleted",
+      integration_id: integrationId,
+      environment_id: environmentId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({ status: "deleted", integrationId, environmentId });
+  } catch (e) {
+    logger.error("Failed to delete environment integration settings", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Integration settings storage unavailable", 503);
+  }
+}
+
 async function handleGetResolvedConfig(
   _request: Request,
   env: Env,
@@ -414,6 +543,23 @@ export const integrationSettingsRoutes: Route[] = [
     method: "DELETE",
     pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
     handler: handleDeleteRepoSettings,
+  },
+  // Integration settings — per-environment (design §13.5; sandbox and
+  // code-server only)
+  {
+    method: "GET",
+    pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    handler: handleGetEnvironmentSettings,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    handler: handleSetEnvironmentSettings,
+  },
+  {
+    method: "DELETE",
+    pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    handler: handleDeleteEnvironmentSettings,
   },
   // Resolved config — used by bots at runtime
   {

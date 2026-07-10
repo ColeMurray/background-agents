@@ -51,12 +51,21 @@ vi.mock("@/hooks/use-media-query", () => ({
   useIsMobile: mockUseIsMobile,
 }));
 
+const { mockUseEnvironments } = vi.hoisted(() => ({
+  mockUseEnvironments: vi.fn(() => ({ environments: [] as unknown[], loading: false })),
+}));
+
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: mockUseEnvironments,
+}));
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
   mockUseIsMobile.mockReturnValue(false);
   mockPush.mockReset();
+  mockUseEnvironments.mockReturnValue({ environments: [], loading: false });
 });
 
 function createSession(index: number, overrides: Record<string, unknown> = {}) {
@@ -120,6 +129,81 @@ describe("SessionSidebar", () => {
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
     expect(screen.getByText("Child session")).toBeInTheDocument();
     expect(screen.getByText("Grandchild session")).toBeInTheDocument();
+  });
+
+  it("shows an empty state for an unmatched search and restores sessions when cleared", async () => {
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText("Search sessions...");
+    fireEvent.change(searchInput, { target: { value: "missing" } });
+
+    expect(screen.getByText("No matching sessions")).toBeInTheDocument();
+    expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: "" } });
+
+    expect(screen.getByText("Session 1")).toBeInTheDocument();
+    expect(screen.queryByText("No matching sessions")).not.toBeInTheDocument();
+  });
+
+  it("keeps the genuine empty-session state distinct from empty search results", () => {
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Search sessions..."), {
+      target: { value: "missing" },
+    });
+
+    expect(screen.getByText("No sessions yet")).toBeInTheDocument();
+    expect(screen.queryByText("No matching sessions")).not.toBeInTheDocument();
+  });
+
+  it("keeps the session-loading failure distinct from empty search results", async () => {
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fetcher: async () => {
+            throw new Error("Failed to load sessions");
+          },
+          shouldRetryOnError: false,
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Unable to load sessions")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search sessions..."), {
+      target: { value: "missing" },
+    });
+
+    expect(screen.getByText("Unable to load sessions")).toBeInTheDocument();
+    expect(screen.queryByText("No matching sessions")).not.toBeInTheDocument();
   });
 
   it("loads the next page when scrolled near the bottom", async () => {
@@ -240,6 +324,68 @@ describe("SessionSidebar", () => {
       expect(fetchMock).toHaveBeenCalledWith(mineKey);
     });
     expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+  });
+
+  it("matches non-primary repository members in the sidebar search", async () => {
+    const session = createSession(1, {
+      repositories: [
+        { repoOwner: "open-inspect", repoName: "background-agents", repoId: 1, baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", repoId: 2, baseBranch: "main" },
+      ],
+    });
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [session], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText("Search sessions...");
+    fireEvent.change(searchInput, { target: { value: "acme/api" } });
+
+    expect(screen.getByText("Session 1")).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: "acme/docs" } });
+
+    expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+    expect(screen.getByText("No matching sessions")).toBeInTheDocument();
+  });
+
+  it("shows the environment name on cards for environment-launched sessions", async () => {
+    mockUseEnvironments.mockReturnValue({
+      environments: [{ id: "env_1", name: "Full stack" }],
+      loading: false,
+    });
+
+    const sessions = [
+      createSession(1, { environmentId: "env_1" }),
+      // Deleted environment: the chip is dropped rather than showing a raw id.
+      createSession(2, { environmentId: "env_gone" }),
+    ];
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions, hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(screen.getByText("Full stack")).toBeInTheDocument();
+    expect(screen.queryByText("env_gone")).not.toBeInTheDocument();
   });
 
   it("ignores stale load-more results after the creator filter changes", async () => {

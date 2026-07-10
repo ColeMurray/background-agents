@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/module-boundaries.test.ts",
+    "src/public-api.test.ts",
+    "src/types/type-contracts.test.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

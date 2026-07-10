@@ -320,7 +320,7 @@ const routes: Route[] = [
   // Secrets
   ...secretsRoutes,
 
-  // Environments (Phase-2 launch unit; internal-HMAC only, web BFF proxied)
+  // Environments (Phase-2 session target; internal-HMAC only, web BFF proxied)
   ...environmentRoutes,
   ...environmentSecretsRoutes,
   ...environmentImageRoutes,

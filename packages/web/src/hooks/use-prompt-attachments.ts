@@ -43,6 +43,7 @@ export function usePromptAttachments() {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const attachmentsRef = useRef<PendingAttachment[]>([]);
+  const uploadedByIdRef = useRef(new Map<string, { sessionId: string; attachment: Attachment }>());
   attachmentsRef.current = attachments;
 
   // Revoke preview URLs on unmount only — removals revoke their own URL.
@@ -109,6 +110,7 @@ export function usePromptAttachments() {
       const removed = prev.find((attachment) => attachment.id === id);
       if (removed) {
         URL.revokeObjectURL(removed.previewUrl);
+        uploadedByIdRef.current.delete(removed.id);
       }
       return prev.filter((attachment) => attachment.id !== id);
     });
@@ -119,6 +121,7 @@ export function usePromptAttachments() {
       for (const attachment of prev) {
         URL.revokeObjectURL(attachment.previewUrl);
       }
+      uploadedByIdRef.current.clear();
       return [];
     });
   }, []);
@@ -135,32 +138,42 @@ export function usePromptAttachments() {
     setIsUploading(true);
     setAttachmentError(null);
     try {
-      return await Promise.all(
-        pending.map(async (attachment) => {
-          const formData = new FormData();
-          formData.append("file", attachment.file, attachment.file.name || attachment.kind);
+      const uploaded: Attachment[] = [];
+      for (const pendingAttachment of pending) {
+        const cached = uploadedByIdRef.current.get(pendingAttachment.id);
+        if (cached?.sessionId === sessionId) {
+          uploaded.push(cached.attachment);
+          continue;
+        }
 
-          const response = await fetch(`/api/sessions/${sessionId}/uploads`, {
-            method: "POST",
-            body: formData,
-          });
-          if (!response.ok) {
-            const data = (await response.json().catch(() => null)) as { error?: string } | null;
-            throw new Error(data?.error || `Failed to upload ${attachment.file.name}`);
-          }
-          const { uploadId, mimeType } = (await response.json()) as {
-            uploadId: string;
-            mimeType: string;
-          };
-
-          return {
-            type: attachment.kind === "image" ? ("image" as const) : ("file" as const),
-            name: attachment.file.name || `${attachment.kind}-attachment`,
-            mimeType,
-            uploadId,
-          };
-        })
-      );
+        const formData = new FormData();
+        formData.append(
+          "file",
+          pendingAttachment.file,
+          pendingAttachment.file.name || pendingAttachment.kind
+        );
+        const response = await fetch(`/api/sessions/${sessionId}/uploads`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) {
+          const data = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(data?.error || `Failed to upload ${pendingAttachment.file.name}`);
+        }
+        const { uploadId, mimeType } = (await response.json()) as {
+          uploadId: string;
+          mimeType: string;
+        };
+        const attachment: Attachment = {
+          type: pendingAttachment.kind === "image" ? "image" : "file",
+          name: pendingAttachment.file.name || `${pendingAttachment.kind}-attachment`,
+          mimeType,
+          uploadId,
+        };
+        uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });
+        uploaded.push(attachment);
+      }
+      return uploaded;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to upload attachments";
       setAttachmentError(message);

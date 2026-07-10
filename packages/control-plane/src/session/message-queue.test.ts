@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionMessageQueue } from "./message-queue";
 import type { ClientInfo, Env, ServerMessage } from "../types";
-import type { MessageRow, ParticipantRow, SessionRow } from "./types";
+import type { MessageRow, ParticipantRow, SessionRow, UploadRow } from "./types";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -87,6 +87,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
   const repository = {
     createMessage: vi.fn(),
     markUploadsReferenced: vi.fn(),
+    getUnreferencedUploads: vi.fn((): UploadRow[] => []),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
@@ -192,6 +193,18 @@ describe("SessionMessageQueue", () => {
 
   it("stores attachments and embeds content-free metadata in the user_message event", async () => {
     const h = buildQueue();
+    h.repository.getUnreferencedUploads.mockReturnValue([
+      {
+        id: "up-1",
+        kind: "image",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/sess-1/uploads/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
 
     await h.queue.handlePromptMessage({} as WebSocket, {
       content: "look at this",
@@ -237,6 +250,21 @@ describe("SessionMessageQueue", () => {
       { type: "image", name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
       { type: "image", name: "inline.png", mimeType: "image/png" },
     ]);
+  });
+
+  it("rejects upload references that cannot be claimed", async () => {
+    const h = buildQueue();
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "look",
+      attachments: [{ type: "image", name: "missing.png", uploadId: "missing" }],
+    });
+
+    expect(h.repository.createMessage).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
+    );
   });
 
   it("omits attachments from the user_message event when none are sent", async () => {

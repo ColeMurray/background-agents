@@ -30,7 +30,7 @@ import {
 
 // Re-export pure functions for existing test imports
 export {
-  resolveStaticRepo,
+  resolveStaticTarget,
   extractModelFromLabels,
   resolveSessionModelSettings,
 } from "./model-resolution";

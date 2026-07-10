@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { describeCron, getReasoningConfig } from "@open-inspect/shared";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
+import { useEnvironments } from "@/hooks/use-environments";
 import { RunHistory } from "@/components/automations/run-history";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { ConditionSummary } from "@/components/automations/condition-summary";
@@ -14,7 +15,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon, PencilIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatModelNameLower } from "@/lib/format";
-import { formatRepositoriesLabel } from "@/lib/repo-label";
+import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -23,6 +24,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { isOpen, toggle } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
+  const { environments } = useEnvironments();
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
   // the next page in one request. Fine at automation-history scale; revisit
@@ -134,8 +136,9 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <AutomationStatusBadge automation={automation} />
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                {formatRepositoriesLabel(automation.repositories)}
+                {formatAutomationTargetsLabel(automation, environments)}
                 {automation.repositories.length === 1 &&
+                  automation.environmentIds.length === 0 &&
                   automation.repositories[0].baseBranch &&
                   ` · ${automation.repositories[0].baseBranch}`}
               </p>
@@ -257,6 +260,21 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 automation.triggerConfig.conditions.length > 0 && (
                   <ConditionSummary conditions={automation.triggerConfig.conditions} />
                 )}
+              {automation.environmentIds.length > 0 && (
+                <div className="sm:col-span-2">
+                  <dt className="text-muted-foreground">Environments</dt>
+                  <dd className="text-foreground">
+                    <ul className="mt-1 space-y-0.5">
+                      {automation.environmentIds.map((environmentId) => (
+                        <li key={environmentId}>
+                          {environments.find((environment) => environment.id === environmentId)
+                            ?.name ?? environmentId}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              )}
               {automation.repositories.length > 1 && (
                 <div className="sm:col-span-2">
                   <dt className="text-muted-foreground">Repositories</dt>

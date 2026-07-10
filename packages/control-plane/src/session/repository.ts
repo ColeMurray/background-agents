@@ -802,10 +802,22 @@ export class SessionRepository {
 
   getUploadTotals(): { count: number; totalBytes: number } {
     const result = this.sql.exec(
-      `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes FROM uploads`
+      `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
+       FROM uploads WHERE cleanup_claimed_at IS NULL`
     );
     const rows = result.toArray() as Array<{ count: number; total_bytes: number }>;
     return { count: rows[0]?.count ?? 0, totalBytes: rows[0]?.total_bytes ?? 0 };
+  }
+
+  getUnreferencedUploads(uploadIds: string[]): UploadRow[] {
+    if (uploadIds.length === 0) return [];
+    const placeholders = uploadIds.map(() => "?").join(", ");
+    const result = this.sql.exec(
+      `SELECT * FROM uploads
+       WHERE id IN (${placeholders}) AND message_id IS NULL AND cleanup_claimed_at IS NULL`,
+      ...uploadIds
+    );
+    return result.toArray() as unknown as UploadRow[];
   }
 
   /** Tie uploads to the prompt that references them so they survive pruning. */
@@ -819,24 +831,47 @@ export class SessionRepository {
     );
   }
 
-  /**
-   * Remove upload records that were never referenced by a prompt before the
-   * cutoff, returning them so the caller can delete the R2 objects.
-   */
-  takeStaleUnreferencedUploads(cutoff: number): UploadRow[] {
+  /** Claim stale records without losing ownership before fallible object deletion. */
+  claimStaleUnreferencedUploads(
+    cutoff: number,
+    claimedAt: number,
+    claimExpiredBefore: number
+  ): UploadRow[] {
     const result = this.sql.exec(
-      `SELECT * FROM uploads WHERE message_id IS NULL AND created_at < ?`,
-      cutoff
+      `SELECT * FROM uploads
+       WHERE message_id IS NULL AND created_at < ?
+         AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at < ?)`,
+      cutoff,
+      claimExpiredBefore
     );
     const stale = result.toArray() as unknown as UploadRow[];
-    if (stale.length > 0) {
-      const placeholders = stale.map(() => "?").join(", ");
-      this.sql.exec(
-        `DELETE FROM uploads WHERE id IN (${placeholders})`,
-        ...stale.map((upload) => upload.id)
-      );
-    }
-    return stale;
+    if (stale.length === 0) return [];
+    const placeholders = stale.map(() => "?").join(", ");
+    this.sql.exec(
+      `UPDATE uploads SET cleanup_claimed_at = ? WHERE id IN (${placeholders})`,
+      claimedAt,
+      ...stale.map((upload) => upload.id)
+    );
+    return stale.map((upload) => ({ ...upload, cleanup_claimed_at: claimedAt }));
+  }
+
+  acknowledgeUploadCleanup(uploadIds: string[]): void {
+    if (uploadIds.length === 0) return;
+    const placeholders = uploadIds.map(() => "?").join(", ");
+    this.sql.exec(
+      `DELETE FROM uploads WHERE id IN (${placeholders}) AND cleanup_claimed_at IS NOT NULL`,
+      ...uploadIds
+    );
+  }
+
+  releaseUploadCleanupClaims(uploadIds: string[]): void {
+    if (uploadIds.length === 0) return;
+    const placeholders = uploadIds.map(() => "?").join(", ");
+    this.sql.exec(
+      `UPDATE uploads SET cleanup_claimed_at = NULL
+       WHERE id IN (${placeholders}) AND message_id IS NULL`,
+      ...uploadIds
+    );
   }
 
   deleteUpload(uploadId: string): void {

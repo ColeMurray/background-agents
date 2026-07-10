@@ -1,17 +1,31 @@
 import { z } from "zod";
 
-// Attachment to a message
-export const attachmentSchema = z.object({
+const attachmentBaseSchema = z.object({
   type: z.enum(["file", "image", "url"]),
-  name: z.string(),
-  url: z.string().optional(),
-  content: z.string().optional(),
-  mimeType: z.string().optional(),
-  // References a file uploaded to the control plane's media bucket
-  // (/sessions/:id/uploads/:uploadId). The sandbox resolves it with its
-  // session-scoped auth token; web clients stream it through their proxy route.
-  uploadId: z.string().optional(),
+  name: z.string().min(1),
+  mimeType: z.string().min(1).optional(),
 });
+
+// Exactly one attachment source is allowed. Upload metadata is canonicalized
+// from the durable upload row before enqueueing, so clients cannot combine an
+// upload reference with arbitrary inline or remote content.
+export const attachmentSchema = z.union([
+  attachmentBaseSchema.extend({
+    uploadId: z.string().min(1),
+    content: z.never().optional(),
+    url: z.never().optional(),
+  }),
+  attachmentBaseSchema.extend({
+    content: z.string().min(1),
+    uploadId: z.never().optional(),
+    url: z.never().optional(),
+  }),
+  attachmentBaseSchema.extend({
+    url: z.string().url(),
+    uploadId: z.never().optional(),
+    content: z.never().optional(),
+  }),
+]);
 
 export type Attachment = z.infer<typeof attachmentSchema>;
 

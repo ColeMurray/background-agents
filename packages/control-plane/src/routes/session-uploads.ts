@@ -29,9 +29,9 @@ import {
 import { SessionInternalPaths } from "../session/contracts";
 import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-storage";
 import type { Env } from "../types";
-import { parseByteRangeHeader } from "./session-media-stream";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { streamStoredMedia } from "./stream-stored-media";
 
 const logger = createLogger("router:session-uploads");
 
@@ -91,16 +91,12 @@ async function handleUploadPost(
 
   // Register the upload with the session DO so it is tracked and quota-governed.
   // On rejection (unknown session, quota exceeded) remove the object again.
-  const recordResponse = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.uploads, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      uploadId,
-      kind: detected.kind,
-      mimeType: detected.mimeType,
-      sizeBytes: bytes.byteLength,
-      objectKey,
-    }),
+  const recordResponse = await recordTrackedUpload(ctx, storage, sessionId, {
+    uploadId,
+    kind: detected.kind,
+    mimeType: detected.mimeType,
+    sizeBytes: bytes.byteLength,
+    objectKey,
   });
 
   if (!recordResponse.ok) {
@@ -120,17 +116,6 @@ async function handleUploadPost(
     return error(message, recordResponse.status);
   }
 
-  const record = (await recordResponse.json()) as { staleObjectKeys?: string[] };
-  const staleObjectKeys = record.staleObjectKeys ?? [];
-  if (staleObjectKeys.length > 0) {
-    const prune = deleteStaleUploadObjects(storage, staleObjectKeys, sessionId, ctx);
-    if (ctx.executionCtx) {
-      ctx.executionCtx.waitUntil(prune);
-    } else {
-      await prune;
-    }
-  }
-
   logger.info("uploads.stored", {
     session_id: sessionId,
     upload_id: uploadId,
@@ -141,6 +126,67 @@ async function handleUploadPost(
   });
 
   return json({ uploadId, kind: detected.kind, mimeType: detected.mimeType }, 201);
+}
+
+interface UploadRecordRequest {
+  uploadId: string;
+  kind: "image" | "video";
+  mimeType: string;
+  sizeBytes: number;
+  objectKey: string;
+}
+
+interface StaleUploadClaim {
+  uploadId: string;
+  objectKey: string;
+}
+
+async function recordTrackedUpload(
+  ctx: SessionRouteContext,
+  storage: ObjectStorage,
+  sessionId: string,
+  record: UploadRecordRequest
+): Promise<Response> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.uploads, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(record),
+    });
+    if (!response.ok) return response;
+
+    const body = (await response.json()) as {
+      status?: string;
+      staleUploads?: StaleUploadClaim[];
+    };
+    if (body.status !== "cleanup_required") {
+      return Response.json(body, { status: response.status });
+    }
+
+    const cleanup = await deleteClaimedUploadObjects(
+      storage,
+      body.staleUploads ?? [],
+      sessionId,
+      ctx
+    );
+    const completion = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.uploads, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "complete_cleanup",
+        acknowledgedUploadIds: cleanup.acknowledgedUploadIds,
+        releasedUploadIds: cleanup.releasedUploadIds,
+      }),
+    });
+    if (!completion.ok) return completion;
+    if (cleanup.releasedUploadIds.length > 0) {
+      return Response.json(
+        { error: "Failed to clean up expired uploads; please retry" },
+        { status: 503 }
+      );
+    }
+  }
+  return Response.json({ error: "Upload cleanup did not converge; please retry" }, { status: 503 });
 }
 
 async function parseUploadError(response: Response): Promise<string> {
@@ -155,21 +201,31 @@ async function parseUploadError(response: Response): Promise<string> {
   return response.status === 404 ? "Session not found" : "Failed to record upload";
 }
 
-async function deleteStaleUploadObjects(
+async function deleteClaimedUploadObjects(
   storage: ObjectStorage,
-  objectKeys: string[],
+  uploads: StaleUploadClaim[],
   sessionId: string,
   ctx: SessionRouteContext
-): Promise<void> {
-  const results = await Promise.allSettled(objectKeys.map((key) => storage.delete(key)));
-  const failed = results.filter((result) => result.status === "rejected").length;
+): Promise<{ acknowledgedUploadIds: string[]; releasedUploadIds: string[] }> {
+  const results = await Promise.allSettled(
+    uploads.map((upload) => storage.delete(upload.objectKey))
+  );
+  const acknowledgedUploadIds: string[] = [];
+  const releasedUploadIds: string[] = [];
+  results.forEach((result, index) => {
+    const uploadId = uploads[index]?.uploadId;
+    if (!uploadId) return;
+    if (result.status === "fulfilled") acknowledgedUploadIds.push(uploadId);
+    else releasedUploadIds.push(uploadId);
+  });
   logger.info("uploads.pruned_stale_objects", {
     session_id: sessionId,
-    deleted: objectKeys.length - failed,
-    failed,
+    deleted: acknowledgedUploadIds.length,
+    failed: releasedUploadIds.length,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   });
+  return { acknowledgedUploadIds, releasedUploadIds };
 }
 
 async function handleUploadGet(
@@ -190,58 +246,23 @@ async function handleUploadGet(
   const storage = createMediaObjectStorage(env);
   const objectKey = buildPromptUploadObjectKey(sessionId, uploadId);
 
-  const rangeHeader = request.headers.get("Range");
-  if (rangeHeader) {
-    const head = await storage.head(objectKey);
-    if (!head) return error("Upload not found", 404);
-
-    const parsedRange = parseByteRangeHeader(rangeHeader, head.size);
-    if (parsedRange instanceof Response) return parsedRange;
-
-    const rangedObject = await storage.get(objectKey, {
-      range: { offset: parsedRange.start, length: parsedRange.length },
-    });
-    if (!rangedObject) return error("Upload not found", 404);
-
-    const headers = buildUploadHeaders(head, sessionId, uploadId, ctx);
-    if (headers instanceof Response) return headers;
-    headers.set("Content-Range", `bytes ${parsedRange.start}-${parsedRange.end}/${head.size}`);
-    headers.set("Content-Length", String(parsedRange.length));
-    return new Response(rangedObject.body, { status: 206, headers });
-  }
-
-  const object = await storage.get(objectKey);
-  if (!object) return error("Upload not found", 404);
-
-  const headers = buildUploadHeaders(object, sessionId, uploadId, ctx);
-  if (headers instanceof Response) return headers;
-  headers.set("Content-Length", String(object.size));
-  return new Response(object.body, { headers });
-}
-
-function buildUploadHeaders(
-  source: { writeHttpMetadata(headers: Headers): void; httpEtag: string },
-  sessionId: string,
-  uploadId: string,
-  ctx: SessionRouteContext
-): Headers | Response {
-  const headers = new Headers();
-  source.writeHttpMetadata(headers);
-  const contentType = headers.get("Content-Type");
-  if (!contentType || !isSupportedPromptUploadMimeType(contentType)) {
-    logger.error("uploads.invalid_metadata", {
-      session_id: sessionId,
-      upload_id: uploadId,
-      content_type: contentType,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Upload is invalid", 500);
-  }
-  headers.set("Content-Type", contentType);
-  headers.set("ETag", source.httpEtag);
-  headers.set("Accept-Ranges", "bytes");
-  return headers;
+  return streamStoredMedia({
+    request,
+    storage,
+    objectKey,
+    isAllowedContentType: isSupportedPromptUploadMimeType,
+    notFound: () => error("Upload not found", 404),
+    invalidMetadata: (contentType) => {
+      logger.error("uploads.invalid_metadata", {
+        session_id: sessionId,
+        upload_id: uploadId,
+        content_type: contentType,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Upload is invalid", 500);
+    },
+  });
 }
 
 export const sessionUploadRoutes: Route[] = [

@@ -122,21 +122,30 @@ can be launched from. `POST /sessions` accepts exactly one of the scalar repo fi
 (`repoOwner`/`repoName`), a `repositories` list (ad-hoc multi-repository session), or an
 `environmentId`.
 
-| Endpoint                           | Method | Description                                        |
-| ---------------------------------- | ------ | -------------------------------------------------- |
-| `/environments`                    | GET    | List environments                                  |
-| `/environments`                    | POST   | Create environment                                 |
-| `/environments/:id`                | GET    | Get environment with repositories                  |
-| `/environments/:id`                | PUT    | Update (name, description, repositories, prebuild) |
-| `/environments/:id`                | DELETE | Delete environment (sessions keep their snapshot)  |
-| `/environments/:id/secrets`        | GET    | List environment secret keys                       |
-| `/environments/:id/secrets`        | PUT    | Upsert environment secrets                         |
-| `/environments/:id/secrets/:key`   | DELETE | Delete an environment secret                       |
-| `/environments/:id/secrets/import` | POST   | Copy selected keys from a repository of the env    |
+| Endpoint                           | Method | Description                                                                     |
+| ---------------------------------- | ------ | ------------------------------------------------------------------------------- |
+| `/environments`                    | GET    | List environments                                                               |
+| `/environments`                    | POST   | Create environment                                                              |
+| `/environments/:id`                | GET    | Get environment with repositories                                               |
+| `/environments/:id`                | PUT    | Update name, description, repositories, prebuild, or Slack channel associations |
+| `/environments/:id`                | DELETE | Delete environment (sessions keep their snapshot)                               |
+| `/environments/:id/secrets`        | GET    | List environment secret keys                                                    |
+| `/environments/:id/secrets`        | PUT    | Upsert environment secrets                                                      |
+| `/environments/:id/secrets/:key`   | DELETE | Delete an environment secret                                                    |
+| `/environments/:id/secrets/import` | POST   | Copy selected keys from a repository of the env                                 |
 
 Environment image builds (prebuilds of the whole environment) are managed via
 `/environment-images/status`, `/environment-images/trigger/:id`, and the build callback routes,
 mirroring the repo-image endpoints.
+
+Environments can also carry integration-setting overrides — the top layer of the resolution chain
+(global defaults → primary-repo overrides → environment overrides), applied to sessions launched
+from the environment and to its image builds. Only the session-scoped integrations (`sandbox`,
+`code-server`) accept this level:
+
+| Endpoint                                        | Method         | Description                         |
+| ----------------------------------------------- | -------------- | ----------------------------------- |
+| `/integration-settings/:id/environments/:envId` | GET/PUT/DELETE | Environment-level setting overrides |
 
 ### Automations
 
@@ -154,11 +163,15 @@ mirroring the repo-image endpoints.
 | `/automations/:id/runs/:runId`    | GET    | Get one run                                                             |
 | `/automations/:id/regenerate-key` | POST   | Rotate a webhook automation's API key                                   |
 
-An automation selects 0–10 repositories (`repositories: [{repoOwner, repoName, baseBranch?}]`;
-multi-repo selections require a schedule trigger). Each firing records one **invocation**; a
-non-skipped invocation fans out into one **run** per repository, and each run links to one session.
-Runs snapshot their repository at firing time, so editing the selection never rewrites history. See
-[docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.md) for the design decisions.
+An automation targets repositories (`repositories: [{repoOwner, repoName, baseBranch?}]`) and/or
+environments (`environmentIds: ["env_…"]`) — up to 10 combined; multi-target selections require a
+schedule trigger, and the repo-scoped `github_event`/`linear_event` triggers take exactly one
+repository and no environments. Each firing records one **invocation**; a non-skipped invocation
+fans out into one **run** per target, and each run links to one session. A repository run works that
+repository in its own session; an environment run opens the environment's full workspace, resolved
+at launch time. Runs snapshot their target at firing time, so editing the selection never rewrites
+history. See [docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.md) for the design
+decisions.
 
 An invocation's status is **derived from its child runs, never stored**: no children → `skipped`;
 any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
@@ -249,18 +262,24 @@ sessions index, repo metadata, and encrypted secrets:
 
 - `session_repositories`: a session's ordered repository list (position 0 = primary; single-repo
   sessions also mirror the primary onto the session row's scalar columns).
-- `environments`: named repository sets (name, description, prebuild flag).
+- `environments`: named repository sets (name, description, prebuild flag, Slack channel
+  associations).
 - `environment_repositories`: the environment's ordered repository list with per-repository base
   branch.
 - `environment_secrets`: environment-scoped secrets, mirroring `repo_secrets` (same encryption key
   and caps).
 - `environment_images`: prebuilt environment image builds — provider artifact id, per-repository
   SHAs, a repositories fingerprint for spawn matching, and the runtime version floor check.
+- `integration_environment_settings`: environment-level integration-setting overrides (sandbox,
+  code-server), the top layer above `integration_settings` (global) and `integration_repo_settings`
+  (per-repo).
 
 Automations:
 
-- `automations`: trigger, schedule, model, instructions, failure counter. The repository selection
-  lives in `automation_repositories`, not on this row.
+- `automations`: trigger, schedule, model, instructions, failure counter. The target selection lives
+  in `automation_repositories` and `automation_environments`, not on this row.
+- `automation_environments`: the live environment selection (one row per targeted environment,
+  unique per `(automation_id, environment_id)`).
 - `automation_repositories`: the live repository selection (0–10 rows per automation), unique per
   `(automation_id, repo_owner, repo_name)`.
 - `automation_invocations`: one thin row per firing — source, firing-scoped `trigger_key` (event

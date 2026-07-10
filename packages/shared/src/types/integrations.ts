@@ -185,17 +185,26 @@ export function resolveBuildTimeoutSeconds(settings: SandboxSettings | undefined
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";
 
+/** What a Slack routing rule points at: a repository or a saved environment. */
+export type SlackRoutingTargetType = "repository" | "environment";
+
 /**
- * A workspace-wide keyword→repository routing rule for Slack. When a Slack
+ * A workspace-wide keyword→target routing rule for Slack. When a Slack
  * message contains the keyword, the bot routes the agent to the target
- * repository deterministically, before falling back to LLM classification.
+ * repository or environment deterministically, before falling back to LLM
+ * classification.
  */
 export interface SlackRoutingRule {
   /** Case-insensitive keyword or phrase. Matched as a whole token in the message. */
   keyword: string;
-  /** Canonical "owner/name" (lowercase) of the target repository. */
+  /**
+   * Canonical "owner/name" (lowercase) of the target repository, or — when
+   * `targetType` is `"environment"` — the stable environment id (`env_…`),
+   * never the rename-able display name.
+   */
   target: string;
-  // Future (deferred): targetType?: "repository" | "environment" — defaults to "repository".
+  /** Absent means "repository" (every rule stored before environments existed). */
+  targetType?: SlackRoutingTargetType;
 }
 
 /** Maximum number of routing rules a workspace can configure (bounds the settings blob). */
@@ -218,9 +227,13 @@ export interface SlackGlobalSettings extends SlackRepoSettings {
 }
 
 /**
- * Clean up raw routing rules for storage or use: trim and lowercase keyword and
- * target, drop entries that are empty after trimming, de-dupe identical
- * (keyword, target) pairs, and cap the count at {@link MAX_SLACK_ROUTING_RULES}.
+ * Clean up raw routing rules for storage or use: trim and lowercase the keyword,
+ * canonicalize the target (repository targets lowercase; environment ids are
+ * opaque and only trimmed), drop entries that are empty after trimming, de-dupe
+ * identical (keyword, targetType, target) triples, and cap the count at
+ * {@link MAX_SLACK_ROUTING_RULES}. Repository rules normalize to the bare
+ * `{ keyword, target }` shape (no `targetType`), keeping them byte-identical to
+ * every rule stored before environments existed.
  *
  * Lenient by design — it never throws — so it is safe on the bot's read path as
  * well as the control plane's write path. Shape/length enforcement (with errors)
@@ -233,12 +246,16 @@ export function normalizeRoutingRules(rules: SlackRoutingRule[] | undefined): Sl
   const normalized: SlackRoutingRule[] = [];
   for (const rule of rules) {
     const keyword = typeof rule?.keyword === "string" ? rule.keyword.trim().toLowerCase() : "";
-    const target = typeof rule?.target === "string" ? rule.target.trim().toLowerCase() : "";
+    const rawTarget = typeof rule?.target === "string" ? rule.target.trim() : "";
+    const isEnvironment = rule?.targetType === "environment";
+    const target = isEnvironment ? rawTarget : rawTarget.toLowerCase();
     if (!keyword || !target) continue;
-    const dedupeKey = `${keyword} ${target}`;
+    const dedupeKey = `${keyword} ${isEnvironment ? "environment" : "repository"} ${target}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    normalized.push({ keyword, target });
+    normalized.push(
+      isEnvironment ? { keyword, target, targetType: "environment" } : { keyword, target }
+    );
     if (normalized.length >= MAX_SLACK_ROUTING_RULES) break;
   }
   return normalized;
@@ -263,6 +280,19 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
     return new RegExp(`(?:^|\\W)${escapeRegExp(keyword)}(?:\\W|$)`).test(haystack);
   });
 }
+
+/**
+ * Integrations that accept environment-level setting overrides — the top layer
+ * of the resolution chain (global defaults → primary-repo overrides →
+ * environment overrides). Limited to the settings the session-scoped
+ * resolution consumes; bot-scoped integrations (github, linear) resolve from
+ * the trigger repo before a session exists, and slack is global/per-repo only.
+ * The environment-level shape is the integration's repo (override) shape.
+ */
+export const ENVIRONMENT_SETTINGS_INTEGRATION_IDS = ["sandbox", "code-server"] as const;
+
+export type EnvironmentSettingsIntegrationId =
+  (typeof ENVIRONMENT_SETTINGS_INTEGRATION_IDS)[number];
 
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {

@@ -138,14 +138,14 @@ async def test_hydrate_upload_attachments_inlines_downloaded_content(
         calls.append((upload_id, max_bytes))
         return b"ABC"
 
-    monkeypatch.setattr(bridge, "_download_upload", fake_download)
+    monkeypatch.setattr(bridge.attachment_processor, "_download_upload_bytes", fake_download)
     result = await bridge._hydrate_upload_attachments(
         [{"type": "image", "name": "shot.png", "mimeType": "image/png", "uploadId": "up-1"}]
     )
     assert result == [
         {"type": "image", "name": "shot.png", "mimeType": "image/png", "content": "QUJD"}
     ]
-    assert calls == [("up-1", bridge.MAX_IMAGE_BYTES)]
+    assert calls == [("up-1", bridge.attachment_processor.MAX_IMAGE_BYTES)]
 
 
 async def test_hydrate_upload_attachments_uses_video_cap_for_videos(
@@ -157,14 +157,14 @@ async def test_hydrate_upload_attachments_uses_video_cap_for_videos(
         calls.append((upload_id, max_bytes))
         return b"vid"
 
-    monkeypatch.setattr(bridge, "_download_upload", fake_download)
+    monkeypatch.setattr(bridge.attachment_processor, "_download_upload_bytes", fake_download)
     result = await bridge._hydrate_upload_attachments(
         [{"type": "file", "name": "rec.mp4", "mimeType": "video/mp4", "uploadId": "up-2"}]
     )
     assert result is not None
     assert result[0]["content"] == "dmlk"
     assert "uploadId" not in result[0]
-    assert calls == [("up-2", bridge.MAX_VIDEO_BYTES)]
+    assert calls == [("up-2", bridge.attachment_processor.MAX_VIDEO_BYTES)]
 
 
 async def test_hydrate_upload_attachments_drops_failed_download(
@@ -173,7 +173,7 @@ async def test_hydrate_upload_attachments_drops_failed_download(
     async def fake_download(upload_id: str, max_bytes: int) -> None:
         return None
 
-    monkeypatch.setattr(bridge, "_download_upload", fake_download)
+    monkeypatch.setattr(bridge.attachment_processor, "_download_upload_bytes", fake_download)
     result = await bridge._hydrate_upload_attachments(
         [
             {"type": "image", "name": "gone.png", "mimeType": "image/png", "uploadId": "up-3"},
@@ -194,7 +194,7 @@ async def test_hydrate_upload_attachments_keeps_existing_content(
     async def fail_download(upload_id: str, max_bytes: int) -> bytes:
         raise AssertionError("should not download when content is already inline")
 
-    monkeypatch.setattr(bridge, "_download_upload", fail_download)
+    monkeypatch.setattr(bridge.attachment_processor, "_download_upload_bytes", fail_download)
     attachments = [
         {
             "type": "image",

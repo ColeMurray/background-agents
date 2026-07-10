@@ -25,6 +25,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 async function seedEnvironment(opts?: {
   id?: string;
   name?: string;
+  channelAssociations?: string[];
   repositories?: [string, string, number, string][];
 }): Promise<string> {
   const store = new EnvironmentStore(env.DB);
@@ -36,6 +37,9 @@ async function seedEnvironment(opts?: {
       name: opts?.name ?? "Seeded",
       description: null,
       prebuild_enabled: 0,
+      channel_associations: opts?.channelAssociations
+        ? JSON.stringify(opts.channelAssociations)
+        : null,
       created_at: now,
       updated_at: now,
     },
@@ -162,6 +166,67 @@ describe("Environments API (routes)", () => {
         .bind(id)
         .first<{ c: number }>();
       expect(secretCount?.c).toBe(0);
+    });
+  });
+
+  describe("PUT /environments/:id (channel associations)", () => {
+    it("sets, dedupes, and clears channel associations without touching repositories", async () => {
+      const id = await seedEnvironment({ name: "Channelled" });
+      const headers = await authHeaders();
+
+      const putRes = await SELF.fetch(`${BASE}/environments/${id}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ channelAssociations: ["C111", "C222", "C111"] }),
+      });
+      expect(putRes.status).toBe(200);
+      const updated = await putRes.json<{
+        environment: { channelAssociations?: string[]; repositories: unknown[] };
+      }>();
+      expect(updated.environment.channelAssociations).toEqual(["C111", "C222"]);
+      expect(updated.environment.repositories.length).toBe(1);
+
+      // A patch that omits the field leaves the set untouched.
+      await SELF.fetch(`${BASE}/environments/${id}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ description: "still channelled" }),
+      });
+      const got = await (
+        await SELF.fetch(`${BASE}/environments/${id}`, { headers })
+      ).json<{ environment: { channelAssociations?: string[] } }>();
+      expect(got.environment.channelAssociations).toEqual(["C111", "C222"]);
+
+      // An empty array clears the set (the column collapses to NULL).
+      const clearRes = await SELF.fetch(`${BASE}/environments/${id}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ channelAssociations: [] }),
+      });
+      const cleared = await clearRes.json<{ environment: { channelAssociations?: string[] } }>();
+      expect(cleared.environment.channelAssociations).toBeUndefined();
+    });
+
+    it("lists seeded channel associations", async () => {
+      await seedEnvironment({ name: "Listed", channelAssociations: ["C123"] });
+      const headers = await authHeaders();
+      const list = await (
+        await SELF.fetch(`${BASE}/environments`, { headers })
+      ).json<{ environments: { channelAssociations?: string[] }[] }>();
+      expect(list.environments[0].channelAssociations).toEqual(["C123"]);
+    });
+
+    it("rejects malformed channel associations (400)", async () => {
+      const id = await seedEnvironment({ name: "Strict" });
+      const headers = await authHeaders();
+      for (const channelAssociations of ["C123", [""], [42]]) {
+        const res = await SELF.fetch(`${BASE}/environments/${id}`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ channelAssociations }),
+        });
+        expect(res.status, JSON.stringify(channelAssociations)).toBe(400);
+      }
     });
   });
 

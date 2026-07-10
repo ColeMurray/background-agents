@@ -26,6 +26,7 @@ const UPLOADS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS uploads (
   size_bytes INTEGER NOT NULL,
   object_key TEXT NOT NULL,
   message_id TEXT,
+  cleanup_claimed_at INTEGER,
   created_at INTEGER NOT NULL
 )`;
 
@@ -442,6 +443,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 33,
     description: "Create uploads table",
     run: UPLOADS_TABLE_SQL,
+  },
+  {
+    id: 34,
+    description: "Add retryable cleanup claims to uploads",
+    run: `ALTER TABLE uploads ADD COLUMN cleanup_claimed_at INTEGER`,
   },
 ];
 

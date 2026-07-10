@@ -1,6 +1,6 @@
 /**
  * Environment CRUD routes. Internal-HMAC authenticated (the web BFF proxies
- * these). Environments are the Phase-2 launch unit: a named, prebuildable
+ * these). Environments are the Phase-2 session target: a named, prebuildable
  * repository set with its own secrets. Additive and dark until the web picker
  * (PR-12); the create-from-environment session path is PR-9. Secrets routes
  * live in ./environment-secrets.
@@ -12,6 +12,7 @@ import {
   toEnvironment,
   type EnvironmentRow,
   type EnvironmentRepositoryInsert,
+  type EnvironmentScalarFields,
 } from "../db/environments";
 import { generateId } from "../auth/crypto";
 import { scheduleEnvironmentImageBuildOnSave } from "../environment-images/save-hooks";
@@ -46,6 +47,17 @@ function validationError(err: {
 /** Empty/whitespace description collapses to null (the column is nullable). */
 function normalizeDescription(description: string | null | undefined): string | null {
   return description && description.length > 0 ? description : null;
+}
+
+/**
+ * Column value for a channel-association set: deduplicated JSON array, with an
+ * empty set collapsing to NULL. `undefined` (field absent from the request)
+ * stays `undefined` so updates leave the column untouched.
+ */
+function normalizeChannelAssociations(channels: string[] | undefined): string | null | undefined {
+  if (channels === undefined) return undefined;
+  const unique = [...new Set(channels)];
+  return unique.length > 0 ? JSON.stringify(unique) : null;
 }
 
 /**
@@ -114,7 +126,7 @@ async function handleCreateEnvironment(
 
   const parsed = createEnvironmentInputSchema.safeParse(body);
   if (!parsed.success) return validationError(parsed.error);
-  const { name, description, prebuildEnabled, repositories } = parsed.data;
+  const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed.data;
 
   const store = new EnvironmentStore(env.DB);
   if (await store.getByName(name)) {
@@ -130,6 +142,7 @@ async function handleCreateEnvironment(
     name,
     description: normalizeDescription(description),
     prebuild_enabled: prebuildEnabled ? 1 : 0,
+    channel_associations: normalizeChannelAssociations(channelAssociations) ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -195,7 +208,7 @@ async function handleUpdateEnvironment(
 
   const parsed = updateEnvironmentInputSchema.safeParse(body);
   if (!parsed.success) return validationError(parsed.error);
-  const { name, description, prebuildEnabled, repositories } = parsed.data;
+  const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed.data;
 
   if (name !== undefined) {
     const other = await store.getByName(name);
@@ -209,10 +222,14 @@ async function handleUpdateEnvironment(
       ? await resolveEnvironmentRepositories(env, repositories, ctx)
       : undefined;
 
-  const fields: Partial<Pick<EnvironmentRow, "name" | "description" | "prebuild_enabled">> = {};
+  const fields: EnvironmentScalarFields = {};
   if (name !== undefined) fields.name = name;
   if (description !== undefined) fields.description = normalizeDescription(description);
   if (prebuildEnabled !== undefined) fields.prebuild_enabled = prebuildEnabled ? 1 : 0;
+  const channelAssociationsColumn = normalizeChannelAssociations(channelAssociations);
+  if (channelAssociationsColumn !== undefined) {
+    fields.channel_associations = channelAssociationsColumn;
+  }
 
   const updated = await store.update(id, fields, inserts);
   if (!updated) return error("Environment not found", 404);

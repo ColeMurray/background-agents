@@ -39,8 +39,8 @@ shows which scope overrode it.
 
 ### Which secrets a session receives
 
-A session receives **global secrets plus its launch unit's secrets** — the launch unit is whatever
-you picked when creating the session:
+A session receives **global secrets plus its session target's secrets** — the session target is
+whatever you picked when creating the session:
 
 - **Single repository** (web picker, Slack, GitHub, Linear): global + that repository's secrets.
 - **Environment**: global + that **environment's** secrets only. The repositories inside the
@@ -119,7 +119,7 @@ Click the delete button next to any secret row and confirm.
 | Max key length                   | 256 characters                                          |
 | Max value size                   | 16 KB                                                   |
 | Max total value size (per scope) | 64 KB                                                   |
-| Max combined size per session    | 128 KB (global + launch unit, after merging)            |
+| Max combined size per session    | 128 KB (global + session target, after merging)         |
 | Key format                       | `[A-Za-z_][A-Za-z0-9_]*` (letters, digits, underscores) |
 
 If the merged payload for a session (or an image build) exceeds the combined cap, the spawn fails

@@ -25,6 +25,7 @@ from sandbox_runtime.constants import (
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig, SessionRepositoryConfig
@@ -288,17 +289,18 @@ class SandboxManager:
     ) -> None:
         """Write tunnel URLs to TUNNEL_ENV_FILE_PATH as a dotenv file.
 
+        The first line tags the file with this sandbox's ID so the supervisor's
+        stale-file cleanup can tell a fresh write (this write can land before
+        the entrypoint runs) from a snapshot/image leftover.
+
         Failures are logged but do not block sandbox creation; URLs are also
         returned to the control plane via the SandboxHandle.
         """
-        lines = [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
+        lines = [f"{TUNNEL_ENV_SANDBOX_ID_KEY}={sandbox_id}"]
+        lines += [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
         content = "\n".join(lines) + "\n"
         try:
-            f = await sandbox.open.aio(TUNNEL_ENV_FILE_PATH, "w")
-            try:
-                await f.write.aio(content)
-            finally:
-                await f.close.aio()
+            await sandbox.filesystem.write_text.aio(content, TUNNEL_ENV_FILE_PATH)
             log.info(
                 "tunnel.urls_written",
                 sandbox_id=sandbox_id,

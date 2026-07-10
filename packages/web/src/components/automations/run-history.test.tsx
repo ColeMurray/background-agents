@@ -15,6 +15,13 @@ vi.mock("next/link", () => ({
   default: ({ children, ...props }: ComponentProps<"a">) => <a {...props}>{children}</a>,
 }));
 
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: () => ({
+    environments: [{ id: "env_1", name: "Fullstack", repositories: [] }],
+    loading: false,
+  }),
+}));
+
 const FIRED_AT = new Date("2026-07-01T09:00:00Z").getTime();
 
 function makeRun(overrides: Partial<AutomationRun> = {}): AutomationRun {
@@ -36,6 +43,7 @@ function makeRun(overrides: Partial<AutomationRun> = {}): AutomationRun {
     repoName: "web-app",
     repoId: 123,
     baseBranch: "main",
+    environmentId: null,
     ...overrides,
   };
 }

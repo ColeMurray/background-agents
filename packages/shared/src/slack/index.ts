@@ -24,6 +24,7 @@ export type {
 } from "./client";
 export {
   applyMentionPolicy,
+  escapeMrkdwnText,
   sanitizeAgentText,
   sanitizeLinks,
   stripBroadcastMentions,

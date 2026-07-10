@@ -377,7 +377,9 @@ describe("VercelSandboxProvider", () => {
         args: expect.arrayContaining([
           "/usr/bin/python3.12",
           "-c",
-          expect.stringContaining("TUNNEL_3000"),
+          // Tagged with the logical sandbox ID (first line) so the supervisor's
+          // stale-file cleanup keeps this write, then the port URLs.
+          expect.stringContaining("TUNNEL_SANDBOX_ID=sandbox-456\\nTUNNEL_3000"),
         ]),
       }),
       undefined

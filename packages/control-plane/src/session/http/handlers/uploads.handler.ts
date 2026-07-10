@@ -3,6 +3,7 @@ import {
   PROMPT_UPLOAD_LIMIT_PER_SESSION,
   PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION,
   PROMPT_UPLOAD_UNREFERENCED_TTL_MS,
+  PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS,
 } from "../../../media";
 import type { SessionRepository } from "../../repository";
 import type { SessionRow } from "../../types";
@@ -10,7 +11,11 @@ import type { SessionRow } from "../../types";
 export interface UploadsHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "createUpload" | "getUploadTotals" | "takeStaleUnreferencedUploads"
+    | "createUpload"
+    | "getUploadTotals"
+    | "claimStaleUnreferencedUploads"
+    | "acknowledgeUploadCleanup"
+    | "releaseUploadCleanupClaims"
   >;
   getSession: () => SessionRow | null;
   getLog: () => Logger;
@@ -22,11 +27,18 @@ export interface UploadsHandler {
 }
 
 interface RecordUploadBody {
+  action?: "record";
   uploadId: string;
   kind: "image" | "video";
   mimeType: string;
   sizeBytes: number;
   objectKey: string;
+}
+
+interface CompleteCleanupBody {
+  action: "complete_cleanup";
+  acknowledgedUploadIds: string[];
+  releasedUploadIds: string[];
 }
 
 function isValidBody(raw: unknown): raw is RecordUploadBody {
@@ -43,6 +55,18 @@ function isValidBody(raw: unknown): raw is RecordUploadBody {
     body.sizeBytes > 0 &&
     typeof body.objectKey === "string" &&
     body.objectKey.length > 0
+  );
+}
+
+function isCompleteCleanupBody(raw: unknown): raw is CompleteCleanupBody {
+  if (!raw || typeof raw !== "object") return false;
+  const body = raw as Partial<CompleteCleanupBody>;
+  return (
+    body.action === "complete_cleanup" &&
+    Array.isArray(body.acknowledgedUploadIds) &&
+    body.acknowledgedUploadIds.every((id) => typeof id === "string" && id.length > 0) &&
+    Array.isArray(body.releasedUploadIds) &&
+    body.releasedUploadIds.every((id) => typeof id === "string" && id.length > 0)
   );
 }
 
@@ -68,18 +92,32 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
       } catch {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
+      if (isCompleteCleanupBody(raw)) {
+        deps.repository.acknowledgeUploadCleanup(raw.acknowledgedUploadIds);
+        deps.repository.releaseUploadCleanupClaims(raw.releasedUploadIds);
+        return Response.json({ status: "ok" });
+      }
       if (!isValidBody(raw)) {
         return Response.json({ error: "Invalid upload record body" }, { status: 400 });
       }
 
       const timestamp = now();
-      const stale = deps.repository.takeStaleUnreferencedUploads(
-        timestamp - PROMPT_UPLOAD_UNREFERENCED_TTL_MS
+      const stale = deps.repository.claimStaleUnreferencedUploads(
+        timestamp - PROMPT_UPLOAD_UNREFERENCED_TTL_MS,
+        timestamp,
+        timestamp - PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS
       );
       if (stale.length > 0) {
-        deps.getLog().info("uploads.pruned_stale", {
+        deps.getLog().info("uploads.claimed_stale", {
           count: stale.length,
           total_bytes: stale.reduce((sum, upload) => sum + upload.size_bytes, 0),
+        });
+        return Response.json({
+          status: "cleanup_required",
+          staleUploads: stale.map((upload) => ({
+            uploadId: upload.id,
+            objectKey: upload.object_key,
+          })),
         });
       }
 
@@ -105,7 +143,6 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
 
       return Response.json({
         status: "ok",
-        staleObjectKeys: stale.map((upload) => upload.object_key),
       });
     },
   };

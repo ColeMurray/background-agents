@@ -125,6 +125,21 @@ describe("POST /callbacks/tool_call", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
+  it("rejects signed tool calls with partial Slack context", async () => {
+    const payload = await makeToolCallPayload({
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+      },
+    });
+    const { response, ctx } = await postToolCall(payload);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid payload" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed JSON payloads", async () => {
     const ctx = makeCtx();
     const response = await makeApp().fetch(
@@ -289,6 +304,77 @@ async function postCallback(path: string, payload: unknown, env = makeEnv(), ctx
   );
   return { response, env, ctx };
 }
+
+describe("POST /callbacks/complete", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function completeCallbackData(overrides: Record<string, unknown> = {}) {
+    return {
+      sessionId: "session-1",
+      messageId: "message-1",
+      success: true,
+      timestamp: 1778900000000,
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      },
+      ...overrides,
+    };
+  }
+
+  it("rejects a partial completion payload", async () => {
+    const payload = await signPayload(
+      completeCallbackData({
+        context: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "111.222",
+        },
+      })
+    );
+    const { response, ctx } = await postCallback("/callbacks/complete", payload);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid payload" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("accepts signed completion payloads without stripping unknown signed fields", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      textContent: "All set.",
+      toolCalls: [],
+      artifacts: [],
+      success: true,
+    });
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(
+      completeCallbackData({
+        extraTopLevel: "preserve-me",
+        context: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "111.222",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          extraNested: "preserve-me-too",
+        },
+      })
+    );
+    const { response, ctx } = await postCallback("/callbacks/complete", payload);
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const post = slackCall(fetchMock, "chat.postMessage");
+    expect(post).toBeDefined();
+    expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
+  });
+});
 
 describe("POST /callbacks/automation-complete", () => {
   afterEach(() => {

@@ -15,6 +15,7 @@ export const PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION = 500 * 1024 * 1024;
 // Uploads never referenced by a prompt after this long are pruned (R2 object +
 // record) the next time the session records an upload.
 export const PROMPT_UPLOAD_UNREFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
+export const PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS = 5 * 60 * 1000;
 
 const SCREENSHOT_EXTENSIONS = {
   "image/png": "png",

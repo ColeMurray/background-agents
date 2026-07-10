@@ -144,7 +144,7 @@ A build clones every repository in the environment at its configured base branch
 repository's `.openinspect/setup.sh` **sequentially, in position order**. A failing setup script
 fails the whole build, and the error names the repository. Build-time secrets are exactly what the
 environment's sessions get: global + environment secrets
-([launch-unit scoping](SECRETS.md#which-secrets-a-session-receives)).
+([session-target scoping](SECRETS.md#which-secrets-a-session-receives)).
 
 ### When environment images rebuild
 

@@ -39,6 +39,10 @@ import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "./bootstrap";
 const log = createLogger("vercel-provider");
 
 const TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env";
+// Mirrors TUNNEL_ENV_SANDBOX_ID_KEY in sandbox_runtime/constants.py: tags the
+// tunnel env file with the sandbox it was written for, so the supervisor's
+// stale-file cleanup keeps a fresh write instead of deleting it.
+const TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
 const DEFAULT_SNAPSHOT_EXPIRATION_MS = 0;
 const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
@@ -564,7 +568,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     }
 
     if (Object.keys(tunnelUrls).length > 0) {
-      await this.writeTunnelEnvFile(created.session.id, tunnelUrls, correlation);
+      await this.writeTunnelEnvFile(created.session.id, logicalSandboxId, tunnelUrls, correlation);
     }
 
     const { codeServerPort, terminalPort } = resolveServicePorts(sandboxSettings);
@@ -587,14 +591,17 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   private async writeTunnelEnvFile(
     sessionId: string,
+    logicalSandboxId: string,
     tunnelUrls: Record<string, string>,
     correlation?: CreateSandboxConfig["correlation"]
   ): Promise<void> {
-    const content =
-      Object.entries(tunnelUrls)
+    const lines = [
+      `${TUNNEL_ENV_SANDBOX_ID_KEY}=${logicalSandboxId}`,
+      ...Object.entries(tunnelUrls)
         .sort(([a], [b]) => Number(a) - Number(b))
-        .map(([port, url]) => `TUNNEL_${port}=${url}`)
-        .join("\n") + "\n";
+        .map(([port, url]) => `TUNNEL_${port}=${url}`),
+    ];
+    const content = lines.join("\n") + "\n";
 
     const script = [
       "from pathlib import Path",

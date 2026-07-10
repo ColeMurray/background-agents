@@ -26,6 +26,18 @@ export function environmentOptionValue(environmentId: string): string {
   return `${ENVIRONMENT_OPTION_PREFIX}${environmentId}`;
 }
 
+/**
+ * The environment id encoded in an `env:<id>` option value, or null for any
+ * other value. The inverse of {@link environmentOptionValue} — for callers
+ * (like the Slack routing-rules settings) that only deal in repo/environment
+ * values and must not inherit the picker's sentinel semantics.
+ */
+export function parseEnvironmentOptionValue(value: string): string | null {
+  return value.startsWith(ENVIRONMENT_OPTION_PREFIX)
+    ? value.slice(ENVIRONMENT_OPTION_PREFIX.length)
+    : null;
+}
+
 export function getTargetSelectValue(target: SessionTarget | null): string {
   if (!target) return "";
   switch (target.kind) {
@@ -57,8 +69,9 @@ export function parseTargetSelectValue(
       repoFullNames: previous?.kind === "repo" ? [previous.repoFullName.toLowerCase()] : [],
     };
   }
-  if (value.startsWith(ENVIRONMENT_OPTION_PREFIX)) {
-    return { kind: "environment", environmentId: value.slice(ENVIRONMENT_OPTION_PREFIX.length) };
+  const environmentId = parseEnvironmentOptionValue(value);
+  if (environmentId !== null) {
+    return { kind: "environment", environmentId };
   }
   return { kind: "repo", repoFullName: value };
 }

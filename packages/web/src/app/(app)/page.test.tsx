@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     defaultBranch: string;
   }>,
   loadingReposValue: false,
+  environmentsLoadingValue: false,
   environmentsValue: [] as Array<{
     id: string;
     name: string;
@@ -65,7 +66,10 @@ vi.mock("swr", () => ({
 
 vi.mock("@/hooks/use-environments", () => ({
   ENVIRONMENTS_KEY: "/api/environments",
-  useEnvironments: () => ({ environments: mocks.environmentsValue, loading: false }),
+  useEnvironments: () => ({
+    environments: mocks.environmentsValue,
+    loading: mocks.environmentsLoadingValue,
+  }),
 }));
 
 vi.mock("@/components/sidebar-layout", () => ({
@@ -100,6 +104,7 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.reposValue = [repo];
   mocks.loadingReposValue = false;
+  mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
@@ -245,5 +250,87 @@ describe("Home", () => {
     expect(body).not.toHaveProperty("repoOwner");
     expect(body).not.toHaveProperty("environmentId");
     expect(body).not.toHaveProperty("branch");
+  });
+
+  const environment = {
+    id: "env-1",
+    name: "full-stack",
+    description: null,
+    prebuildEnabled: false,
+    createdAt: 1,
+    updatedAt: 1,
+    repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 1, baseBranch: "main" }],
+  };
+
+  it("persists an environment selection and restores it on the next visit", async () => {
+    mocks.environmentsValue = [environment];
+    const user = userEvent.setup();
+    const first = render(<Home />);
+
+    await screen.findByRole("button", { name: /background-agents/i });
+    await user.click(screen.getByRole("button", { name: /background-agents/i }));
+    await user.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /full-stack/i })
+    );
+
+    expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe("env:env-1");
+
+    // A fresh mount (e.g. the sidebar "+" navigating back to "/") restores it.
+    first.unmount();
+    render(<Home />);
+    await screen.findByRole("button", { name: /full-stack/i });
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(sessionCreateBody()).toMatchObject({ environmentId: "env-1" });
+  });
+
+  it("waits for environments to load before restoring a stored environment", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", "env:env-1");
+    mocks.environmentsLoadingValue = true;
+    const { rerender } = render(<Home />);
+
+    // Must not commit the repo default while the stored environment is pending.
+    await screen.findByRole("button", { name: /select repo/i });
+    expect(screen.queryByRole("button", { name: /background-agents/i })).not.toBeInTheDocument();
+
+    mocks.environmentsLoadingValue = false;
+    mocks.environmentsValue = [environment];
+    rerender(<Home />);
+    await screen.findByRole("button", { name: /full-stack/i });
+  });
+
+  it("falls back to the repo default when the stored environment was deleted", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", "env:deleted-env");
+    render(<Home />);
+
+    await screen.findByRole("button", { name: /background-agents/i });
+  });
+
+  it("falls back to the repo default on a malformed stored value", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", "env:");
+    render(<Home />);
+
+    await screen.findByRole("button", { name: /background-agents/i });
+  });
+
+  it("still restores a stored repository fullName (legacy value)", async () => {
+    mocks.reposValue = [
+      repo,
+      {
+        id: 2,
+        fullName: "open-inspect/docs",
+        owner: "open-inspect",
+        name: "docs",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    localStorage.setItem("open-inspect-last-selected-repo", "open-inspect/docs");
+    render(<Home />);
+
+    await screen.findByRole("button", { name: /docs/i });
   });
 });

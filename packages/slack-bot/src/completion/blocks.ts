@@ -3,7 +3,7 @@
  */
 
 import type { AgentResponse, SlackCallbackContext } from "../types";
-import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
+import { escapeMrkdwnText, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 
 /**
  * Slack Block Kit block type (subset).
@@ -83,7 +83,8 @@ export function buildCompletionBlocks(
     elements: [
       {
         type: "mrkdwn",
-        text: `${emoji} ${status}  |  ${context.model}${effortSuffix}  |  ${context.repoFullName}`,
+        // The target label is raw user text for environment-launched sessions.
+        text: `${emoji} ${status}  |  ${context.model}${effortSuffix}  |  ${escapeMrkdwnText(context.repoFullName)}`,
       },
     ],
   });

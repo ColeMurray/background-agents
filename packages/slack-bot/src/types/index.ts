@@ -57,10 +57,27 @@ export interface ThreadContext {
   previousMessages?: string[];
 }
 
+import type { ConfidenceLevel } from "@open-inspect/shared";
+// targets.ts is a pure leaf (types + policy functions, no I/O), so the types
+// barrel can depend on it without a cycle.
+import type { SlackSessionTarget } from "../targets";
+
 /**
- * Result of repository classification.
+ * Result of target classification. Unlike the shared repo-only
+ * `ClassificationResult` (still used by the Linear bot), the Slack bot
+ * classifies to a {@link SlackSessionTarget} — a repository or a saved
+ * environment — because routing rules can name either.
  */
-export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";
+export interface ClassificationResult {
+  target: SlackSessionTarget | null;
+  confidence: ConfidenceLevel;
+  reasoning: string;
+  alternatives?: SlackSessionTarget[];
+  needsClarification: boolean;
+}
+
+export type { ConfidenceLevel, Environment } from "@open-inspect/shared";
+export type { SlackSessionTarget } from "../targets";
 
 /**
  * Slack event types.
@@ -122,7 +139,9 @@ export type SlackBotCallbackContext = SlackCallbackContext;
  */
 export interface ThreadSession {
   sessionId: string;
+  /** Session-target id: the repo id ("owner/name") or environment id ("env_…"). */
   repoId: string;
+  /** Session-target display label: the repo fullName or environment name. */
   repoFullName: string;
   model: string;
   reasoningEffort?: string;

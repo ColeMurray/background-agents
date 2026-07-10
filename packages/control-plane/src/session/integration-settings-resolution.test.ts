@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionScopedSettings } from "./integration-settings-resolution";
 
 const mockState = vi.hoisted(() => ({
-  resolvedCalls: [] as Array<{ id: string; repo: string }>,
+  resolvedCalls: [] as Array<{ id: string; repo: string; environmentId: string | null }>,
   globalCalls: [] as string[],
   resolved: {} as Record<
     string,
@@ -13,8 +13,8 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("../db/integration-settings", () => ({
   IntegrationSettingsStore: class {
-    async getResolvedConfig(id: string, repo: string) {
-      mockState.resolvedCalls.push({ id, repo });
+    async getResolvedConfig(id: string, repo: string, environmentId?: string | null) {
+      mockState.resolvedCalls.push({ id, repo, environmentId: environmentId ?? null });
       return mockState.resolved[id] ?? { enabledRepos: null, settings: {} };
     }
     async getGlobal(id: string) {
@@ -50,6 +50,25 @@ describe("resolveSessionScopedSettings", () => {
     // Every resolution targets the primary member; the secondary is never asked about.
     expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual(["acme/web", "acme/web"]);
     expect(mockState.resolvedCalls.map((c) => c.id).sort()).toEqual(["code-server", "sandbox"]);
+    // No environment layer unless the session launched from one.
+    expect(mockState.resolvedCalls.map((c) => c.environmentId)).toEqual([null, null]);
+  });
+
+  it("passes the environment id through to both resolutions (design §13.5)", async () => {
+    mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: true } };
+    mockState.resolved["sandbox"] = { enabledRepos: null, settings: { buildTimeoutSeconds: 3600 } };
+
+    const result = await resolveSessionScopedSettings(
+      DB,
+      [{ repoOwner: "acme", repoName: "web" }],
+      "env_1"
+    );
+
+    expect(result).toEqual({
+      codeServerEnabled: true,
+      sandboxSettings: { buildTimeoutSeconds: 3600 },
+    });
+    expect(mockState.resolvedCalls.map((c) => c.environmentId)).toEqual(["env_1", "env_1"]);
   });
 
   it("falls back to global sandbox defaults and disabled code-server for a repo-less session", async () => {

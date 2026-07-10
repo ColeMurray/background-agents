@@ -43,6 +43,7 @@ async function seedEnvironment(opts?: {
       name: opts?.name ?? `Seeded ${id}`,
       description: null,
       prebuild_enabled: opts?.prebuildEnabled ? 1 : 0,
+      channel_associations: null,
       created_at: now,
       updated_at: now,
     },

@@ -62,7 +62,16 @@ which settings apply. The agent sees all clones side by side and can make coordi
 them; pushes and pull requests are per-repository, so one session can produce PRs in several
 repositories. The session sidebar lists every repository with its branch and any PR created for it.
 
-Bot-created sessions (Slack, GitHub, Linear) remain single-repository.
+GitHub-bot sessions open the webhook's repository, unless that repository's metadata names a default
+environment (`defaultEnvironmentId` via the repo-metadata API) — then a PR review or @mention opens
+that environment's full workspace, provided the environment still contains the trigger repository.
+Slack sessions can target an environment three ways: a routing rule (Settings › Integrations ›
+Slack) launches it from a keyword; a channel association (`channelAssociations` on the environments
+API, like repository metadata) routes messages in that channel to it automatically; and the LLM
+classifier considers environments alongside repositories, using their names and descriptions as
+signals — its clarification picker lists both kinds when it has to ask. Linear sessions can target
+an environment through the team and project mappings (`{"environmentId": "env_…"}` entries alongside
+repository entries).
 
 ### Session Lifecycle
 
@@ -306,17 +315,21 @@ can read them locally.
 
 ```dotenv
 # /workspace/.tunnels.env
+TUNNEL_SANDBOX_ID=sandbox-acme-app-1783614336426
 TUNNEL_3000=https://abc123-3000.modal.host
 TUNNEL_5173=https://abc123-5173.modal.host
 ```
 
 This dotenv shape works directly with tools that accept an env-file path — `node --env-file=...`,
 `bun --env-file=...`, `docker compose --env-file=...`. The format is plain `KEY=value`, so any other
-dotenv consumer can read it without parsing.
+dotenv consumer can read it without parsing. The `TUNNEL_SANDBOX_ID` line names the sandbox the URLs
+were resolved for; the supervisor uses it to tell a fresh write from a snapshot leftover.
 
 **Boot ordering.** On every non-build boot, the supervisor:
 
-1. Clears any stale file inherited from a snapshot.
+1. Clears a file left by a previous sandbox (its `TUNNEL_SANDBOX_ID` doesn't match), such as one
+   inherited from a snapshot. A file already written for _this_ sandbox is kept — the backend's
+   write can land before the supervisor starts.
 2. Waits up to `TUNNEL_WAIT_TIMEOUT_SECONDS` (default `30`) for fresh URLs.
 3. Runs `.openinspect/start.sh`.
 
@@ -541,7 +554,7 @@ restores still mint a fresh fallback token on restore.
 ### Secrets
 
 You can configure environment variables (API keys, credentials) at global, per-repository, or
-per-environment scope. A session receives global secrets plus its **launch unit's** secrets:
+per-environment scope. A session receives global secrets plus its **session target's** secrets:
 
 - **Global secrets** apply to all sessions (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
   `ZHIPU_API_KEY`)

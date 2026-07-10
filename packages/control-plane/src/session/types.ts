@@ -92,6 +92,7 @@ export interface UploadRow {
   size_bytes: number;
   object_key: string;
   message_id: string | null; // Set once a prompt references this upload
+  cleanup_claimed_at: number | null; // Retained until object deletion is acknowledged
   created_at: number;
 }
 

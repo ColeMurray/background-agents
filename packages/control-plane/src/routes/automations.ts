@@ -25,13 +25,18 @@ import {
   type AutomationRow,
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
+import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
 import { resolveProviderIdentity, type SessionIdentityFields } from "../session/identity";
 import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import { automationRepositoriesInputSchema } from "@open-inspect/shared";
+import {
+  automationRepositoriesInputSchema,
+  isEnvironmentId,
+  MAX_AUTOMATION_REPOSITORIES,
+} from "@open-inspect/shared";
 import {
   type Route,
   type RequestContext,
@@ -76,14 +81,15 @@ type RepositorySelectionRequest =
   | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
- * Thrown by {@link parseRepositorySelection} when the `repositories` payload is
- * invalid. Route handlers catch it and answer 400 — the parser stays free of
- * HTTP concerns (mirrors normalizeOptionalRepositoryPair / RepositoryPairValidationError).
+ * Thrown by {@link parseRepositorySelection} and {@link parseEnvironmentBinding}
+ * when the session-target payload is invalid. Route handlers catch it and answer
+ * 400 — the parsers stay free of HTTP concerns (mirrors
+ * normalizeOptionalRepositoryPair / RepositoryPairValidationError).
  */
-class RepositorySelectionError extends Error {
+class TargetSelectionError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "RepositorySelectionError";
+    this.name = "TargetSelectionError";
   }
 }
 
@@ -91,7 +97,7 @@ class RepositorySelectionError extends Error {
  * Parse the repository selection from a create/update body. `unchanged` means
  * the body did not touch the selection (create treats that as empty).
  *
- * @throws RepositorySelectionError when the `repositories` payload is invalid.
+ * @throws TargetSelectionError when the `repositories` payload is invalid.
  */
 function parseRepositorySelection(body: { repositories?: unknown }): RepositorySelectionRequest {
   if (body.repositories === undefined) return { kind: "unchanged" };
@@ -99,22 +105,82 @@ function parseRepositorySelection(body: { repositories?: unknown }): RepositoryS
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
-    throw new RepositorySelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
+    throw new TargetSelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
   }
   return { kind: "replace", repositories: parsed.data };
 }
 
 /**
- * Repository-count rules: repo-scoped event triggers need exactly one
- * repository; fan-out over several is a schedule/manual-only product scope
- * (event fan-out semantics are undefined, not technically prevented).
+ * Target-count rules across BOTH selections (repositories + environments):
+ * repo-scoped event triggers need exactly one repository and no environments;
+ * fan-out over several targets is a schedule/manual-only product scope (event
+ * fan-out semantics are undefined, not technically prevented). Repositories
+ * and environments share one combined cap.
  */
-function validateRepositoryCount(triggerType: AutomationTriggerType, count: number): void {
-  if (count === 0 && (triggerType === "github_event" || triggerType === "linear_event")) {
-    throw new RepositorySelectionError("Repository-scoped triggers require exactly one repository");
+function validateTargetCounts(
+  triggerType: AutomationTriggerType,
+  repositoryCount: number,
+  environmentCount: number
+): void {
+  if (triggerType === "github_event" || triggerType === "linear_event") {
+    if (repositoryCount === 0) {
+      throw new TargetSelectionError("Repository-scoped triggers require exactly one repository");
+    }
+    if (environmentCount > 0) {
+      throw new TargetSelectionError("Repository-scoped triggers cannot target environments");
+    }
   }
-  if (count > 1 && triggerType !== "schedule") {
-    throw new RepositorySelectionError("Multi-repository selections require a schedule trigger");
+  if (repositoryCount + environmentCount > 1 && triggerType !== "schedule") {
+    throw new TargetSelectionError("Multi-target selections require a schedule trigger");
+  }
+  if (repositoryCount + environmentCount > MAX_AUTOMATION_REPOSITORIES) {
+    throw new TargetSelectionError(
+      `At most ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined`
+    );
+  }
+}
+
+type EnvironmentSelectionRequest =
+  | { kind: "unchanged" }
+  | { kind: "replace"; environmentIds: string[] };
+
+/**
+ * Parse the environment selection from a create/update body (design §13.3).
+ * `unchanged` means the body did not touch the selection (create treats that
+ * as empty); an array replaces it wholesale (empty clears).
+ *
+ * @throws TargetSelectionError when the `environmentIds` payload is malformed.
+ */
+function parseEnvironmentSelection(body: {
+  environmentIds?: unknown;
+}): EnvironmentSelectionRequest {
+  if (body.environmentIds === undefined) return { kind: "unchanged" };
+  if (
+    !Array.isArray(body.environmentIds) ||
+    body.environmentIds.some((id) => typeof id !== "string" || !isEnvironmentId(id))
+  ) {
+    throw new TargetSelectionError("environmentIds must be an array of environment ids (env_…)");
+  }
+  const environmentIds = body.environmentIds as string[];
+  if (new Set(environmentIds).size !== environmentIds.length) {
+    throw new TargetSelectionError("environmentIds must not contain duplicates");
+  }
+  return { kind: "replace", environmentIds };
+}
+
+/**
+ * Verify every selected environment exists — a selection must not silently
+ * point at deleted environments.
+ *
+ * @throws TargetSelectionError naming every missing environment.
+ */
+async function resolveEnvironmentSelection(env: Env, environmentIds: string[]): Promise<void> {
+  if (environmentIds.length === 0) return;
+  const store = new EnvironmentStore(env.DB);
+  const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
+  const missing = environmentIds.filter((_, index) => !found[index]);
+  if (missing.length > 0) {
+    throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
   }
 }
 
@@ -207,13 +273,19 @@ async function handleListAutomations(
 
   const store = new AutomationStore(env.DB);
   const result = await store.list({ repoOwner, repoName });
-  const repositoriesByAutomation = await store.getRepositoriesForAutomationIds(
-    result.automations.map((row) => row.id)
-  );
+  const automationIds = result.automations.map((row) => row.id);
+  const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
+    store.getRepositoriesForAutomationIds(automationIds),
+    store.getEnvironmentsForAutomationIds(automationIds),
+  ]);
 
   return json({
     automations: result.automations.map((row) =>
-      toAutomation(row, repositoriesByAutomation.get(row.id) ?? [])
+      toAutomation(
+        row,
+        repositoriesByAutomation.get(row.id) ?? [],
+        environmentsByAutomation.get(row.id) ?? []
+      )
     ),
     total: result.total,
   });
@@ -250,7 +322,7 @@ async function handleCreateAutomation(
   try {
     selection = parseRepositorySelection(body);
   } catch (e) {
-    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
   const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
@@ -268,10 +340,15 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
+  let requestedEnvironmentIds: string[];
   try {
-    validateRepositoryCount(triggerType, requestedRepositories.length);
+    const environmentSelection = parseEnvironmentSelection(body);
+    requestedEnvironmentIds =
+      environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
+    validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
+    await resolveEnvironmentSelection(env, requestedEnvironmentIds);
   } catch (e) {
-    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
 
@@ -411,6 +488,7 @@ async function handleCreateAutomation(
   const createStatements = [
     store.bindAutomationInsert(row),
     ...store.bindRepositoryInserts(id, newRepositories, now),
+    ...store.bindEnvironmentInserts(id, requestedEnvironmentIds, now),
   ];
   if (triggerType === "slack_event") {
     const slackStore = new SlackChannelStore(env.DB);
@@ -422,13 +500,15 @@ async function handleCreateAutomation(
 
   const automation = toAutomation(
     (await store.getById(id))!,
-    await store.getRepositoriesForAutomation(id)
+    await store.getRepositoriesForAutomation(id),
+    await store.getEnvironmentsForAutomation(id)
   );
 
   logger.info("automation.created", {
     event: "automation.created",
     automation_id: id,
     repo: newRepositories.map((repo) => `${repo.repo_owner}/${repo.repo_name}`).join(",") || null,
+    environments: requestedEnvironmentIds.join(",") || null,
     trigger_type: triggerType,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
@@ -473,7 +553,11 @@ async function handleGetAutomation(
   if (!row) return error("Automation not found", 404);
 
   return json({
-    automation: toAutomation(row, await store.getRepositoriesForAutomation(id)),
+    automation: toAutomation(
+      row,
+      await store.getRepositoriesForAutomation(id),
+      await store.getEnvironmentsForAutomation(id)
+    ),
   });
 }
 
@@ -566,23 +650,51 @@ async function handleUpdateAutomation(
   try {
     selection = parseRepositorySelection(body);
   } catch (e) {
-    if (e instanceof RepositorySelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
 
+  let environmentSelection: EnvironmentSelectionRequest;
+  try {
+    environmentSelection = parseEnvironmentSelection(body);
+  } catch (e) {
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    throw e;
+  }
+
+  // The count rules span both selections, so when EITHER is replaced they are
+  // validated against the automation's FINAL state (the replacement plus the
+  // other side's existing rows). Edits that touch neither selection skip this
+  // — count rules stay write-time so a stored selection predating a rule can
+  // never brick unrelated edits.
   let replacementRepositories: AutomationRepositoryInsert[] | null = null;
-  if (selection.kind === "replace") {
+  const replacementEnvironmentIds: string[] | null =
+    environmentSelection.kind === "replace" ? environmentSelection.environmentIds : null;
+  if (selection.kind === "replace" || replacementEnvironmentIds !== null) {
     try {
-      validateRepositoryCount(
+      const finalRepositoryCount =
+        selection.kind === "replace"
+          ? selection.repositories.length
+          : (await store.getRepositoriesForAutomation(id)).length;
+      const finalEnvironmentCount =
+        replacementEnvironmentIds !== null
+          ? replacementEnvironmentIds.length
+          : (await store.getEnvironmentsForAutomation(id)).length;
+      validateTargetCounts(
         existing.trigger_type as AutomationTriggerType,
-        selection.repositories.length
+        finalRepositoryCount,
+        finalEnvironmentCount
       );
+      if (replacementEnvironmentIds !== null) {
+        await resolveEnvironmentSelection(env, replacementEnvironmentIds);
+      }
     } catch (e) {
-      if (e instanceof RepositorySelectionError) return error(e.message, 400);
+      if (e instanceof TargetSelectionError) return error(e.message, 400);
       throw e;
     }
-    const resolved = await resolveRepositorySelection(env, selection.repositories, ctx);
-    replacementRepositories = resolved;
+    if (selection.kind === "replace") {
+      replacementRepositories = await resolveRepositorySelection(env, selection.repositories, ctx);
+    }
   }
 
   // Update event type — only for non-schedule types
@@ -669,6 +781,9 @@ async function handleUpdateAutomation(
   if (replacementRepositories !== null) {
     statements.push(...store.bindReplaceRepositories(id, replacementRepositories, Date.now()));
   }
+  if (replacementEnvironmentIds !== null) {
+    statements.push(...store.bindReplaceEnvironments(id, replacementEnvironmentIds, Date.now()));
+  }
   if (resyncSlackChannels) {
     const slackStore = new SlackChannelStore(env.DB);
     statements.push(
@@ -689,7 +804,11 @@ async function handleUpdateAutomation(
   });
 
   return json({
-    automation: toAutomation(updated, await store.getRepositoriesForAutomation(id)),
+    automation: toAutomation(
+      updated,
+      await store.getRepositoriesForAutomation(id),
+      await store.getEnvironmentsForAutomation(id)
+    ),
   });
 }
 
@@ -738,7 +857,13 @@ async function handlePauseAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? toAutomation(row, await store.getRepositoriesForAutomation(id)) : null,
+    automation: row
+      ? toAutomation(
+          row,
+          await store.getRepositoriesForAutomation(id),
+          await store.getEnvironmentsForAutomation(id)
+        )
+      : null,
   });
 }
 
@@ -780,7 +905,13 @@ async function handleResumeAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? toAutomation(row, await store.getRepositoriesForAutomation(id)) : null,
+    automation: row
+      ? toAutomation(
+          row,
+          await store.getRepositoriesForAutomation(id),
+          await store.getEnvironmentsForAutomation(id)
+        )
+      : null,
   });
 }
 

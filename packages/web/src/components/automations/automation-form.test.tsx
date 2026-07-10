@@ -39,9 +39,15 @@ function mockRepo(id: number, owner: string, name: string, defaultBranch = "main
 let enabledModelsValue: string[] = ["openai/gpt-5.4"];
 let loadingModelsValue = false;
 let reposValue: MockRepo[] = [];
+let environmentsValue: Array<{
+  id: string;
+  name: string;
+  repositories: Array<{ repoOwner: string; repoName: string }>;
+}> = [];
 beforeEach(() => {
   enabledModelsValue = ["openai/gpt-5.4"];
   loadingModelsValue = false;
+  environmentsValue = [];
   reposValue = [
     mockRepo(1, "open-inspect", "background-agents"),
     mockRepo(2, "open-inspect", "control-plane", "develop"),
@@ -52,6 +58,13 @@ beforeEach(() => {
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
     repos: reposValue,
+    loading: false,
+  }),
+}));
+
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: () => ({
+    environments: environmentsValue,
     loading: false,
   }),
 }));
@@ -191,6 +204,223 @@ describe("automation cron submission", () => {
   });
 });
 
+describe("environment binding", () => {
+  const scheduleBase = {
+    name: "Workspace review",
+    model: "openai/gpt-5.4",
+    scheduleCron: "0 9 * * 1",
+    scheduleTz: "UTC",
+    instructions: "Review the workspace.",
+  };
+  const fullstackEnvironment = {
+    id: "env_1",
+    name: "Fullstack",
+    repositories: [
+      { repoOwner: "acme", repoName: "web-app" },
+      { repoOwner: "acme", repoName: "api" },
+    ],
+  };
+
+  it("submits the selected environment in single-select mode", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={scheduleBase}
+      />
+    );
+
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: /Fullstack/ }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1"],
+      repositories: [],
+    });
+  });
+
+  it("replaces an environment with a repository in single-select mode", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, environmentIds: ["env_1"] }}
+      />
+    );
+
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: "open-inspect/control-plane" }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: [],
+      repositories: [
+        { repoOwner: "open-inspect", repoName: "control-plane", baseBranch: "develop" },
+      ],
+    });
+  });
+
+  it("replaces a repository with an environment in single-select mode", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, repositories: singleRepository }}
+      />
+    );
+
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: /Fullstack/ }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1"],
+      repositories: [],
+    });
+  });
+
+  it("hydrates a mixed repository + environment selection in edit mode", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          ...scheduleBase,
+          repositories: singleRepository,
+          environmentIds: ["env_1"],
+        }}
+      />
+    );
+
+    expect(screen.getByText("1 repository + 1 environment")).toBeInTheDocument();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1"],
+      repositories: [
+        { repoOwner: "open-inspect", repoName: "background-agents", baseBranch: "main" },
+      ],
+    });
+  });
+
+  it("keeps the repository when collapsing a mixed selection to single-select", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={scheduleBase}
+      />
+    );
+
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
+    // Environment first: the collapse still prefers the repository target.
+    fireEvent.click(screen.getByLabelText(/Fullstack/));
+    fireEvent.click(screen.getByLabelText("open-inspect/background-agents"));
+    fireEvent.click(screen.getByRole("button", { name: "Select One" }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: [],
+      repositories: [
+        { repoOwner: "open-inspect", repoName: "background-agents", baseBranch: "main" },
+      ],
+    });
+  });
+
+  it("fans out repositories and environments together in multi-select mode", () => {
+    environmentsValue = [fullstackEnvironment];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={scheduleBase}
+      />
+    );
+
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
+    fireEvent.click(screen.getByLabelText("open-inspect/background-agents"));
+    fireEvent.click(screen.getByLabelText(/Fullstack/));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1"],
+      repositories: [{ repoOwner: "open-inspect", repoName: "background-agents" }],
+    });
+  });
+
+  it("preserves hydrated multi-environment selections on untouched edits", () => {
+    environmentsValue = [
+      fullstackEnvironment,
+      { id: "env_2", name: "Data", repositories: [{ repoOwner: "acme", repoName: "data" }] },
+    ];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, environmentIds: ["env_1", "env_2"] }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      environmentIds: ["env_1", "env_2"],
+      repositories: [],
+    });
+  });
+
+  it("hides environments for repo-scoped triggers", () => {
+    environmentsValue = [fullstackEnvironment];
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...scheduleBase,
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          repositories: singleRepository,
+        }}
+      />
+    );
+
+    openRepositoryPicker();
+    expect(screen.queryByText("Environments")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Fullstack/)).not.toBeInTheDocument();
+  });
+});
+
 describe("repository selection", () => {
   const scheduleBase = {
     name: "Weekly review",
@@ -213,7 +443,9 @@ describe("repository selection", () => {
 
     // The picker defaults to no repository, which is a valid schedule selection.
     expect(screen.getByText("No repository")).toBeInTheDocument();
-    expect(screen.getByText("Select no repository or one repository.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Select no repository, one repository, or one environment.")
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
 
     fireEvent.submit(container.querySelector("form")!);

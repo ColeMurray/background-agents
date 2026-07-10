@@ -17,28 +17,21 @@ import {
   fetchIssueDetails,
   fetchUser,
   updateAgentSession,
-  getRepoSuggestions,
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
 import { buildInternalAuthHeaders } from "./utils/internal";
-import { splitRepoFullName } from "./utils/repo";
-import { classifyRepo } from "./classifier";
-import { getAvailableRepos } from "./classifier/repos";
-import { getLinearConfig } from "./utils/integration-config";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
+import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
 import {
-  resolveStaticRepo,
-  extractModelFromLabels,
-  resolveSessionModelSettings,
-} from "./model-resolution";
-import {
-  getTeamRepoMapping,
-  getProjectRepoMapping,
-  getUserPreferences,
-  lookupIssueSession,
-  storeIssueSession,
-} from "./kv-store";
+  resolveSessionTarget,
+  resolveTargetIntegration,
+  targetId,
+  targetLabel,
+  targetRequestFields,
+  type SessionTarget,
+} from "./target-resolution";
+import { getUserPreferences, lookupIssueSession, storeIssueSession } from "./kv-store";
 
 const log = createLogger("handler");
 
@@ -137,9 +130,8 @@ async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string
  */
 async function createSession(
   env: Env,
+  target: SessionTarget,
   params: {
-    repoOwner: string;
-    repoName: string;
     title: string;
     model: string;
     reasoningEffort?: string;
@@ -154,6 +146,7 @@ async function createSession(
     method: "POST",
     headers,
     body: JSON.stringify({
+      ...targetRequestFields(target),
       ...params,
       spawnSource: "linear-bot",
     }),
@@ -385,137 +378,35 @@ async function handleNewSession(
   const labelNames = labels.map((l) => l.name);
   const projectInfo = issueDetails?.project || issue.project;
 
-  // ─── Resolve repo ─────────────────────────────────────────────────────
+  // ─── Resolve target ───────────────────────────────────────────────────
 
-  let repoOwner: string | null = null;
-  let repoName: string | null = null;
-  let repoFullName: string | null = null;
-  let classificationReasoning: string | null = null;
+  const resolved = await resolveSessionTarget({
+    env,
+    client,
+    agentSessionId,
+    issue,
+    labelNames,
+    projectInfo,
+    comment,
+    traceId,
+  });
+  if (!resolved) return;
 
-  // 1. Check project→repo mapping FIRST
-  if (projectInfo?.id) {
-    const projectMapping = await getProjectRepoMapping(env);
-    const mapped = projectMapping[projectInfo.id];
-    if (mapped) {
-      repoOwner = mapped.owner;
-      repoName = mapped.name;
-      repoFullName = `${mapped.owner}/${mapped.name}`;
-      classificationReasoning = `Project "${projectInfo.name}" is mapped to ${repoFullName}`;
-    }
-  }
+  const { target, reasoning: classificationReasoning } = resolved;
+  const label = targetLabel(target);
 
-  // 2. Check static team→repo mapping (override)
-  if (!repoOwner) {
-    const teamMapping = await getTeamRepoMapping(env);
-    const teamId = issue.team?.id ?? "";
-    if (teamId && teamMapping[teamId] && teamMapping[teamId].length > 0) {
-      const staticRepo = resolveStaticRepo(teamMapping, teamId, labelNames);
-      if (staticRepo) {
-        repoOwner = staticRepo.owner;
-        repoName = staticRepo.name;
-        repoFullName = `${staticRepo.owner}/${staticRepo.name}`;
-        classificationReasoning = `Team static mapping`;
-      }
-    }
-  }
-
-  // 3. Try Linear's built-in issueRepositorySuggestions API
-  if (!repoOwner) {
-    const repos = await getAvailableRepos(env, traceId);
-    if (repos.length > 0) {
-      const candidates = repos.map((r) => ({
-        hostname: "github.com",
-        repositoryFullName: `${r.owner}/${r.name}`,
-      }));
-
-      const suggestions = await getRepoSuggestions(client, issue.id, agentSessionId, candidates);
-      const topSuggestion = suggestions.find((s) => s.confidence >= 0.7);
-      if (topSuggestion) {
-        // Split on the last slash — GitLab nested-group paths
-        // ("group/subgroup/project") carry slashes in the owner.
-        const { owner, name } = splitRepoFullName(topSuggestion.repositoryFullName);
-        repoOwner = owner;
-        repoName = name;
-        repoFullName = topSuggestion.repositoryFullName;
-        classificationReasoning = `Linear suggested ${repoFullName} (confidence: ${Math.round(topSuggestion.confidence * 100)}%)`;
-      }
-    }
-  }
-
-  // 4. Fall back to our LLM classification
-  if (!repoOwner) {
-    await emitAgentActivity(
-      client,
-      agentSessionId,
-      {
-        type: "thought",
-        body: "Classifying repository using AI...",
-      },
-      true
-    );
-
-    const classification = await classifyRepo(
-      env,
-      issue.title,
-      issue.description,
-      labelNames,
-      projectInfo?.name,
-      issue.team?.name ?? null,
-      issue.team?.key ?? null,
-      comment?.body,
-      traceId
-    );
-
-    if (classification.needsClarification || !classification.repo) {
-      const altList = (classification.alternatives || [])
-        .map((r) => `- **${r.fullName}**: ${r.description}`)
-        .join("\n");
-
-      await emitAgentActivity(client, agentSessionId, {
-        type: "elicitation",
-        body: `I couldn't determine which repository to work on.\n\n${classification.reasoning}\n\n**Available repositories:**\n${altList || "None available"}\n\nPlease reply with the repository name (e.g., \`owner/repo\`).`,
-      });
-
-      log.warn("agent_session.classification_uncertain", {
-        trace_id: traceId,
-        issue_identifier: issue.identifier,
-        confidence: classification.confidence,
-        reasoning: classification.reasoning,
-      });
-      return;
-    }
-
-    repoOwner = classification.repo.owner;
-    repoName = classification.repo.name;
-    repoFullName = classification.repo.fullName;
-    classificationReasoning = classification.reasoning;
-  }
-
-  if (!repoOwner || !repoName || !repoFullName) {
-    await emitAgentActivity(client, agentSessionId, {
-      type: "elicitation",
-      body: "I couldn't determine which repository to work on. Please reply with the repository name (e.g., `owner/repo`).",
-    });
-    log.warn("agent_session.repo_resolution_failed", {
-      trace_id: traceId,
-      issue_identifier: issue.identifier,
-    });
-    return;
-  }
-
-  const integrationConfig = await getLinearConfig(env, repoFullName.toLowerCase());
-  if (
-    integrationConfig.enabledRepos !== null &&
-    !integrationConfig.enabledRepos.includes(repoFullName.toLowerCase())
-  ) {
+  const integration = await resolveTargetIntegration(env, target);
+  const integrationConfig = integration.config;
+  if (!integration.enabled) {
     await emitAgentActivity(client, agentSessionId, {
       type: "error",
-      body: `The Linear integration is not enabled for \`${repoFullName}\`.`,
+      body: `The Linear integration is not enabled for ${integration.notEnabledSubject}.`,
     });
     log.info("agent_session.repo_not_enabled", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
-      repo: repoFullName,
+      target: targetId(target),
+      repo: integration.settingsRepo,
     });
     return;
   }
@@ -559,16 +450,15 @@ async function handleNewSession(
     agentSessionId,
     {
       type: "thought",
-      body: `Creating coding session on ${repoFullName} (model: ${model})...`,
+      body: `Creating coding session on ${label} (model: ${model})...`,
     },
     true
   );
 
   const sessionResult = await createSession(
     env,
+    target,
     {
-      repoOwner: repoOwner!,
-      repoName: repoName!,
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
@@ -587,7 +477,7 @@ async function handleNewSession(
     log.error("control_plane.create_session", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
-      repo: repoFullName,
+      target: targetId(target),
       http_status: sessionResult.status,
       response_body: sessionResult.body.slice(0, 500),
       duration_ms: Date.now() - startTime,
@@ -602,8 +492,7 @@ async function handleNewSession(
     sessionId: session.sessionId,
     issueId: issue.id,
     issueIdentifier: issue.identifier,
-    repoOwner: repoOwner!,
-    repoName: repoName!,
+    ...targetRequestFields(target),
     model,
     agentSessionId,
     createdAt: Date.now(),
@@ -633,7 +522,7 @@ async function handleNewSession(
     issueId: issue.id,
     issueIdentifier: issue.identifier,
     issueUrl: issue.url,
-    repoFullName: repoFullName!,
+    repoFullName: integration.callbackRepoFullName,
     model,
     agentSessionId,
     organizationId: orgId,
@@ -678,7 +567,7 @@ async function handleNewSession(
 
   await emitAgentActivity(client, agentSessionId, {
     type: "thought",
-    body: `Working on \`${repoFullName}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+    body: `Working on \`${label}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 
   log.info("agent_session.session_created", {
@@ -686,7 +575,7 @@ async function handleNewSession(
     session_id: session.sessionId,
     agent_session_id: agentSessionId,
     issue_identifier: issue.identifier,
-    repo: repoFullName,
+    target: targetId(target),
     model,
     classification_reasoning: classificationReasoning,
     duration_ms: Date.now() - startTime,

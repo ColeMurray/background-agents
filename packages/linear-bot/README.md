@@ -79,7 +79,7 @@ The agent resolves repos automatically in most cases (see [Repo Resolution](#rep
 Static mappings are optional overrides. All `/config/*` endpoints require an `Authorization` header
 with an HMAC-signed bearer token (from `INTERNAL_CALLBACK_SECRET`).
 
-**Team → repo mapping:**
+**Team → target mapping:**
 
 ```bash
 curl -X PUT https://<your-linear-bot-worker>/config/team-repos \
@@ -88,27 +88,31 @@ curl -X PUT https://<your-linear-bot-worker>/config/team-repos \
   -d '{
     "YOUR_TEAM_ID": [
       { "owner": "your-org", "name": "frontend", "label": "frontend" },
-      { "owner": "your-org", "name": "backend", "label": "backend" },
+      { "environmentId": "env_abc123", "label": "fullstack" },
       { "owner": "your-org", "name": "main-repo" }
     ]
   }'
 ```
 
-Each team maps to an array of repos. If a repo has a `label`, it only matches issues with that
-label. The first repo without a label is the default fallback.
+Each team maps to an array of targets — repositories (`owner`/`name`) or saved environments
+(`environmentId`, the stable `env_…` id shown in the web UI). If a target has a `label`, it only
+matches issues with that label. The first target without a label is the default fallback. An
+environment entry whose environment was deleted is skipped and resolution falls through to the next
+stage.
 
-**Project → repo mapping:**
+**Project → target mapping:**
 
 ```bash
 curl -X PUT https://<your-linear-bot-worker>/config/project-repos \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "LINEAR_PROJECT_ID": { "owner": "your-org", "name": "my-repo" }
+    "LINEAR_PROJECT_ID": { "owner": "your-org", "name": "my-repo" },
+    "OTHER_PROJECT_ID": { "environmentId": "env_abc123" }
   }'
 ```
 
-Project mappings take the highest priority during repo resolution.
+Project mappings take the highest priority during target resolution.
 
 ### 5. Configure Integration Settings (Optional)
 
@@ -129,35 +133,41 @@ On any Linear issue:
 - Assign the issue to `OpenInspect` → agent picks it up
 - Agent status is visible directly in Linear (thinking, working, done)
 - Add a `model:<name>` label to override the model (e.g., `model:opus`, `model:sonnet`,
-  `model:haiku`, `model:gpt-5.4`, `model:gpt-5.2-codex`)
+  `model:haiku`, `model:gpt-5.4`, `model:gpt-5.3-codex`)
 
 ## Repo Resolution
 
-When an issue is triggered, the agent resolves the target GitHub repo using a 4-step cascade:
+When an issue is triggered, the agent resolves the session target using a 4-step cascade:
 
-1. **Project → repo mapping** — static mapping from Linear project IDs (highest priority)
-2. **Team → repo mapping** — static mapping from Linear team IDs, with optional label filtering
+1. **Project → target mapping** — static mapping from Linear project IDs to a repository or a saved
+   environment (highest priority)
+2. **Team → target mapping** — static mapping from Linear team IDs to repositories or saved
+   environments, with optional label filtering
 3. **Linear's `issueRepositorySuggestions` API** — Linear's built-in repo suggestion (>= 70%
    confidence)
 4. **LLM classifier** — uses Claude Haiku to classify based on issue content, labels, and available
    repo descriptions. Asks the user to clarify if confidence is low.
 
+Environment sessions clone the environment's full repository set; integration settings (model,
+enabled-repos allowlist) resolve from the environment's primary repository until environment-level
+settings exist.
+
 ## API Endpoints
 
 All `/config/*` endpoints require HMAC auth via `Authorization: Bearer <token>`.
 
-| Endpoint                     | Method  | Description                               |
-| ---------------------------- | ------- | ----------------------------------------- |
-| `/health`                    | GET     | Health check                              |
-| `/webhook`                   | POST    | Linear webhook receiver                   |
-| `/oauth/authorize`           | GET     | Start OAuth installation flow             |
-| `/oauth/callback`            | GET     | OAuth callback handler                    |
-| `/config/team-repos`         | GET/PUT | Team → repo mapping                       |
-| `/config/project-repos`      | GET/PUT | Project → repo mapping                    |
-| `/config/user-prefs/:userId` | GET/PUT | Per-user model and reasoning preferences  |
-| `/config/triggers`           | GET/PUT | Trigger configuration (legacy)            |
-| `/callbacks/complete`        | POST    | Completion callback from control plane    |
-| `/callbacks/tool_call`       | POST    | Tool progress callback from control plane |
+| Endpoint                     | Method  | Description                                    |
+| ---------------------------- | ------- | ---------------------------------------------- |
+| `/health`                    | GET     | Health check                                   |
+| `/webhook`                   | POST    | Linear webhook receiver                        |
+| `/oauth/authorize`           | GET     | Start OAuth installation flow                  |
+| `/oauth/callback`            | GET     | OAuth callback handler                         |
+| `/config/team-repos`         | GET/PUT | Team → target mapping (repo or environment)    |
+| `/config/project-repos`      | GET/PUT | Project → target mapping (repo or environment) |
+| `/config/user-prefs/:userId` | GET/PUT | Per-user model and reasoning preferences       |
+| `/config/triggers`           | GET/PUT | Trigger configuration (legacy)                 |
+| `/callbacks/complete`        | POST    | Completion callback from control plane         |
+| `/callbacks/tool_call`       | POST    | Tool progress callback from control plane      |
 
 ## Agent Activity Types
 

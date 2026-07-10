@@ -77,6 +77,7 @@ function makeChild(automationId: string, overrides?: Partial<AutomationRunRow>):
     repo_name: null,
     repo_id: null,
     base_branch: null,
+    environment_id: null,
     ...overrides,
   };
 }

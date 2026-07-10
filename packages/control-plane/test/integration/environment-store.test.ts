@@ -22,6 +22,7 @@ function makeEnv(overrides?: Partial<EnvironmentRow>): EnvironmentRow {
     name: "Full Stack",
     description: null,
     prebuild_enabled: 0,
+    channel_associations: null,
     created_at: now,
     updated_at: now,
     ...overrides,
@@ -97,6 +98,23 @@ describe("EnvironmentStore", () => {
     expect(updated?.prebuild_enabled).toBe(1);
     const repoRows = await store.getRepositoriesForEnvironment(row.id);
     expect(repoRows.map((r) => r.repo_name)).toEqual(["api", "worker"]);
+  });
+
+  it("round-trips channel associations through the JSON column", async () => {
+    const store = new EnvironmentStore(env.DB);
+    const row = makeEnv({ name: "Channelled", channel_associations: JSON.stringify(["C1", "C2"]) });
+    await store.create(row, repos(["acme", "web", 1, "main"]));
+
+    const created = toEnvironment(
+      (await store.getById(row.id))!,
+      await store.getRepositoriesForEnvironment(row.id)
+    );
+    expect(created.channelAssociations).toEqual(["C1", "C2"]);
+
+    const updated = await store.update(row.id, { channel_associations: null });
+    expect(
+      toEnvironment(updated!, await store.getRepositoriesForEnvironment(row.id)).channelAssociations
+    ).toBeUndefined();
   });
 
   it("bumps updated_at on a members-only edit", async () => {
