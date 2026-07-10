@@ -420,4 +420,36 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
     expect(response.status).toBe(400);
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
   });
+
+  it("returns 404 without writing the flag when enabling an uninstalled repo", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(null);
+    const waitUntilTasks: Promise<unknown>[] = [];
+
+    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+
+    expect(response.status).toBe(404);
+    expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
+    expect(waitUntilTasks).toHaveLength(0);
+  });
+
+  it("returns 500 without writing the flag when enabling and resolution fails", async () => {
+    scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
+    const waitUntilTasks: Promise<unknown>[] = [];
+
+    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+
+    expect(response.status).toBe(500);
+    expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
+    expect(waitUntilTasks).toHaveLength(0);
+  });
+
+  it("disables without resolving so an unresolvable repo stays disableable", async () => {
+    scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
+
+    const response = await callToggle(createModalEnv(), { enabled: false });
+
+    expect(response.status).toBe(200);
+    expect(setImageBuildEnabledSpy).toHaveBeenCalledWith("acme", "repo", false);
+    expect(scmProvider.checkRepositoryAccess).not.toHaveBeenCalled();
+  });
 });

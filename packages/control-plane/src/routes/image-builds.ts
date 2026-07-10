@@ -26,7 +26,11 @@ import {
 } from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
-import { listEnabledScopes, listEnabledScopeUnits } from "../image-builds/scope";
+import {
+  listEnabledScopes,
+  listEnabledScopeUnits,
+  resolveScopeTarget,
+} from "../image-builds/scope";
 import { createImageBuildWorkflowFromEnv } from "../image-builds/workflow";
 import type {
   CompleteImageBuildCallback,
@@ -430,20 +434,33 @@ async function handleToggleRepoImageBuilds(
     return error("enabled must be a boolean", 400);
   }
 
+  const scope = repoImageBuildScope(owner, name);
+
+  // Enabling an unknown or unresolvable repo would persist a flag whose
+  // builds can never plan; resolve through the trigger path's canonical
+  // resolver first and only persist on success. Disabling never resolves —
+  // a repo that became unresolvable must remain disableable.
+  if (body.enabled) {
+    try {
+      await resolveScopeTarget(env, scope);
+    } catch (e) {
+      return imageBuildErrorToResponse(e);
+    }
+  }
+
   try {
     await new RepoMetadataStore(env.DB).setImageBuildEnabled(owner, name, body.enabled);
   } catch (e) {
     logger.error("image_build.toggle_error", {
       error: e instanceof Error ? e.message : String(e),
-      scope_kind: "repo",
-      scope_id: repoImageBuildScope(owner, name).id,
+      scope_kind: scope.kind,
+      scope_id: scope.id,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
     return error("Failed to toggle image builds", 500);
   }
 
-  const scope = repoImageBuildScope(owner, name);
   logger.info("image_build.toggle", {
     scope_kind: scope.kind,
     scope_id: scope.id,

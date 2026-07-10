@@ -1159,24 +1159,30 @@ describe("Image builds", () => {
       ]);
     });
 
-    it("PUT /image-builds/toggle/repo/:owner/:name writes the repo_metadata flag", async () => {
+    it("PUT /image-builds/toggle/repo/:owner/:name resolves on enable, never on disable", async () => {
       const store = new RepoMetadataStore(env.DB);
 
+      // The integration harness has no source-control provider configured, so
+      // enabling — which resolves the repo through the trigger path's
+      // canonical resolver first — fails without persisting the flag.
       const enable = await SELF.fetch(`${BASE}/image-builds/toggle/repo/Acme/Web`, {
         method: "PUT",
         headers: await authHeaders(),
         body: JSON.stringify({ enabled: true }),
       });
-      expect(enable.status).toBe(200);
-      await expect(enable.json()).resolves.toEqual({ ok: true, enabled: true });
-      expect(await store.getImageBuildEnabled("acme", "web")).toBe(true);
+      expect(enable.status).toBe(500);
+      expect(await store.getImageBuildEnabled("acme", "web")).toBe(false);
 
+      // Disabling never resolves — a repo that became unresolvable must
+      // remain disableable.
+      await enableRepo();
       const disable = await SELF.fetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
         method: "PUT",
         headers: await authHeaders(),
         body: JSON.stringify({ enabled: false }),
       });
       expect(disable.status).toBe(200);
+      await expect(disable.json()).resolves.toEqual({ ok: true, enabled: false });
       expect(await store.getImageBuildEnabled("acme", "web")).toBe(false);
     });
 
