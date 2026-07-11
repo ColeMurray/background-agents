@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { formatPullRequestSummaryLabel } from "./pr-summary";
+import { dominantPullRequestState, formatPullRequestSummaryLabel } from "./pr-summary";
+
+describe("dominantPullRequestState", () => {
+  it("returns null without a summary or with zero PRs", () => {
+    expect(dominantPullRequestState(undefined)).toBeNull();
+    expect(
+      dominantPullRequestState({ total: 0, open: 0, draft: 0, merged: 0, closed: 0 })
+    ).toBeNull();
+  });
+
+  it("picks the most actionable bucket: open, draft, merged, closed", () => {
+    expect(dominantPullRequestState({ total: 3, open: 1, draft: 1, merged: 1, closed: 0 })).toBe(
+      "open"
+    );
+    expect(dominantPullRequestState({ total: 2, open: 0, draft: 1, merged: 1, closed: 0 })).toBe(
+      "draft"
+    );
+    expect(dominantPullRequestState({ total: 2, open: 0, draft: 0, merged: 1, closed: 1 })).toBe(
+      "merged"
+    );
+    expect(dominantPullRequestState({ total: 1, open: 0, draft: 0, merged: 0, closed: 1 })).toBe(
+      "closed"
+    );
+  });
+});
 
 describe("formatPullRequestSummaryLabel", () => {
   it("returns null without a summary or with zero PRs", () => {

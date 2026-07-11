@@ -123,6 +123,13 @@ describe("SessionSidebar", () => {
     expect(await screen.findByText("PR merged")).toBeInTheDocument();
     expect(screen.getByText("3 PRs · 2 open")).toBeInTheDocument();
     expect(screen.getAllByText(/PR/)).toHaveLength(2);
+
+    // GitHub-style state icon next to the title: merged for the single-PR
+    // session, open (dominant bucket) for the multi-PR session, none without
+    // tracked PRs.
+    expect(screen.getByTestId("pr-state-merged")).toBeInTheDocument();
+    expect(screen.getByTestId("pr-state-open")).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^pr-state-/)).toHaveLength(2);
   });
 
   it("renders nested child sessions under their immediate parent", async () => {

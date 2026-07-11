@@ -1,4 +1,19 @@
-import type { PullRequestSummary } from "@open-inspect/shared";
+import type { PullRequestDisplayStatus, PullRequestSummary } from "@open-inspect/shared";
+
+/**
+ * The single display state a session-list row's PR icon shows. With several
+ * PRs the most actionable bucket wins: open, then draft, then merged, then
+ * closed. Null when the session has no tracked PRs.
+ */
+export function dominantPullRequestState(
+  summary: PullRequestSummary | undefined
+): PullRequestDisplayStatus | null {
+  if (!summary || summary.total === 0) return null;
+  if (summary.open > 0) return "open";
+  if (summary.draft > 0) return "draft";
+  if (summary.merged > 0) return "merged";
+  return "closed";
+}
 
 /**
  * Fixed-height PR indicator for a session list row (design §7): a single PR

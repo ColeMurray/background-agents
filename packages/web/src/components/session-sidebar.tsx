@@ -15,7 +15,7 @@ import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
 import { archiveSession } from "@/lib/archive-session";
-import { formatPullRequestSummaryLabel } from "@/lib/pr-summary";
+import { dominantPullRequestState, formatPullRequestSummaryLabel } from "@/lib/pr-summary";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
@@ -39,6 +39,9 @@ import {
   BranchIcon,
   BoxIcon,
   GitPrIcon,
+  GitMergeIcon,
+  GitPrClosedIcon,
+  GitPrDraftIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { APP_SHORT_NAME } from "@/lib/site-config";
@@ -54,7 +57,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Session } from "@open-inspect/shared";
+import type { PullRequestDisplayStatus, Session } from "@open-inspect/shared";
 
 export type SessionItem = Session;
 
@@ -668,6 +671,40 @@ function ChildSessionTree({
   });
 }
 
+const PR_STATE_ICONS: Record<
+  PullRequestDisplayStatus,
+  { Icon: (props: { className?: string }) => React.JSX.Element; colorClass: string }
+> = {
+  open: { Icon: GitPrIcon, colorClass: "text-accent" },
+  draft: { Icon: GitPrDraftIcon, colorClass: "text-muted-foreground" },
+  merged: { Icon: GitMergeIcon, colorClass: "text-success" },
+  closed: { Icon: GitPrClosedIcon, colorClass: "text-destructive" },
+};
+
+/**
+ * GitHub-style PR state icon next to a session row's title. Colors follow the
+ * prBadgeVariant semantic tokens used by the session detail badges.
+ */
+function PullRequestStateIcon({
+  state,
+  label,
+}: {
+  state: PullRequestDisplayStatus;
+  label: string | null;
+}) {
+  const { Icon, colorClass } = PR_STATE_ICONS[state];
+  return (
+    <span
+      className={`flex-shrink-0 ${colorClass}`}
+      title={label ?? undefined}
+      aria-label={label ?? `PR ${state}`}
+      data-testid={`pr-state-${state}`}
+    >
+      <Icon className="w-3.5 h-3.5" />
+    </span>
+  );
+}
+
 function SessionListItem({
   session,
   environmentName,
@@ -693,6 +730,7 @@ function SessionListItem({
     session.repositories
   );
   const prSummaryLabel = formatPullRequestSummaryLabel(session.pullRequestSummary);
+  const prState = dominantPullRequestState(session.pullRequestSummary);
   const displayTitle = session.title || repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
@@ -891,7 +929,10 @@ function SessionListItem({
             onTouchCancel={handleTouchEnd}
             className="block pr-8"
           >
-            <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
+            <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+              {prState && <PullRequestStateIcon state={prState} label={prSummaryLabel} />}
+              <span className="truncate">{displayTitle}</span>
+            </div>
             <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
               <span>{relativeTime}</span>
               <span>·</span>
