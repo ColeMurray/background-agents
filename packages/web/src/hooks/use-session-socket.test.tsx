@@ -835,6 +835,10 @@ describe("useSessionSocket", () => {
         },
       ]);
     });
+
+    // A new PR changes the sidebar summary, so creation revalidates the
+    // session list just like artifact_updated.
+    expect(mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
   });
 
   it("applies artifact_updated in place and revalidates the session list", async () => {

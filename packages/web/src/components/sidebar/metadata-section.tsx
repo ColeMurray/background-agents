@@ -53,8 +53,8 @@ interface MetadataSectionProps {
 }
 
 /**
- * Manual PR sync (design §7): kicks the rate-limited read-through; fresh
- * state arrives over the session socket as artifact_updated.
+ * Manual PR sync (design §7): kicks the read-through refresh; fresh state
+ * arrives over the session socket as artifact_updated.
  */
 function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
   const [syncing, setSyncing] = useState(false);
@@ -64,6 +64,9 @@ function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
     setSyncing(true);
     try {
       await fetch(`/api/sessions/${sessionId}/pull-requests/refresh`, { method: "POST" });
+    } catch {
+      // Fire-and-forget: the socket stream is the source of truth, so a
+      // failed trigger only means no update arrives.
     } finally {
       setSyncing(false);
     }

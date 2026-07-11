@@ -532,13 +532,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "artifact_created":
-          setArtifacts((prev) => upsertArtifact(prev, toUiArtifact(data.artifact)));
-          break;
-
         case "artifact_updated":
-          // Same upsert-by-id as artifact_created — an update replaces in
-          // place, so the artifact list order stays stable. Revalidate the
-          // session list so sidebar PR summaries reflect the change.
+          // Upsert-by-id: a create appends, an update replaces in place so
+          // the artifact list order stays stable. Both revalidate the
+          // session list — a new PR changes the sidebar summary just like a
+          // lifecycle update does.
           setArtifacts((prev) => upsertArtifact(prev, toUiArtifact(data.artifact)));
           mutate(isUnarchivedSessionListKey);
           break;
