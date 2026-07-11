@@ -9,7 +9,8 @@ import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import { findPrArtifactForRepo, type SessionRepositoryState } from "@open-inspect/shared";
+import type { SessionRepositoryState } from "@open-inspect/shared";
+import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 import {
   ClockIcon,
   SparkleIcon,
@@ -291,13 +292,11 @@ export function MetadataSection({
             {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
           </div>
           {repositories.map((repo, index) => {
-            const memberPrArtifact = findPrArtifactForRepo(artifacts, repo, index === 0);
-            const memberPrNumber = memberPrArtifact?.metadata?.prNumber;
-            const memberPrState = memberPrArtifact?.metadata?.prState;
-            const memberPrUrl = getSafeExternalUrl(
-              memberPrArtifact?.url || repo.prUrl || undefined
-            );
-            const memberBranchUrl = repo.branchName
+            const repoPrArtifact = findPrArtifactForRepo(artifacts, repo, index === 0);
+            const repoPrNumber = repoPrArtifact?.metadata?.prNumber;
+            const repoPrState = repoPrArtifact?.metadata?.prState;
+            const repoPrUrl = getSafeExternalUrl(repoPrArtifact?.url || repo.prUrl || undefined);
+            const repoBranchUrl = repo.branchName
               ? getScmBranchUrl(repo.repoOwner, repo.repoName, repo.branchName)
               : null;
             return (
@@ -319,14 +318,14 @@ export function MetadataSection({
                     </Badge>
                   )}
                 </div>
-                {(repo.branchName || memberPrNumber || memberPrUrl) && (
+                {(repo.branchName || repoPrNumber || repoPrUrl) && (
                   <div className="ml-6 flex items-center gap-2 text-xs text-muted-foreground">
                     {repo.branchName && (
                       <span className="inline-flex min-w-0 items-center gap-1">
                         <GitPrIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                        {memberBranchUrl ? (
+                        {repoBranchUrl ? (
                           <a
-                            href={memberBranchUrl}
+                            href={repoBranchUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-accent truncate max-w-[120px] hover:underline"
@@ -341,22 +340,22 @@ export function MetadataSection({
                         )}
                       </span>
                     )}
-                    {(memberPrNumber || memberPrUrl) &&
-                      (memberPrUrl ? (
+                    {(repoPrNumber || repoPrUrl) &&
+                      (repoPrUrl ? (
                         <a
-                          href={memberPrUrl}
+                          href={repoPrUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-accent hover:underline"
                         >
-                          {memberPrNumber ? `#${memberPrNumber}` : "PR"}
+                          {repoPrNumber ? `#${repoPrNumber}` : "PR"}
                         </a>
                       ) : (
-                        <span className="text-foreground">#{memberPrNumber}</span>
+                        <span className="text-foreground">#{repoPrNumber}</span>
                       ))}
-                    {memberPrState && (
-                      <Badge variant={prBadgeVariant(memberPrState)} className="capitalize">
-                        {memberPrState}
+                    {repoPrState && (
+                      <Badge variant={prBadgeVariant(repoPrState)} className="capitalize">
+                        {repoPrState}
                       </Badge>
                     )}
                   </div>

@@ -60,8 +60,8 @@ export interface SessionListRepository {
  * before multi-repo support carry no repo identity (`artifactRepo === null`)
  * and by construction belong to the session's primary. Identity is compared
  * case-insensitively, matching repo-identity comparison elsewhere. This is the
- * single home of that convention — the control-plane per-repo prUrl projection
- * (findPrArtifactForRepo) and the web per-repo PR chips both go through here.
+ * single home of that convention — the control-plane and web PR-artifact
+ * lookups (each a native find over its own artifact shape) go through here.
  */
 export function prArtifactBelongsToRepo(
   artifactRepo: { repoOwner: string; repoName: string } | null,
@@ -73,37 +73,6 @@ export function prArtifactBelongsToRepo(
     artifactRepo.repoOwner.toLowerCase() === targetRepo.repoOwner.toLowerCase() &&
     artifactRepo.repoName.toLowerCase() === targetRepo.repoName.toLowerCase()
   );
-}
-
-/**
- * The shape findPrArtifactForRepo needs: the artifact type discriminator plus
- * parsed metadata that may carry the owning repo identity.
- */
-export interface PrArtifactLike {
-  type: string;
-  metadata?: { repoOwner?: unknown; repoName?: unknown } | null;
-}
-
-/**
- * Find the PR artifact belonging to a member repository — the find step over
- * the prArtifactBelongsToRepo convention, shared by the control-plane per-repo
- * prUrl projection and the web sidebar/action-bar selection. Callers with
- * unparsed (JSON string) metadata parse before calling.
- */
-export function findPrArtifactForRepo<T extends PrArtifactLike>(
-  artifacts: readonly T[],
-  targetRepo: { repoOwner: string; repoName: string },
-  targetIsPrimary: boolean
-): T | undefined {
-  return artifacts.find((artifact) => {
-    if (artifact.type !== "pr") return false;
-    const { repoOwner, repoName } = artifact.metadata ?? {};
-    const artifactRepo =
-      typeof repoOwner === "string" && typeof repoName === "string"
-        ? { repoOwner, repoName }
-        : null;
-    return prArtifactBelongsToRepo(artifactRepo, targetRepo, targetIsPrimary);
-  });
 }
 
 /**

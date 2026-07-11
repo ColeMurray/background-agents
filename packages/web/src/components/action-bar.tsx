@@ -20,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getSafeExternalUrl } from "@/lib/urls";
-import { findPrArtifactForRepo } from "@open-inspect/shared";
+import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 
 interface ActionBarProps {
   sessionId: string;
