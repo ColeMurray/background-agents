@@ -1,6 +1,5 @@
 import {
   generateBranchName,
-  type PullRequestArtifactMetadata,
   type PullRequestStatus,
   type SessionArtifact,
 } from "@open-inspect/shared";
@@ -18,6 +17,11 @@ import {
   type GitPushSpec,
 } from "../source-control";
 import { findPrArtifactForRepo } from "./pr-artifacts";
+import {
+  mergeSnapshotMetadata,
+  snapshotToRecord,
+  type PullRequestSnapshotInput,
+} from "./pull-request-snapshot";
 import {
   mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
@@ -299,22 +303,22 @@ export class SessionPullRequestService {
       const artifactId = this.deps.generateId();
       const now = Date.now();
       const status = statusFromDisplayState(prResult.state);
-      const artifactMetadata = {
+      // The one PR lifecycle projection boundary (pull-request-snapshot.ts):
+      // artifact metadata and the D1 record both derive from this snapshot,
+      // so creation cannot drift from the update paths' field mapping.
+      const snapshot: PullRequestSnapshotInput = {
         number: prResult.id,
-        // Legacy display key; older clients render it until PR lifecycle
-        // tracking reaches the web (rolling compatibility).
-        state: prResult.state,
+        url: prResult.webUrl,
         lifecycleState: status.lifecycleState,
         isDraft: status.isDraft,
-        head: sanitizedHeadBranch,
-        base: baseBranch,
+        headBranch: sanitizedHeadBranch,
+        baseBranch,
+        headSha: prResult.headSha,
         repoOwner: targetRepo.repoOwner,
         repoName: targetRepo.repoName,
-        ...(prResult.headSha !== undefined ? { headSha: prResult.headSha } : {}),
-        ...(prResult.repositoryExternalId !== undefined
-          ? { repositoryExternalId: prResult.repositoryExternalId }
-          : {}),
-      } satisfies PullRequestArtifactMetadata & { state: string };
+        repositoryExternalId: prResult.repositoryExternalId,
+      };
+      const artifactMetadata = mergeSnapshotMetadata({}, snapshot);
       this.deps.repository.createArtifact({
         id: artifactId,
         type: "pr",
@@ -323,23 +327,9 @@ export class SessionPullRequestService {
         createdAt: now,
       });
 
-      await this.writeSessionPullRequestRecord({
-        artifactId,
-        sessionId,
-        repositoryExternalId: prResult.repositoryExternalId ?? null,
-        repoOwner: targetRepo.repoOwner,
-        repoName: targetRepo.repoName,
-        prNumber: prResult.id,
-        url: prResult.webUrl,
-        lifecycleState: status.lifecycleState,
-        isDraft: status.isDraft,
-        headBranch: sanitizedHeadBranch,
-        baseBranch,
-        headSha: prResult.headSha ?? null,
-        providerUpdatedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      await this.writeSessionPullRequestRecord(
+        snapshotToRecord(snapshot, { artifactId, sessionId, createdAt: now, updatedAt: now })
+      );
 
       this.deps.broadcastArtifactCreated({
         id: artifactId,

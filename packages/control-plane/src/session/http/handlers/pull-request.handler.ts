@@ -1,6 +1,7 @@
-import { toDisplayStatus, type SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
+import { applyPullRequestSnapshot, pullRequestSnapshotSchema } from "../../pull-request-snapshot";
 import {
   mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
@@ -20,73 +21,6 @@ const createPrRequestSchema = z.object({
 });
 
 type CreatePrRequest = z.infer<typeof createPrRequestSchema>;
-
-/**
- * Mirrors PullRequestSnapshot (source-control/types.ts) — the wire body the
- * webhook and read-through paths push into the DO. Draft is only meaningful
- * while open (shared-contract invariant, same rule as the D1 CHECK).
- */
-const pullRequestSnapshotSchema = z
-  .object({
-    number: z.number().int().positive(),
-    url: z.string(),
-    lifecycleState: z.enum(["open", "closed", "merged"]),
-    isDraft: z.boolean(),
-    headBranch: z.string(),
-    baseBranch: z.string(),
-    headSha: z.string().optional(),
-    repoOwner: z.string(),
-    repoName: z.string(),
-    repositoryExternalId: z.string().optional(),
-    providerUpdatedAt: z.number().optional(),
-  })
-  .refine((snapshot) => snapshot.lifecycleState === "open" || !snapshot.isDraft, {
-    message: "isDraft is only valid while the pull request is open",
-  });
-
-type PullRequestSnapshotBody = z.infer<typeof pullRequestSnapshotSchema>;
-
-/** Tolerant metadata read: malformed or non-object metadata degrades to {}. */
-function parseArtifactMetadata(raw: string | null): Record<string, unknown> {
-  if (!raw) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Merge a snapshot into existing artifact metadata, preserving unknown legacy
- * keys and keeping the legacy `state` display key current for older clients.
- */
-function mergeSnapshotMetadata(
-  existing: Record<string, unknown>,
-  snapshot: PullRequestSnapshotBody
-): Record<string, unknown> {
-  const next: Record<string, unknown> = {
-    ...existing,
-    number: snapshot.number,
-    state: toDisplayStatus(snapshot),
-    lifecycleState: snapshot.lifecycleState,
-    isDraft: snapshot.isDraft,
-    head: snapshot.headBranch,
-    base: snapshot.baseBranch,
-    repoOwner: snapshot.repoOwner,
-    repoName: snapshot.repoName,
-  };
-  if (snapshot.headSha !== undefined) next.headSha = snapshot.headSha;
-  if (snapshot.repositoryExternalId !== undefined) {
-    next.repositoryExternalId = snapshot.repositoryExternalId;
-  }
-  if (snapshot.providerUpdatedAt !== undefined) {
-    next.providerUpdatedAt = snapshot.providerUpdatedAt;
-  }
-  return next;
-}
 
 type PromptingParticipantResult =
   | { participant: ParticipantRow; error?: never; status?: never }
@@ -197,10 +131,10 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
     },
 
     /**
-     * Applies a provider snapshot to the `pr` artifact mirror (design §6):
-     * merge metadata, advance updated_at, broadcast one artifact_updated.
-     * Stale (older providerUpdatedAt) and materially identical snapshots
-     * no-op with `{ applied: false }` — no write, no broadcast.
+     * Transport shell for the snapshot projection (design §6): parse the
+     * request, resolve the artifact, and delegate to the canonical
+     * applyPullRequestSnapshot. Stale and materially identical snapshots
+     * answer `{ applied: false }` — no write, no broadcast.
      */
     async pullRequestArtifactSnapshot(request: Request, url: URL): Promise<Response> {
       const artifactId = url.searchParams.get("artifactId");
@@ -219,51 +153,23 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       if (!parsed.success) {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
-      const snapshot = parsed.data;
 
       const artifact = deps.getArtifactById(artifactId);
       if (!artifact || artifact.type !== "pr") {
         return Response.json({ error: "Pull request artifact not found" }, { status: 404 });
       }
 
-      const existing = parseArtifactMetadata(artifact.metadata);
+      const result = applyPullRequestSnapshot(
+        {
+          updateArtifact: deps.updateArtifact,
+          broadcastArtifactUpdated: deps.broadcastArtifactUpdated,
+          now: deps.now,
+        },
+        artifact,
+        parsed.data
+      );
 
-      // Same monotonic rule as the D1 store's upsert guard: only a snapshot
-      // strictly older than the stored provider timestamp is rejected; a
-      // missing timestamp on either side is authoritative.
-      const existingProviderUpdatedAt =
-        typeof existing.providerUpdatedAt === "number" ? existing.providerUpdatedAt : null;
-      if (
-        snapshot.providerUpdatedAt !== undefined &&
-        existingProviderUpdatedAt !== null &&
-        snapshot.providerUpdatedAt < existingProviderUpdatedAt
-      ) {
-        return Response.json({ applied: false });
-      }
-
-      const nextMetadata = mergeSnapshotMetadata(existing, snapshot);
-      const urlChanged = snapshot.url !== artifact.url;
-      const metadataChanged = JSON.stringify(nextMetadata) !== JSON.stringify(existing);
-      if (!urlChanged && !metadataChanged) {
-        return Response.json({ applied: false });
-      }
-
-      const updatedAt = deps.now();
-      deps.updateArtifact(artifactId, {
-        url: snapshot.url,
-        metadata: JSON.stringify(nextMetadata),
-        updatedAt,
-      });
-      deps.broadcastArtifactUpdated({
-        id: artifact.id,
-        type: "pr",
-        url: snapshot.url,
-        metadata: nextMetadata,
-        createdAt: artifact.created_at,
-        updatedAt,
-      });
-
-      return Response.json({ applied: true });
+      return Response.json(result);
     },
   };
 }
