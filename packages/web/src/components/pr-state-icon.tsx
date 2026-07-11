@@ -1,7 +1,7 @@
 import type { PullRequestDisplayStatus } from "@open-inspect/shared";
 import { GitMergeIcon, GitPrClosedIcon, GitPrDraftIcon, GitPrIcon } from "@/components/ui/icons";
 
-export const PR_STATE_TEXT_CLASS: Record<PullRequestDisplayStatus, string> = {
+const PR_STATE_ICON_TEXT_CLASS: Record<PullRequestDisplayStatus, string> = {
   open: "text-[#1f883d] dark:text-[#3fb950]",
   draft: "text-[#656d76] dark:text-[#8c959f]",
   merged: "text-[#8250df] dark:text-[#a371f7]",
@@ -31,7 +31,7 @@ export function PullRequestStateIcon({
   const Icon = PR_STATE_ICONS[state];
   return (
     <span
-      className={`flex-shrink-0 ${PR_STATE_TEXT_CLASS[state]}`}
+      className={`flex-shrink-0 ${PR_STATE_ICON_TEXT_CLASS[state]}`}
       title={label}
       aria-label={label}
       data-testid={`pr-state-${state}`}

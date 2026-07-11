@@ -4,9 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 /**
- * Canonical text-color token per PR display state. The PR badges below and
- * the session-list state icon both derive from this map, so the color policy
- * has exactly one home.
+ * Text-color token per PR badge display state.
  */
 export const PR_STATE_TEXT_CLASS = {
   open: "text-accent",
