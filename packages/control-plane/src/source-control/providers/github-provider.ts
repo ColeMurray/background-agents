@@ -5,6 +5,7 @@
  * wrapping existing GitHub API functions.
  */
 
+import { z } from "zod";
 import { toDisplayStatus, type InstallationRepository } from "@open-inspect/shared";
 import type { PullRequestStatus } from "@open-inspect/shared";
 import type {
@@ -23,7 +24,7 @@ import type {
   GitPushAuthContext,
   CredentialHelperAuth,
 } from "../types";
-import { SourceControlProviderError } from "../errors";
+import { SourceControlProviderError, parseProviderResponse } from "../errors";
 import {
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
@@ -45,7 +46,8 @@ function extractHttpStatus(error: unknown): number | undefined {
 
 /** GitHub pull-request state fields as the REST API reports them. */
 interface GitHubPullRequestStateFields {
-  state: string;
+  /** GitHub's wire state is strictly open/closed; merged is a separate flag. */
+  state: "open" | "closed";
   draft?: boolean | null;
   merged?: boolean | null;
 }
@@ -64,21 +66,38 @@ export function deriveGitHubPullRequestStatus(
   return { lifecycleState: "open", isDraft: data.draft === true };
 }
 
-/** Wire shape of a GitHub REST pull request, limited to the fields we read. */
-interface GitHubPullResponse {
-  number: number;
-  html_url: string;
-  url: string;
-  state: string;
-  draft?: boolean | null;
-  merged?: boolean | null;
-  updated_at?: string;
-  head: { ref: string; sha?: string };
-  base: {
-    ref: string;
-    repo?: { id?: number; name?: string; owner?: { login?: string } } | null;
-  };
-}
+/**
+ * Wire schema of a GitHub REST pull request, limited to the fields we read.
+ * `state` is a strict enum — an unexpected value is schema drift and fails
+ * the parse rather than being coerced into an apparently-valid status.
+ */
+const githubPullResponseSchema = z.object({
+  number: z.number(),
+  html_url: z.string(),
+  url: z.string(),
+  state: z.enum(["open", "closed"]),
+  draft: z.boolean().nullable().optional(),
+  merged: z.boolean().nullable().optional(),
+  updated_at: z.string().optional(),
+  head: z.object({ ref: z.string(), sha: z.string().optional() }),
+  base: z.object({
+    ref: z.string(),
+    repo: z
+      .object({
+        id: z.number().optional(),
+        name: z.string().optional(),
+        owner: z.object({ login: z.string().optional() }).optional(),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
+
+/** Wire shape of GET /repositories/{id}, limited to the location fields. */
+const githubRepositoryLocationSchema = z.object({
+  name: z.string(),
+  owner: z.object({ login: z.string() }),
+});
 
 /** Parse GitHub's ISO-8601 updated_at into epoch ms; undefined when absent/invalid. */
 function parseProviderUpdatedAt(updatedAt: string | undefined): number | undefined {
@@ -191,7 +210,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as GitHubPullResponse;
+    const data = await parseProviderResponse(
+      response,
+      githubPullResponseSchema,
+      "Failed to create PR"
+    );
 
     const repositoryExternalId = data.base.repo?.id;
     const result: CreatePullRequestResult = {
@@ -277,7 +300,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as GitHubPullResponse;
+    const data = await parseProviderResponse(
+      response,
+      githubPullResponseSchema,
+      "Failed to get pull request"
+    );
     const status = deriveGitHubPullRequestStatus(data);
     const repositoryExternalId = data.base.repo?.id;
 
@@ -335,11 +362,15 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       return null;
     }
 
-    const data = (await response.json()) as { name?: string; owner?: { login?: string } };
-    if (!data.owner?.login || !data.name) {
+    // Best-effort repair path: a malformed resolution body degrades to "not
+    // resolved" so the caller surfaces the original 404 instead.
+    const parsed = githubRepositoryLocationSchema.safeParse(
+      await response.json().catch(() => null)
+    );
+    if (!parsed.success) {
       return null;
     }
-    return { owner: data.owner.login, name: data.name };
+    return { owner: parsed.data.owner.login, name: parsed.data.name };
   }
 
   /**

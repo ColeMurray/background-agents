@@ -633,3 +633,102 @@ describe("createPullRequest state capture", () => {
     expect(result.repositoryExternalId).toBeUndefined();
   });
 });
+
+describe("response validation (zod boundary)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+  });
+
+  it("getPullRequest throws a permanent provider error on an unexpected state value", async () => {
+    // Schema drift must fail loudly, never be silently stored as "open".
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({ ...basePullResponse, state: "reopened" })
+    );
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    expect((err as SourceControlProviderError).message).toContain("state");
+  });
+
+  it("getPullRequest throws a permanent provider error on a malformed response", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({ ...basePullResponse, head: {} }) // missing head.ref
+    );
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+  });
+
+  it("getPullRequest throws a permanent provider error on non-JSON response body", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError("Unexpected token <")),
+      text: () => Promise.resolve("<html>"),
+    } as unknown as Response);
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+  });
+
+  it("falls back to the original 404 when the by-id resolution body is malformed", async () => {
+    mockFetchWithTimeout
+      .mockResolvedValueOnce(makeJsonResponse({ message: "Not Found" }, 404))
+      .mockResolvedValueOnce(makeJsonResponse({ id: 9001 })); // no owner/name
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).httpStatus).toBe(404);
+    expect(mockFetchWithTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it("createPullRequest throws a permanent provider error on a malformed response", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({ html_url: "https://github.com/acme/web/pull/7" }) // missing number etc.
+    );
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const err = await provider
+      .createPullRequest(
+        { authType: "oauth", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 9001,
+          },
+          title: "Add feature",
+          body: "Description",
+          sourceBranch: "open-inspect/session-1",
+          targetBranch: "main",
+        }
+      )
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+  });
+});

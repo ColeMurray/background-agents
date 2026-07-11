@@ -930,3 +930,96 @@ describe("createPullRequest state capture", () => {
     expect(result.repositoryExternalId).toBe("9001");
   });
 });
+
+describe("response validation (zod boundary)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("getPullRequest maps the transient locked state to open at the response level", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        iid: 7,
+        web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+        state: "locked",
+        draft: false,
+        source_branch: "open-inspect/session-1",
+        target_branch: "main",
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot.lifecycleState).toBe("open");
+    expect(snapshot.isDraft).toBe(false);
+  });
+
+  it("getPullRequest throws a permanent provider error on an unexpected state value", async () => {
+    // Schema drift must fail loudly, never be silently stored as "open".
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        iid: 7,
+        web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+        state: "hidden",
+        draft: false,
+        source_branch: "open-inspect/session-1",
+        target_branch: "main",
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    expect((err as SourceControlProviderError).message).toContain("state");
+  });
+
+  it("createPullRequest throws a permanent provider error on a malformed response", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ web_url: "https://gitlab.com/acme/web/-/merge_requests/5" }) // missing iid etc.
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Add feature",
+          body: "Description",
+          sourceBranch: "feature/foo",
+          targetBranch: "main",
+        }
+      )
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+  });
+
+  it("falls back to the original 404 when the by-id resolution body is malformed", async () => {
+    mockFetch
+      .mockResolvedValueOnce(makeResponse({ message: "404 Not Found" }, 404))
+      .mockResolvedValueOnce(makeResponse({ id: 9001 })); // no path/namespace
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).httpStatus).toBe(404);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+});
