@@ -299,11 +299,12 @@ describe("POST /internal/create-pr", () => {
 
     await runInDurableObject(stub, (instance: SessionDO) => {
       instance.ctx.storage.sql.exec(
-        "INSERT INTO artifacts (id, type, url, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         "artifact-pr-existing",
         "pr",
         "https://github.com/acme/web-app/pull/1",
         JSON.stringify({ number: 1 }),
+        Date.now(),
         Date.now()
       );
     });
@@ -542,5 +543,117 @@ describe("POST /internal/create-pr", () => {
       const body = await res.json<{ error: string }>();
       expect(body.error).toBe("Repository evil/exfil is not part of this session");
     });
+  });
+});
+
+describe("POST /internal/pull-request-artifact-snapshot", () => {
+  function snapshotBody(overrides: Record<string, unknown> = {}) {
+    return {
+      number: 1,
+      url: "https://github.com/acme/web-app/pull/1",
+      lifecycleState: "merged",
+      isDraft: false,
+      headBranch: "open-inspect/session-1",
+      baseBranch: "main",
+      repoOwner: "acme",
+      repoName: "web-app",
+      providerUpdatedAt: 5000,
+      ...overrides,
+    };
+  }
+
+  async function seedPrArtifact(stub: DurableObjectStub, createdAt: number) {
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(
+        "INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "artifact-pr-1",
+        "pr",
+        "https://github.com/acme/web-app/pull/1",
+        JSON.stringify({
+          number: 1,
+          state: "open",
+          lifecycleState: "open",
+          isDraft: false,
+          head: "open-inspect/session-1",
+          base: "main",
+          repoOwner: "acme",
+          repoName: "web-app",
+        }),
+        createdAt,
+        createdAt
+      );
+    });
+  }
+
+  it("applies a snapshot to the stored artifact and advances updated_at", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    const createdAt = Date.now() - 60_000;
+    await seedPrArtifact(stub, createdAt);
+
+    const res = await stub.fetch(
+      "http://internal/internal/pull-request-artifact-snapshot?artifactId=artifact-pr-1",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshotBody()),
+      }
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ applied: true });
+
+    const rows = await queryDO<{ metadata: string; updated_at: number; created_at: number }>(
+      stub,
+      "SELECT metadata, created_at, updated_at FROM artifacts WHERE id = ?",
+      "artifact-pr-1"
+    );
+    expect(rows).toHaveLength(1);
+    const metadata = JSON.parse(rows[0].metadata) as Record<string, unknown>;
+    expect(metadata.lifecycleState).toBe("merged");
+    expect(metadata.state).toBe("merged");
+    expect(metadata.providerUpdatedAt).toBe(5000);
+    expect(rows[0].updated_at).toBeGreaterThan(rows[0].created_at);
+  });
+
+  it("no-ops on an identical snapshot", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    const createdAt = Date.now() - 60_000;
+    await seedPrArtifact(stub, createdAt);
+
+    const res = await stub.fetch(
+      "http://internal/internal/pull-request-artifact-snapshot?artifactId=artifact-pr-1",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          snapshotBody({ lifecycleState: "open", providerUpdatedAt: undefined })
+        ),
+      }
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ applied: false });
+
+    const rows = await queryDO<{ updated_at: number }>(
+      stub,
+      "SELECT updated_at FROM artifacts WHERE id = ?",
+      "artifact-pr-1"
+    );
+    expect(rows[0].updated_at).toBe(createdAt);
+  });
+
+  it("returns 404 for an unknown artifact", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+
+    const res = await stub.fetch(
+      "http://internal/internal/pull-request-artifact-snapshot?artifactId=missing",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshotBody()),
+      }
+    );
+
+    expect(res.status).toBe(404);
   });
 });

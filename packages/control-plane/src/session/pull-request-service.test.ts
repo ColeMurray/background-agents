@@ -156,9 +156,12 @@ function createTestHarness() {
         url: data.url,
         metadata: data.metadata,
         created_at: data.createdAt,
+        updated_at: data.createdAt,
       } as ArtifactRow);
     },
   };
+
+  const sessionPullRequests = { upsert: vi.fn(async () => ({ applied: true })) };
 
   let idCounter = 0;
   const deps: PullRequestServiceDeps = {
@@ -171,6 +174,7 @@ function createTestHarness() {
     broadcastSessionBranch: vi.fn(),
     broadcastArtifactCreated: vi.fn(),
     appName: "Open-Inspect",
+    sessionPullRequests,
   };
 
   const service = new SessionPullRequestService(deps);
@@ -180,6 +184,8 @@ function createTestHarness() {
     deps,
     provider,
     artifacts,
+    sessionPullRequests,
+    log,
     setSession: (next: SessionRow | null) => {
       session = next;
     },
@@ -215,6 +221,7 @@ describe("SessionPullRequestService", () => {
       url: "https://github.com/acme/web/pull/1",
       metadata: null,
       created_at: Date.now(),
+      updated_at: Date.now(),
     });
 
     const result = await harness.service.createPullRequest(createInput());
@@ -332,12 +339,15 @@ describe("SessionPullRequestService", () => {
       metadata: {
         number: 42,
         state: "open",
+        lifecycleState: "open",
+        isDraft: false,
         head: "open-inspect/session-name-1",
         base: "main",
         repoOwner: "acme",
         repoName: "web",
       },
       createdAt: expect.any(Number),
+      updatedAt: expect.any(Number),
     });
   });
 
@@ -442,6 +452,7 @@ describe("SessionPullRequestService", () => {
         url: "https://github.com/acme/web/pull/1",
         metadata: JSON.stringify({ number: 1, repoOwner: "acme", repoName: "web" }),
         created_at: Date.now(),
+        updated_at: Date.now(),
       });
 
       const result = await harness.service.createPullRequest(
@@ -465,6 +476,7 @@ describe("SessionPullRequestService", () => {
         url: "https://github.com/acme/backend/pull/9",
         metadata: JSON.stringify({ number: 9, repoOwner: "acme", repoName: "backend" }),
         created_at: Date.now(),
+        updated_at: Date.now(),
       });
 
       const result = await harness.service.createPullRequest(
@@ -486,6 +498,7 @@ describe("SessionPullRequestService", () => {
         url: "https://github.com/acme/web/pull/1",
         metadata: JSON.stringify({ number: 1 }),
         created_at: Date.now(),
+        updated_at: Date.now(),
       });
 
       const primaryResult = await harness.service.createPullRequest(createInput());
@@ -680,6 +693,7 @@ describe("SessionPullRequestService", () => {
         createPrUrl: "https://existing.example.com/manual-pr",
       }),
       created_at: Date.now(),
+      updated_at: Date.now(),
     });
 
     const result = await harness.service.createPullRequest(createInput({ promptingAuth: null }));
@@ -691,5 +705,121 @@ describe("SessionPullRequestService", () => {
       state: "open",
     });
     expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
+  });
+
+  describe("session pull request record (D1 authority)", () => {
+    it("writes the D1 record after the artifact and before the broadcast", async () => {
+      const result = await harness.service.createPullRequest(createInput());
+
+      expect(result.kind).toBe("created");
+      expect(harness.sessionPullRequests.upsert).toHaveBeenCalledTimes(1);
+      expect(harness.sessionPullRequests.upsert).toHaveBeenCalledWith({
+        artifactId: "id-1",
+        sessionId: "session-name-1",
+        repositoryExternalId: null,
+        repoOwner: "acme",
+        repoName: "web",
+        prNumber: 42,
+        url: "https://github.com/acme/web/pull/42",
+        lifecycleState: "open",
+        isDraft: false,
+        headBranch: "open-inspect/session-name-1",
+        baseBranch: "main",
+        headSha: null,
+        providerUpdatedAt: null,
+        createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
+      });
+
+      const upsertOrder = harness.sessionPullRequests.upsert.mock.invocationCallOrder[0];
+      const broadcastOrder = vi.mocked(harness.deps.broadcastArtifactCreated).mock
+        .invocationCallOrder[0];
+      expect(upsertOrder).toBeLessThan(broadcastOrder);
+    });
+
+    it("captures headSha and repositoryExternalId when the provider returns them", async () => {
+      vi.mocked(harness.provider.createPullRequest).mockResolvedValue({
+        id: 42,
+        webUrl: "https://github.com/acme/web/pull/42",
+        apiUrl: "https://api.github.com/repos/acme/web/pulls/42",
+        state: "open",
+        sourceBranch: "open-inspect/session-name-1",
+        targetBranch: "main",
+        headSha: "abc123",
+        repositoryExternalId: "999",
+      });
+
+      await harness.service.createPullRequest(createInput());
+
+      expect(harness.sessionPullRequests.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headSha: "abc123",
+          repositoryExternalId: "999",
+        })
+      );
+      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            headSha: "abc123",
+            repositoryExternalId: "999",
+          }),
+        })
+      );
+    });
+
+    it("maps a draft creation to open + isDraft while keeping the display state", async () => {
+      vi.mocked(harness.provider.createPullRequest).mockResolvedValue({
+        id: 42,
+        webUrl: "https://github.com/acme/web/pull/42",
+        apiUrl: "https://api.github.com/repos/acme/web/pulls/42",
+        state: "draft",
+        sourceBranch: "open-inspect/session-name-1",
+        targetBranch: "main",
+      });
+
+      await harness.service.createPullRequest(createInput());
+
+      expect(harness.sessionPullRequests.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycleState: "open", isDraft: true })
+      );
+      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            lifecycleState: "open",
+            isDraft: true,
+            state: "draft",
+          }),
+        })
+      );
+    });
+
+    it("treats a D1 write failure as non-fatal", async () => {
+      harness.sessionPullRequests.upsert.mockRejectedValue(new Error("D1 unavailable"));
+
+      const result = await harness.service.createPullRequest(createInput());
+
+      expect(result).toEqual({
+        kind: "created",
+        prNumber: 42,
+        prUrl: "https://github.com/acme/web/pull/42",
+        state: "open",
+      });
+      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledTimes(1);
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "Failed to write session pull request record",
+        expect.objectContaining({ artifact_id: "id-1", pr_number: 42 })
+      );
+    });
+
+    it("skips the D1 write when no store is configured", async () => {
+      const deps = { ...harness.deps };
+      delete deps.sessionPullRequests;
+      const service = new SessionPullRequestService(deps);
+
+      const result = await service.createPullRequest(createInput());
+
+      expect(result.kind).toBe("created");
+      expect(harness.sessionPullRequests.upsert).not.toHaveBeenCalled();
+    });
   });
 });

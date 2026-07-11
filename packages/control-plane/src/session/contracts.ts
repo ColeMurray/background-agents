@@ -15,6 +15,9 @@ export const SessionInternalPaths = {
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
   createPr: "/internal/create-pr",
+  // Static path + artifactId query param: the router matches paths as exact
+  // strings, so the artifact id cannot ride in the path.
+  pullRequestArtifactSnapshot: "/internal/pull-request-artifact-snapshot",
   wsToken: "/internal/ws-token",
   archive: "/internal/archive",
   unarchive: "/internal/unarchive",

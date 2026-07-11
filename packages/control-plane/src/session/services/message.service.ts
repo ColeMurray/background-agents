@@ -69,6 +69,7 @@ export class MessageService {
       url: string | null;
       metadata: Record<string, unknown> | null;
       createdAt: number;
+      updatedAt: number;
     }>;
   } {
     const artifacts = this.deps.repository.listArtifacts();
@@ -79,6 +80,7 @@ export class MessageService {
         url: artifact.url,
         metadata: this.deps.parseArtifactMetadata(artifact),
         createdAt: artifact.created_at,
+        updatedAt: artifact.updated_at,
       })),
     };
   }
@@ -96,6 +98,7 @@ export class MessageService {
         url: artifact.url,
         metadata: this.deps.parseArtifactMetadata(artifact),
         createdAt: artifact.created_at,
+        updatedAt: artifact.updated_at,
       },
     };
   }

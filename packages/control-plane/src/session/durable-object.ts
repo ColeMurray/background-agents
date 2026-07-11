@@ -63,6 +63,7 @@ import { SessionRepository } from "./repository";
 import { resolveParticipantName } from "./participant-name";
 import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
@@ -194,6 +195,8 @@ export class SessionDO extends DurableObject<Env> {
     listArtifacts: (_request, url) => this.messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
     createPr: (request) => this.pullRequestHandler.createPr(request),
+    pullRequestArtifactSnapshot: (request, url) =>
+      this.pullRequestHandler.pullRequestArtifactSnapshot(request, url),
     wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
     updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
     archive: (request) => this.sessionLifecycleHandler.archive(request),
@@ -515,10 +518,20 @@ export class SessionDO extends DurableObject<Env> {
               });
             },
             appName: resolveAppName(this.env),
+            sessionPullRequests: this.env.DB ? new SessionPullRequestStore(this.env.DB) : undefined,
           });
 
           return pullRequestService.createPullRequest(input);
         },
+        getArtifactById: (artifactId) => this.repository.getArtifactById(artifactId),
+        updateArtifact: (artifactId, data) => this.repository.updateArtifact(artifactId, data),
+        broadcastArtifactUpdated: (artifact) => {
+          this.broadcast({
+            type: "artifact_updated",
+            artifact,
+          });
+        },
+        now: () => Date.now(),
       });
     }
 

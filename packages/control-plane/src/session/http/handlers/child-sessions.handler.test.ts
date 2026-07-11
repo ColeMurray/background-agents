@@ -95,6 +95,7 @@ function createArtifact(overrides: Partial<ArtifactRow> = {}): ArtifactRow {
     url: "https://example.com/pr/1",
     metadata: null,
     created_at: 1,
+    updated_at: 1,
     ...overrides,
   };
 }

@@ -107,6 +107,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         url: body.objectKey,
         metadata: body.metadata ?? null,
         createdAt: now,
+        updatedAt: now,
       };
 
       deps.repository.createArtifact({

@@ -230,6 +230,16 @@ export interface CreateArtifactData {
 }
 
 /**
+ * Data for updating an artifact's content in place (PR lifecycle updates).
+ * `url` is omitted to leave the stored URL unchanged.
+ */
+export interface UpdateArtifactData {
+  url?: string;
+  metadata: string | null;
+  updatedAt: number;
+}
+
+/**
  * Data for WS client mapping.
  */
 export interface WsClientMappingData {
@@ -958,14 +968,35 @@ export class SessionRepository {
   // === ARTIFACTS ===
 
   createArtifact(data: CreateArtifactData): void {
+    // updated_at starts at created_at; only content changes advance it.
     this.sql.exec(
-      `INSERT INTO artifacts (id, type, url, metadata, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       data.id,
       data.type,
       data.url,
       data.metadata,
+      data.createdAt,
       data.createdAt
+    );
+  }
+
+  updateArtifact(artifactId: string, data: UpdateArtifactData): void {
+    if (data.url !== undefined) {
+      this.sql.exec(
+        `UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?`,
+        data.url,
+        data.metadata,
+        data.updatedAt,
+        artifactId
+      );
+      return;
+    }
+    this.sql.exec(
+      `UPDATE artifacts SET metadata = ?, updated_at = ? WHERE id = ?`,
+      data.metadata,
+      data.updatedAt,
+      artifactId
     );
   }
 

@@ -201,6 +201,7 @@ describe("createSandboxHandler", () => {
           sizeBytes: 128,
         },
         createdAt: 1234,
+        updatedAt: 1234,
       },
     });
     expect(broadcast).toHaveBeenNthCalledWith(2, {

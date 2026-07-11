@@ -107,7 +107,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
   type TEXT NOT NULL,                               -- 'pr', 'screenshot', 'video', 'preview', 'branch'
   url TEXT,
   metadata TEXT,                                    -- JSON
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL                       -- last content change (PR lifecycle updates)
 );
 
 -- Sandbox state
@@ -428,6 +429,17 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 33,
     description: "Add auth_name to participants (provider-agnostic presence display name)",
     run: `ALTER TABLE participants ADD COLUMN auth_name TEXT`,
+  },
+  {
+    id: 34,
+    description: "Add updated_at to artifacts (PR lifecycle tracking)",
+    // SQLite cannot ADD COLUMN with NOT NULL and no default, so migrated DOs
+    // get a nullable column plus a backfill; fresh DOs get NOT NULL from
+    // SCHEMA_SQL and createArtifact always writes it.
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE artifacts ADD COLUMN updated_at INTEGER`);
+      sql.exec(`UPDATE artifacts SET updated_at = created_at WHERE updated_at IS NULL`);
+    },
   },
 ];
 

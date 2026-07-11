@@ -1,4 +1,13 @@
-import { generateBranchName, type SessionArtifact } from "@open-inspect/shared";
+import {
+  generateBranchName,
+  type PullRequestArtifactMetadata,
+  type PullRequestStatus,
+  type SessionArtifact,
+} from "@open-inspect/shared";
+import type {
+  SessionPullRequestRecord,
+  SessionPullRequestStore,
+} from "../db/session-pull-request-store";
 import type { Logger } from "../logger";
 import { resolveHeadBranchForPr, sanitizeBranchName } from "../source-control/branch-resolution";
 import {
@@ -111,6 +120,21 @@ export interface PullRequestServiceDeps {
   broadcastArtifactCreated: (artifact: SessionArtifact) => void;
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
+  /**
+   * D1 authority store for session PR records (design §4). Absent when the
+   * deployment has no D1 binding; the write is best-effort either way.
+   */
+  sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
+}
+
+/**
+ * Inverse of toDisplayStatus for provider create results: "draft" is the
+ * display collapse of open + draft, every other display state is non-draft.
+ */
+function statusFromDisplayState(state: "open" | "closed" | "merged" | "draft"): PullRequestStatus {
+  return state === "draft"
+    ? { lifecycleState: "open", isDraft: true }
+    : { lifecycleState: state, isDraft: false };
 }
 
 /**
@@ -274,14 +298,23 @@ export class SessionPullRequestService {
 
       const artifactId = this.deps.generateId();
       const now = Date.now();
+      const status = statusFromDisplayState(prResult.state);
       const artifactMetadata = {
         number: prResult.id,
+        // Legacy display key; older clients render it until PR lifecycle
+        // tracking reaches the web (rolling compatibility).
         state: prResult.state,
+        lifecycleState: status.lifecycleState,
+        isDraft: status.isDraft,
         head: sanitizedHeadBranch,
         base: baseBranch,
         repoOwner: targetRepo.repoOwner,
         repoName: targetRepo.repoName,
-      };
+        ...(prResult.headSha !== undefined ? { headSha: prResult.headSha } : {}),
+        ...(prResult.repositoryExternalId !== undefined
+          ? { repositoryExternalId: prResult.repositoryExternalId }
+          : {}),
+      } satisfies PullRequestArtifactMetadata & { state: string };
       this.deps.repository.createArtifact({
         id: artifactId,
         type: "pr",
@@ -290,12 +323,31 @@ export class SessionPullRequestService {
         createdAt: now,
       });
 
+      await this.writeSessionPullRequestRecord({
+        artifactId,
+        sessionId,
+        repositoryExternalId: prResult.repositoryExternalId ?? null,
+        repoOwner: targetRepo.repoOwner,
+        repoName: targetRepo.repoName,
+        prNumber: prResult.id,
+        url: prResult.webUrl,
+        lifecycleState: status.lifecycleState,
+        isDraft: status.isDraft,
+        headBranch: sanitizedHeadBranch,
+        baseBranch,
+        headSha: prResult.headSha ?? null,
+        providerUpdatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
       this.deps.broadcastArtifactCreated({
         id: artifactId,
         type: "pr",
         url: prResult.webUrl,
         metadata: artifactMetadata,
         createdAt: now,
+        updatedAt: now,
       });
 
       return {
@@ -324,6 +376,27 @@ export class SessionPullRequestService {
       };
     } finally {
       this.deps.claims.release(targetRepo);
+    }
+  }
+
+  /**
+   * Best-effort creation write to the D1 authority record. Failure is logged
+   * and swallowed: the DO artifact is already persisted, and the first
+   * webhook or read-through repairs a missing record (design §5).
+   */
+  private async writeSessionPullRequestRecord(record: SessionPullRequestRecord): Promise<void> {
+    const store = this.deps.sessionPullRequests;
+    if (!store) return;
+    try {
+      await store.upsert(record);
+    } catch (error) {
+      this.deps.log.error("Failed to write session pull request record", {
+        artifact_id: record.artifactId,
+        pr_number: record.prNumber,
+        repo_owner: record.repoOwner,
+        repo_name: record.repoName,
+        error: error instanceof Error ? error : String(error),
+      });
     }
   }
 

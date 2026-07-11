@@ -100,6 +100,8 @@ export interface ArtifactRow {
   url: string | null;
   metadata: string | null; // JSON
   created_at: number;
+  /** Last content change; migration 34 backfills it to created_at. */
+  updated_at: number;
 }
 
 export interface SandboxRow {
