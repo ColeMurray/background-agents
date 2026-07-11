@@ -25,6 +25,7 @@ import type {
   SessionPullRequestStore,
 } from "../db/session-pull-request-store";
 import type { Logger } from "../logger";
+import { snapshotToRecord } from "../session/pull-request-snapshot";
 import type { PullRequestSnapshot } from "../source-control";
 
 /** A DO artifact as served by GET /internal/artifacts (metadata pre-parsed). */
@@ -144,20 +145,14 @@ async function applyToRecord(
     providerUpdatedAt: facts.providerUpdatedAt ?? record.providerUpdatedAt ?? undefined,
   };
 
-  const { applied } = await deps.store.upsert({
-    ...record,
-    repositoryExternalId: snapshot.repositoryExternalId ?? null,
-    repoOwner: snapshot.repoOwner,
-    repoName: snapshot.repoName,
-    url: snapshot.url,
-    lifecycleState: snapshot.lifecycleState,
-    isDraft: snapshot.isDraft,
-    headBranch: snapshot.headBranch,
-    baseBranch: snapshot.baseBranch,
-    headSha: snapshot.headSha ?? null,
-    providerUpdatedAt: snapshot.providerUpdatedAt ?? null,
-    updatedAt: deps.now(),
-  });
+  const { applied } = await deps.store.upsert(
+    snapshotToRecord(snapshot, {
+      artifactId: record.artifactId,
+      sessionId: record.sessionId,
+      createdAt: record.createdAt,
+      updatedAt: deps.now(),
+    })
+  );
   if (!applied) return "stale";
 
   await deps.pushSnapshotToSession(record.sessionId, record.artifactId, snapshot);
@@ -228,23 +223,14 @@ async function insertViaBranchFallback(
     providerUpdatedAt: facts.providerUpdatedAt,
   };
 
-  await deps.store.upsert({
-    artifactId: artifact.id,
-    sessionId,
-    repositoryExternalId: snapshot.repositoryExternalId ?? null,
-    repoOwner: snapshot.repoOwner,
-    repoName: snapshot.repoName,
-    prNumber: snapshot.number,
-    url: snapshot.url,
-    lifecycleState: snapshot.lifecycleState,
-    isDraft: snapshot.isDraft,
-    headBranch: snapshot.headBranch,
-    baseBranch: snapshot.baseBranch,
-    headSha: snapshot.headSha ?? null,
-    providerUpdatedAt: snapshot.providerUpdatedAt ?? null,
-    createdAt: now,
-    updatedAt: now,
-  });
+  await deps.store.upsert(
+    snapshotToRecord(snapshot, {
+      artifactId: artifact.id,
+      sessionId,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
 
   await deps.pushSnapshotToSession(sessionId, artifact.id, snapshot);
   return "inserted";

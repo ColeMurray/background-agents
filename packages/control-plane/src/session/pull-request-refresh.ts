@@ -8,15 +8,13 @@
  */
 
 import type { SessionArtifact } from "@open-inspect/shared";
-import type {
-  SessionPullRequestRecord,
-  SessionPullRequestStore,
-} from "../db/session-pull-request-store";
+import type { SessionPullRequestStore } from "../db/session-pull-request-store";
 import type { Logger } from "../logger";
 import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
 import {
   applyPullRequestSnapshot,
   parsePullRequestArtifactMetadata,
+  snapshotToRecord,
 } from "./pull-request-snapshot";
 import type { UpdateArtifactData } from "./repository";
 import type { ArtifactRow, SessionRow } from "./types";
@@ -172,23 +170,12 @@ export class SessionPullRequestRefreshService {
     const store = this.deps.sessionPullRequests;
     if (!store) return;
 
-    const record: SessionPullRequestRecord = {
+    const record = snapshotToRecord(snapshot, {
       artifactId: artifact.id,
       sessionId,
-      repositoryExternalId: snapshot.repositoryExternalId ?? null,
-      repoOwner: snapshot.repoOwner,
-      repoName: snapshot.repoName,
-      prNumber: snapshot.number,
-      url: snapshot.url,
-      lifecycleState: snapshot.lifecycleState,
-      isDraft: snapshot.isDraft,
-      headBranch: snapshot.headBranch,
-      baseBranch: snapshot.baseBranch,
-      headSha: snapshot.headSha ?? null,
-      providerUpdatedAt: snapshot.providerUpdatedAt ?? null,
       createdAt: artifact.created_at,
       updatedAt: this.deps.now(),
-    };
+    });
     try {
       await store.upsert(record);
     } catch (error) {
