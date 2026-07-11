@@ -157,19 +157,44 @@ export class SessionPullRequestStore {
     return row ? toRecord(row) : null;
   }
 
-  /** Canonical webhook lookup: stable provider repo id + PR number. */
-  async getByExternalIdentity(
-    repositoryExternalId: string,
-    prNumber: number
-  ): Promise<SessionPullRequestRecord | null> {
-    const row = await this.db
+  /**
+   * The single PR identity boundary. Callers pass everything they know about
+   * the PR's identity; the layering lives here, not at call sites:
+   *
+   * 1. Canonical: stable provider repo id + PR number.
+   * 2. Legacy fallback: owner/name + PR number, only against rows that
+   *    predate external-id capture (the next upsert upgrades them in place).
+   *    Compared case-insensitively — provider repo identifiers are
+   *    case-insensitive while our stored casing is display-canonical.
+   */
+  async getByIdentity(identity: {
+    repositoryExternalId?: string | null;
+    repoOwner: string;
+    repoName: string;
+    prNumber: number;
+  }): Promise<SessionPullRequestRecord | null> {
+    if (identity.repositoryExternalId) {
+      const row = await this.db
+        .prepare(
+          "SELECT * FROM session_pull_requests WHERE repository_external_id = ? AND pr_number = ?"
+        )
+        .bind(identity.repositoryExternalId, identity.prNumber)
+        .first<SessionPullRequestRow>();
+      if (row) return toRecord(row);
+    }
+
+    const legacyRow = await this.db
       .prepare(
-        "SELECT * FROM session_pull_requests WHERE repository_external_id = ? AND pr_number = ?"
+        `SELECT * FROM session_pull_requests
+         WHERE repository_external_id IS NULL
+           AND LOWER(repo_owner) = LOWER(?)
+           AND LOWER(repo_name) = LOWER(?)
+           AND pr_number = ?`
       )
-      .bind(repositoryExternalId, prNumber)
+      .bind(identity.repoOwner, identity.repoName, identity.prNumber)
       .first<SessionPullRequestRow>();
 
-    return row ? toRecord(row) : null;
+    return legacyRow ? toRecord(legacyRow) : null;
   }
 
   async getBySession(sessionId: string): Promise<SessionPullRequestRecord[]> {

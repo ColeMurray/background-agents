@@ -26,16 +26,21 @@ CREATE TABLE IF NOT EXISTS session_pull_requests (
   provider_updated_at    INTEGER,           -- provider's updated_at (epoch ms); monotonic guard source
   created_at             INTEGER NOT NULL,
   updated_at             INTEGER NOT NULL,
+  -- Shared-contract invariant: draft is only meaningful while open. Enforced
+  -- at the authority boundary so no writer can persist a terminal draft.
+  CONSTRAINT chk_spr_draft_only_while_open CHECK (lifecycle_state = 'open' OR is_draft = 0),
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
--- Canonical webhook lookup. Partial: legacy rows without an external id fall
--- back to branch derivation and are upgraded in place on first provider read.
+-- Canonical identity lookup. Partial: legacy rows without an external id are
+-- found via the store's owner/name fallback arm (getByIdentity) and are
+-- upgraded in place on first provider read.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_spr_external_identity
   ON session_pull_requests (repository_external_id, pr_number)
   WHERE repository_external_id IS NOT NULL;
 
--- Legacy identity for rows that predate external-id capture.
+-- Uniqueness guard + fallback lookup for rows that predate external-id
+-- capture (e.g. branch-derived webhook inserts, whose events carry no repo id).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_spr_legacy_identity
   ON session_pull_requests (repo_owner, repo_name, pr_number)
   WHERE repository_external_id IS NULL;

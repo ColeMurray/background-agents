@@ -59,7 +59,7 @@ describe("SessionPullRequestStore", () => {
   });
 
   describe("upsert + reads", () => {
-    it("inserts a record and reads it back by artifact id and by external identity", async () => {
+    it("inserts a record and reads it back by artifact id and by identity", async () => {
       const store = new SessionPullRequestStore(env.DB);
       const record = makeRecord();
 
@@ -67,7 +67,33 @@ describe("SessionPullRequestStore", () => {
       expect(result.applied).toBe(true);
 
       expect(await store.getByArtifactId("artifact-1")).toEqual(record);
-      expect(await store.getByExternalIdentity("9001", 7)).toEqual(record);
+      expect(
+        await store.getByIdentity({
+          repositoryExternalId: "9001",
+          repoOwner: "acme",
+          repoName: "web",
+          prNumber: 7,
+        })
+      ).toEqual(record);
+    });
+
+    it("rejects a terminal draft state — the invariant is enforced by the table", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+
+      await expect(
+        store.upsert(makeRecord({ lifecycleState: "merged", isDraft: true }))
+      ).rejects.toThrow();
+      await expect(
+        store.upsert(makeRecord({ lifecycleState: "closed", isDraft: true }))
+      ).rejects.toThrow();
+      // The guard also covers the ON CONFLICT update arm.
+      await store.upsert(makeRecord());
+      await expect(
+        store.upsert(
+          makeRecord({ lifecycleState: "merged", isDraft: true, providerUpdatedAt: 2_000 })
+        )
+      ).rejects.toThrow();
+      expect((await store.getByArtifactId("artifact-1"))?.lifecycleState).toBe("open");
     });
 
     it("is idempotent for a redelivered identical write", async () => {
@@ -137,15 +163,61 @@ describe("SessionPullRequestStore", () => {
       expect((await store.getByArtifactId("artifact-1"))?.lifecycleState).toBe("closed");
     });
 
+    it("falls back to legacy owner/name identity for rows that predate external-id capture", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await store.upsert(makeRecord({ repositoryExternalId: null }));
+
+      // One boundary: callers pass everything they know; the store layers
+      // stable-id-first, legacy-fallback internally.
+      const row = await store.getByIdentity({
+        repositoryExternalId: "9001",
+        repoOwner: "acme",
+        repoName: "web",
+        prNumber: 7,
+      });
+
+      expect(row?.artifactId).toBe("artifact-1");
+      expect(row?.repositoryExternalId).toBeNull();
+    });
+
+    it("matches legacy identity case-insensitively (provider identifiers are case-insensitive)", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await store.upsert(
+        makeRecord({ repositoryExternalId: null, repoOwner: "Acme", repoName: "Web" })
+      );
+
+      const row = await store.getByIdentity({
+        repositoryExternalId: null,
+        repoOwner: "acme",
+        repoName: "web",
+        prNumber: 7,
+      });
+
+      expect(row?.artifactId).toBe("artifact-1");
+    });
+
+    it("returns null when neither identity arm matches", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await store.upsert(makeRecord());
+
+      expect(
+        await store.getByIdentity({
+          repositoryExternalId: "9999",
+          repoOwner: "other",
+          repoName: "repo",
+          prNumber: 7,
+        })
+      ).toBeNull();
+    });
+
     it("upgrades a legacy row (no external id) to external identity in place", async () => {
       const store = new SessionPullRequestStore(env.DB);
       await store.upsert(makeRecord({ repositoryExternalId: null }));
-      expect(await store.getByExternalIdentity("9001", 7)).toBeNull();
 
       await store.upsert(makeRecord({ providerUpdatedAt: 2_000 }));
 
-      const row = await store.getByExternalIdentity("9001", 7);
-      expect(row?.artifactId).toBe("artifact-1");
+      const row = await store.getByArtifactId("artifact-1");
+      expect(row?.repositoryExternalId).toBe("9001");
       const rows = await store.getBySession("session-1");
       expect(rows).toHaveLength(1);
     });
