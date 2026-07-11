@@ -221,6 +221,47 @@ describe("ModalClient", () => {
     });
   });
 
+  it("parses nullable create response fields from Modal-infra", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            sandbox_id: "sb-1",
+            modal_object_id: null,
+            status: "spawning",
+            created_at: 1,
+            code_server_url: null,
+            code_server_password: null,
+            ttyd_url: null,
+            tunnel_urls: null,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    const result = await client.createSandbox({
+      sessionId: "session-123",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+    });
+
+    expect(result).toEqual({
+      sandboxId: "sb-1",
+      modalObjectId: undefined,
+      status: "spawning",
+      createdAt: 1,
+      codeServerUrl: undefined,
+      codeServerPassword: undefined,
+      ttydUrl: undefined,
+      tunnelUrls: undefined,
+    });
+  });
+
   it("rejects malformed create responses instead of trusting the payload", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -298,6 +339,49 @@ describe("ModalClient", () => {
         model: "anthropic/claude-sonnet-4-5",
       })
     ).rejects.toThrow("Modal API error: Invalid response");
+  });
+
+  it("parses nullable restore response fields from Modal-infra", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            sandbox_id: "sb-1",
+            modal_object_id: null,
+            status: "warming",
+            code_server_url: null,
+            code_server_password: null,
+            ttyd_url: null,
+            tunnel_urls: null,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.restoreSandbox({
+        snapshotImageId: "img-1",
+        sessionId: "session-123",
+        sandboxId: "sandbox-456",
+        sandboxAuthToken: "auth-token",
+        controlPlaneUrl: "https://control-plane.test",
+        repoOwner: "testowner",
+        repoName: "testrepo",
+        provider: "anthropic",
+        model: "anthropic/claude-sonnet-4-5",
+      })
+    ).resolves.toEqual({
+      success: true,
+      sandboxId: "sb-1",
+      modalObjectId: undefined,
+      codeServerUrl: undefined,
+      codeServerPassword: undefined,
+      ttydUrl: undefined,
+      tunnelUrls: undefined,
+    });
   });
 
   it("parses valid snapshot responses", async () => {

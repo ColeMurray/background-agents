@@ -33,13 +33,13 @@ const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
     success: z.literal(true),
     data: z.object({
       sandbox_id: z.string(),
-      modal_object_id: z.string().optional(),
+      modal_object_id: z.string().nullable().optional(),
       status: z.string(),
       created_at: z.number(),
-      code_server_url: z.string().optional(),
-      code_server_password: z.string().optional(),
-      ttyd_url: z.string().optional(),
-      tunnel_urls: modalTunnelUrlsSchema.optional(),
+      code_server_url: z.string().nullable().optional(),
+      code_server_password: z.string().nullable().optional(),
+      ttyd_url: z.string().nullable().optional(),
+      tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
     }),
   }),
   modalErrorResponseSchema,
@@ -51,11 +51,11 @@ const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
     data: z
       .object({
         sandbox_id: z.string().optional(),
-        modal_object_id: z.string().optional(),
-        code_server_url: z.string().optional(),
-        code_server_password: z.string().optional(),
-        ttyd_url: z.string().optional(),
-        tunnel_urls: modalTunnelUrlsSchema.optional(),
+        modal_object_id: z.string().nullable().optional(),
+        code_server_url: z.string().nullable().optional(),
+        code_server_password: z.string().nullable().optional(),
+        ttyd_url: z.string().nullable().optional(),
+        tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
       })
       .optional(),
   }),
@@ -353,13 +353,13 @@ export class ModalClient {
       outcome = "success";
       return {
         sandboxId: result.data.sandbox_id,
-        modalObjectId: result.data.modal_object_id,
+        modalObjectId: result.data.modal_object_id ?? undefined,
         status: result.data.status,
         createdAt: result.data.created_at,
-        codeServerUrl: result.data.code_server_url,
-        codeServerPassword: result.data.code_server_password,
-        ttydUrl: result.data.ttyd_url,
-        tunnelUrls: result.data.tunnel_urls,
+        codeServerUrl: result.data.code_server_url ?? undefined,
+        codeServerPassword: result.data.code_server_password ?? undefined,
+        ttydUrl: result.data.ttyd_url ?? undefined,
+        tunnelUrls: result.data.tunnel_urls ?? undefined,
       };
     } finally {
       log.info("modal.request", {
@@ -427,11 +427,11 @@ export class ModalClient {
       return {
         success: true,
         sandboxId: result.data?.sandbox_id,
-        modalObjectId: result.data?.modal_object_id,
-        codeServerUrl: result.data?.code_server_url,
-        codeServerPassword: result.data?.code_server_password,
-        ttydUrl: result.data?.ttyd_url,
-        tunnelUrls: result.data?.tunnel_urls,
+        modalObjectId: result.data?.modal_object_id ?? undefined,
+        codeServerUrl: result.data?.code_server_url ?? undefined,
+        codeServerPassword: result.data?.code_server_password ?? undefined,
+        ttydUrl: result.data?.ttyd_url ?? undefined,
+        tunnelUrls: result.data?.tunnel_urls ?? undefined,
       };
     } finally {
       log.info("modal.request", {
