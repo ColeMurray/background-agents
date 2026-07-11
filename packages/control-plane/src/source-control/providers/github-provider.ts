@@ -342,7 +342,15 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     });
   }
 
-  /** Resolve a repository's current owner/name from its stable numeric id. */
+  /**
+   * Resolve a repository's current owner/name from its stable numeric id.
+   *
+   * GET /repositories/{id} is GitHub's stable-but-undocumented by-id alias of
+   * GET /repos/{owner}/{name} (identical response schema; acknowledged by
+   * GitHub staff). Acceptable here because this is a best-effort repair path:
+   * if the endpoint ever disappears, resolution degrades to "not resolved"
+   * and the caller surfaces the original 404.
+   */
   private async resolveRepositoryLocationById(
     token: string,
     repositoryExternalId: string
