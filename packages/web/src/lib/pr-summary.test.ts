@@ -1,65 +1,47 @@
 import { describe, expect, it } from "vitest";
-import { dominantPullRequestState, formatPullRequestSummaryLabel } from "./pr-summary";
+import { pullRequestSummaryDisplay } from "./pr-summary";
 
-describe("dominantPullRequestState", () => {
+describe("pullRequestSummaryDisplay", () => {
   it("returns null without a summary or with zero PRs", () => {
-    expect(dominantPullRequestState(undefined)).toBeNull();
+    expect(pullRequestSummaryDisplay(undefined)).toBeNull();
     expect(
-      dominantPullRequestState({ total: 0, open: 0, draft: 0, merged: 0, closed: 0 })
+      pullRequestSummaryDisplay({ total: 0, open: 0, draft: 0, merged: 0, closed: 0 })
     ).toBeNull();
   });
 
-  it("picks the most actionable bucket: open, draft, merged, closed", () => {
-    expect(dominantPullRequestState({ total: 3, open: 1, draft: 1, merged: 1, closed: 0 })).toBe(
-      "open"
-    );
-    expect(dominantPullRequestState({ total: 2, open: 0, draft: 1, merged: 1, closed: 0 })).toBe(
-      "draft"
-    );
-    expect(dominantPullRequestState({ total: 2, open: 0, draft: 0, merged: 1, closed: 1 })).toBe(
-      "merged"
-    );
-    expect(dominantPullRequestState({ total: 1, open: 0, draft: 0, merged: 0, closed: 1 })).toBe(
-      "closed"
-    );
-  });
-});
-
-describe("formatPullRequestSummaryLabel", () => {
-  it("returns null without a summary or with zero PRs", () => {
-    expect(formatPullRequestSummaryLabel(undefined)).toBeNull();
+  it("renders a single PR's display status as both state and label", () => {
     expect(
-      formatPullRequestSummaryLabel({ total: 0, open: 0, draft: 0, merged: 0, closed: 0 })
-    ).toBeNull();
+      pullRequestSummaryDisplay({ total: 1, open: 0, draft: 1, merged: 0, closed: 0 })
+    ).toEqual({ state: "draft", label: "PR draft" });
+    expect(
+      pullRequestSummaryDisplay({ total: 1, open: 1, draft: 0, merged: 0, closed: 0 })
+    ).toEqual({ state: "open", label: "PR open" });
+    expect(
+      pullRequestSummaryDisplay({ total: 1, open: 0, draft: 0, merged: 1, closed: 0 })
+    ).toEqual({ state: "merged", label: "PR merged" });
+    expect(
+      pullRequestSummaryDisplay({ total: 1, open: 0, draft: 0, merged: 0, closed: 1 })
+    ).toEqual({ state: "closed", label: "PR closed" });
   });
 
-  it("renders the single PR's display status", () => {
+  it("picks the most actionable state and counts drafts as open in the label", () => {
     expect(
-      formatPullRequestSummaryLabel({ total: 1, open: 0, draft: 1, merged: 0, closed: 0 })
-    ).toBe("PR draft");
+      pullRequestSummaryDisplay({ total: 3, open: 1, draft: 1, merged: 1, closed: 0 })
+    ).toEqual({ state: "open", label: "3 PRs · 2 open" });
     expect(
-      formatPullRequestSummaryLabel({ total: 1, open: 1, draft: 0, merged: 0, closed: 0 })
-    ).toBe("PR open");
-    expect(
-      formatPullRequestSummaryLabel({ total: 1, open: 0, draft: 0, merged: 1, closed: 0 })
-    ).toBe("PR merged");
-    expect(
-      formatPullRequestSummaryLabel({ total: 1, open: 0, draft: 0, merged: 0, closed: 1 })
-    ).toBe("PR closed");
-  });
-
-  it("counts drafts as open in the multi-PR label", () => {
-    expect(
-      formatPullRequestSummaryLabel({ total: 3, open: 1, draft: 1, merged: 1, closed: 0 })
-    ).toBe("3 PRs · 2 open");
+      pullRequestSummaryDisplay({ total: 2, open: 0, draft: 1, merged: 1, closed: 0 })
+    ).toEqual({ state: "draft", label: "2 PRs · 1 open" });
   });
 
   it("falls back to merged, then closed, when nothing is open", () => {
     expect(
-      formatPullRequestSummaryLabel({ total: 2, open: 0, draft: 0, merged: 2, closed: 0 })
-    ).toBe("2 PRs · 2 merged");
+      pullRequestSummaryDisplay({ total: 2, open: 0, draft: 0, merged: 2, closed: 0 })
+    ).toEqual({ state: "merged", label: "2 PRs · 2 merged" });
     expect(
-      formatPullRequestSummaryLabel({ total: 2, open: 0, draft: 0, merged: 0, closed: 2 })
-    ).toBe("2 PRs · 2 closed");
+      pullRequestSummaryDisplay({ total: 2, open: 0, draft: 0, merged: 1, closed: 1 })
+    ).toEqual({ state: "merged", label: "2 PRs · 1 merged" });
+    expect(
+      pullRequestSummaryDisplay({ total: 2, open: 0, draft: 0, merged: 0, closed: 2 })
+    ).toEqual({ state: "closed", label: "2 PRs · 2 closed" });
   });
 });
