@@ -7,6 +7,7 @@
 
 import { generateInternalToken, type SandboxSettings } from "@open-inspect/shared";
 import type { ImageBuildScopeKind, McpServerConfig } from "@open-inspect/shared";
+import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
@@ -19,6 +20,67 @@ const MODAL_APP_NAME = "open-inspect";
 
 // Modal's default environment name; unrelated to the git branch named "main".
 const DEFAULT_MODAL_ENVIRONMENT = "main";
+
+const modalErrorResponseSchema = z.object({
+  success: z.literal(false),
+  error: z.string().optional(),
+});
+
+const modalTunnelUrlsSchema = z.record(z.string(), z.string());
+
+const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      sandbox_id: z.string(),
+      modal_object_id: z.string().optional(),
+      status: z.string(),
+      created_at: z.number(),
+      code_server_url: z.string().optional(),
+      code_server_password: z.string().optional(),
+      ttyd_url: z.string().optional(),
+      tunnel_urls: modalTunnelUrlsSchema.optional(),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z
+      .object({
+        sandbox_id: z.string().optional(),
+        modal_object_id: z.string().optional(),
+        code_server_url: z.string().optional(),
+        code_server_password: z.string().optional(),
+        ttyd_url: z.string().optional(),
+        tunnel_urls: modalTunnelUrlsSchema.optional(),
+      })
+      .optional(),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const snapshotSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z
+      .object({
+        image_id: z.string(),
+      })
+      .optional(),
+  }),
+  modalErrorResponseSchema,
+]);
+
+function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    throw new Error("Modal API error: Invalid response");
+  }
+  return result.data;
+}
 
 /**
  * Build the Modal endpoint workspace slug from the raw workspace and environment web suffix.
@@ -282,18 +344,9 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        sandbox_id: string;
-        modal_object_id?: string;
-        status: string;
-        created_at: number;
-        code_server_url?: string;
-        code_server_password?: string;
-        ttyd_url?: string;
-        tunnel_urls?: Record<string, string>;
-      }>;
+      const result = parseModalApiResponse(createSandboxModalResponseSchema, await response.json());
 
-      if (!result.success || !result.data) {
+      if (!result.success) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
@@ -361,14 +414,10 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        sandbox_id: string;
-        modal_object_id?: string;
-        code_server_url?: string;
-        code_server_password?: string;
-        ttyd_url?: string;
-        tunnel_urls?: Record<string, string>;
-      }>;
+      const result = parseModalApiResponse(
+        restoreSandboxModalResponseSchema,
+        await response.json()
+      );
 
       if (!result.success) {
         return { success: false, error: result.error || "Unknown restore error" };
@@ -430,7 +479,10 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{ image_id: string }>;
+      const result = parseModalApiResponse(
+        snapshotSandboxModalResponseSchema,
+        await response.json()
+      );
       if (!result.success) {
         return { success: false, error: result.error || "Unknown snapshot error" };
       }

@@ -180,6 +180,70 @@ describe("ModalClient", () => {
     expect(body.repositories).toBeNull();
   });
 
+  it("parses optional create response fields without rejecting valid Modal data", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            sandbox_id: "sb-1",
+            modal_object_id: "mo-1",
+            status: "spawning",
+            created_at: 1,
+            code_server_url: "https://code.test",
+            code_server_password: "pw",
+            ttyd_url: "https://ttyd.test",
+            tunnel_urls: { "3000": "https://3000.test" },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.createSandbox({
+        sessionId: "session-123",
+        repoOwner: "testowner",
+        repoName: "testrepo",
+        controlPlaneUrl: "https://control-plane.test",
+        sandboxAuthToken: "auth-token",
+      })
+    ).resolves.toEqual({
+      sandboxId: "sb-1",
+      modalObjectId: "mo-1",
+      status: "spawning",
+      createdAt: 1,
+      codeServerUrl: "https://code.test",
+      codeServerPassword: "pw",
+      ttydUrl: "https://ttyd.test",
+      tunnelUrls: { "3000": "https://3000.test" },
+    });
+  });
+
+  it("rejects malformed create responses instead of trusting the payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { sandbox_id: "sb-1", status: "spawning", created_at: "1" },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.createSandbox({
+        sessionId: "session-123",
+        repoOwner: "testowner",
+        repoName: "testrepo",
+        controlPlaneUrl: "https://control-plane.test",
+        sandboxAuthToken: "auth-token",
+      })
+    ).rejects.toThrow("Modal API error: Invalid response");
+  });
+
   it("routes multi-repo members through the restore session_config", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
@@ -210,6 +274,66 @@ describe("ModalClient", () => {
       { repo_owner: "testowner", repo_name: "testrepo", branch: "main" },
       { repo_owner: "testowner", repo_name: "backend", branch: "develop" },
     ]);
+  });
+
+  it("rejects malformed restore responses instead of trusting the payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { sandbox_id: 123 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.restoreSandbox({
+        snapshotImageId: "img-1",
+        sessionId: "session-123",
+        sandboxId: "sandbox-456",
+        sandboxAuthToken: "auth-token",
+        controlPlaneUrl: "https://control-plane.test",
+        repoOwner: "testowner",
+        repoName: "testrepo",
+        provider: "anthropic",
+        model: "anthropic/claude-sonnet-4-5",
+      })
+    ).rejects.toThrow("Modal API error: Invalid response");
+  });
+
+  it("parses valid snapshot responses", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { image_id: "img-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.snapshotSandbox({
+        providerObjectId: "mo-1",
+        sessionId: "session-123",
+        reason: "manual",
+      })
+    ).resolves.toEqual({ success: true, imageId: "img-1" });
+  });
+
+  it("rejects malformed snapshot responses instead of trusting the payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { image_id: 123 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.snapshotSandbox({
+        providerObjectId: "mo-1",
+        sessionId: "session-123",
+        reason: "manual",
+      })
+    ).rejects.toThrow("Modal API error: Invalid response");
   });
 
   it("posts image builds to the single api-build-image endpoint with scope fields", async () => {
