@@ -2,7 +2,7 @@
  * Read-through refresh for a session's pull requests (design §5.3): on
  * session open and on the manual sync action, read each PR artifact's current
  * provider state (app-authed), repair/refresh the D1 authority record, and
- * project the snapshot onto the DO artifact mirror. This is the only
+ * apply the snapshot to the DO artifact mirror. This is the only
  * freshness path that reads the provider directly and the only one required
  * when the bot is off.
  *
@@ -15,7 +15,7 @@ import type { SessionPullRequestStore } from "../db/session-pull-request-store";
 import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
 import {
   parsePullRequestArtifactMetadata,
-  projectPullRequestSnapshot,
+  preparePullRequestArtifactUpdate,
   snapshotToRecord,
 } from "./pull-request-snapshot";
 import type { UpdateArtifactData } from "./repository";
@@ -149,11 +149,11 @@ export async function refreshSessionPullRequests(
     }
     if (!recordAccepted) continue;
 
-    const projection = projectPullRequestSnapshot(artifact, snapshot, Date.now());
-    if (!projection) continue;
+    const artifactUpdate = preparePullRequestArtifactUpdate(artifact, snapshot, Date.now());
+    if (!artifactUpdate) continue;
 
-    repository.updateArtifact(artifact.id, projection.update);
-    updated.push(projection.artifact);
+    repository.updateArtifact(artifact.id, artifactUpdate.update);
+    updated.push(artifactUpdate.artifact);
   }
 
   return { updated, failures };

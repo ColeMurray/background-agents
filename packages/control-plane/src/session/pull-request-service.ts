@@ -303,7 +303,7 @@ export class SessionPullRequestService {
       const artifactId = this.deps.generateId();
       const now = Date.now();
       const status = statusFromDisplayState(prResult.state);
-      // The one PR lifecycle projection boundary (pull-request-snapshot.ts):
+      // The one PR lifecycle snapshot mapping (pull-request-snapshot.ts):
       // artifact metadata and the D1 record both derive from this snapshot,
       // so creation cannot drift from the update paths' field mapping.
       const snapshot: PullRequestSnapshotInput = {

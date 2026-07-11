@@ -1,7 +1,10 @@
 import type { SessionArtifact } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
-import { projectPullRequestSnapshot, pullRequestSnapshotSchema } from "../../pull-request-snapshot";
+import {
+  preparePullRequestArtifactUpdate,
+  pullRequestSnapshotSchema,
+} from "../../pull-request-snapshot";
 import {
   mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
@@ -134,9 +137,9 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
     },
 
     /**
-     * Transport shell for the snapshot projection (design §6): parse the
-     * request, resolve the artifact, project through the canonical
-     * projectPullRequestSnapshot, and perform the write + broadcast it
+     * Transport shell for snapshot application (design §6): parse the
+     * request, resolve the artifact, compute the update via the canonical
+     * preparePullRequestArtifactUpdate, and perform the write + broadcast it
      * prescribes. Stale and materially identical snapshots answer
      * `{ applied: false }` — no write, no broadcast.
      */
@@ -163,13 +166,13 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         return Response.json({ error: "Pull request artifact not found" }, { status: 404 });
       }
 
-      const projection = projectPullRequestSnapshot(artifact, parsed.data, deps.now());
-      if (!projection) {
+      const artifactUpdate = preparePullRequestArtifactUpdate(artifact, parsed.data, deps.now());
+      if (!artifactUpdate) {
         return Response.json({ applied: false });
       }
 
-      deps.updateArtifact(artifact.id, projection.update);
-      deps.broadcastArtifactUpdated(projection.artifact);
+      deps.updateArtifact(artifact.id, artifactUpdate.update);
+      deps.broadcastArtifactUpdated(artifactUpdate.artifact);
       return Response.json({ applied: true });
     },
 
