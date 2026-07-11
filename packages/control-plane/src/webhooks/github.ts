@@ -83,7 +83,6 @@ async function trackPullRequestLifecycle(
           throw new Error(`Snapshot push to session DO failed (status ${response.status})`);
         }
       },
-      log,
       now: () => Date.now(),
     };
 

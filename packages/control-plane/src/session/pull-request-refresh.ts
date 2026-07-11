@@ -2,25 +2,24 @@
  * Read-through refresh for a session's pull requests (design §5.3): on
  * session open and on the manual sync action, read each PR artifact's current
  * provider state (app-authed), repair/refresh the D1 authority record, and
- * apply the snapshot to the DO artifact mirror. This is the only freshness
- * path that reads the provider directly and the only one required when the
- * bot is off.
+ * project the snapshot onto the DO artifact mirror. This is the only
+ * freshness path that reads the provider directly and the only one required
+ * when the bot is off.
+ *
+ * The pass returns its effects as data — updated artifact_updated payloads
+ * and per-artifact failures — and the caller broadcasts and logs them.
  */
 
 import type { SessionArtifact } from "@open-inspect/shared";
 import type { SessionPullRequestStore } from "../db/session-pull-request-store";
-import type { Logger } from "../logger";
 import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
 import {
-  applyPullRequestSnapshot,
   parsePullRequestArtifactMetadata,
+  projectPullRequestSnapshot,
   snapshotToRecord,
 } from "./pull-request-snapshot";
 import type { UpdateArtifactData } from "./repository";
 import type { ArtifactRow, SessionRow } from "./types";
-
-/** Minimum spacing between provider reads for the same PR artifact. */
-export const PULL_REQUEST_REFRESH_MIN_INTERVAL_MS = 60_000;
 
 export interface PullRequestRefreshRepository {
   getSession(): SessionRow | null;
@@ -28,21 +27,20 @@ export interface PullRequestRefreshRepository {
   updateArtifact(artifactId: string, data: UpdateArtifactData): void;
 }
 
-export interface PullRequestRefreshDeps {
-  repository: PullRequestRefreshRepository;
-  sourceControlProvider: Pick<SourceControlProvider, "getPullRequest">;
-  /** D1 authority store; absent when the deployment has no D1 binding. */
-  sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
-  broadcastArtifactUpdated: (artifact: SessionArtifact) => void;
-  log: Logger;
-  now: () => number;
+/** A per-artifact problem from a refresh pass; the caller decides logging. */
+export interface PullRequestRefreshFailure {
+  artifactId: string;
+  reason: "not_refreshable" | "provider_read_failed" | "record_write_failed";
+  prNumber?: number;
+  repoOwner?: string;
+  repoName?: string;
+  error?: unknown;
 }
 
 export interface PullRequestRefreshResult {
-  /** Artifacts whose DO mirror actually changed. */
-  refreshed: number;
-  /** Artifacts skipped by the per-PR rate limit. */
-  skipped: number;
+  /** artifact_updated payloads for mirrors that materially changed. */
+  updated: SessionArtifact[];
+  failures: PullRequestRefreshFailure[];
 }
 
 /** The identity fields a refresh needs from a PR artifact's metadata. */
@@ -76,122 +74,87 @@ function resolveRefreshTarget(
 }
 
 /**
- * One refresh pass over the session's PR artifacts. Instances are
- * DO-instance-scoped: the per-artifact rate-limit window lives in memory and
- * must survive across requests (like PullRequestCreationClaims).
+ * One refresh pass over the session's PR artifacts.
+ *
+ * The D1 write is the authority step: a snapshot the monotonic guard rejects
+ * as stale (a newer webhook write won while this read was in flight) never
+ * reaches the mirror. It is otherwise best-effort — the mirror still updates
+ * when D1 is absent (`sessionPullRequests` null) or errors, and the upsert
+ * repairs records whose creation write failed.
  */
-export class SessionPullRequestRefreshService {
-  private readonly lastAttemptAtByArtifact = new Map<string, number>();
+export async function refreshSessionPullRequests(
+  repository: PullRequestRefreshRepository,
+  sourceControlProvider: Pick<SourceControlProvider, "getPullRequest">,
+  sessionPullRequests: Pick<SessionPullRequestStore, "upsert"> | null
+): Promise<PullRequestRefreshResult> {
+  const updated: SessionArtifact[] = [];
+  const failures: PullRequestRefreshFailure[] = [];
 
-  constructor(private readonly deps: PullRequestRefreshDeps) {}
+  const session = repository.getSession();
+  if (!session) return { updated, failures };
+  const sessionId = session.session_name || session.id;
 
-  async refresh(): Promise<PullRequestRefreshResult> {
-    const session = this.deps.repository.getSession();
-    if (!session) return { refreshed: 0, skipped: 0 };
-    const sessionId = session.session_name || session.id;
+  const prArtifacts = repository.listArtifacts().filter((artifact) => artifact.type === "pr");
 
-    const prArtifacts = this.deps.repository
-      .listArtifacts()
-      .filter((artifact) => artifact.type === "pr");
-
-    let refreshed = 0;
-    let skipped = 0;
-    for (const artifact of prArtifacts) {
-      const target = resolveRefreshTarget(
-        parsePullRequestArtifactMetadata(artifact.metadata),
-        session
-      );
-      if (!target) {
-        this.deps.log.warn("Pull request artifact not refreshable", {
-          artifact_id: artifact.id,
-        });
-        continue;
-      }
-
-      const now = this.deps.now();
-      const lastAttemptAt = this.lastAttemptAtByArtifact.get(artifact.id);
-      if (
-        lastAttemptAt !== undefined &&
-        now - lastAttemptAt < PULL_REQUEST_REFRESH_MIN_INTERVAL_MS
-      ) {
-        skipped += 1;
-        continue;
-      }
-      // Attempt-time stamp: a failing provider is not retried any faster.
-      this.lastAttemptAtByArtifact.set(artifact.id, now);
-
-      let snapshot: PullRequestSnapshot;
-      try {
-        snapshot = await this.deps.sourceControlProvider.getPullRequest({
-          owner: target.repoOwner,
-          name: target.repoName,
-          number: target.prNumber,
-          repositoryExternalId: target.repositoryExternalId,
-        });
-      } catch (error) {
-        this.deps.log.error("Pull request read-through failed", {
-          artifact_id: artifact.id,
-          pr_number: target.prNumber,
-          repo_owner: target.repoOwner,
-          repo_name: target.repoName,
-          error: error instanceof Error ? error : String(error),
-        });
-        continue;
-      }
-
-      const recordAccepted = await this.upsertRecord(artifact, sessionId, snapshot);
-      if (!recordAccepted) continue;
-
-      const { applied } = applyPullRequestSnapshot(
-        {
-          updateArtifact: (artifactId, data) =>
-            this.deps.repository.updateArtifact(artifactId, data),
-          broadcastArtifactUpdated: this.deps.broadcastArtifactUpdated,
-          now: this.deps.now,
-        },
-        artifact,
-        snapshot
-      );
-      if (applied) refreshed += 1;
+  for (const artifact of prArtifacts) {
+    const target = resolveRefreshTarget(
+      parsePullRequestArtifactMetadata(artifact.metadata),
+      session
+    );
+    if (!target) {
+      failures.push({ artifactId: artifact.id, reason: "not_refreshable" });
+      continue;
     }
 
-    return { refreshed, skipped };
-  }
-
-  /**
-   * Refresh/repair the D1 authority record from the provider snapshot —
-   * insert-if-absent covers records whose creation write failed. Returns
-   * false only when the monotonic guard rejected the snapshot as stale (a
-   * newer webhook write won the authority record while this read was in
-   * flight): the DO mirror must not regress behind the authority. Best-effort
-   * otherwise — the mirror still updates when D1 is unavailable or errors.
-   */
-  private async upsertRecord(
-    artifact: ArtifactRow,
-    sessionId: string,
-    snapshot: PullRequestSnapshot
-  ): Promise<boolean> {
-    const store = this.deps.sessionPullRequests;
-    if (!store) return true;
-
-    const record = snapshotToRecord(snapshot, {
-      artifactId: artifact.id,
-      sessionId,
-      createdAt: artifact.created_at,
-      updatedAt: this.deps.now(),
-    });
+    let snapshot: PullRequestSnapshot;
     try {
-      const { applied } = await store.upsert(record);
-      return applied;
-    } catch (error) {
-      this.deps.log.error("Failed to write session pull request record", {
-        artifact_id: record.artifactId,
-        pr_number: record.prNumber,
-        repo_owner: record.repoOwner,
-        repo_name: record.repoName,
-        error: error instanceof Error ? error : String(error),
+      snapshot = await sourceControlProvider.getPullRequest({
+        owner: target.repoOwner,
+        name: target.repoName,
+        number: target.prNumber,
+        repositoryExternalId: target.repositoryExternalId,
       });
-      return true;
+    } catch (error) {
+      failures.push({
+        artifactId: artifact.id,
+        reason: "provider_read_failed",
+        prNumber: target.prNumber,
+        repoOwner: target.repoOwner,
+        repoName: target.repoName,
+        error,
+      });
+      continue;
     }
+
+    let recordAccepted = true;
+    if (sessionPullRequests) {
+      const record = snapshotToRecord(snapshot, {
+        artifactId: artifact.id,
+        sessionId,
+        createdAt: artifact.created_at,
+        updatedAt: Date.now(),
+      });
+      try {
+        recordAccepted = (await sessionPullRequests.upsert(record)).applied;
+      } catch (error) {
+        failures.push({
+          artifactId: artifact.id,
+          reason: "record_write_failed",
+          prNumber: target.prNumber,
+          repoOwner: target.repoOwner,
+          repoName: target.repoName,
+          error,
+        });
+      }
+    }
+    if (!recordAccepted) continue;
+
+    const projection = projectPullRequestSnapshot(artifact, snapshot, Date.now());
+    if (!projection) continue;
+
+    repository.updateArtifact(artifact.id, projection.update);
+    updated.push(projection.artifact);
   }
+
+  return { updated, failures };
 }

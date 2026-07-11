@@ -1,21 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Logger } from "../logger";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PullRequestSnapshot } from "../source-control";
-import {
-  PULL_REQUEST_REFRESH_MIN_INTERVAL_MS,
-  SessionPullRequestRefreshService,
-} from "./pull-request-refresh";
+import { refreshSessionPullRequests } from "./pull-request-refresh";
 import type { ArtifactRow, SessionRow } from "./types";
-
-function createMockLogger(): Logger {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    child: vi.fn(() => createMockLogger()),
-  };
-}
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -86,7 +72,6 @@ function createSnapshot(overrides: Partial<PullRequestSnapshot> = {}): PullReque
 }
 
 function createHarness(artifacts: ArtifactRow[], session: SessionRow | null = createSession()) {
-  let nowValue = 100_000;
   const rows = [...artifacts];
   const updateArtifact = vi.fn((artifactId: string, data: { metadata: string | null }) => {
     const index = rows.findIndex((row) => row.id === artifactId);
@@ -99,42 +84,37 @@ function createHarness(artifacts: ArtifactRow[], session: SessionRow | null = cr
   };
   const getPullRequest = vi.fn(async () => createSnapshot());
   const upsert = vi.fn(async () => ({ applied: true }));
-  const broadcastArtifactUpdated = vi.fn();
-  const log = createMockLogger();
-
-  const service = new SessionPullRequestRefreshService({
-    repository,
-    sourceControlProvider: { getPullRequest },
-    sessionPullRequests: { upsert },
-    broadcastArtifactUpdated,
-    log,
-    now: () => nowValue,
-  });
 
   return {
-    service,
     repository,
     getPullRequest,
     upsert,
-    broadcastArtifactUpdated,
-    log,
-    advance: (ms: number) => {
-      nowValue += ms;
-    },
+    refresh: () => refreshSessionPullRequests(repository, { getPullRequest }, { upsert }),
   };
 }
 
-describe("SessionPullRequestRefreshService", () => {
+describe("refreshSessionPullRequests", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("refreshes each PR artifact from the provider and repairs the D1 record", async () => {
     const harness = createHarness([createPrArtifact()]);
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 1, skipped: 0 });
+    expect(result.failures).toEqual([]);
+    expect(result.updated).toHaveLength(1);
+    expect(result.updated[0]).toMatchObject({
+      id: "artifact-1",
+      type: "pr",
+      metadata: expect.objectContaining({ lifecycleState: "merged" }),
+    });
     expect(harness.getPullRequest).toHaveBeenCalledWith({
       owner: "acme",
       name: "web",
@@ -159,7 +139,6 @@ describe("SessionPullRequestRefreshService", () => {
       updatedAt: 100_000,
     });
     expect(harness.repository.updateArtifact).toHaveBeenCalledTimes(1);
-    expect(harness.broadcastArtifactUpdated).toHaveBeenCalledTimes(1);
   });
 
   it("skips non-PR artifacts and sessions without artifacts", async () => {
@@ -167,27 +146,13 @@ describe("SessionPullRequestRefreshService", () => {
       createPrArtifact({ id: "branch-1", type: "branch", metadata: null }),
     ]);
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 0, skipped: 0 });
+    expect(result).toEqual({ updated: [], failures: [] });
     expect(harness.getPullRequest).not.toHaveBeenCalled();
   });
 
-  it("rate-limits repeat refreshes per artifact within the minimum interval", async () => {
-    const harness = createHarness([createPrArtifact()]);
-
-    await harness.service.refresh();
-    const second = await harness.service.refresh();
-
-    expect(second).toEqual({ refreshed: 0, skipped: 1 });
-    expect(harness.getPullRequest).toHaveBeenCalledTimes(1);
-
-    harness.advance(PULL_REQUEST_REFRESH_MIN_INTERVAL_MS + 1);
-    await harness.service.refresh();
-    expect(harness.getPullRequest).toHaveBeenCalledTimes(2);
-  });
-
-  it("counts an unchanged provider snapshot as skipped work, not a refresh", async () => {
+  it("reports an unchanged provider snapshot as neither updated nor failed", async () => {
     const artifact = createPrArtifact({
       metadata: JSON.stringify({
         number: 7,
@@ -205,17 +170,17 @@ describe("SessionPullRequestRefreshService", () => {
     });
     const harness = createHarness([artifact]);
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 0, skipped: 0 });
+    expect(result).toEqual({ updated: [], failures: [] });
     expect(harness.upsert).toHaveBeenCalledTimes(1);
-    expect(harness.broadcastArtifactUpdated).not.toHaveBeenCalled();
+    expect(harness.repository.updateArtifact).not.toHaveBeenCalled();
   });
 
   it("falls back to the session's primary repo for legacy metadata without identity", async () => {
     const harness = createHarness([createPrArtifact({ metadata: JSON.stringify({ number: 7 }) })]);
 
-    await harness.service.refresh();
+    await harness.refresh();
 
     expect(harness.getPullRequest).toHaveBeenCalledWith({
       owner: "acme",
@@ -225,68 +190,88 @@ describe("SessionPullRequestRefreshService", () => {
     });
   });
 
-  it("skips artifacts whose metadata carries no PR number", async () => {
+  it("reports artifacts whose metadata carries no PR number as not refreshable", async () => {
     const harness = createHarness([createPrArtifact({ metadata: JSON.stringify({}) })]);
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 0, skipped: 0 });
+    expect(result.updated).toEqual([]);
+    expect(result.failures).toEqual([{ artifactId: "artifact-1", reason: "not_refreshable" }]);
     expect(harness.getPullRequest).not.toHaveBeenCalled();
   });
 
-  it("continues past a provider read failure and rate-limits the failed attempt", async () => {
+  it("continues past a provider read failure and reports it", async () => {
     const harness = createHarness([
       createPrArtifact(),
       createPrArtifact({ id: "artifact-2", metadata: JSON.stringify({ number: 8 }) }),
     ]);
+    const providerError = new Error("provider down");
     harness.getPullRequest
-      .mockRejectedValueOnce(new Error("provider down"))
+      .mockRejectedValueOnce(providerError)
       .mockResolvedValueOnce(createSnapshot({ number: 8 }));
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 1, skipped: 0 });
-    expect(harness.log.error).toHaveBeenCalledWith(
-      "Pull request read-through failed",
-      expect.objectContaining({ artifact_id: "artifact-1" })
-    );
-
-    // The failed attempt still consumes the rate-limit window.
-    const second = await harness.service.refresh();
-    expect(second.skipped).toBe(2);
+    expect(result.updated).toHaveLength(1);
+    expect(result.updated[0].id).toBe("artifact-2");
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        artifactId: "artifact-1",
+        reason: "provider_read_failed",
+        prNumber: 7,
+        error: providerError,
+      }),
+    ]);
   });
 
   it("treats a D1 upsert failure as non-fatal and still updates the DO artifact", async () => {
     const harness = createHarness([createPrArtifact()]);
-    harness.upsert.mockRejectedValue(new Error("D1 unavailable"));
+    const upsertError = new Error("D1 unavailable");
+    harness.upsert.mockRejectedValue(upsertError);
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 1, skipped: 0 });
-    expect(harness.broadcastArtifactUpdated).toHaveBeenCalledTimes(1);
-    expect(harness.log.error).toHaveBeenCalledWith(
-      "Failed to write session pull request record",
-      expect.objectContaining({ artifact_id: "artifact-1" })
-    );
+    expect(result.updated).toHaveLength(1);
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        artifactId: "artifact-1",
+        reason: "record_write_failed",
+        error: upsertError,
+      }),
+    ]);
+    expect(harness.repository.updateArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("does not touch the DO mirror when the D1 monotonic guard rejects the snapshot", async () => {
     const harness = createHarness([createPrArtifact()]);
     harness.upsert.mockResolvedValue({ applied: false });
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 0, skipped: 0 });
+    expect(result).toEqual({ updated: [], failures: [] });
     expect(harness.repository.updateArtifact).not.toHaveBeenCalled();
-    expect(harness.broadcastArtifactUpdated).not.toHaveBeenCalled();
+  });
+
+  it("updates the DO mirror without a D1 store", async () => {
+    const harness = createHarness([createPrArtifact()]);
+
+    const result = await refreshSessionPullRequests(
+      harness.repository,
+      { getPullRequest: harness.getPullRequest },
+      null
+    );
+
+    expect(result.updated).toHaveLength(1);
+    expect(result.failures).toEqual([]);
+    expect(harness.repository.updateArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("no-ops without a session row", async () => {
     const harness = createHarness([createPrArtifact()], null);
 
-    const result = await harness.service.refresh();
+    const result = await harness.refresh();
 
-    expect(result).toEqual({ refreshed: 0, skipped: 0 });
+    expect(result).toEqual({ updated: [], failures: [] });
     expect(harness.getPullRequest).not.toHaveBeenCalled();
   });
 });

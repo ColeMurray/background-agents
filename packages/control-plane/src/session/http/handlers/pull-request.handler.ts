@@ -1,7 +1,7 @@
 import type { SessionArtifact } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
-import { applyPullRequestSnapshot, pullRequestSnapshotSchema } from "../../pull-request-snapshot";
+import { projectPullRequestSnapshot, pullRequestSnapshotSchema } from "../../pull-request-snapshot";
 import {
   mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
@@ -41,7 +41,7 @@ export interface PullRequestHandlerDeps {
   updateArtifact: (artifactId: string, data: UpdateArtifactData) => void;
   broadcastArtifactUpdated: (artifact: SessionArtifact) => void;
   now: () => number;
-  /** Kicks off a background read-through refresh (rate-limited per PR). */
+  /** Kicks off a background read-through refresh. */
   triggerPullRequestRefresh: () => void;
 }
 
@@ -135,9 +135,10 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
 
     /**
      * Transport shell for the snapshot projection (design §6): parse the
-     * request, resolve the artifact, and delegate to the canonical
-     * applyPullRequestSnapshot. Stale and materially identical snapshots
-     * answer `{ applied: false }` — no write, no broadcast.
+     * request, resolve the artifact, project through the canonical
+     * projectPullRequestSnapshot, and perform the write + broadcast it
+     * prescribes. Stale and materially identical snapshots answer
+     * `{ applied: false }` — no write, no broadcast.
      */
     async pullRequestArtifactSnapshot(request: Request, url: URL): Promise<Response> {
       const artifactId = url.searchParams.get("artifactId");
@@ -162,23 +163,20 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         return Response.json({ error: "Pull request artifact not found" }, { status: 404 });
       }
 
-      const result = applyPullRequestSnapshot(
-        {
-          updateArtifact: deps.updateArtifact,
-          broadcastArtifactUpdated: deps.broadcastArtifactUpdated,
-          now: deps.now,
-        },
-        artifact,
-        parsed.data
-      );
+      const projection = projectPullRequestSnapshot(artifact, parsed.data, deps.now());
+      if (!projection) {
+        return Response.json({ applied: false });
+      }
 
-      return Response.json(result);
+      deps.updateArtifact(artifact.id, projection.update);
+      deps.broadcastArtifactUpdated(projection.artifact);
+      return Response.json({ applied: true });
     },
 
     /**
      * Manual sync (design §5.3): fire the read-through refresh in the
      * background and return immediately — the endpoint never blocks on a
-     * provider read. Per-PR rate limiting lives in the refresh service.
+     * provider read.
      */
     refreshPullRequests(): Response {
       deps.triggerPullRequestRefresh();

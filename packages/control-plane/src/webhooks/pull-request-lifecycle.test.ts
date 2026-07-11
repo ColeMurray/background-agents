@@ -1,22 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubAutomationEvent } from "@open-inspect/shared";
 import type { SessionPullRequestRecord } from "../db/session-pull-request-store";
-import type { Logger } from "../logger";
 import {
   processPullRequestLifecycleEvent,
   type PullRequestLifecycleDeps,
   type SessionArtifactSummary,
 } from "./pull-request-lifecycle";
-
-function createMockLogger(): Logger {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    child: vi.fn(() => createMockLogger()),
-  };
-}
 
 function createEvent(
   overrides: Partial<GitHubAutomationEvent> = {},
@@ -84,14 +73,12 @@ function createHarness() {
   }));
   const listSessionArtifacts = vi.fn(async (): Promise<SessionArtifactSummary[]> => []);
   const pushSnapshotToSession = vi.fn(async () => {});
-  const log = createMockLogger();
 
   const deps: PullRequestLifecycleDeps = {
     store: { getByIdentity, upsert },
     sessions: { isRepositoryAssociated, get: getSession },
     listSessionArtifacts,
     pushSnapshotToSession,
-    log,
     now: () => 99_000,
   };
 
@@ -103,7 +90,6 @@ function createHarness() {
     getSession,
     listSessionArtifacts,
     pushSnapshotToSession,
-    log,
   };
 }
 

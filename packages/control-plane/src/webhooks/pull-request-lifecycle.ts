@@ -24,7 +24,6 @@ import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
 } from "../db/session-pull-request-store";
-import type { Logger } from "../logger";
 import { snapshotToRecord } from "../session/pull-request-snapshot";
 import type { PullRequestSnapshot } from "../source-control";
 
@@ -52,7 +51,6 @@ export interface PullRequestLifecycleDeps {
     artifactId: string,
     snapshot: PullRequestSnapshot
   ) => Promise<void>;
-  log: Logger;
   now: () => number;
 }
 

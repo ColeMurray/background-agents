@@ -65,7 +65,7 @@ import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
-import { SessionPullRequestRefreshService } from "./pull-request-refresh";
+import { refreshSessionPullRequests } from "./pull-request-refresh";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
@@ -175,9 +175,6 @@ export class SessionDO extends DurableObject<Env> {
   // Pull request handler (lazily initialized)
   private _pullRequestHandler: PullRequestHandler | null = null;
   private readonly prCreationClaims = new PullRequestCreationClaims();
-  // Read-through refresh (lazily initialized) — instance-scoped so the
-  // per-PR rate-limit window survives across requests.
-  private _pullRequestRefreshService: SessionPullRequestRefreshService | null = null;
   // Participants handler (lazily initialized)
   private _participantsHandler: ParticipantsHandler | null = null;
   // Alarm handler (lazily initialized)
@@ -548,35 +545,36 @@ export class SessionDO extends DurableObject<Env> {
     return this._pullRequestHandler;
   }
 
-  private get pullRequestRefreshService(): SessionPullRequestRefreshService {
-    if (!this._pullRequestRefreshService) {
-      this._pullRequestRefreshService = new SessionPullRequestRefreshService({
-        repository: this.repository,
-        sourceControlProvider: this.sourceControlProvider,
-        sessionPullRequests: this.env.DB ? new SessionPullRequestStore(this.env.DB) : undefined,
-        broadcastArtifactUpdated: (artifact) => {
-          this.broadcast({
-            type: "artifact_updated",
-            artifact,
-          });
-        },
-        log: this.log,
-        now: () => Date.now(),
-      });
-    }
-
-    return this._pullRequestRefreshService;
-  }
-
   /** Fire a background read-through refresh; failures only log. */
   private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
     this.ctx.waitUntil(
-      this.pullRequestRefreshService.refresh().catch((error) => {
-        this.log.error("Pull request refresh failed", {
-          trigger,
-          error: error instanceof Error ? error : String(error),
-        });
-      })
+      refreshSessionPullRequests(
+        this.repository,
+        this.sourceControlProvider,
+        this.env.DB ? new SessionPullRequestStore(this.env.DB) : null
+      )
+        .then(({ updated, failures }) => {
+          for (const artifact of updated) {
+            this.broadcast({ type: "artifact_updated", artifact });
+          }
+          for (const failure of failures) {
+            this.log.error("Pull request refresh failed for artifact", {
+              trigger,
+              reason: failure.reason,
+              artifact_id: failure.artifactId,
+              pr_number: failure.prNumber,
+              repo_owner: failure.repoOwner,
+              repo_name: failure.repoName,
+              error: failure.error instanceof Error ? failure.error : String(failure.error),
+            });
+          }
+        })
+        .catch((error) => {
+          this.log.error("Pull request refresh failed", {
+            trigger,
+            error: error instanceof Error ? error : String(error),
+          });
+        })
     );
   }
 
