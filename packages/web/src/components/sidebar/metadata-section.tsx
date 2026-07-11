@@ -9,7 +9,7 @@ import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import { prArtifactBelongsToRepo, type SessionRepositoryState } from "@open-inspect/shared";
+import { findPrArtifactForRepo, type SessionRepositoryState } from "@open-inspect/shared";
 import {
   ClockIcon,
   SparkleIcon,
@@ -21,12 +21,15 @@ import {
   CheckIcon,
   LinkIcon,
   ErrorIcon,
+  RefreshIcon,
 } from "@/components/ui/icons";
 import { Badge, prBadgeVariant } from "@/components/ui/badge";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
 interface MetadataSectionProps {
+  /** Enables the PR sync button; older callers without it just omit it. */
+  sessionId?: string;
   createdAt: number;
   model?: string;
   reasoningEffort?: string;
@@ -49,25 +52,39 @@ interface MetadataSectionProps {
 }
 
 /**
- * The PR artifact belonging to a member repo. The ownership convention
- * (identity-less artifact → primary; case-insensitive match) lives in shared
- * prArtifactBelongsToRepo — the same helper the control-plane prUrl projection
- * uses; here we only supply the identity parsed from the UI artifact metadata.
+ * Manual PR sync (design §7): kicks the rate-limited read-through; fresh
+ * state arrives over the session socket as artifact_updated.
  */
-function findPrArtifactForRepo(
-  artifacts: Artifact[],
-  repo: SessionRepositoryState,
-  isPrimary: boolean
-): Artifact | undefined {
-  return artifacts.find((artifact) => {
-    if (artifact.type !== "pr") return false;
-    const { repoOwner, repoName } = artifact.metadata ?? {};
-    const artifactRepo = repoOwner && repoName ? { repoOwner, repoName } : null;
-    return prArtifactBelongsToRepo(artifactRepo, repo, isPrimary);
-  });
+function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      await fetch(`/api/sessions/${sessionId}/pull-requests/refresh`, { method: "POST" });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleSync}
+      disabled={syncing}
+      className="p-1 hover:bg-muted transition-colors"
+      title="Sync PR status"
+      aria-label="Sync PR status"
+    >
+      <RefreshIcon
+        className={`w-3.5 h-3.5 text-secondary-foreground ${syncing ? "animate-spin" : ""}`}
+      />
+    </button>
+  );
 }
 
 export function MetadataSection({
+  sessionId,
   createdAt,
   model,
   reasoningEffort,
@@ -86,6 +103,8 @@ export function MetadataSection({
   const [copied, setCopied] = useState(false);
 
   const isMultiRepo = (repositories?.length ?? 0) > 1;
+  const hasPrArtifact = artifacts.some((a) => a.type === "pr");
+  const showSyncButton = Boolean(sessionId) && hasPrArtifact;
 
   const prArtifact = artifacts.find((a) => a.type === "pr");
   const manualPrArtifact = artifacts.find(
@@ -184,6 +203,7 @@ export function MetadataSection({
                   {prState}
                 </Badge>
               )}
+              {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
             </div>
           )}
 
@@ -266,8 +286,9 @@ export function MetadataSection({
       {/* Repository member list (multi-repo sessions) */}
       {isMultiRepo && repositories && (
         <div className="space-y-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Repositories
+          <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <span>Repositories</span>
+            {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
           </div>
           {repositories.map((repo, index) => {
             const memberPrArtifact = findPrArtifactForRepo(artifacts, repo, index === 0);

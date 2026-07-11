@@ -4,9 +4,10 @@ import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 
 import { mutate } from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import { serverMessageSchema } from "@open-inspect/shared";
+import { serverMessageSchema, toDisplayStatus } from "@open-inspect/shared";
 import type {
   ParticipantPresence,
+  PullRequestDisplayStatus,
   SandboxEvent as SharedSandboxEvent,
   ScreenshotArtifactMetadata,
   ServerMessage,
@@ -148,8 +149,40 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
-type PrState = NonNullable<NonNullable<Artifact["metadata"]>["prState"]>;
-const PR_STATES = new Set<string>(["open", "merged", "closed", "draft"]);
+/** Replace an artifact in place by id, or prepend when it is new. */
+function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact[] {
+  const existingIndex = artifacts.findIndex((artifact) => artifact.id === nextArtifact.id);
+  if (existingIndex === -1) {
+    return [nextArtifact, ...artifacts];
+  }
+  return artifacts.map((artifact, index) => (index === existingIndex ? nextArtifact : artifact));
+}
+
+const PR_DISPLAY_STATUSES = new Set<PullRequestDisplayStatus>([
+  "open",
+  "merged",
+  "closed",
+  "draft",
+]);
+
+/**
+ * The PR display status for an artifact's metadata. Prefers the tracked
+ * lifecycleState/isDraft pair (derived via shared toDisplayStatus); falls
+ * back to the legacy `state` display key on artifacts that predate PR
+ * lifecycle tracking.
+ */
+function derivePrState(meta: Record<string, unknown>): PullRequestDisplayStatus | undefined {
+  if (meta.lifecycleState === "open" || meta.lifecycleState === "closed") {
+    return toDisplayStatus({ lifecycleState: meta.lifecycleState, isDraft: meta.isDraft === true });
+  }
+  if (meta.lifecycleState === "merged") {
+    return "merged";
+  }
+  return typeof meta.state === "string" &&
+    PR_DISPLAY_STATUSES.has(meta.state as PullRequestDisplayStatus)
+    ? (meta.state as PullRequestDisplayStatus)
+    : undefined;
+}
 type MediaMimeType = ScreenshotArtifactMetadata["mimeType"] | VideoArtifactMetadata["mimeType"];
 const MEDIA_MIME_TYPES = new Set<MediaMimeType>([
   "image/png",
@@ -181,13 +214,11 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
     type: artifact.type as Artifact["type"],
     url: artifact.url,
     createdAt: artifact.createdAt,
+    updatedAt: artifact.updatedAt,
     metadata: meta
       ? {
           prNumber: typeof meta.number === "number" ? meta.number : undefined,
-          prState:
-            typeof meta.state === "string" && PR_STATES.has(meta.state)
-              ? (meta.state as PrState)
-              : undefined,
+          prState: derivePrState(meta),
           mode: meta.mode === "manual_pr" ? "manual_pr" : undefined,
           createPrUrl: typeof meta.createPrUrl === "string" ? meta.createPrUrl : undefined,
           head: typeof meta.head === "string" ? meta.head : undefined,
@@ -501,17 +532,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "artifact_created":
-          setArtifacts((prev) => {
-            const nextArtifact = toUiArtifact(data.artifact);
-            const existingIndex = prev.findIndex((artifact) => artifact.id === nextArtifact.id);
-            if (existingIndex === -1) {
-              return [nextArtifact, ...prev];
-            }
+          setArtifacts((prev) => upsertArtifact(prev, toUiArtifact(data.artifact)));
+          break;
 
-            return prev.map((artifact, index) =>
-              index === existingIndex ? nextArtifact : artifact
-            );
-          });
+        case "artifact_updated":
+          // Same upsert-by-id as artifact_created — an update replaces in
+          // place, so the artifact list order stays stable. Revalidate the
+          // session list so sidebar PR summaries reflect the change.
+          setArtifacts((prev) => upsertArtifact(prev, toUiArtifact(data.artifact)));
+          mutate(isUnarchivedSessionListKey);
           break;
 
         case "session_branch":

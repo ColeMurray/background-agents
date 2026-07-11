@@ -91,3 +91,43 @@ describe("ActionBar", () => {
     expect(screen.queryByText(/Media/)).not.toBeInTheDocument();
   });
 });
+
+describe("repository-aware PR selection", () => {
+  const webPr = {
+    id: "artifact-pr-web",
+    type: "pr" as const,
+    url: "https://github.com/acme/web/pull/1",
+    metadata: { prNumber: 1, repoOwner: "acme", repoName: "web" },
+    createdAt: 1,
+  };
+  const backendPr = {
+    id: "artifact-pr-backend",
+    type: "pr" as const,
+    url: "https://github.com/acme/backend/pull/9",
+    metadata: { prNumber: 9, repoOwner: "acme", repoName: "backend" },
+    createdAt: 2,
+  };
+
+  it("selects the primary repo's PR, not the first PR artifact", () => {
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[backendPr, webPr]}
+        primaryRepo={{ repoOwner: "acme", repoName: "web" }}
+      />
+    );
+
+    const link = screen.getByRole("link", { name: /view pr/i });
+    expect(link).toHaveAttribute("href", "https://github.com/acme/web/pull/1");
+  });
+
+  it("falls back to the first PR artifact without repo context", () => {
+    render(
+      <ActionBar sessionId="session-1" sessionStatus="active" artifacts={[backendPr, webPr]} />
+    );
+
+    const link = screen.getByRole("link", { name: /view pr/i });
+    expect(link).toHaveAttribute("href", "https://github.com/acme/backend/pull/9");
+  });
+});

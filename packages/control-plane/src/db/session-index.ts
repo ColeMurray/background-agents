@@ -1,4 +1,10 @@
-import type { SessionListRepository, SessionStatus, SpawnSource } from "@open-inspect/shared";
+import type {
+  PullRequestSummary,
+  SessionListRepository,
+  SessionStatus,
+  SpawnSource,
+} from "@open-inspect/shared";
+import { SessionPullRequestStore } from "./session-pull-request-store";
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -41,6 +47,11 @@ export interface SessionEntry {
    * repo-launched/ad-hoc sessions. PR-12 renders it on the session list.
    */
   environmentId?: string | null;
+  /**
+   * Per-status PR counts from session_pull_requests; absent when the session
+   * has no tracked PRs. Attached by list() for the global sidebar.
+   */
+  pullRequestSummary?: PullRequestSummary;
 }
 
 interface SessionRepositoryRow {
@@ -309,12 +320,34 @@ export class SessionIndexStore {
       .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = await this.withRepositories(rows.slice(0, limit).map(toEntry));
+    const sessions = await this.withPullRequestSummaries(
+      await this.withRepositories(rows.slice(0, limit).map(toEntry))
+    );
 
     return {
       sessions,
       hasMore: rows.length > limit,
     };
+  }
+
+  /**
+   * Return copies of the given entries with per-session PR status summaries
+   * attached, resolved in one grouped query over session_pull_requests
+   * (mirrors withRepositories). Sessions without PR records are returned
+   * as-is, without the field. PR state never influences session ordering —
+   * this only decorates the already-paged rows.
+   */
+  private async withPullRequestSummaries(sessions: SessionEntry[]): Promise<SessionEntry[]> {
+    if (sessions.length === 0) return sessions;
+
+    const summaries = await new SessionPullRequestStore(this.db).summariesForSessions(
+      sessions.map((session) => session.id)
+    );
+
+    return sessions.map((session) => {
+      const pullRequestSummary = summaries.get(session.id);
+      return pullRequestSummary ? { ...session, pullRequestSummary } : session;
+    });
   }
 
   /**

@@ -1,4 +1,4 @@
-import { prArtifactBelongsToRepo } from "@open-inspect/shared";
+import { findPrArtifactForRepo as findPrArtifactForRepoShared } from "@open-inspect/shared";
 import type { RepoIdentity } from "./repository-target";
 import type { ArtifactRow } from "./types";
 
@@ -23,19 +23,23 @@ export function parsePrArtifactRepo(metadata: string | null): RepoIdentity | nul
 }
 
 /**
- * Find a PR artifact belonging to the target repo. Identity-less metadata
- * matches only when the target is the primary — the ownership convention lives
- * in shared {@link prArtifactBelongsToRepo}; this only supplies the parsed
- * identity from ArtifactRow metadata.
+ * Find a PR artifact belonging to the target repo. The find-over-convention
+ * step is the shared findPrArtifactForRepo (also used by the web sidebar and
+ * action bar); this adapter only parses the identity out of ArtifactRow's
+ * JSON metadata.
  */
 export function findPrArtifactForRepo(
   artifacts: ArtifactRow[],
   targetRepo: RepoIdentity,
   isPrimary: boolean
 ): ArtifactRow | undefined {
-  return artifacts.find(
-    (artifact) =>
-      artifact.type === "pr" &&
-      prArtifactBelongsToRepo(parsePrArtifactRepo(artifact.metadata), targetRepo, isPrimary)
-  );
+  return findPrArtifactForRepoShared(
+    artifacts.map((artifact) => ({
+      artifact,
+      type: artifact.type,
+      metadata: parsePrArtifactRepo(artifact.metadata),
+    })),
+    targetRepo,
+    isPrimary
+  )?.artifact;
 }

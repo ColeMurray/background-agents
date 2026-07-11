@@ -15,6 +15,7 @@ import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
 import { archiveSession } from "@/lib/archive-session";
+import { formatPullRequestSummaryLabel } from "@/lib/pr-summary";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
@@ -37,6 +38,7 @@ import {
   AutomationsIcon,
   BranchIcon,
   BoxIcon,
+  GitPrIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { APP_SHORT_NAME } from "@/lib/site-config";
@@ -690,6 +692,7 @@ function SessionListItem({
     session.repoName,
     session.repositories
   );
+  const prSummaryLabel = formatPullRequestSummaryLabel(session.pullRequestSummary);
   const displayTitle = session.title || repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
@@ -911,6 +914,13 @@ function SessionListItem({
                   <span>·</span>
                   <BranchIcon className="w-3 h-3 flex-shrink-0" />
                   <span className="truncate">{session.baseBranch}</span>
+                </>
+              )}
+              {prSummaryLabel && (
+                <>
+                  <span>·</span>
+                  <GitPrIcon className="w-3 h-3 flex-shrink-0" />
+                  <span className="truncate">{prSummaryLabel}</span>
                 </>
               )}
             </div>

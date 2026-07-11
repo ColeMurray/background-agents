@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { MetadataSection } from "./metadata-section";
 
@@ -195,5 +195,58 @@ describe("MetadataSection", () => {
     );
 
     expect(screen.queryByText("Environment deleted")).not.toBeInTheDocument();
+  });
+});
+
+describe("PR sync button", () => {
+  const prArtifact = {
+    id: "artifact-pr-1",
+    type: "pr" as const,
+    url: "https://github.com/acme/web-app/pull/42",
+    metadata: { prNumber: 42, prState: "open" as const },
+    createdAt: 1234,
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("kicks the refresh endpoint when clicked", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "refreshing" })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MetadataSection
+        sessionId="session-1"
+        createdAt={Date.now()}
+        baseBranch="main"
+        artifacts={[prArtifact]}
+      />
+    );
+
+    const button = screen.getByRole("button", { name: "Sync PR status" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/pull-requests/refresh", {
+        method: "POST",
+      });
+    });
+  });
+
+  it("does not render without a sessionId or without PR artifacts", () => {
+    render(<MetadataSection createdAt={Date.now()} baseBranch="main" artifacts={[prArtifact]} />);
+    expect(screen.queryByRole("button", { name: "Sync PR status" })).not.toBeInTheDocument();
+    cleanup();
+
+    render(
+      <MetadataSection
+        sessionId="session-1"
+        createdAt={Date.now()}
+        baseBranch="main"
+        artifacts={[]}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Sync PR status" })).not.toBeInTheDocument();
   });
 });

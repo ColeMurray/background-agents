@@ -20,11 +20,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getSafeExternalUrl } from "@/lib/urls";
+import { findPrArtifactForRepo } from "@open-inspect/shared";
 
 interface ActionBarProps {
   sessionId: string;
   sessionStatus: string;
   artifacts: Artifact[];
+  /**
+   * The session's primary repository. When present, "View PR" is selected
+   * repository-aware (the primary's PR) instead of taking the first PR
+   * artifact — in a multi-repo session those can differ.
+   */
+  primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
 }
@@ -33,13 +40,16 @@ export function ActionBar({
   sessionId,
   sessionStatus,
   artifacts,
+  primaryRepo,
   onArchive,
   onUnarchive,
 }: ActionBarProps) {
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
 
-  const prArtifact = artifacts.find((a) => a.type === "pr");
+  const prArtifact = primaryRepo
+    ? findPrArtifactForRepo(artifacts, primaryRepo, true)
+    : artifacts.find((a) => a.type === "pr");
   const previewArtifact = artifacts.find((a) => a.type === "preview");
   const mediaCount = artifacts.filter(
     (artifact) => artifact.type === "screenshot" || artifact.type === "video"

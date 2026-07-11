@@ -27,6 +27,7 @@ export {
   MAX_SESSION_REPOSITORIES,
   sessionRepositoryStateSchema,
   prArtifactBelongsToRepo,
+  findPrArtifactForRepo,
   repositoryInputSchema,
   repositoriesInputSchema,
   sessionRepositoriesInputSchema,
@@ -39,6 +40,7 @@ export type {
   SessionListRepository,
   RepositoryInput,
   RepositoryPair,
+  PrArtifactLike,
 } from "./repositories";
 
 export type {

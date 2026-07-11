@@ -40,6 +40,7 @@ const QUERY_PATTERNS = {
   INSERT_SESSION: /^INSERT OR IGNORE INTO sessions/,
   INSERT_SESSION_REPO: /^INSERT INTO session_repositories/,
   SELECT_SESSION_REPOS: /^SELECT \* FROM session_repositories WHERE session_id IN/,
+  SELECT_PR_SUMMARIES: /FROM session_pull_requests WHERE session_id IN/,
   DELETE_SESSION_REPOS: /^DELETE FROM session_repositories WHERE session_id = \?$/,
   SELECT_BY_ID: /^SELECT \* FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
@@ -144,6 +145,11 @@ class FakeD1Database {
       return this.repositoryRows
         .filter((r) => ids.has(r.session_id))
         .sort((a, b) => a.session_id.localeCompare(b.session_id) || a.position - b.position);
+    }
+
+    // PR summaries attach only for sessions with records; this fake has none.
+    if (QUERY_PATTERNS.SELECT_PR_SUMMARIES.test(normalized)) {
+      return [];
     }
 
     throw new Error(`Unexpected all() query: ${query}`);

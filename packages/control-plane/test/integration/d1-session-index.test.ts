@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import { cleanD1Tables } from "./cleanup";
 
 describe("D1 SessionIndexStore", () => {
@@ -82,6 +83,69 @@ describe("D1 SessionIndexStore", () => {
 
       expect(await store.isRepositoryAssociated("assoc-session-2", "acme", "solo")).toBe(true);
       expect(await store.isRepositoryAssociated("assoc-session-2", "acme", "web-app")).toBe(false);
+    });
+  });
+
+  it("attaches pullRequestSummary from session_pull_requests without reordering", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const prStore = new SessionPullRequestStore(env.DB);
+    const now = Date.now();
+
+    for (const [id, updatedAt] of [
+      ["summary-session-new", now],
+      ["summary-session-old", now - 10_000],
+    ] as const) {
+      await store.create({
+        id,
+        title: null,
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        createdAt: now - 20_000,
+        updatedAt,
+      });
+    }
+
+    // Two PRs on the OLDER session — its list position must not change.
+    for (const [artifactId, prNumber, lifecycleState, isDraft] of [
+      ["summary-artifact-1", 1, "open", true],
+      ["summary-artifact-2", 2, "merged", false],
+    ] as const) {
+      await prStore.upsert({
+        artifactId,
+        sessionId: "summary-session-old",
+        repositoryExternalId: String(prNumber),
+        repoOwner: "acme",
+        repoName: "web-app",
+        prNumber,
+        url: `https://github.com/acme/web-app/pull/${prNumber}`,
+        lifecycleState,
+        isDraft,
+        headBranch: "open-inspect/summary-session-old",
+        baseBranch: "main",
+        headSha: null,
+        providerUpdatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    const { sessions } = await store.list();
+
+    expect(sessions.map((session) => session.id)).toEqual([
+      "summary-session-new",
+      "summary-session-old",
+    ]);
+    expect(sessions[0].pullRequestSummary).toBeUndefined();
+    expect(sessions[1].pullRequestSummary).toEqual({
+      total: 2,
+      open: 0,
+      draft: 1,
+      merged: 1,
+      closed: 0,
     });
   });
 

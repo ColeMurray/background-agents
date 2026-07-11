@@ -494,6 +494,11 @@ function SessionContent({
           id: sessionId,
           status: sessionState?.status || "",
           artifacts,
+          primaryRepo:
+            sessionState?.repositories?.[0] ??
+            (sessionState?.repoOwner && sessionState?.repoName
+              ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
+              : null),
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
         }}

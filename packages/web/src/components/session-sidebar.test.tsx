@@ -92,6 +92,39 @@ function jsonResponse(body: unknown) {
 }
 
 describe("SessionSidebar", () => {
+  it("renders the PR status summary on session rows", async () => {
+    const single = createSession(1, {
+      updatedAt: 4000,
+      pullRequestSummary: { total: 1, open: 0, draft: 0, merged: 1, closed: 0 },
+    });
+    const multi = createSession(2, {
+      updatedAt: 3000,
+      pullRequestSummary: { total: 3, open: 1, draft: 1, merged: 1, closed: 0 },
+    });
+    const none = createSession(3, { updatedAt: 2000 });
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: {
+            [SIDEBAR_SESSIONS_KEY]: {
+              sessions: [single, multi, none],
+              hasMore: false,
+            },
+          },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("PR merged")).toBeInTheDocument();
+    expect(screen.getByText("3 PRs · 2 open")).toBeInTheDocument();
+    expect(screen.getAllByText(/PR/)).toHaveLength(2);
+  });
+
   it("renders nested child sessions under their immediate parent", async () => {
     const parent = createSession(1, { updatedAt: 4000 });
     const child = createSession(2, {
