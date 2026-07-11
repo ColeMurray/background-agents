@@ -19,6 +19,23 @@ export interface ModelReasoningConfig {
   default: ReasoningEffort | undefined;
 }
 
+interface ModelCatalogGroup {
+  category: string;
+  enabledByDefault: boolean;
+  models: readonly ModelCatalogEntry[];
+}
+
+interface ModelCatalogEntry {
+  id: `${string}/${string}`;
+  name: string;
+  description: string;
+  default?: true;
+  reasoning?: {
+    readonly efforts: readonly ReasoningEffort[];
+    readonly default: ReasoningEffort | undefined;
+  };
+}
+
 /**
  * Authoritative model metadata, grouped in UI display order.
  */
@@ -175,7 +192,7 @@ export const MODEL_CATALOG = [
       { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "Most capable" },
     ],
   },
-] as const;
+] as const satisfies readonly ModelCatalogGroup[];
 
 export type ValidModel = (typeof MODEL_CATALOG)[number]["models"][number]["id"];
 
@@ -188,9 +205,11 @@ const MODEL_DEFINITIONS: readonly CatalogModel[] = MODEL_CATALOG.flatMap((group)
 export const VALID_MODELS: ValidModel[] = MODEL_DEFINITIONS.map((model) => model.id);
 
 /** Default model to use when none is specified or valid. */
-export const DEFAULT_MODEL: ValidModel = MODEL_DEFINITIONS.find(
-  (model) => "default" in model && model.default
-)!.id;
+const defaultModels = MODEL_DEFINITIONS.filter((model) => "default" in model && model.default);
+if (defaultModels.length !== 1) {
+  throw new Error("MODEL_CATALOG must define exactly one model with `default: true`");
+}
+export const DEFAULT_MODEL: ValidModel = defaultModels[0].id;
 
 /** Per-model reasoning configuration. Models omitted do not support reasoning controls. */
 export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningConfig>> =
