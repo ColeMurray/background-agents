@@ -33,6 +33,58 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.status).toBe("created");
   });
 
+  describe("isRepositoryAssociated", () => {
+    it("matches the scalar primary and member rows case-insensitively", async () => {
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+
+      await store.create({
+        id: "assoc-session-1",
+        title: null,
+        repoOwner: "Acme",
+        repoName: "Web-App",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: "main",
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+        repositories: [
+          { repoOwner: "Acme", repoName: "Web-App", repoId: 1, baseBranch: "main" },
+          { repoOwner: "Acme", repoName: "Backend", repoId: 2, baseBranch: "main" },
+        ],
+      });
+
+      expect(await store.isRepositoryAssociated("assoc-session-1", "acme", "web-app")).toBe(true);
+      expect(await store.isRepositoryAssociated("assoc-session-1", "ACME", "BACKEND")).toBe(true);
+      expect(await store.isRepositoryAssociated("assoc-session-1", "acme", "other-repo")).toBe(
+        false
+      );
+      expect(await store.isRepositoryAssociated("missing-session", "acme", "web-app")).toBe(false);
+    });
+
+    it("matches the scalar primary for pre-multi-repo sessions without member rows", async () => {
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+
+      await store.create({
+        id: "assoc-session-2",
+        title: null,
+        repoOwner: "acme",
+        repoName: "solo",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      expect(await store.isRepositoryAssociated("assoc-session-2", "acme", "solo")).toBe(true);
+      expect(await store.isRepositoryAssociated("assoc-session-2", "acme", "web-app")).toBe(false);
+    });
+  });
+
   it("lists sessions with status filter", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();

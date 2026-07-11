@@ -65,6 +65,7 @@ import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
+import { SessionPullRequestRefreshService } from "./pull-request-refresh";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
@@ -174,6 +175,9 @@ export class SessionDO extends DurableObject<Env> {
   // Pull request handler (lazily initialized)
   private _pullRequestHandler: PullRequestHandler | null = null;
   private readonly prCreationClaims = new PullRequestCreationClaims();
+  // Read-through refresh (lazily initialized) — instance-scoped so the
+  // per-PR rate-limit window survives across requests.
+  private _pullRequestRefreshService: SessionPullRequestRefreshService | null = null;
   // Participants handler (lazily initialized)
   private _participantsHandler: ParticipantsHandler | null = null;
   // Alarm handler (lazily initialized)
@@ -197,6 +201,7 @@ export class SessionDO extends DurableObject<Env> {
     createPr: (request) => this.pullRequestHandler.createPr(request),
     pullRequestArtifactSnapshot: (request, url) =>
       this.pullRequestHandler.pullRequestArtifactSnapshot(request, url),
+    pullRequestsRefresh: () => this.pullRequestHandler.refreshPullRequests(),
     wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
     updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
     archive: (request) => this.sessionLifecycleHandler.archive(request),
@@ -536,10 +541,43 @@ export class SessionDO extends DurableObject<Env> {
           });
         },
         now: () => Date.now(),
+        triggerPullRequestRefresh: () => this.schedulePullRequestRefresh("manual"),
       });
     }
 
     return this._pullRequestHandler;
+  }
+
+  private get pullRequestRefreshService(): SessionPullRequestRefreshService {
+    if (!this._pullRequestRefreshService) {
+      this._pullRequestRefreshService = new SessionPullRequestRefreshService({
+        repository: this.repository,
+        sourceControlProvider: this.sourceControlProvider,
+        sessionPullRequests: this.env.DB ? new SessionPullRequestStore(this.env.DB) : undefined,
+        broadcastArtifactUpdated: (artifact) => {
+          this.broadcast({
+            type: "artifact_updated",
+            artifact,
+          });
+        },
+        log: this.log,
+        now: () => Date.now(),
+      });
+    }
+
+    return this._pullRequestRefreshService;
+  }
+
+  /** Fire a background read-through refresh; failures only log. */
+  private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
+    this.ctx.waitUntil(
+      this.pullRequestRefreshService.refresh().catch((error) => {
+        this.log.error("Pull request refresh failed", {
+          trigger,
+          error: error instanceof Error ? error : String(error),
+        });
+      })
+    );
   }
 
   private get participantsHandler(): ParticipantsHandler {
@@ -1295,6 +1333,10 @@ export class SessionDO extends DurableObject<Env> {
 
     // Notify others
     this.presenceService.broadcastPresence();
+
+    // Read-through backstop (design §5.3): opening the session refreshes its
+    // PR state from the provider; changes arrive as artifact_updated.
+    this.schedulePullRequestRefresh("open");
   }
 
   /**

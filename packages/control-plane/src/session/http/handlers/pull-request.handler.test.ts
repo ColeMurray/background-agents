@@ -91,6 +91,7 @@ function createHandler() {
   const updateArtifact = vi.fn();
   const broadcastArtifactUpdated = vi.fn();
   const now = vi.fn(() => 5000);
+  const triggerPullRequestRefresh = vi.fn();
 
   const handler = createPullRequestHandler({
     getSession,
@@ -103,6 +104,7 @@ function createHandler() {
     updateArtifact,
     broadcastArtifactUpdated,
     now,
+    triggerPullRequestRefresh,
   });
 
   return {
@@ -120,6 +122,7 @@ function createHandler() {
     updateArtifact,
     broadcastArtifactUpdated,
     now,
+    triggerPullRequestRefresh,
   };
 }
 
@@ -701,5 +704,17 @@ describe("pullRequestArtifactSnapshot", () => {
     expect(vi.mocked(updateArtifact).mock.calls[0][1].url).toBe(
       "https://github.com/acme/renamed/pull/7"
     );
+  });
+});
+
+describe("refreshPullRequests", () => {
+  it("fires the background refresh and returns 202 immediately", async () => {
+    const { handler, triggerPullRequestRefresh } = createHandler();
+
+    const response = handler.refreshPullRequests();
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ status: "refreshing" });
+    expect(triggerPullRequestRefresh).toHaveBeenCalledTimes(1);
   });
 });

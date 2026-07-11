@@ -18,6 +18,7 @@ export const SessionInternalPaths = {
   // Static path + artifactId query param: the router matches paths as exact
   // strings, so the artifact id cannot ride in the path.
   pullRequestArtifactSnapshot: "/internal/pull-request-artifact-snapshot",
+  pullRequestsRefresh: "/internal/pull-requests-refresh",
   wsToken: "/internal/ws-token",
   archive: "/internal/archive",
   unarchive: "/internal/unarchive",

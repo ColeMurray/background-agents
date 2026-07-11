@@ -116,6 +116,8 @@ const pullRequestObjectSchema = z.object({
   state: z.string().optional(),
   draft: z.boolean().nullable().optional(),
   merged: z.boolean().nullable().optional(),
+  html_url: z.string().optional(),
+  updated_at: z.string().optional(),
   user: userSchema.optional(),
   labels: labelArraySchema.optional(),
   head: z

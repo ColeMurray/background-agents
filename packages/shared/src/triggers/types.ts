@@ -61,6 +61,15 @@ export interface GitHubPullRequestEventFacts {
    * (fork PR). Undefined when the payload lacks repo identity to compare.
    */
   isCrossRepository?: boolean;
+  /** Web URL of the pull request (html_url). */
+  url?: string;
+  /**
+   * Stable id of the repository the PR lives in (the base repo) — the
+   * canonical PR-record identity used for webhook correlation.
+   */
+  repositoryExternalId?: string;
+  /** Provider's updated_at (epoch ms) — the monotonic write guard source. */
+  providerUpdatedAt?: number;
 }
 
 export interface GitHubAutomationEvent extends BaseAutomationEvent {
@@ -152,6 +161,9 @@ export const automationEventSchema = z.discriminatedUnion("source", [
         merged: z.boolean().optional(),
         headSha: z.string().optional(),
         isCrossRepository: z.boolean().optional(),
+        url: z.string().optional(),
+        repositoryExternalId: z.string().optional(),
+        providerUpdatedAt: z.number().optional(),
       })
       .optional(),
   }),

@@ -41,11 +41,14 @@ export interface PullRequestHandlerDeps {
   updateArtifact: (artifactId: string, data: UpdateArtifactData) => void;
   broadcastArtifactUpdated: (artifact: SessionArtifact) => void;
   now: () => number;
+  /** Kicks off a background read-through refresh (rate-limited per PR). */
+  triggerPullRequestRefresh: () => void;
 }
 
 export interface PullRequestHandler {
   createPr: (request: Request) => Promise<Response>;
   pullRequestArtifactSnapshot: (request: Request, url: URL) => Promise<Response>;
+  refreshPullRequests: () => Response;
 }
 
 export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequestHandler {
@@ -170,6 +173,16 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       );
 
       return Response.json(result);
+    },
+
+    /**
+     * Manual sync (design §5.3): fire the read-through refresh in the
+     * background and return immediately — the endpoint never blocks on a
+     * provider read. Per-PR rate limiting lives in the refresh service.
+     */
+    refreshPullRequests(): Response {
+      deps.triggerPullRequestRefresh();
+      return Response.json({ status: "refreshing" }, { status: 202 });
     },
   };
 }

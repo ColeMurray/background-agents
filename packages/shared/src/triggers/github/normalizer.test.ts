@@ -493,7 +493,49 @@ describe("typed pullRequest facts on pull_request events", () => {
       merged: false,
       headSha: "abc1234def5678",
       isCrossRepository: false,
+      repositoryExternalId: "9001",
     });
+  });
+
+  it("carries url, base-repo identity, and provider updated_at when present", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: {
+        ...trackedPR,
+        html_url: "https://github.com/acme-org/my-app/pull/42",
+        updated_at: "2026-07-10T12:00:00Z",
+      },
+    });
+
+    expect(event?.pullRequest?.url).toBe("https://github.com/acme-org/my-app/pull/42");
+    expect(event?.pullRequest?.repositoryExternalId).toBe("9001");
+    expect(event?.pullRequest?.providerUpdatedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
+  });
+
+  it("omits url, repo identity, and updated_at when the payload lacks them", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: basePR, // no html_url / updated_at / base.repo
+    });
+
+    expect(event?.pullRequest?.url).toBeUndefined();
+    expect(event?.pullRequest?.repositoryExternalId).toBeUndefined();
+    expect(event?.pullRequest?.providerUpdatedAt).toBeUndefined();
+  });
+
+  it("omits providerUpdatedAt for an unparseable updated_at", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: { ...trackedPR, updated_at: "not-a-date" },
+    });
+
+    expect(event?.pullRequest?.providerUpdatedAt).toBeUndefined();
   });
 
   it("carries draft readiness for a draft PR", () => {

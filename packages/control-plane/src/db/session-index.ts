@@ -213,6 +213,39 @@ export class SessionIndexStore {
     return result ? toEntry(result) : null;
   }
 
+  /**
+   * Whether the session exists and the repository is one of its members
+   * (the scalar primary mirror or a session_repositories row). This is the
+   * webhook branch-fallback gate (design §5.2): a branch-derived insert may
+   * only attach to a session already associated with the event's repository.
+   * Case-insensitive — provider repo identifiers are case-insensitive while
+   * stored casing is display-canonical.
+   */
+  async isRepositoryAssociated(
+    sessionId: string,
+    repoOwner: string,
+    repoName: string
+  ): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        `SELECT 1 AS ok FROM sessions
+         WHERE id = ?1
+           AND (
+             (LOWER(repo_owner) = LOWER(?2) AND LOWER(repo_name) = LOWER(?3))
+             OR EXISTS (
+               SELECT 1 FROM session_repositories sr
+               WHERE sr.session_id = sessions.id
+                 AND LOWER(sr.repo_owner) = LOWER(?2)
+                 AND LOWER(sr.repo_name) = LOWER(?3)
+             )
+           )`
+      )
+      .bind(sessionId, repoOwner, repoName)
+      .first<{ ok: number }>();
+
+    return row !== null;
+  }
+
   async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
     const {
       status,

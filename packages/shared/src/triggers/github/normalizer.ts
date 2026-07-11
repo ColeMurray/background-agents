@@ -131,10 +131,18 @@ function isCrossRepositoryHead(pr: PullRequestPayload["pull_request"]): boolean 
   return headId !== baseId;
 }
 
+/** Parse the provider's updated_at into epoch ms; undefined when unparseable. */
+function parseProviderUpdatedAt(updatedAt: string | undefined): number | undefined {
+  if (!updatedAt) return undefined;
+  const parsed = Date.parse(updatedAt);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
 /** Extract the typed PR facts the payload actually carries (no guessing). */
 function getPullRequestFacts(
   pr: PullRequestPayload["pull_request"]
 ): GitHubAutomationEvent["pullRequest"] {
+  const baseRepoId = pr.base?.repo?.id;
   return {
     number: pr.number,
     state: pr.state === "open" || pr.state === "closed" ? pr.state : undefined,
@@ -142,6 +150,10 @@ function getPullRequestFacts(
     merged: pr.merged ?? undefined,
     headSha: pr.head?.sha,
     isCrossRepository: isCrossRepositoryHead(pr),
+    url: pr.html_url,
+    // The base repo is where the PR lives — the canonical record identity.
+    repositoryExternalId: baseRepoId !== undefined ? String(baseRepoId) : undefined,
+    providerUpdatedAt: parseProviderUpdatedAt(pr.updated_at),
   };
 }
 
