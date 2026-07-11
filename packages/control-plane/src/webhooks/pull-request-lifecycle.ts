@@ -95,6 +95,25 @@ function equalsIgnoreCase(a: string | null | undefined, b: string): boolean {
   return typeof a === "string" && a.toLowerCase() === b.toLowerCase();
 }
 
+/**
+ * The single authority-then-mirror sequence: upsert the D1 record, and only
+ * when the monotonic guard accepted the write push the snapshot into the DO
+ * mirror. A rejected write is "stale" and must never reach the mirror — the
+ * authority record already holds a newer provider state.
+ */
+async function upsertRecordThenMirror(
+  deps: PullRequestLifecycleDeps,
+  snapshot: PullRequestSnapshot,
+  identity: { artifactId: string; sessionId: string; createdAt: number; updatedAt: number },
+  outcome: "updated" | "inserted"
+): Promise<PullRequestLifecycleOutcome> {
+  const { applied } = await deps.store.upsert(snapshotToRecord(snapshot, identity));
+  if (!applied) return "stale";
+
+  await deps.pushSnapshotToSession(identity.sessionId, identity.artifactId, snapshot);
+  return outcome;
+}
+
 export async function processPullRequestLifecycleEvent(
   deps: PullRequestLifecycleDeps,
   event: GitHubAutomationEvent
@@ -145,18 +164,17 @@ async function applyToRecord(
     providerUpdatedAt: facts.providerUpdatedAt ?? record.providerUpdatedAt ?? undefined,
   };
 
-  const { applied } = await deps.store.upsert(
-    snapshotToRecord(snapshot, {
+  return upsertRecordThenMirror(
+    deps,
+    snapshot,
+    {
       artifactId: record.artifactId,
       sessionId: record.sessionId,
       createdAt: record.createdAt,
       updatedAt: deps.now(),
-    })
+    },
+    "updated"
   );
-  if (!applied) return "stale";
-
-  await deps.pushSnapshotToSession(record.sessionId, record.artifactId, snapshot);
-  return "updated";
 }
 
 /**
@@ -186,8 +204,7 @@ async function insertViaBranchFallback(
     equalsIgnoreCase(session.repoOwner, event.repoOwner) &&
     equalsIgnoreCase(session.repoName, event.repoName);
 
-  const artifacts = await deps.listSessionArtifacts(sessionId);
-  const artifact = artifacts.find(
+  const candidates = (await deps.listSessionArtifacts(sessionId)).filter(
     (candidate) =>
       candidate.type === "pr" &&
       prArtifactBelongsToRepo(
@@ -196,14 +213,14 @@ async function insertViaBranchFallback(
         isPrimary
       )
   );
+  // The record mirrors one specific artifact: prefer the artifact carrying
+  // the webhook's PR number (a session can hold several PRs in one repo);
+  // number-less legacy metadata is acceptable only when no numbered
+  // artifact matches.
+  const artifact =
+    candidates.find((candidate) => candidate.metadata?.number === facts.number) ??
+    candidates.find((candidate) => typeof candidate.metadata?.number !== "number");
   if (!artifact) return "no_matching_artifact";
-
-  // The record mirrors this specific artifact — a different PR number means
-  // this webhook is not about the session's PR.
-  const artifactNumber = artifact.metadata?.number;
-  if (typeof artifactNumber === "number" && artifactNumber !== facts.number) {
-    return "no_matching_artifact";
-  }
 
   const url = facts.url ?? artifact.url;
   if (!url || !event.branch || !event.targetBranch) return "insufficient_payload";
@@ -223,15 +240,10 @@ async function insertViaBranchFallback(
     providerUpdatedAt: facts.providerUpdatedAt,
   };
 
-  await deps.store.upsert(
-    snapshotToRecord(snapshot, {
-      artifactId: artifact.id,
-      sessionId,
-      createdAt: now,
-      updatedAt: now,
-    })
+  return upsertRecordThenMirror(
+    deps,
+    snapshot,
+    { artifactId: artifact.id, sessionId, createdAt: now, updatedAt: now },
+    "inserted"
   );
-
-  await deps.pushSnapshotToSession(sessionId, artifact.id, snapshot);
-  return "inserted";
 }

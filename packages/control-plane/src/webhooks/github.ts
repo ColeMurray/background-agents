@@ -66,7 +66,7 @@ async function trackPullRequestLifecycle(
         return body.artifacts ?? [];
       },
       pushSnapshotToSession: async (sessionId, artifactId, snapshot) => {
-        await sessionRuntime.fetch(
+        const response = await sessionRuntime.fetch(
           sessionId,
           SessionInternalPaths.pullRequestArtifactSnapshot,
           {
@@ -76,6 +76,12 @@ async function trackPullRequestLifecycle(
           },
           `?artifactId=${encodeURIComponent(artifactId)}`
         );
+        // fetch resolves on 4xx/5xx — a rejected push must fail loudly
+        // instead of reading as a mirrored update. The D1 authority has
+        // already advanced; read-through repairs the mirror.
+        if (!response.ok) {
+          throw new Error(`Snapshot push to session DO failed (status ${response.status})`);
+        }
       },
       log,
       now: () => Date.now(),

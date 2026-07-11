@@ -189,6 +189,25 @@ describe("PR lifecycle tracking on /internal/github-event", () => {
     expect(record?.providerUpdatedAt).toBe(9000);
   });
 
+  it("still answers 200 and advances D1 when the DO snapshot push fails", async () => {
+    const sessionName = `pr-lifecycle-push-fail-${Date.now()}`;
+    await createIndexedSession(sessionName);
+    // Authority record points at an artifact the DO does not hold — the
+    // snapshot push 404s and must surface as a failure, never as success.
+    const store = new SessionPullRequestStore(env.DB);
+    await store.upsert(makeRecord(sessionName, { artifactId: "artifact-gone" }));
+
+    const res = await postGitHubEvent(makePullRequestEvent(sessionName));
+    expect(res.status).toBe(200);
+
+    // The D1 authority advances before the failing mirror push; read-through
+    // repairs the mirror later.
+    await vi.waitFor(async () => {
+      const record = await store.getByArtifactId("artifact-gone");
+      expect(record?.lifecycleState).toBe("merged");
+    });
+  });
+
   it("drops events on non-Open-Inspect branches", async () => {
     const sessionName = `pr-lifecycle-drop-${Date.now()}`;
     const stub = await createIndexedSession(sessionName);

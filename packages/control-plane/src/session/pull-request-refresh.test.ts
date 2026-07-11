@@ -270,6 +270,17 @@ describe("SessionPullRequestRefreshService", () => {
     );
   });
 
+  it("does not touch the DO mirror when the D1 monotonic guard rejects the snapshot", async () => {
+    const harness = createHarness([createPrArtifact()]);
+    harness.upsert.mockResolvedValue({ applied: false });
+
+    const result = await harness.service.refresh();
+
+    expect(result).toEqual({ refreshed: 0, skipped: 0 });
+    expect(harness.repository.updateArtifact).not.toHaveBeenCalled();
+    expect(harness.broadcastArtifactUpdated).not.toHaveBeenCalled();
+  });
+
   it("no-ops without a session row", async () => {
     const harness = createHarness([createPrArtifact()], null);
 

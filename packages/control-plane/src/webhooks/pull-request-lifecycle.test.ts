@@ -311,6 +311,79 @@ describe("processPullRequestLifecycleEvent", () => {
       expect(harness.upsert).not.toHaveBeenCalled();
     });
 
+    it("repairs the numbered artifact even when another same-repo PR artifact sorts first", async () => {
+      harness.isRepositoryAssociated.mockResolvedValue(true);
+      harness.listSessionArtifacts.mockResolvedValue([
+        {
+          id: "artifact-other",
+          type: "pr",
+          url: "https://github.com/acme/web/pull/999",
+          metadata: { number: 999, repoOwner: "acme", repoName: "web" },
+        },
+        {
+          id: "artifact-match",
+          type: "pr",
+          url: "https://github.com/acme/web/pull/7",
+          metadata: { number: 7, repoOwner: "acme", repoName: "web" },
+        },
+      ]);
+
+      const outcome = await processPullRequestLifecycleEvent(harness.deps, createEvent());
+
+      expect(outcome).toBe("inserted");
+      expect(harness.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ artifactId: "artifact-match", prNumber: 7 })
+      );
+      expect(harness.pushSnapshotToSession).toHaveBeenCalledWith(
+        "public-session-1",
+        "artifact-match",
+        expect.objectContaining({ number: 7 })
+      );
+    });
+
+    it("prefers the numbered artifact over number-less legacy metadata", async () => {
+      harness.isRepositoryAssociated.mockResolvedValue(true);
+      harness.listSessionArtifacts.mockResolvedValue([
+        {
+          id: "artifact-legacy",
+          type: "pr",
+          url: "https://github.com/acme/web/pull/6",
+          metadata: { repoOwner: "acme", repoName: "web" },
+        },
+        {
+          id: "artifact-match",
+          type: "pr",
+          url: "https://github.com/acme/web/pull/7",
+          metadata: { number: 7, repoOwner: "acme", repoName: "web" },
+        },
+      ]);
+
+      const outcome = await processPullRequestLifecycleEvent(harness.deps, createEvent());
+
+      expect(outcome).toBe("inserted");
+      expect(harness.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ artifactId: "artifact-match" })
+      );
+    });
+
+    it("does not push to the DO when the monotonic guard rejects the repair", async () => {
+      harness.isRepositoryAssociated.mockResolvedValue(true);
+      harness.upsert.mockResolvedValue({ applied: false });
+      harness.listSessionArtifacts.mockResolvedValue([
+        {
+          id: "artifact-repaired",
+          type: "pr",
+          url: "https://github.com/acme/web/pull/7",
+          metadata: { number: 7, repoOwner: "acme", repoName: "web" },
+        },
+      ]);
+
+      const outcome = await processPullRequestLifecycleEvent(harness.deps, createEvent());
+
+      expect(outcome).toBe("stale");
+      expect(harness.pushSnapshotToSession).not.toHaveBeenCalled();
+    });
+
     it("matches identity-less legacy artifact metadata via the primary-repo convention", async () => {
       harness.isRepositoryAssociated.mockResolvedValue(true);
       harness.listSessionArtifacts.mockResolvedValue([

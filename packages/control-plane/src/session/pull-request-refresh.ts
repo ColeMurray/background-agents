@@ -139,7 +139,8 @@ export class SessionPullRequestRefreshService {
         continue;
       }
 
-      await this.upsertRecord(artifact, sessionId, snapshot);
+      const recordAccepted = await this.upsertRecord(artifact, sessionId, snapshot);
+      if (!recordAccepted) continue;
 
       const { applied } = applyPullRequestSnapshot(
         {
@@ -159,16 +160,19 @@ export class SessionPullRequestRefreshService {
 
   /**
    * Refresh/repair the D1 authority record from the provider snapshot —
-   * insert-if-absent covers records whose creation write failed. Best-effort:
-   * the DO mirror still updates when D1 is unavailable.
+   * insert-if-absent covers records whose creation write failed. Returns
+   * false only when the monotonic guard rejected the snapshot as stale (a
+   * newer webhook write won the authority record while this read was in
+   * flight): the DO mirror must not regress behind the authority. Best-effort
+   * otherwise — the mirror still updates when D1 is unavailable or errors.
    */
   private async upsertRecord(
     artifact: ArtifactRow,
     sessionId: string,
     snapshot: PullRequestSnapshot
-  ): Promise<void> {
+  ): Promise<boolean> {
     const store = this.deps.sessionPullRequests;
-    if (!store) return;
+    if (!store) return true;
 
     const record = snapshotToRecord(snapshot, {
       artifactId: artifact.id,
@@ -177,7 +181,8 @@ export class SessionPullRequestRefreshService {
       updatedAt: this.deps.now(),
     });
     try {
-      await store.upsert(record);
+      const { applied } = await store.upsert(record);
+      return applied;
     } catch (error) {
       this.deps.log.error("Failed to write session pull request record", {
         artifact_id: record.artifactId,
@@ -186,6 +191,7 @@ export class SessionPullRequestRefreshService {
         repo_name: record.repoName,
         error: error instanceof Error ? error : String(error),
       });
+      return true;
     }
   }
 }
