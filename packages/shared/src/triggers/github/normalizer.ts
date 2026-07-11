@@ -116,6 +116,35 @@ export function normalizeGitHubEvent(
 
 // ─── Per-event normalizers ────────────────────────────────────────────────────
 
+/**
+ * Compare head vs base repository identity to detect a fork (cross-repository)
+ * PR. A null head repo means the fork was deleted — never the base repository,
+ * so it counts as cross-repository. Returns undefined when the payload lacks
+ * the identity to compare.
+ */
+function isCrossRepositoryHead(pr: PullRequestPayload["pull_request"]): boolean | undefined {
+  const headRepo = pr.head?.repo;
+  if (headRepo === null) return true;
+  const headId = headRepo?.id;
+  const baseId = pr.base?.repo?.id;
+  if (headId === undefined || baseId === undefined) return undefined;
+  return headId !== baseId;
+}
+
+/** Extract the typed PR facts the payload actually carries (no guessing). */
+function getPullRequestFacts(
+  pr: PullRequestPayload["pull_request"]
+): GitHubAutomationEvent["pullRequest"] {
+  return {
+    number: pr.number,
+    state: pr.state === "open" || pr.state === "closed" ? pr.state : undefined,
+    draft: pr.draft ?? undefined,
+    merged: pr.merged ?? undefined,
+    headSha: pr.head?.sha,
+    isCrossRepository: isCrossRepositoryHead(pr),
+  };
+}
+
 function normalizePullRequest(
   eventType: string,
   action: string,
@@ -137,6 +166,7 @@ function normalizePullRequest(
     targetBranch,
     labels: getPRLabels(pr),
     actor: getActor(payload),
+    pullRequest: getPullRequestFacts(pr),
     contextBlock: buildPullRequestContextBlock(eventType, payload),
     meta: {
       prNumber: pr.number,

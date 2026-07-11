@@ -5,7 +5,8 @@
  * using Personal Access Tokens (PAT) for authentication.
  */
 
-import type { InstallationRepository } from "@open-inspect/shared";
+import { toDisplayStatus } from "@open-inspect/shared";
+import type { InstallationRepository, PullRequestStatus } from "@open-inspect/shared";
 import type {
   SourceControlProvider,
   SourceControlAuthContext,
@@ -14,6 +15,8 @@ import type {
   RepositoryInfo,
   CreatePullRequestConfig,
   CreatePullRequestResult,
+  GetPullRequestConfig,
+  PullRequestSnapshot,
   BuildManualPullRequestUrlConfig,
   BuildGitPushSpecConfig,
   GitPushSpec,
@@ -51,6 +54,47 @@ function encodeProjectPath(owner: string, name: string): string {
 function encodeProjectWebPath(owner: string, name: string): string {
   const encodedOwner = owner.split("/").map(encodeURIComponent).join("/");
   return `${encodedOwner}/${encodeURIComponent(name)}`;
+}
+
+/** GitLab merge-request state fields as the REST API reports them. */
+interface GitLabMergeRequestStateFields {
+  state: string;
+  draft?: boolean | null;
+}
+
+/**
+ * Pure mapping from GitLab's MR state fields to the stored status. GitLab
+ * models merged as a first-class state; terminal states win over a stale
+ * draft flag (isDraft is only meaningful while open), and the transient
+ * "locked" state (mid-merge) counts as open. Shared by createPullRequest
+ * (user-authed) and getPullRequest (PAT/app-authed).
+ */
+export function deriveGitLabMergeRequestStatus(
+  data: GitLabMergeRequestStateFields
+): PullRequestStatus {
+  if (data.state === "merged") return { lifecycleState: "merged", isDraft: false };
+  if (data.state === "closed") return { lifecycleState: "closed", isDraft: false };
+  return { lifecycleState: "open", isDraft: data.draft === true };
+}
+
+/** Wire shape of a GitLab REST merge request, limited to the fields we read. */
+interface GitLabMergeRequestResponse {
+  iid: number;
+  web_url: string;
+  state: string;
+  draft?: boolean | null;
+  source_branch: string;
+  target_branch: string;
+  sha?: string;
+  project_id?: number;
+  updated_at?: string;
+}
+
+/** Parse GitLab's ISO-8601 updated_at into epoch ms; undefined when absent/invalid. */
+function parseProviderUpdatedAt(updatedAt: string | undefined): number | undefined {
+  if (!updatedAt) return undefined;
+  const parsed = Date.parse(updatedAt);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 /**
@@ -179,36 +223,99 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as {
-      iid: number;
-      web_url: string;
+    const data = (await response.json()) as GitLabMergeRequestResponse & {
       _links: { self: string };
-      state: string;
-      draft: boolean;
-      source_branch: string;
-      target_branch: string;
     };
-
-    // Check terminal states first — a merged/closed MR cannot also be a draft.
-    let state: CreatePullRequestResult["state"];
-    if (data.state === "merged") {
-      state = "merged";
-    } else if (data.state === "closed") {
-      state = "closed";
-    } else if (data.draft) {
-      state = "draft";
-    } else {
-      state = "open";
-    }
 
     return {
       id: data.iid,
       webUrl: data.web_url,
       apiUrl: data._links.self,
-      state,
+      state: toDisplayStatus(deriveGitLabMergeRequestStatus(data)),
       sourceBranch: data.source_branch,
       targetBranch: data.target_branch,
+      headSha: data.sha,
+      repositoryExternalId: data.project_id !== undefined ? String(data.project_id) : undefined,
     };
+  }
+
+  /**
+   * Read the current state of a merge request using the provider PAT.
+   *
+   * On a 404 with a known stable project id, re-resolves the project's
+   * current path by id and retries once (rename/transfer tolerance).
+   */
+  async getPullRequest(config: GetPullRequestConfig): Promise<PullRequestSnapshot> {
+    let owner = config.owner;
+    let name = config.name;
+    let response = await this.fetchMergeRequest(owner, name, config.number);
+
+    if (response.status === 404 && config.repositoryExternalId) {
+      const resolved = await this.resolveProjectLocationById(config.repositoryExternalId);
+      if (resolved) {
+        ({ owner, name } = resolved);
+        response = await this.fetchMergeRequest(owner, name, config.number);
+      }
+    }
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to get merge request: ${response.status} ${error}`,
+        new Error(error),
+        response.status
+      );
+    }
+
+    const data = (await response.json()) as GitLabMergeRequestResponse;
+    const status = deriveGitLabMergeRequestStatus(data);
+
+    return {
+      number: data.iid,
+      url: data.web_url,
+      lifecycleState: status.lifecycleState,
+      isDraft: status.isDraft,
+      headBranch: data.source_branch,
+      baseBranch: data.target_branch,
+      headSha: data.sha,
+      // The MR response has no namespace path; the path we successfully read
+      // from (config, or the by-id resolution) is the current location.
+      repoOwner: owner,
+      repoName: name,
+      repositoryExternalId:
+        data.project_id !== undefined ? String(data.project_id) : config.repositoryExternalId,
+      providerUpdatedAt: parseProviderUpdatedAt(data.updated_at),
+    };
+  }
+
+  private fetchMergeRequest(owner: string, name: string, number: number): Promise<Response> {
+    const projectPath = encodeProjectPath(owner, name);
+    return fetchWithTimeout(`${GITLAB_API_BASE}/projects/${projectPath}/merge_requests/${number}`, {
+      headers: this.headers(this.accessToken),
+    });
+  }
+
+  /** Resolve a project's current namespace/path from its stable numeric id. */
+  private async resolveProjectLocationById(
+    repositoryExternalId: string
+  ): Promise<{ owner: string; name: string } | null> {
+    const response = await fetchWithTimeout(
+      `${GITLAB_API_BASE}/projects/${encodeURIComponent(repositoryExternalId)}`,
+      { headers: this.headers(this.accessToken) }
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as {
+      path?: string;
+      namespace?: { full_path?: string };
+    };
+    if (!data.namespace?.full_path || !data.path) {
+      return null;
+    }
+    return { owner: data.namespace.full_path, name: data.path };
   }
 
   /**

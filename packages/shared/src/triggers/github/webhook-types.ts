@@ -101,15 +101,33 @@ const baseEventSchema = z.object({
   sender: userSchema.optional(),
 });
 
+// Repo identity on a PR's head/base. `id` is the stable provider repo id used
+// to detect cross-repository (fork) heads; GitHub sends head.repo as null when
+// the fork was deleted.
+const prRepoRefSchema = z.object({
+  id: z.number().optional(),
+  full_name: z.string().optional(),
+});
+
 const pullRequestObjectSchema = z.object({
   number: z.number(),
   title: z.string().optional(),
   body: z.string().nullable().optional(),
+  state: z.string().optional(),
+  draft: z.boolean().nullable().optional(),
   merged: z.boolean().nullable().optional(),
   user: userSchema.optional(),
   labels: labelArraySchema.optional(),
-  head: z.object({ ref: z.string().optional(), sha: z.string().optional() }).optional(),
-  base: z.object({ ref: z.string().optional() }).optional(),
+  head: z
+    .object({
+      ref: z.string().optional(),
+      sha: z.string().optional(),
+      repo: prRepoRefSchema.nullable().optional(),
+    })
+    .optional(),
+  base: z
+    .object({ ref: z.string().optional(), repo: prRepoRefSchema.nullable().optional() })
+    .optional(),
 });
 
 const commentSchema = z.object({

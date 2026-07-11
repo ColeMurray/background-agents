@@ -51,12 +51,17 @@ export type {
   ClassificationResult,
 } from "./repository-catalog";
 
+export { toDisplayStatus } from "./artifacts";
 export type {
   SessionArtifact,
   ManualPullRequestArtifactMetadata,
   ScreenshotArtifactMetadata,
   VideoArtifactMetadata,
   PullRequest,
+  PullRequestLifecycleState,
+  PullRequestStatus,
+  PullRequestDisplayStatus,
+  PullRequestArtifactMetadata,
   ArtifactResponse,
   ListArtifactsResponse,
   ToolCallSummary,
@@ -73,6 +78,7 @@ export type {
   SessionMessage,
   SessionState,
   ParticipantPresence,
+  PullRequestSummary,
 } from "./sessions";
 
 export { serverMessageSchema } from "./server-messages";

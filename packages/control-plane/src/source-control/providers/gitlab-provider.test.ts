@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { GitLabSourceControlProvider } from "./gitlab-provider";
+import { GitLabSourceControlProvider, deriveGitLabMergeRequestStatus } from "./gitlab-provider";
 import { SourceControlProviderError } from "../errors";
 
 // Mock global fetch
@@ -751,5 +751,182 @@ describe("GitLabSourceControlProvider", () => {
       expect(spec.remoteUrl).toBe("https://oauth2:glpat-secret@gitlab.com/acme/my-repo.git");
       expect(spec.redactedRemoteUrl).toBe("https://oauth2:<redacted>@gitlab.com/acme/my-repo.git");
     });
+  });
+});
+
+// ─── PR lifecycle tracking (getPullRequest + status derivation) ───────────────
+
+describe("deriveGitLabMergeRequestStatus", () => {
+  it("maps an opened ready MR", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "opened", draft: false })).toEqual({
+      lifecycleState: "open",
+      isDraft: false,
+    });
+  });
+
+  it("maps an opened draft MR", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "opened", draft: true })).toEqual({
+      lifecycleState: "open",
+      isDraft: true,
+    });
+  });
+
+  it("maps merged terminal-first and never leaks a stale draft flag (invariant)", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "merged", draft: true })).toEqual({
+      lifecycleState: "merged",
+      isDraft: false,
+    });
+  });
+
+  it("maps closed terminal-first", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "closed", draft: true })).toEqual({
+      lifecycleState: "closed",
+      isDraft: false,
+    });
+  });
+
+  it("treats the transient locked state as open", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "locked", draft: false })).toEqual({
+      lifecycleState: "open",
+      isDraft: false,
+    });
+  });
+});
+
+describe("getPullRequest", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  const baseMrResponse = {
+    iid: 7,
+    web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+    state: "opened",
+    draft: true,
+    source_branch: "open-inspect/session-1",
+    target_branch: "main",
+    sha: "abc123",
+    project_id: 9001,
+    updated_at: "2026-07-10T12:00:00.000Z",
+  };
+
+  it("reads with the provider PAT and maps the response to a snapshot", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse(baseMrResponse));
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot).toEqual({
+      number: 7,
+      url: "https://gitlab.com/acme/web/-/merge_requests/7",
+      lifecycleState: "open",
+      isDraft: true,
+      headBranch: "open-inspect/session-1",
+      baseBranch: "main",
+      headSha: "abc123",
+      repoOwner: "acme",
+      repoName: "web",
+      repositoryExternalId: "9001",
+      providerUpdatedAt: Date.parse("2026-07-10T12:00:00.000Z"),
+    });
+
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/7");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer glpat-test-token");
+  });
+
+  it("maps a merged MR to merged", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ ...baseMrResponse, state: "merged" }));
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot.lifecycleState).toBe("merged");
+    expect(snapshot.isDraft).toBe(false);
+  });
+
+  it("resolves the project by stable id and retries once on 404 (rename tolerance)", async () => {
+    mockFetch
+      .mockResolvedValueOnce(makeResponse({ message: "404 Not Found" }, 404))
+      .mockResolvedValueOnce(
+        makeResponse({ id: 9001, path: "web-renamed", namespace: { full_path: "acme" } })
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          ...baseMrResponse,
+          web_url: "https://gitlab.com/acme/web-renamed/-/merge_requests/7",
+        })
+      );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({
+      owner: "acme",
+      name: "web",
+      number: 7,
+      repositoryExternalId: "9001",
+    });
+
+    expect(snapshot.repoName).toBe("web-renamed");
+    expect(mockFetch.mock.calls[1][0]).toBe("https://gitlab.com/api/v4/projects/9001");
+    expect(mockFetch.mock.calls[2][0]).toBe(
+      "https://gitlab.com/api/v4/projects/acme%2Fweb-renamed/merge_requests/7"
+    );
+  });
+
+  it("throws with httpStatus 404 when the MR is gone and no stable id is known", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ message: "404 Not Found" }, 404));
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).httpStatus).toBe(404);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createPullRequest state capture", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("captures headSha and repositoryExternalId from the create response", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        iid: 5,
+        web_url: "https://gitlab.com/acme/web/-/merge_requests/5",
+        _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/5" },
+        state: "opened",
+        draft: false,
+        source_branch: "open-inspect/session-1",
+        target_branch: "main",
+        sha: "abc123",
+        project_id: 9001,
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const result = await provider.createPullRequest(
+      { authType: "pat", token: "user-token" },
+      {
+        repository: {
+          owner: "acme",
+          name: "web",
+          fullName: "acme/web",
+          defaultBranch: "main",
+          isPrivate: true,
+          providerRepoId: 9001,
+        },
+        title: "Add feature",
+        body: "Description",
+        sourceBranch: "open-inspect/session-1",
+        targetBranch: "main",
+      }
+    );
+
+    expect(result.headSha).toBe("abc123");
+    expect(result.repositoryExternalId).toBe("9001");
   });
 });

@@ -44,6 +44,25 @@ interface BaseAutomationEvent {
 
 // ─── Source-Specific Variants ─────────────────────────────────────────────────
 
+/**
+ * Typed pull-request facts carried on pull_request events. Every field beyond
+ * the number is optional and reflects only what the webhook payload actually
+ * said — consumers fall back to a provider read when a field is absent.
+ */
+export interface GitHubPullRequestEventFacts {
+  number: number;
+  /** Raw provider state; merged-vs-closed is disambiguated by `merged`. */
+  state?: "open" | "closed";
+  draft?: boolean;
+  merged?: boolean;
+  headSha?: string;
+  /**
+   * True when the head branch lives in a different repository than the base
+   * (fork PR). Undefined when the payload lacks repo identity to compare.
+   */
+  isCrossRepository?: boolean;
+}
+
 export interface GitHubAutomationEvent extends BaseAutomationEvent {
   source: "github";
   repoOwner: string;
@@ -56,6 +75,8 @@ export interface GitHubAutomationEvent extends BaseAutomationEvent {
   actor?: string;
   changedFiles?: string[];
   checkConclusion?: string;
+  /** Present only on pull_request events. */
+  pullRequest?: GitHubPullRequestEventFacts;
 }
 
 export interface LinearAutomationEvent extends BaseAutomationEvent {
@@ -123,6 +144,16 @@ export const automationEventSchema = z.discriminatedUnion("source", [
     actor: z.string().optional(),
     changedFiles: z.array(z.string()).optional(),
     checkConclusion: z.string().optional(),
+    pullRequest: z
+      .object({
+        number: z.number(),
+        state: z.enum(["open", "closed"]).optional(),
+        draft: z.boolean().optional(),
+        merged: z.boolean().optional(),
+        headSha: z.string().optional(),
+        isCrossRepository: z.boolean().optional(),
+      })
+      .optional(),
   }),
   z.object({
     ...baseAutomationEventSchema,
