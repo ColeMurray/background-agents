@@ -39,7 +39,6 @@ import {
   AutomationsIcon,
   BranchIcon,
   BoxIcon,
-  GitPrIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { APP_SHORT_NAME } from "@/lib/site-config";
@@ -920,13 +919,6 @@ function SessionListItem({
                   <span>·</span>
                   <BranchIcon className="w-3 h-3 flex-shrink-0" />
                   <span className="truncate">{session.baseBranch}</span>
-                </>
-              )}
-              {prDisplay && (
-                <>
-                  <span>·</span>
-                  <GitPrIcon className="w-3 h-3 flex-shrink-0" />
-                  <span className="truncate">{prDisplay.label}</span>
                 </>
               )}
             </div>

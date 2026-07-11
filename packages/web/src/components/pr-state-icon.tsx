@@ -1,6 +1,12 @@
 import type { PullRequestDisplayStatus } from "@open-inspect/shared";
-import { PR_STATE_TEXT_CLASS } from "@/components/ui/badge";
 import { GitMergeIcon, GitPrClosedIcon, GitPrDraftIcon, GitPrIcon } from "@/components/ui/icons";
+
+export const PR_STATE_TEXT_CLASS: Record<PullRequestDisplayStatus, string> = {
+  open: "text-[#1f883d] dark:text-[#3fb950]",
+  draft: "text-[#656d76] dark:text-[#8c959f]",
+  merged: "text-[#8250df] dark:text-[#a371f7]",
+  closed: "text-[#cf222e] dark:text-[#f85149]",
+};
 
 const PR_STATE_ICONS: Record<
   PullRequestDisplayStatus,
@@ -13,8 +19,7 @@ const PR_STATE_ICONS: Record<
 };
 
 /**
- * GitHub-style PR state icon for a session-list row. Colors come from
- * PR_STATE_TEXT_CLASS — the same tokens the PR badge variants use.
+ * GitHub-style PR state icon for a session-list row.
  */
 export function PullRequestStateIcon({
   state,
