@@ -242,6 +242,10 @@ function getNewSessionActorUserId(webhook: AgentSessionWebhook): string | undefi
   return webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId;
 }
 
+function shouldTransitionIssueOnStart(webhook: AgentSessionWebhook): boolean {
+  return webhook.action === "created" && Boolean(webhook.agentSession.creatorId?.trim());
+}
+
 function getFollowUp(webhook: AgentSessionWebhook): {
   content: string;
   source: "linear_agent_activity" | "linear_comment" | "linear_fallback";
@@ -274,10 +278,18 @@ function buildLinearCallbackContext(params: {
   model: string;
   repoFullName?: string;
   emitToolProgressActivities?: boolean;
+  transitionIssueOnStart?: boolean;
 }): LinearCallbackContext {
-  const { webhook, issue, model, repoFullName, emitToolProgressActivities } = params;
-  return {
-    source: "linear",
+  const {
+    webhook,
+    issue,
+    model,
+    repoFullName,
+    emitToolProgressActivities,
+    transitionIssueOnStart,
+  } = params;
+  const context = {
+    source: "linear" as const,
     issueId: issue.id,
     issueIdentifier: issue.identifier,
     issueUrl: issue.url,
@@ -287,6 +299,13 @@ function buildLinearCallbackContext(params: {
     organizationId: webhook.organizationId,
     appUserId: webhook.appUserId,
     emitToolProgressActivities,
+  };
+  if (transitionIssueOnStart === true) {
+    return { ...context, transitionIssueOnStart: true };
+  }
+  return {
+    ...context,
+    ...(transitionIssueOnStart === false ? { transitionIssueOnStart: false as const } : {}),
   };
 }
 
@@ -554,6 +573,7 @@ async function handleNewSession(
     model,
     repoFullName: integration.callbackRepoFullName,
     emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
+    transitionIssueOnStart: shouldTransitionIssueOnStart(webhook),
   });
 
   await storeIssueSession(env, issue.id, {

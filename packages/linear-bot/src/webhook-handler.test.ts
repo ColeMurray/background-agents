@@ -280,6 +280,14 @@ describe("handleAgentSessionEvent environment targets", () => {
     return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
   }
 
+  function promptBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> | null {
+    const call = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith("/sessions/session-xyz/prompt")
+    );
+    if (!call) return null;
+    return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
+  }
+
   it("transitions an existing installation and creates an environment session", async () => {
     const { kv, store } = createFakeKV({
       "oauth:token:org-1": JSON.stringify({
@@ -391,6 +399,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       callbackContext: {
         organizationId: "org-1",
         appUserId: "app-user-1",
+        transitionIssueOnStart: true,
       },
     });
 
@@ -400,6 +409,44 @@ describe("handleAgentSessionEvent environment targets", () => {
     > | null;
     expect(issueSession).toMatchObject({ repoOwner: "acme", repoName: "backend" });
     expect(issueSession).not.toHaveProperty("environmentId");
+  });
+
+  it("does not opt an automation-created session into the issue transition", async () => {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({
+        "project-1": { owner: "acme", name: "backend" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = stubControlPlane(env);
+    const webhook = makeWebhook();
+    delete webhook.agentSession.creatorId;
+
+    await handleAgentSessionEvent(webhook, env, "trace-automation");
+
+    expect(promptBody(fetchMock)).toMatchObject({
+      callbackContext: { transitionIssueOnStart: false },
+    });
+  });
+
+  it("does not opt an unmapped prompted event into the initial issue transition", async () => {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({
+        "project-1": { owner: "acme", name: "backend" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = stubControlPlane(env);
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+
+    await handleAgentSessionEvent(webhook, env, "trace-unmapped-prompt");
+
+    expect(promptBody(fetchMock)).toMatchObject({
+      callbackContext: { transitionIssueOnStart: false },
+    });
   });
 
   it("attributes follow-up prompts to the human activity author", async () => {
@@ -436,7 +483,8 @@ describe("handleAgentSessionEvent environment targets", () => {
     const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
       String(input).endsWith("/prompt")
     );
-    expect(JSON.parse(String(promptCall?.[1]?.body))).toMatchObject({
+    const body = JSON.parse(String(promptCall?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
       authorId: "linear:follow-up-human-user",
       callbackContext: {
         source: "linear",
@@ -450,6 +498,7 @@ describe("handleAgentSessionEvent environment targets", () => {
         appUserId: "app-user-1",
       },
     });
+    expect(body.callbackContext).not.toHaveProperty("transitionIssueOnStart");
   });
 
   it("resolves current callback settings for an environment follow-up", async () => {

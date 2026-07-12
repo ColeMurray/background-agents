@@ -56,8 +56,11 @@ viewer organization must match the webhook organization.
 1. User @mentions or assigns the agent → Linear sends `AgentSessionEvent`
 2. Agent emits `Thought` activities (visible as "thinking" in Linear)
 3. Agent creates Open-Inspect session and sends prompt
-4. Agent emits a `Thought` with the session link while work continues
-5. On completion callback, agent emits `Response` with PR link
+4. When a human-initiated prompt is dispatched to a live sandbox, the control plane sends a signed
+   start callback and the agent moves an eligible issue to the team's lowest-position `started`
+   workflow state
+5. Agent emits a `Thought` with the session link while work continues
+6. On completion callback, agent emits `Response` with PR link
 
 ### Callback Context
 
@@ -65,6 +68,11 @@ The `callbackContext` is stored on every queued message, including follow-ups. I
 `agentSessionId`, `organizationId`, and installed `appUserId` so completion can verify the runtime
 credential and emit `AgentActivity` on the correct Linear session. It also carries issue, model,
 optional repository/settings, and tool-progress fields needed by callback delivery.
+
+The initial message also carries `transitionIssueOnStart: true` when Linear identifies a responsible
+human creator. The control plane forwards that message-scoped context through `/callbacks/start`,
+and the Linear worker applies the opt-in policy; automation sessions and follow-ups omit it or set
+it to false. Callback failures are retried once and never block sandbox execution.
 
 Callback context is message-scoped rather than inherited by the control plane. A producer that
 queues a follow-up must attach it again; otherwise the control plane has no safe callback
