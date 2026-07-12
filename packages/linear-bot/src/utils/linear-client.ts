@@ -76,7 +76,7 @@ export async function getLinearClientOrThrow(
 /**
  * Execute a GraphQL query against the Linear API.
  */
-async function linearGraphQL(
+export async function linearGraphQL(
   client: LinearApiClient,
   query: string,
   variables: Record<string, unknown>

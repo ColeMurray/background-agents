@@ -12,21 +12,13 @@ import {
   updateAgentSession,
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
-import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
-import { computeHmacHex } from "./utils/crypto";
+import { resolveAppName } from "@open-inspect/shared";
+import { verifyCallbackSignature } from "./utils/crypto";
 import { makePlan } from "./plan";
 import { createLogger } from "./logger";
+import { createStartCallbackRouter } from "./callbacks/start-callback";
 
 const log = createLogger("callback");
-
-export async function verifyCallbackSignature<T extends { signature: string }>(
-  payload: T,
-  secret: string
-): Promise<boolean> {
-  const { signature, ...data } = payload;
-  const expectedHex = await computeHmacHex(JSON.stringify(data), secret);
-  return timingSafeEqual(signature, expectedHex);
-}
 
 export function formatCompletionComment(
   appName: string,
@@ -54,6 +46,7 @@ export function isValidPayload(payload: unknown): payload is CompletionCallback 
 }
 
 export const callbacksRouter = new Hono<{ Bindings: Env }>();
+callbacksRouter.route("/", createStartCallbackRouter());
 
 callbacksRouter.post("/complete", async (c) => {
   const startTime = Date.now();

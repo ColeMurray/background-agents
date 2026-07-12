@@ -274,8 +274,16 @@ function buildLinearCallbackContext(params: {
   model: string;
   repoFullName?: string;
   emitToolProgressActivities?: boolean;
+  transitionIssueOnStart?: boolean;
 }): LinearCallbackContext {
-  const { webhook, issue, model, repoFullName, emitToolProgressActivities } = params;
+  const {
+    webhook,
+    issue,
+    model,
+    repoFullName,
+    emitToolProgressActivities,
+    transitionIssueOnStart,
+  } = params;
   return {
     source: "linear",
     issueId: issue.id,
@@ -287,6 +295,7 @@ function buildLinearCallbackContext(params: {
     organizationId: webhook.organizationId,
     appUserId: webhook.appUserId,
     emitToolProgressActivities,
+    transitionIssueOnStart,
   };
 }
 
@@ -554,6 +563,8 @@ async function handleNewSession(
     model,
     repoFullName: integration.callbackRepoFullName,
     emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
+    transitionIssueOnStart:
+      webhook.action === "created" && Boolean(webhook.agentSession.creatorId?.trim()),
   });
 
   await storeIssueSession(env, issue.id, {

@@ -115,8 +115,13 @@ starts.
 When a session starts, Linear receives a **View Session** link. If the agent opens a pull request,
 Linear receives a **Pull Request** link when the session finishes.
 
-Open the web session for live output, logs, artifacts, and file changes. Linear does not currently
-update issue status, labels, assignee, priority, or project.
+Open the web session for live output, logs, artifacts, and file changes. For a human-initiated
+session, Open-Inspect moves an unstarted issue to the team's first **Started** status only after the
+initial prompt reaches a live sandbox. It leaves automation-initiated, already-started, completed,
+and canceled issues unchanged. Follow-up prompts do not change issue status.
+
+Open-Inspect does not update labels, assignee, priority, or project. Pull-request workflow changes
+remain the responsibility of Linear's GitHub integration and the team's PR automation settings.
 
 ---
 

@@ -48,6 +48,8 @@ export interface LinearCallbackContext {
   /** Installed Linear app-user identity used to verify runtime credentials. */
   appUserId?: string;
   emitToolProgressActivities?: boolean;
+  /** Move the issue to its team's started workflow when this message begins processing. */
+  transitionIssueOnStart?: boolean;
 }
 
 export interface AutomationCallbackContext {

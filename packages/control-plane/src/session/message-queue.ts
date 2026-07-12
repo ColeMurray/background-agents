@@ -207,6 +207,17 @@ export class SessionMessageQueue {
 
     const sent = this.deps.wsManager.send(sandboxWs, command);
 
+    if (sent) {
+      this.deps.ctx.waitUntil(
+        this.deps.callbackService.notifyStarted(message.id).catch((error) => {
+          this.deps.log.error("callback.started.background_error", {
+            message_id: message.id,
+            error,
+          });
+        })
+      );
+    }
+
     this.deps.log.info("prompt.dispatch", {
       event: "prompt.dispatch",
       message_id: message.id,
