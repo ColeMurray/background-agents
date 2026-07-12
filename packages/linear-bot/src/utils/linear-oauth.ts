@@ -11,6 +11,7 @@ const LINEAR_TOKEN_URL = "https://api.linear.app/oauth/token";
 
 export const LINEAR_CLIENT_CREDENTIALS_SCOPE = "read,write,app:assignable,app:mentionable";
 export const LINEAR_TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
+export const LINEAR_AUTH_REQUEST_TIMEOUT_MS = 5_000;
 
 const CLIENT_CREDENTIALS_SCOPE_SET = new Set(LINEAR_CLIENT_CREDENTIALS_SCOPE.split(","));
 
@@ -142,6 +143,7 @@ function postTokenRequest(env: Env, body: URLSearchParams): Promise<Response> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    signal: AbortSignal.timeout(LINEAR_AUTH_REQUEST_TIMEOUT_MS),
   });
 }
 
@@ -233,6 +235,7 @@ export async function fetchLinearIdentity(accessToken: string): Promise<LinearId
       body: JSON.stringify({
         query: `query LinearViewerIdentity { viewer { id organization { id name } } }`,
       }),
+      signal: AbortSignal.timeout(LINEAR_AUTH_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) throw new LinearIdentityError(response.status);
 

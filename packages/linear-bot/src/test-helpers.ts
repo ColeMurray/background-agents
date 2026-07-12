@@ -62,6 +62,7 @@ interface LinearFetchRequest {
   body: Record<string, unknown>;
   operationName?: string;
   params?: URLSearchParams;
+  signal?: AbortSignal | null;
 }
 
 interface LinearFetchHandlers {
@@ -94,7 +95,7 @@ export function createLinearFetchMock(handlers: LinearFetchHandlers) {
             ? handlers.clientCredentials
             : undefined;
       if (!handler) throw new Error(`Unexpected Linear OAuth grant: ${String(grantType)}`);
-      return handler({ body: {}, params });
+      return handler({ body: {}, params, signal: init?.signal });
     }
 
     if (url === "https://api.linear.app/graphql") {
@@ -108,6 +109,7 @@ export function createLinearFetchMock(handlers: LinearFetchHandlers) {
         accessToken: readBearerToken(init?.headers),
         body,
         operationName,
+        signal: init?.signal,
       });
     }
 

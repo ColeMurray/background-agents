@@ -12,6 +12,7 @@ import {
   linearIdentityResponse,
   makeLinearBotEnv,
 } from "../test-helpers";
+import { LINEAR_AUTH_REQUEST_TIMEOUT_MS } from "./linear-oauth";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -450,6 +451,47 @@ describe("Linear client credentials", () => {
     await expect(
       getLinearClientOrThrow(makeLinearBotEnv(kv), "org-1", "app-user-1")
     ).rejects.toMatchObject({ reason: "client_credentials_error" });
+  });
+
+  it("times out token endpoint requests and maps the abort to an auth failure", async () => {
+    const { kv } = createFakeKV();
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    vi.stubGlobal(
+      "fetch",
+      createLinearFetchMock({
+        clientCredentials: ({ signal }) => {
+          expect(signal).toBe(timeoutSignal);
+          throw timeoutSignal.reason;
+        },
+      })
+    );
+
+    await expect(
+      getLinearClientOrThrow(makeLinearBotEnv(kv), "org-1", "app-user-1")
+    ).rejects.toMatchObject({ reason: "client_credentials_error" });
+    expect(timeoutSpy).toHaveBeenCalledWith(LINEAR_AUTH_REQUEST_TIMEOUT_MS);
+  });
+
+  it("times out identity requests and maps the abort to an identity failure", async () => {
+    const { kv } = createFakeKV();
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    vi.stubGlobal(
+      "fetch",
+      createLinearFetchMock({
+        clientCredentials: () => linearClientCredentialsResponse(),
+        identity: ({ signal }) => {
+          expect(signal).toBe(timeoutSignal);
+          throw timeoutSignal.reason;
+        },
+      })
+    );
+
+    await expect(
+      getLinearClientOrThrow(makeLinearBotEnv(kv), "org-1", "app-user-1")
+    ).rejects.toMatchObject({ reason: "client_credentials_identity_error" });
+    expect(timeoutSpy).toHaveBeenCalledWith(LINEAR_AUTH_REQUEST_TIMEOUT_MS);
   });
 
   it("rejects an invalid viewer identity response", async () => {
