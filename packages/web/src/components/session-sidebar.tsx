@@ -35,16 +35,15 @@ import {
   SidebarIcon,
   ArchiveIcon,
   PlusIcon,
+  SearchIcon,
   SettingsIcon,
   AutomationsIcon,
   BranchIcon,
   BoxIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
-import { APP_SHORT_NAME } from "@/lib/site-config";
-import { formatRepoLabel, formatSessionRepositoriesLabel } from "@/lib/repo-label";
+import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useEnvironments } from "@/hooks/use-environments";
 import {
   DropdownMenu,
@@ -80,15 +79,20 @@ export function buildSessionHref(session: SessionItem) {
 
 interface SessionSidebarProps {
   onNewSession?: () => void;
+  onSearchSessions?: () => void;
   onToggle?: () => void;
   onSessionSelect?: () => void;
 }
 
-export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: SessionSidebarProps) {
+export function SessionSidebar({
+  onNewSession,
+  onSearchSessions,
+  onToggle,
+  onSessionSelect,
+}: SessionSidebarProps) {
   const { data: authSession } = useSession();
   const pathname = usePathname();
   const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState("");
   const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
   const [hasMorePages, setHasMorePages] = useState(false);
@@ -214,23 +218,9 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     [firstPageSessions, effectiveExtraSessions]
   );
 
-  // Sort sessions by updatedAt (most recent first), filter by search query,
-  // and group children under their parent sessions
-  const { activeSessions, inactiveSessions, childrenMap, hasFilteredSessions } = useMemo(() => {
-    const filtered = sessions
-      .filter((session) => session.status !== "archived")
-      .filter((session) => {
-        if (!searchQuery) return true;
-        const query = searchQuery.toLowerCase();
-        const title = session.title?.toLowerCase() || "";
-        if (title.includes(query)) return true;
-        // Match against every member of the repository set, not just the
-        // primary; scalar fallback covers pre-multi-repo sessions.
-        const repoLabels = session.repositories?.length
-          ? session.repositories.map((repo) => formatRepoLabel(repo.repoOwner, repo.repoName))
-          : [formatRepoLabel(session.repoOwner, session.repoName)];
-        return repoLabels.some((label) => label.toLowerCase().includes(query));
-      });
+  // Sort sessions by updatedAt (most recent first) and group children under their parent sessions.
+  const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
+    const filtered = sessions.filter((session) => session.status !== "archived");
 
     // Sort by updatedAt descending
     const sorted = [...filtered].sort((a, b) => {
@@ -276,9 +266,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       activeSessions: active,
       inactiveSessions: inactive,
       childrenMap: children,
-      hasFilteredSessions: filtered.length > 0,
     };
-  }, [sessions, searchQuery]);
+  }, [sessions]);
 
   // Environment provenance for the cards, resolved once for the whole list.
   // Names are looked up so a deleted environment (or one still loading)
@@ -357,9 +346,15 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <SidebarIcon className="w-4 h-4" />
           </Button>
-          <Link href="/" onClick={handleNavigationSelect} className="min-w-0">
-            <span className="block truncate font-semibold text-foreground">{APP_SHORT_NAME}</span>
-          </Link>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onSearchSessions}
+            title={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
+            aria-label={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
+          >
+            <SearchIcon className="w-4 h-4" />
+          </Button>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button
@@ -442,16 +437,6 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         </ToggleGroup>
       </div>
 
-      {/* Search */}
-      <div className="px-3 py-2">
-        <Input
-          type="text"
-          placeholder="Search sessions..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-      </div>
-
       {/* Session List */}
       <div
         ref={scrollContainerRef}
@@ -464,10 +449,6 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           </div>
         ) : sessions.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">{emptyMessage}</div>
-        ) : searchQuery && !hasFilteredSessions ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No matching sessions
-          </div>
         ) : (
           <>
             {/* Active Sessions */}

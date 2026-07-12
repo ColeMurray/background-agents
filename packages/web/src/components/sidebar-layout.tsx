@@ -70,6 +70,10 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
     setIsCommandMenuOpen((prev) => !prev);
   }, []);
 
+  const handleSearchSessions = useCallback(() => {
+    setIsCommandMenuOpen(true);
+  }, []);
+
   useGlobalShortcuts({
     enabled: status === "authenticated" && Boolean(session),
     onOpenCommandMenu: handleOpenCommandMenu,
@@ -138,6 +142,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         >
           <SessionSidebar
             onNewSession={handleNewSession}
+            onSearchSessions={handleSearchSessions}
             onToggle={sidebar.toggle}
             onSessionSelect={sidebar.close}
           />
