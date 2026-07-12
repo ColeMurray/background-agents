@@ -208,11 +208,12 @@ export class CallbackNotificationService {
       this.sleep,
       async ({ attempt, response, error: deliveryError }) => {
         if (response) {
+          const responseText = await response.text().catch(() => "");
           this.log.error("Callback failed", {
             message_id: messageId,
             source,
             status: response.status,
-            response_text: await response.text(),
+            response_text: responseText.slice(0, 500),
           });
           return;
         }

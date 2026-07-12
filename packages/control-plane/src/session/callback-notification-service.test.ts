@@ -196,6 +196,29 @@ describe("CallbackNotificationService", () => {
       );
     });
 
+    it("safely bounds failed response bodies in logs", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C123" }),
+        source: "slack",
+      });
+      const unreadableResponse = new Response("unreadable", { status: 503 });
+      vi.spyOn(unreadableResponse, "text").mockRejectedValue(new Error("body unavailable"));
+      harness.slackBot.fetch
+        .mockResolvedValueOnce(unreadableResponse)
+        .mockResolvedValueOnce(new Response("x".repeat(600), { status: 503 }));
+
+      await harness.service.notifyComplete("msg-1", false);
+
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "Callback failed",
+        expect.objectContaining({ response_text: "" })
+      );
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "Callback failed",
+        expect.objectContaining({ response_text: "x".repeat(500) })
+      );
+    });
+
     it("routes to LINEAR_BOT for linear source", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ issueId: "LIN-123" }),
