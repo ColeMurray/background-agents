@@ -43,11 +43,12 @@ export async function notifyLinearStarted({
   };
 
   const delivered = await deliverWithRetry(
-    () =>
+    (signal) =>
       binding.fetch("https://internal/callbacks/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal,
       }),
     sleep,
     (failure) => {

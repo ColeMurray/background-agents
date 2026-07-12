@@ -198,11 +198,12 @@ export class CallbackNotificationService {
     const payload = { ...payloadData, signature };
 
     const delivered = await deliverWithRetry(
-      () =>
+      (signal) =>
         binding.fetch("https://internal/callbacks/complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
+          signal,
         }),
       this.sleep,
       async ({ attempt, response, error: deliveryError }) => {
@@ -262,11 +263,12 @@ export class CallbackNotificationService {
     };
 
     const delivered = await deliverWithRetry(
-      () =>
+      (signal) =>
         binding.fetch("https://internal/internal/run-complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
+          signal,
         }),
       this.sleep,
       async ({ attempt, response, error: deliveryError }) => {
