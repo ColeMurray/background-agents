@@ -16,38 +16,22 @@ from pathlib import Path
 import modal
 
 import sandbox_runtime
+from sandbox_runtime.toolchain import (
+    AGENT_BROWSER_VERSION,
+    CODE_SERVER_VERSION,
+    OPENCODE_VERSION,
+    git_credential_helper_commands,
+    opencode_deps_staging_commands,
+    ttyd_install_commands,
+)
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
-# OpenCode version to install.
-#
-# Pinned to 1.14.41 — the last release before opencode's Hono → Effect Schema
-# migration (landed across v1.14.42+, released 2026-05-09 onward) broke event
-# publishing on the legacy `/event` SSE endpoint. With newer versions the
-# bridge connects, posts the prompt, opencode processes it and records the
-# assistant response in the session store, but no `message.updated` /
-# `message.part.updated` / `session.idle` events are streamed back — so the
-# session shows execution_complete with no reply.
-#
-# Symptom in bridge logs: `prompt.run outcome=success duration_ms=35-367`,
-# which means `_stream_opencode_response_sse` returned with zero yielded
-# events. Tracked in #567.
-OPENCODE_VERSION = "1.14.41"
-
-# code-server version to install (pinned for reproducible images)
-CODE_SERVER_VERSION = "4.109.5"
-
-# agent-browser version to install (pinned for reproducible images)
-AGENT_BROWSER_VERSION = "0.21.2"
-
-# ttyd version to install (pinned for reproducible images)
-TTYD_VERSION = "1.7.7"
-TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
-
 # Cache buster - change this to force Modal image rebuild
 # v52: bake opencode global deps
 CACHE_BUSTER = "v53-list-native-runtime"
+
 
 # Base image with all development tools
 base_image = (
@@ -140,16 +124,7 @@ base_image = (
     # multi-second node_modules copy on every boot. Baking it makes that seed a
     # no-op (it skips when node_modules already exists). See #767 / #790.
     .run_commands(
-        "mkdir -p /app/opencode-deps",
-        # Pin staged plugin to OPENCODE_VERSION so the pre-staged tree copied
-        # into .opencode/ at boot matches the globally installed plugin (#567).
-        f'echo \'{{"name":"opencode-tools","type":"module",'
-        f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
-        " > /app/opencode-deps/package.json",
-        "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
-        # Bake the in-sync tree into the global config dir so the runtime seed is a no-op.
-        "mkdir -p /root/.config/opencode",
-        "cp -a /app/opencode-deps/. /root/.config/opencode/",
+        *opencode_deps_staging_commands(),
     )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
@@ -162,12 +137,7 @@ base_image = (
     )
     # Install ttyd web terminal (direct binary from GitHub releases)
     .run_commands(
-        f"curl -fsSL -o /usr/local/bin/ttyd"
-        f" https://github.com/tsl0922/ttyd/releases/download/{TTYD_VERSION}"
-        f"/ttyd.x86_64",
-        f'echo "{TTYD_SHA256}  /usr/local/bin/ttyd" | sha256sum -c -',
-        "chmod +x /usr/local/bin/ttyd",
-        "ttyd --version",
+        *ttyd_install_commands(),
     )
     # Install agent-browser CLI and download Chromium
     .run_commands(
@@ -191,15 +161,7 @@ base_image = (
     # system level so it applies before entrypoint.py has a chance to run
     # (e.g. when restoring a snapshot whose first action is a `git fetch`).
     .run_commands(
-        "printf '%s\\n'"
-        " '#!/bin/sh'"
-        " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
-        " > /usr/local/bin/oi-git-credentials",
-        "chmod 0755 /usr/local/bin/oi-git-credentials",
-        "git config --system credential.helper /usr/local/bin/oi-git-credentials",
-        # Pass the repo path to the helper so it can scope credentials to the
-        # session repo, not just the host.
-        "git config --system credential.useHttpPath true",
+        *git_credential_helper_commands(),
     )
     # Set environment variables (including cache buster to force rebuild)
     .env(
