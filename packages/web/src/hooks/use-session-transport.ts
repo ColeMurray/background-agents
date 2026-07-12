@@ -137,10 +137,10 @@ export function useSessionTransport(
 
   /**
    * Make sure `wsTokenRef` holds an auth token, fetching one if needed.
-   * Returns false when the connect attempt should stop: the fetch failed, or
-   * `epoch` was superseded (reconnect()/unmount) while awaiting — in which
-   * case the in-flight flag is released only if this attempt still owns it,
-   * and the stale attempt's token is never stored.
+   * Returns false when none is available: the fetch failed, or `epoch` was
+   * superseded (reconnect()/unmount) while awaiting — a stale attempt's
+   * token is never stored, since it may belong to an old sessionId. The
+   * in-flight flag lifecycle stays with connect().
    */
   const ensureWsToken = useCallback(
     async (epoch: number): Promise<boolean> => {
@@ -148,16 +148,7 @@ export function useSessionTransport(
         return true;
       }
       const token = await fetchWsToken();
-      if (epoch !== connectEpochRef.current) {
-        if (connectingEpochRef.current === epoch) {
-          connectingEpochRef.current = null;
-          setConnecting(false);
-        }
-        return false;
-      }
-      if (!token) {
-        connectingEpochRef.current = null;
-        setConnecting(false);
+      if (epoch !== connectEpochRef.current || !token) {
         return false;
       }
       wsTokenRef.current = token;
@@ -274,7 +265,20 @@ export function useSessionTransport(
     setConnecting(true);
     setAuthError(null);
 
-    if (!(await ensureWsToken(epoch))) {
+    const tokenReady = await ensureWsToken(epoch);
+    if (epoch !== connectEpochRef.current) {
+      // Superseded while suspended — even the cached-token path yields a
+      // microtask. Release the in-flight flag only if this attempt still
+      // owns it; a newer connect may hold it now.
+      if (connectingEpochRef.current === epoch) {
+        connectingEpochRef.current = null;
+        setConnecting(false);
+      }
+      return;
+    }
+    if (!tokenReady) {
+      connectingEpochRef.current = null;
+      setConnecting(false);
       return;
     }
 
