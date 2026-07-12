@@ -281,12 +281,11 @@ export async function seedSandboxAuth(
   stub: DurableObjectStub,
   opts: { authToken: string; sandboxId: string }
 ): Promise<void> {
-  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = 'running'",
+      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?",
       opts.authToken,
       tokenHash,
       opts.sandboxId
@@ -295,18 +294,17 @@ export async function seedSandboxAuth(
 }
 
 /**
- * Seed a running sandbox with auth_token_hash and modal_sandbox_id.
+ * Seed auth_token_hash and modal_sandbox_id on the sandbox row.
  */
 export async function seedSandboxAuthHash(
   stub: DurableObjectStub,
   opts: { authToken: string; sandboxId: string }
 ): Promise<void> {
-  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = 'running'",
+      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?",
       tokenHash,
       opts.sandboxId
     );

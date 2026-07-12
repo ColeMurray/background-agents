@@ -183,11 +183,11 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ valid: false, error: "No sandbox" }, { status: 404 });
       }
 
-      if (sandbox.status !== "running") {
-        deps.getLog().warn("Sandbox token verification failed: sandbox is not running", {
+      if (sandbox.status === "stopped" || sandbox.status === "stale") {
+        deps.getLog().warn("Sandbox token verification failed: sandbox is stopped/stale", {
           status: sandbox.status,
         });
-        return Response.json({ valid: false, error: "Sandbox not running" }, { status: 410 });
+        return Response.json({ valid: false, error: "Sandbox stopped" }, { status: 410 });
       }
 
       const isTokenValid = await deps.isValidSandboxToken(token, sandbox);
