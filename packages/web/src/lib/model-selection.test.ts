@@ -53,6 +53,21 @@ describe("resolveModelPreference", () => {
     ).toEqual({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
   });
 
+  it("preserves the upstream model while enabled models are loading", () => {
+    expect(
+      resolveModelPreference({ model: "claude-opus-4-8", reasoningEffort: "high" }, undefined)
+    ).toEqual({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
+  });
+
+  it("uses the default when the loaded enabled-model list is empty", () => {
+    expect(
+      resolveModelPreference({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" }, [])
+    ).toEqual({
+      model: DEFAULT_MODEL,
+      reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
+    });
+  });
+
   it("uses the fallback model default when reasoning is invalid", () => {
     expect(
       resolveModelPreference({ model: "anthropic/claude-opus-4-8", reasoningEffort: "not-valid" }, [

@@ -53,7 +53,7 @@ export default function Home() {
     branch: string;
   } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
-  const { enabledModels, enabledModelOptions } = useEnabledModels();
+  const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
 
   useEffect(() => {
     if (hasHydratedModelPreferences) return;
@@ -69,7 +69,7 @@ export default function Home() {
 
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? storedPreference,
-    enabledModels
+    loadingEnabledModels ? undefined : enabledModels
   );
 
   useEffect(() => {

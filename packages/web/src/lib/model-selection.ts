@@ -31,9 +31,11 @@ export function resolveEnabledModel(model: string, enabledModels: string[]): str
 
 export function resolveModelPreference(
   preference: ModelPreference,
-  enabledModels: string[]
+  enabledModels: string[] | undefined
 ): ModelPreference {
-  const model = resolveEnabledModel(preference.model, enabledModels);
+  const model = enabledModels
+    ? resolveEnabledModel(preference.model, enabledModels)
+    : getValidModelOrDefault(preference.model);
   return {
     model,
     reasoningEffort:

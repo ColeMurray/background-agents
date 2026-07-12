@@ -366,7 +366,7 @@ function useSessionListActions(sessionId: string) {
 function useModelSelection(sessionState: SessionState) {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
 
-  const { enabledModels, enabledModelOptions } = useEnabledModels();
+  const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? {
       model: sessionState?.model ?? DEFAULT_MODEL,
@@ -374,7 +374,7 @@ function useModelSelection(sessionState: SessionState) {
         sessionState?.reasoningEffort ??
         getDefaultReasoningEffort(sessionState?.model ?? DEFAULT_MODEL),
     },
-    enabledModels
+    loadingEnabledModels ? undefined : enabledModels
   );
   const modelItems = useMemo<ComboboxGroup[]>(
     () =>
