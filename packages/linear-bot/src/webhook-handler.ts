@@ -175,11 +175,12 @@ async function getAgentSessionLinearClient(params: {
   agentSessionId: string;
   issue: AgentSessionWebhookIssue;
   mode: "start" | "follow_up";
+  expectedAppUserId?: string;
 }): Promise<LinearApiClient | null> {
-  const { env, traceId, orgId, agentSessionId, issue, mode } = params;
+  const { env, traceId, orgId, agentSessionId, issue, mode, expectedAppUserId } = params;
 
   try {
-    return await getLinearClientOrThrow(env, orgId);
+    return await getLinearClientOrThrow(env, orgId, expectedAppUserId);
   } catch (err) {
     if (!(err instanceof LinearAuthError)) throw err;
 
@@ -236,6 +237,14 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   });
 }
 
+function getInitiatingUserId(webhook: AgentSessionWebhook): string | undefined {
+  return (
+    webhook.agentActivity?.userId ??
+    webhook.agentSession.comment?.userId ??
+    webhook.agentSession.creatorId
+  );
+}
+
 async function handleFollowUp(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
@@ -247,6 +256,7 @@ async function handleFollowUp(
   const comment = webhook.agentSession.comment;
   const agentActivity = webhook.agentActivity;
   const orgId = webhook.organizationId;
+  const initiatingUserId = getInitiatingUserId(webhook);
 
   const client = await getAgentSessionLinearClient({
     env,
@@ -255,6 +265,7 @@ async function handleFollowUp(
     agentSessionId,
     issue,
     mode: "follow_up",
+    expectedAppUserId: webhook.appUserId,
   });
   if (!client) return;
 
@@ -313,7 +324,7 @@ async function handleFollowUp(
           followUpAuthor: followUpMetadata.followUpAuthor,
           sessionContextSummary,
         }),
-        authorId: `linear:${webhook.appUserId}`,
+        authorId: `linear:${initiatingUserId ?? "unknown"}`,
         source: "linear",
       }),
     }
@@ -358,6 +369,7 @@ async function handleNewSession(
     agentSessionId,
     issue,
     mode: "start",
+    expectedAppUserId: webhook.appUserId,
   });
   if (!client) return;
 
@@ -417,15 +429,15 @@ async function handleNewSession(
   let userReasoningEffort: string | undefined;
   let actorDisplayName: string | undefined;
   let actorEmail: string | undefined;
-  const appUserId = webhook.appUserId;
-  if (appUserId) {
-    const prefs = await getUserPreferences(env, appUserId);
+  const initiatingUserId = getInitiatingUserId(webhook);
+  if (initiatingUserId) {
+    const prefs = await getUserPreferences(env, initiatingUserId);
     if (prefs?.model) {
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
 
-    const linearUser = await fetchUser(client, appUserId);
+    const linearUser = await fetchUser(client, initiatingUserId);
     actorDisplayName = linearUser?.name;
     actorEmail = linearUser?.email ?? undefined;
   }
@@ -462,7 +474,7 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
-      actorUserId: appUserId,
+      actorUserId: initiatingUserId,
       actorDisplayName,
       actorEmail,
     },
@@ -536,7 +548,7 @@ async function handleNewSession(
       headers,
       body: JSON.stringify({
         content: prompt,
-        authorId: `linear:${webhook.appUserId}`,
+        authorId: `linear:${initiatingUserId ?? "unknown"}`,
         source: "linear",
         callbackContext,
       }),

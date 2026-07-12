@@ -2,259 +2,75 @@
  * Linear API client utilities — OAuth + raw GraphQL.
  */
 
-import type { Env, OAuthTokenResponse, StoredTokenData, LinearIssueDetails } from "../types";
+import type { Env, LinearIssueDetails } from "../types";
 import { timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./crypto";
 import { createLogger } from "../logger";
+import {
+  getClientCredentialsTokenOrThrow,
+  LINEAR_CLIENT_CREDENTIALS_SCOPE,
+  LinearAuthError,
+} from "./linear-credentials";
+
+export {
+  completeLinearOAuthInstallation,
+  getClientCredentialsTokenOrThrow,
+  LinearAuthError,
+  type LinearAuthFailure,
+  type LinearAuthFailureReason,
+} from "./linear-credentials";
 
 const log = createLogger("linear-client");
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
-const OAUTH_TOKEN_KEY_PREFIX = "oauth:token:";
-const OAUTH_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 // ─── OAuth Helpers ───────────────────────────────────────────────────────────
-
-function getWorkspaceTokenKey(orgId: string): string {
-  return `${OAUTH_TOKEN_KEY_PREFIX}${orgId}`;
-}
 
 export function buildOAuthAuthorizeUrl(env: Env): string {
   const authUrl = new URL("https://linear.app/oauth/authorize");
   authUrl.searchParams.set("client_id", env.LINEAR_CLIENT_ID);
   authUrl.searchParams.set("redirect_uri", `${env.WORKER_URL}/oauth/callback`);
   authUrl.searchParams.set("response_type", "code");
-  authUrl.searchParams.set("scope", "read,write,app:assignable,app:mentionable");
+  authUrl.searchParams.set("scope", LINEAR_CLIENT_CREDENTIALS_SCOPE);
   authUrl.searchParams.set("actor", "app");
   return authUrl.toString();
-}
-
-export async function exchangeCodeForToken(
-  env: Env,
-  code: string
-): Promise<{ orgId: string; orgName: string }> {
-  const tokenRes = await fetch("https://api.linear.app/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      client_id: env.LINEAR_CLIENT_ID,
-      client_secret: env.LINEAR_CLIENT_SECRET,
-      code,
-      redirect_uri: `${env.WORKER_URL}/oauth/callback`,
-    }),
-  });
-
-  if (!tokenRes.ok) {
-    const errText = await tokenRes.text();
-    throw new Error(`Token exchange failed: ${errText}`);
-  }
-
-  const tokenData = (await tokenRes.json()) as OAuthTokenResponse;
-  const workspaceInfo = await getWorkspaceInfo(tokenData.access_token);
-
-  const stored: StoredTokenData = {
-    access_token: tokenData.access_token,
-    refresh_token: tokenData.refresh_token,
-    expires_at: Date.now() + tokenData.expires_in * 1000,
-  };
-  await env.LINEAR_KV.put(getWorkspaceTokenKey(workspaceInfo.id), JSON.stringify(stored));
-
-  return { orgId: workspaceInfo.id, orgName: workspaceInfo.name };
-}
-
-export async function getOAuthToken(env: Env, orgId: string): Promise<string | null> {
-  try {
-    return await getOAuthTokenOrThrow(env, orgId);
-  } catch (err) {
-    if (err instanceof LinearAuthError) return null;
-    throw err;
-  }
-}
-
-export type LinearAuthFailureReason =
-  | "missing_token"
-  | "malformed_token"
-  | "missing_refresh_token"
-  | "refresh_invalid_grant"
-  | "refresh_failed"
-  | "refresh_error"
-  | "token_read_error";
-
-export interface LinearAuthFailure {
-  reason: LinearAuthFailureReason;
-  status?: number;
-  oauthError?: string;
-  oauthErrorDescription?: string;
-}
-
-export class LinearAuthError extends Error implements LinearAuthFailure {
-  readonly reason: LinearAuthFailureReason;
-  readonly status?: number;
-  readonly oauthError?: string;
-  readonly oauthErrorDescription?: string;
-
-  constructor(failure: LinearAuthFailure) {
-    super(`Linear auth failed: ${failure.reason}`);
-    this.name = "LinearAuthError";
-    this.reason = failure.reason;
-    this.status = failure.status;
-    this.oauthError = failure.oauthError;
-    this.oauthErrorDescription = failure.oauthErrorDescription;
-  }
-}
-
-type CheckedStoredTokenData = Pick<StoredTokenData, "access_token" | "expires_at"> &
-  Partial<Pick<StoredTokenData, "refresh_token">>;
-
-function parseStoredTokenData(raw: string): CheckedStoredTokenData | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-
-  if (!parsed || typeof parsed !== "object") return null;
-
-  const data = parsed as Partial<StoredTokenData>;
-  if (
-    typeof data.access_token !== "string" ||
-    data.access_token.length === 0 ||
-    typeof data.expires_at !== "number" ||
-    !Number.isFinite(data.expires_at) ||
-    (data.refresh_token !== undefined && typeof data.refresh_token !== "string")
-  ) {
-    return null;
-  }
-
-  return {
-    access_token: data.access_token,
-    expires_at: data.expires_at,
-    ...(data.refresh_token ? { refresh_token: data.refresh_token } : {}),
-  };
-}
-
-export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<string> {
-  let raw: string | null;
-  try {
-    raw = await env.LINEAR_KV.get(getWorkspaceTokenKey(orgId));
-  } catch (err) {
-    log.error("oauth.token_read_error", {
-      org_id: orgId,
-      error: err instanceof Error ? err : new Error(String(err)),
-    });
-    throw new LinearAuthError({
-      reason: "token_read_error",
-    });
-  }
-
-  if (!raw) {
-    throw new LinearAuthError({
-      reason: "missing_token",
-    });
-  }
-
-  const tokenData = parseStoredTokenData(raw);
-  if (!tokenData) {
-    throw new LinearAuthError({
-      reason: "malformed_token",
-    });
-  }
-
-  if (Date.now() < tokenData.expires_at - OAUTH_REFRESH_SKEW_MS) {
-    return tokenData.access_token;
-  }
-
-  if (!tokenData.refresh_token) {
-    throw new LinearAuthError({
-      reason: "missing_refresh_token",
-    });
-  }
-
-  try {
-    log.info("oauth.refresh", { org_id: orgId });
-    const res = await fetch("https://api.linear.app/oauth/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: env.LINEAR_CLIENT_ID,
-        client_secret: env.LINEAR_CLIENT_SECRET,
-        refresh_token: tokenData.refresh_token,
-      }),
-    });
-
-    if (!res.ok) {
-      // RFC 6749 OAuth error responses carry `error` and `error_description` fields.
-      // Extract those so we can distinguish invalid_grant from invalid_client without
-      // logging the raw body (which contained client_secret and refresh_token in the
-      // request — and could be reflected by a misconfigured upstream).
-      const rawBody = await res.text();
-      let oauthError: string | undefined;
-      let oauthErrorDescription: string | undefined;
-      try {
-        const parsed = JSON.parse(rawBody) as { error?: unknown; error_description?: unknown };
-        if (typeof parsed.error === "string") oauthError = parsed.error;
-        if (typeof parsed.error_description === "string") {
-          oauthErrorDescription = parsed.error_description;
-        }
-      } catch {
-        // Non-JSON body — fall back to a bounded truncation below.
-      }
-      log.error("oauth.refresh_failed", {
-        org_id: orgId,
-        status: res.status,
-        oauth_error: oauthError,
-        oauth_error_description: oauthErrorDescription,
-        body_snippet: oauthError ? undefined : rawBody.slice(0, 500),
-      });
-      throw new LinearAuthError({
-        reason: oauthError === "invalid_grant" ? "refresh_invalid_grant" : "refresh_failed",
-        status: res.status,
-        oauthError,
-        oauthErrorDescription,
-      });
-    }
-
-    const refreshed = (await res.json()) as OAuthTokenResponse;
-    const newStored: StoredTokenData = {
-      access_token: refreshed.access_token,
-      refresh_token: refreshed.refresh_token,
-      expires_at: Date.now() + refreshed.expires_in * 1000,
-    };
-    await env.LINEAR_KV.put(getWorkspaceTokenKey(orgId), JSON.stringify(newStored));
-    return newStored.access_token;
-  } catch (err) {
-    if (err instanceof LinearAuthError) throw err;
-
-    log.error("oauth.refresh_error", {
-      org_id: orgId,
-      error: err instanceof Error ? err : new Error(String(err)),
-    });
-    throw new LinearAuthError({
-      reason: "refresh_error",
-    });
-  }
 }
 
 // ─── Linear API Client ──────────────────────────────────────────────────────
 
 export interface LinearApiClient {
   accessToken: string;
+  organizationId: string;
+  renewAccessToken: () => Promise<string>;
 }
 
-export async function getLinearClient(env: Env, orgId: string): Promise<LinearApiClient | null> {
+export async function getLinearClient(
+  env: Env,
+  orgId: string,
+  expectedAppUserId?: string
+): Promise<LinearApiClient | null> {
   try {
-    return await getLinearClientOrThrow(env, orgId);
+    return await getLinearClientOrThrow(env, orgId, expectedAppUserId);
   } catch (err) {
     if (err instanceof LinearAuthError) return null;
     throw err;
   }
 }
 
-export async function getLinearClientOrThrow(env: Env, orgId: string): Promise<LinearApiClient> {
-  return { accessToken: await getOAuthTokenOrThrow(env, orgId) };
+export async function getLinearClientOrThrow(
+  env: Env,
+  orgId: string,
+  expectedAppUserId?: string
+): Promise<LinearApiClient> {
+  return {
+    accessToken: await getClientCredentialsTokenOrThrow(env, orgId, { expectedAppUserId }),
+    organizationId: orgId,
+    renewAccessToken: () =>
+      getClientCredentialsTokenOrThrow(env, orgId, {
+        forceRenew: true,
+        expectedAppUserId,
+      }),
+  };
 }
 
 /**
@@ -265,14 +81,51 @@ async function linearGraphQL(
   query: string,
   variables: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(LINEAR_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${client.accessToken}`,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+  const body = JSON.stringify({ query, variables });
+  const send = (accessToken: string) =>
+    fetch(LINEAR_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body,
+    });
+
+  let res = await send(client.accessToken);
+  if (res.status === 401) {
+    log.warn("linear.graphql.unauthorized", { org_id: client.organizationId });
+    let renewedToken: string;
+    try {
+      renewedToken = await client.renewAccessToken();
+    } catch (error) {
+      if (error instanceof LinearAuthError) throw error;
+      throw new LinearAuthError({ reason: "client_credentials_error" });
+    }
+    client.accessToken = renewedToken;
+    res = await send(renewedToken);
+    if (res.status === 401) {
+      log.error("linear.graphql.retry_failed", {
+        org_id: client.organizationId,
+        status: res.status,
+      });
+      throw new LinearAuthError({
+        reason: "client_credentials_rejected",
+        status: res.status,
+      });
+    }
+    if (res.ok) {
+      log.info("linear.graphql.retry_succeeded", {
+        org_id: client.organizationId,
+        status: res.status,
+      });
+    } else {
+      log.error("linear.graphql.retry_failed", {
+        org_id: client.organizationId,
+        status: res.status,
+      });
+    }
+  }
 
   if (!res.ok) {
     throw new Error(`Linear API error: ${res.status}`);
@@ -541,28 +394,4 @@ export async function postIssueComment(
     data?: { commentCreate?: { success: boolean } };
   };
   return { success: result.data?.commentCreate?.success ?? false };
-}
-
-// ─── Internal Helpers ────────────────────────────────────────────────────────
-
-async function getWorkspaceInfo(accessToken: string): Promise<{ id: string; name: string }> {
-  const res = await fetch(LINEAR_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      query: `query { viewer { organization { id name } } }`,
-    }),
-  });
-
-  if (!res.ok) throw new Error(`Failed to get workspace info: ${res.statusText}`);
-
-  const data = (await res.json()) as {
-    data?: { viewer?: { organization?: { id: string; name: string } } };
-  };
-  const org = data.data?.viewer?.organization;
-  if (!org) throw new Error("No organization found in response");
-  return { id: org.id, name: org.name };
 }

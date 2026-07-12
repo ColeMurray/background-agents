@@ -37,9 +37,18 @@ own context (e.g. `agentSessionId` for Linear agent activities).
 
 ### Authentication
 
-- OAuth2 with `actor=app` — agent gets its own identity per workspace
-- Tokens stored in KV with auto-refresh (`oauth:token:{orgId}`)
+- OAuth2 with `actor=app` installs the agent identity per workspace
+- Client credentials must be enabled on the Linear OAuth application
+- The client ID and secret mint 30-day app-actor runtime tokens
+- Verified runtime tokens are cached in KV at `oauth:client-credentials:{orgId}`
+- Missing, near-expiry, or explicitly rejected tokens are replaced automatically; no refresh token
+  is maintained
 - No personal API key needed
+
+For existing deployments, enable **Client credentials tokens** in **Linear Settings → API →
+Applications** before deploying this credential mode. Eligible single-workspace installations
+transition on their next request without uninstalling or reinstalling the app. The issued token's
+viewer organization must match the webhook organization.
 
 ### Agent Session Lifecycle
 

@@ -42,6 +42,8 @@ Fill in:
 - **Callback URL:** `https://<your-linear-bot-worker>/oauth/callback`
 - **Webhooks:** Enable, set URL to `https://<your-linear-bot-worker>/webhook`
 - **Webhook events:** Check **Agent session events**, **Issues**, **Comments**
+- **Client credentials tokens:** Enable this option. The Worker uses these 30-day app-actor tokens
+  for runtime API calls.
 - **Public:** OFF (unless distributing to other workspaces)
 
 Note the **Client ID**, **Client Secret**, and **Webhook Signing Secret**.
@@ -72,6 +74,29 @@ flow with `actor=app` and installs the agent in your Linear workspace.
 **Requires admin permissions** in the Linear workspace.
 
 After installation, `@OpenInspect` will appear in the mention and assignee menus.
+
+The browser authorization installs the app actor. The Worker then uses the application's client ID
+and client secret to mint runtime tokens; authorization-code access and refresh tokens are not kept
+as runtime credentials.
+
+### Upgrading an Existing Installation
+
+Before deploying a version that uses client credentials, open the existing application in **Linear
+Settings → API → Applications** and enable **Client credentials tokens**. Terraform cannot change
+this Linear-side setting.
+
+For a private, single-workspace deployment whose application credentials resolve to the installed
+workspace, deploy normally after enabling the setting. No uninstall/reinstall, new secret, webhook
+change, or scope reauthorization is expected. The first Linear request mints and verifies a runtime
+token, then removes the legacy refresh-token record.
+
+If the setting is not enabled, Linear reports that the client does not support the
+`client_credentials` grant and the request fails without falling back to the legacy refresh token.
+If the OAuth application is managed in a different workspace from the installed agent, verify that
+the client-credentials token's viewer organization matches the webhook organization before
+upgrading; a mismatch is rejected. Rotating the Linear client secret invalidates cached runtime
+tokens; deploy the replacement secret and the Worker will mint a replacement token on the next cache
+miss or HTTP 401.
 
 ### 4. Configure Repo Mapping (Optional)
 
@@ -194,10 +219,12 @@ wrangler dev  # Local development
 
 Built on Linear's [Agents API](https://linear.app/developers/agents):
 
-- **OAuth2 with `actor=app`** — agent has its own identity in the workspace
+- **OAuth2 installation with `actor=app`** — installs the agent identity in the workspace
+- **OAuth2 client credentials at runtime** — mints replaceable 30-day app-actor tokens and renews
+  once after an explicit HTTP 401
 - **Raw Linear GraphQL API** — direct `fetch` calls (no SDK, Workers can't import CJS)
 - **AgentSessionEvent** — native trigger when users @mention or assign
 - **AgentActivity** — native status updates visible in Linear's UI
 - **Hono** for HTTP routing
-- **KV** for OAuth tokens, issue-to-session mapping, and configuration
+- **KV** for the replaceable runtime-token cache, issue-to-session mapping, and configuration
 - **Service binding** to the control plane for session management

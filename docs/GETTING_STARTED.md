@@ -862,6 +862,11 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `APP_SHORT_NAME`                 | Optional short label for sidebar header (default: `Inspect`)                                |
 | `APP_ICON_URL`                   | Optional URL to a custom logo/favicon (default: built-in icon)                              |
 
+When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
+application in **Linear Settings → API → Applications**. This provider-side setting is not managed
+by Terraform. Existing eligible single-workspace installations transition on their next request
+without uninstalling or reinstalling the app.
+
 **Bulk upload secrets with `gh` CLI:**
 
 Instead of adding secrets one by one, create a `.secrets` file (don't commit this!):

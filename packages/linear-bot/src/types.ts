@@ -6,7 +6,7 @@
  * Cloudflare Worker environment bindings.
  */
 export interface Env {
-  // KV namespace for config, OAuth tokens, and issue-to-session mapping
+  // KV namespace for config, runtime-token cache, and issue-to-session mapping
   LINEAR_KV: KVNamespace;
 
   // Service binding to control plane
@@ -36,18 +36,31 @@ export interface Env {
 
 // ─── OAuth Types ─────────────────────────────────────────────────────────────
 
-export interface OAuthTokenResponse {
+export interface LinearAuthorizationCodeTokenResponse {
   access_token: string;
   token_type: string;
   expires_in: number;
   refresh_token: string;
-  scope?: string;
+  scope?: string | string[];
 }
 
-export interface StoredTokenData {
+export interface LinearClientCredentialsTokenResponse {
   access_token: string;
-  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+  scope?: string | string[];
+}
+
+export interface StoredLinearClientCredentialsToken {
+  version: 1;
+  access_token: string;
+  token_type: "Bearer";
+  scope: string;
+  issued_at: number;
   expires_at: number;
+  organization_id: string;
+  organization_name: string;
+  app_user_id: string;
 }
 
 // ─── Repo / Config Types ─────────────────────────────────────────────────────
@@ -219,14 +232,16 @@ export interface AgentSessionWebhook {
   action: string;
   organizationId: string;
   webhookId: string;
-  appUserId?: string;
+  appUserId: string;
   agentSession: {
     id: string;
+    creatorId?: string;
     issue?: AgentSessionWebhookIssue;
-    comment?: { body: string };
+    comment?: { body: string; userId?: string };
     promptContext?: string;
   };
   agentActivity?: {
+    userId?: string;
     content?: {
       type?: string;
       body?: string;

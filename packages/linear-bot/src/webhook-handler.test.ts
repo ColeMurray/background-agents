@@ -9,7 +9,13 @@ import {
 import { clearEnvironmentsLocalCache } from "./environments";
 import { clearReposLocalCache } from "./classifier/repos";
 import type { AgentSessionWebhook, Env, Environment } from "./types";
-import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
+import {
+  createFakeKV,
+  createLinearFetchMock,
+  linearClientCredentialsResponse,
+  linearIdentityResponse,
+  makeLinearBotEnv,
+} from "./test-helpers";
 
 describe("escapeHtml", () => {
   it("escapes & to &amp;", () => {
@@ -185,12 +191,10 @@ describe("handleAgentSessionEvent environment targets", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url === "https://api.linear.app/graphql") {
-          return { ok: true, json: () => Promise.resolve({ data: {} }) };
-        }
-        throw new Error(`Unexpected fetch to ${url}`);
+      createLinearFetchMock({
+        clientCredentials: () => linearClientCredentialsResponse("transitioned-runtime-token"),
+        identity: () => linearIdentityResponse(),
+        graphql: () => Response.json({ data: {} }),
       })
     );
   });
@@ -201,10 +205,17 @@ describe("handleAgentSessionEvent environment targets", () => {
   });
 
   function validToken(): string {
+    const issuedAt = Date.now();
     return JSON.stringify({
+      version: 1,
       access_token: "valid-token",
-      refresh_token: "refresh-token",
-      expires_at: Date.now() + VALID_TOKEN_TTL_MS,
+      token_type: "Bearer",
+      scope: "read,write,app:assignable,app:mentionable",
+      issued_at: issuedAt,
+      expires_at: issuedAt + VALID_TOKEN_TTL_MS,
+      organization_id: "org-1",
+      organization_name: "Acme",
+      app_user_id: "app-user-1",
     });
   }
 
@@ -214,9 +225,10 @@ describe("handleAgentSessionEvent environment targets", () => {
       action: "created",
       organizationId: "org-1",
       webhookId: "webhook-created",
-      appUserId: undefined,
+      appUserId: "app-user-1",
       agentSession: {
         id: "agent-session-1",
+        creatorId: "human-user-1",
         issue: {
           id: "issue-1",
           identifier: "ENG-42",
@@ -268,9 +280,13 @@ describe("handleAgentSessionEvent environment targets", () => {
     return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
   }
 
-  it("creates an environment session from a project mapping", async () => {
+  it("transitions an existing installation and creates an environment session", async () => {
     const { kv, store } = createFakeKV({
-      "oauth:token:org-1": validToken(),
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "legacy-access-token",
+        refresh_token: "legacy-refresh-token",
+        expires_at: Date.now() - 60_000,
+      }),
       "config:project-repos": JSON.stringify({ "project-1": { environmentId: "env_abc" } }),
     });
     const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
@@ -283,6 +299,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       environmentId: "env_abc",
       title: "ENG-42: Wire the fullstack flow",
       spawnSource: "linear-bot",
+      actorUserId: "human-user-1",
     });
     expect(body).not.toHaveProperty("repoOwner");
     expect(body).not.toHaveProperty("repoName");
@@ -301,11 +318,19 @@ describe("handleAgentSessionEvent environment targets", () => {
     > | null;
     expect(issueSession).toMatchObject({ sessionId: "session-xyz", environmentId: "env_abc" });
     expect(issueSession).not.toHaveProperty("repoOwner");
+    expect(store.has("oauth:token:org-1")).toBe(false);
+    expect(store.get("oauth:client-credentials:org-1")).toContain("transitioned-runtime-token");
+    const tokenCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([input]) => String(input) === "https://api.linear.app/oauth/token");
+    const tokenBody = tokenCall?.[1]?.body as URLSearchParams;
+    expect(tokenBody.get("grant_type")).toBe("client_credentials");
+    expect(tokenBody.has("refresh_token")).toBe(false);
   });
 
   it("creates an environment session from a label-matched team mapping", async () => {
     const { kv } = createFakeKV({
-      "oauth:token:org-1": validToken(),
+      "oauth:client-credentials:org-1": validToken(),
       "config:team-repos": JSON.stringify({
         "team-1": [
           { owner: "acme", name: "backend" },
@@ -326,7 +351,7 @@ describe("handleAgentSessionEvent environment targets", () => {
 
   it("falls through when the mapped environment does not exist", async () => {
     const { kv } = createFakeKV({
-      "oauth:token:org-1": validToken(),
+      "oauth:client-credentials:org-1": validToken(),
       "config:project-repos": JSON.stringify({ "project-1": { environmentId: "env_missing" } }),
     });
     const env = makeLinearBotEnv(kv);
@@ -340,7 +365,7 @@ describe("handleAgentSessionEvent environment targets", () => {
 
   it("still creates repository sessions from repo mappings", async () => {
     const { kv, store } = createFakeKV({
-      "oauth:token:org-1": validToken(),
+      "oauth:client-credentials:org-1": validToken(),
       "config:project-repos": JSON.stringify({
         "project-1": { owner: "acme", name: "backend" },
       }),
@@ -361,11 +386,46 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(issueSession).toMatchObject({ repoOwner: "acme", repoName: "backend" });
     expect(issueSession).not.toHaveProperty("environmentId");
   });
+
+  it("attributes follow-up prompts to the human activity author", async () => {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-xyz",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
+      if (url.endsWith("/prompt")) return Response.json({ ok: true });
+      throw new Error(`Unexpected control-plane fetch to ${url}`);
+    });
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+    webhook.agentActivity = {
+      userId: "follow-up-human-user",
+      content: { type: "prompt", body: "Please continue." },
+    };
+
+    await handleAgentSessionEvent(webhook, env, "trace-follow-up");
+
+    const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
+      String(input).endsWith("/prompt")
+    );
+    expect(JSON.parse(String(promptCall?.[1]?.body))).toMatchObject({
+      authorId: "linear:follow-up-human-user",
+    });
+  });
 });
 
 describe("handleAgentSessionEvent auth failures", () => {
-  const EXPIRED_TOKEN_AGE_MS = 60 * 1000;
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -374,14 +434,6 @@ describe("handleAgentSessionEvent auth failures", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-
-  function expiredToken(): string {
-    return JSON.stringify({
-      access_token: "expired-token",
-      refresh_token: "refresh-token",
-      expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-    });
-  }
 
   function makeIssue() {
     return {
@@ -416,7 +468,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     return (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
   }
 
-  function stubInvalidGrant() {
+  function stubInvalidClient() {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "https://api.linear.app/oauth/token") {
@@ -426,8 +478,8 @@ describe("handleAgentSessionEvent auth failures", () => {
           text: () =>
             Promise.resolve(
               JSON.stringify({
-                error: "invalid_grant",
-                error_description: "Refresh token has expired.",
+                error: "invalid_client",
+                error_description: "Client credentials were rejected.",
               })
             ),
         };
@@ -438,12 +490,12 @@ describe("handleAgentSessionEvent auth failures", () => {
     return fetchMock;
   }
 
-  it("logs auth failure and does not create a session on new-session invalid_grant", async () => {
+  it("logs auth failure and does not create a session when client credentials are rejected", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
+    const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv);
-    const fetchMock = stubInvalidGrant();
+    const fetchMock = stubInvalidClient();
 
     await handleAgentSessionEvent(makeWebhook("created"), env, "trace-123");
 
@@ -460,7 +512,7 @@ describe("handleAgentSessionEvent auth failures", () => {
         issue_id: "issue-1",
         issue_identifier: "ORI-229",
         mode: "start",
-        auth_failure_reason: "refresh_invalid_grant",
+        auth_failure_reason: "client_credentials_invalid_client",
       })
     );
   });
@@ -469,7 +521,6 @@ describe("handleAgentSessionEvent auth failures", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const { kv } = createFakeKV({
-      "oauth:token:org-1": expiredToken(),
       "issue:issue-1": JSON.stringify({
         sessionId: "session-1",
         issueId: "issue-1",
@@ -482,7 +533,7 @@ describe("handleAgentSessionEvent auth failures", () => {
       }),
     });
     const env = makeLinearBotEnv(kv);
-    const fetchMock = stubInvalidGrant();
+    const fetchMock = stubInvalidClient();
 
     await handleAgentSessionEvent(makeWebhook("prompted"), env, "trace-456");
 
@@ -499,7 +550,7 @@ describe("handleAgentSessionEvent auth failures", () => {
         issue_id: "issue-1",
         issue_identifier: "ORI-229",
         mode: "follow_up",
-        auth_failure_reason: "refresh_invalid_grant",
+        auth_failure_reason: "client_credentials_invalid_client",
       })
     );
   });

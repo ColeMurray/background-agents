@@ -151,7 +151,9 @@ Linear user preferences are currently admin/API-managed, not set from a self-ser
 ## Admin and Safety Notes
 
 - Linear webhooks are verified before Open-Inspect acts on them.
-- Linear OAuth tokens, webhook secrets, and callback secrets stay server-side.
+- Linear client credentials, runtime access tokens, webhook secrets, and callback secrets stay
+  server-side. Runtime access tokens are cached and replaced automatically; refresh tokens are not
+  used for runtime API access.
 - Linear does not provide Git credentials. Repository access still comes from the deployment's
   configured source-control integration, such as the GitHub App installation.
 - Repository scope in Linear settings controls which resolved repositories can receive
@@ -173,6 +175,12 @@ agent scopes required for mentions and assignment. Setup details live in the
 
 Make sure the request mentions or assigns the Linear Agent on an issue. Also check that the issue
 belongs to a repo Open-Inspect can resolve and access.
+
+If the Worker logs a client-credentials failure, confirm **Client credentials tokens** is enabled
+for the application in **Linear Settings → API → Applications**. Existing eligible installations do
+not need to be uninstalled and reinstalled. A client-credentials viewer-organization mismatch means
+the application credentials resolve to a different workspace than the incoming webhook and must be
+corrected before the deployment is eligible.
 
 ### Open-Inspect asks which repository to use
 
