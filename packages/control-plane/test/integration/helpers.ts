@@ -274,18 +274,20 @@ export async function openSandboxWs(
 }
 
 /**
- * Seed auth_token and modal_sandbox_id on the sandbox row so sandbox
- * WebSocket auth can pass.
+ * Seed a live sandbox with auth_token and modal_sandbox_id so sandbox
+ * WebSocket auth can pass. Waits out the (always-failing) test spawn first so
+ * its status write can't clobber the seeded 'ready' state.
  */
 export async function seedSandboxAuth(
   stub: DurableObjectStub,
   opts: { authToken: string; sandboxId: string }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = 'ready'",
       opts.authToken,
       tokenHash,
       opts.sandboxId
@@ -294,17 +296,20 @@ export async function seedSandboxAuth(
 }
 
 /**
- * Seed auth_token_hash and modal_sandbox_id on the sandbox row.
+ * Seed a live sandbox with auth_token_hash and modal_sandbox_id. Waits out the
+ * (always-failing) test spawn first so its status write can't clobber the
+ * seeded 'ready' state.
  */
 export async function seedSandboxAuthHash(
   stub: DurableObjectStub,
   opts: { authToken: string; sandboxId: string }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = 'ready'",
       tokenHash,
       opts.sandboxId
     );

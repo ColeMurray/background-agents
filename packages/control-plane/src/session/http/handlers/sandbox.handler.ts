@@ -5,6 +5,7 @@ import {
   type CreateMediaArtifactRequest,
   type SessionArtifact,
 } from "@open-inspect/shared";
+import type { SandboxStatus } from "@open-inspect/shared";
 import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
@@ -12,6 +13,15 @@ import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
+
+/**
+ * States in which no live sandbox can legitimately hold this token. Everything
+ * else — including boot-time states (spawning/connecting), where the git
+ * credential broker is already called, and the post-connect steady state
+ * (ready) — must authenticate. Deny-list, not allowlist: an unknown future
+ * state defaults to letting the token comparison decide.
+ */
+const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set(["stopped", "stale", "failed"]);
 
 interface AddParticipantRequest {
   userId: string;
@@ -183,11 +193,11 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ valid: false, error: "No sandbox" }, { status: 404 });
       }
 
-      if (sandbox.status === "stopped" || sandbox.status === "stale") {
-        deps.getLog().warn("Sandbox token verification failed: sandbox is stopped/stale", {
+      if (DEAD_SANDBOX_STATUSES.has(sandbox.status)) {
+        deps.getLog().warn("Sandbox token verification failed: sandbox is dead", {
           status: sandbox.status,
         });
-        return Response.json({ valid: false, error: "Sandbox stopped" }, { status: 410 });
+        return Response.json({ valid: false, error: "Sandbox not active" }, { status: 410 });
       }
 
       const isTokenValid = await deps.isValidSandboxToken(token, sandbox);

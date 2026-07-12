@@ -316,45 +316,52 @@ describe("createSandboxHandler", () => {
     expect(log.warn).toHaveBeenCalledWith("Sandbox token verification failed: no sandbox");
   });
 
-  it("returns 410 when sandbox is stopped", async () => {
-    const { handler, getSandbox, log } = createHandler();
-    getSandbox.mockReturnValue({ status: "stopped" } as SandboxRow);
+  it.each(["stopped", "stale", "failed"] as const)(
+    "returns 410 without comparing the token when sandbox is %s",
+    async (status) => {
+      const { handler, getSandbox, isValidSandboxToken, log } = createHandler();
+      getSandbox.mockReturnValue({ status } as SandboxRow);
 
-    const response = await handler.verifySandboxToken(
-      new Request("http://internal/internal/verify-sandbox-token", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: "abc" }),
-      })
-    );
+      const response = await handler.verifySandboxToken(
+        new Request("http://internal/internal/verify-sandbox-token", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "abc" }),
+        })
+      );
 
-    expect(response.status).toBe(410);
-    expect(await response.json()).toEqual({ valid: false, error: "Sandbox stopped" });
-    expect(log.warn).toHaveBeenCalledWith(
-      "Sandbox token verification failed: sandbox is stopped/stale",
-      { status: "stopped" }
-    );
-  });
+      expect(response.status).toBe(410);
+      expect(await response.json()).toEqual({ valid: false, error: "Sandbox not active" });
+      expect(log.warn).toHaveBeenCalledWith("Sandbox token verification failed: sandbox is dead", {
+        status,
+      });
+      expect(isValidSandboxToken).not.toHaveBeenCalled();
+    }
+  );
 
-  it("returns 410 when sandbox is stale", async () => {
-    const { handler, getSandbox, log } = createHandler();
-    getSandbox.mockReturnValue({ status: "stale" } as SandboxRow);
+  // Boot-time states (spawning/connecting) must authenticate — the git
+  // credential broker is called during the initial clone, before the sandbox
+  // WebSocket connect flips the status to ready. "running" is not currently
+  // produced by any lifecycle path but remains a valid live state.
+  it.each(["pending", "spawning", "connecting", "warming", "syncing", "ready", "running"] as const)(
+    "accepts a valid token when sandbox is %s",
+    async (status) => {
+      const { handler, getSandbox, isValidSandboxToken } = createHandler();
+      getSandbox.mockReturnValue({ status } as SandboxRow);
+      vi.mocked(isValidSandboxToken).mockResolvedValue(true);
 
-    const response = await handler.verifySandboxToken(
-      new Request("http://internal/internal/verify-sandbox-token", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: "abc" }),
-      })
-    );
+      const response = await handler.verifySandboxToken(
+        new Request("http://internal/internal/verify-sandbox-token", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "abc" }),
+        })
+      );
 
-    expect(response.status).toBe(410);
-    expect(await response.json()).toEqual({ valid: false, error: "Sandbox stopped" });
-    expect(log.warn).toHaveBeenCalledWith(
-      "Sandbox token verification failed: sandbox is stopped/stale",
-      { status: "stale" }
-    );
-  });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ valid: true });
+    }
+  );
 
   it("returns 401 when sandbox token is invalid", async () => {
     const { handler, getSandbox, isValidSandboxToken, log } = createHandler();
