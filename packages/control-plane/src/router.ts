@@ -259,7 +259,8 @@ async function requireInternalAuth(
   request: Request,
   env: Env,
   path: string,
-  ctx: RequestContext
+  ctx: RequestContext,
+  logFailure = true
 ): Promise<Response | null> {
   if (!env.INTERNAL_CALLBACK_SECRET) {
     logger.error("INTERNAL_CALLBACK_SECRET not configured - rejecting request", {
@@ -277,13 +278,15 @@ async function requireInternalAuth(
 
   if (!isValid) {
     const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    logger.warn("Auth failed: HMAC", {
-      event: "auth.hmac_failed",
-      http_path: path,
-      client_ip: clientIP,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
+    if (logFailure) {
+      logger.warn("Auth failed: HMAC", {
+        event: "auth.hmac_failed",
+        http_path: path,
+        client_ip: clientIP,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+    }
     return error("Unauthorized", 401);
   }
 
@@ -386,12 +389,13 @@ export async function handleRequest(
 
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
+    const acceptsSandboxAuth = isSandboxAuthRoute(path);
     // First try HMAC auth (for web app, slack bot, etc.)
-    const hmacAuthError = await requireInternalAuth(request, env, path, ctx);
+    const hmacAuthError = await requireInternalAuth(request, env, path, ctx, !acceptsSandboxAuth);
 
     if (hmacAuthError) {
       // HMAC auth failed - check if this route accepts sandbox auth
-      if (isSandboxAuthRoute(path)) {
+      if (acceptsSandboxAuth) {
         // Extract session ID from path (e.g., /sessions/abc123/pr -> abc123)
         const sessionIdMatch = path.match(/^\/sessions\/([^/]+)\//);
         if (sessionIdMatch) {
@@ -401,6 +405,14 @@ export async function handleRequest(
             // Sandbox auth passed, continue to route handler
           } else {
             // Both HMAC and sandbox auth failed
+            const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
+            logger.warn("Auth failed: HMAC", {
+              event: "auth.hmac_failed",
+              http_path: path,
+              client_ip: clientIP,
+              request_id: ctx.request_id,
+              trace_id: ctx.trace_id,
+            });
             return withCorsAndTraceHeaders(sandboxAuthError, ctx);
           }
         }
