@@ -316,14 +316,16 @@ function useSessionListActions(sessionId: string) {
         if (!success) {
           throw new Error("Failed to update session title");
         }
-        await mutate<SessionListResponse>(isUnarchivedSessionListKey, updateSessionsTitle, {
-          populateCache: true,
-          revalidate: true,
-        });
-        await mutate<SessionListResponse>(isArchivedSessionListKey, updateSessionsTitle, {
-          populateCache: true,
-          revalidate: false,
-        });
+        await Promise.all([
+          mutate<SessionListResponse>(isUnarchivedSessionListKey, updateSessionsTitle, {
+            populateCache: true,
+            revalidate: true,
+          }),
+          mutate<SessionListResponse>(isArchivedSessionListKey, updateSessionsTitle, {
+            populateCache: true,
+            revalidate: false,
+          }),
+        ]);
         return true;
       } catch {
         return false;
@@ -422,10 +424,21 @@ function usePromptInput(
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const clearTypingTimeout = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearTypingTimeout, [clearTypingTimeout]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isProcessing) return;
 
+    // Drop any queued typing indicator — the prompt supersedes it
+    clearTypingTimeout();
     sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
     // Revalidate sidebar so this session bubbles to the top
@@ -445,9 +458,7 @@ function usePromptInput(
     setPrompt(e.target.value);
 
     // Send typing indicator (debounced)
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
+    clearTypingTimeout();
     typingTimeoutRef.current = setTimeout(() => {
       sendTyping();
     }, 300);
