@@ -9,11 +9,9 @@ import { AnalyticsRepoBarChart } from "@/components/analytics/repo-bar-chart";
 import { AnalyticsSummaryCards } from "@/components/analytics/summary-cards";
 import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-chart";
 import { AnalyticsUserTable } from "@/components/analytics/user-table";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon } from "@/components/ui/icons";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAnalyticsDashboard } from "@/hooks/use-analytics";
 import {
@@ -25,10 +23,9 @@ import {
   type AnalyticsSortDirection,
   type AnalyticsUserSortKey,
 } from "@/lib/analytics";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
 export default function AnalyticsPage() {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const [days, setDays] = useState<AnalyticsDays>(30);
   const [sortKey, setSortKey] = useState<AnalyticsUserSortKey>("sessions");
   const [sortDirection, setSortDirection] = useState<AnalyticsSortDirection>("desc");
@@ -66,15 +63,7 @@ export default function AnalyticsPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
+            <CollapsedSidebarControls />
           </div>
         </header>
       )}

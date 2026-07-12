@@ -4,7 +4,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CollapsedSidebarActions } from "./sidebar-layout";
+import { CollapsedSidebarControls, SidebarLayout } from "./sidebar-layout";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 
 expect.extend(matchers);
 
@@ -15,23 +17,51 @@ vi.mock("next-auth/react", () => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(),
+  usePathname: () => "/",
+}));
+
+vi.mock("@/hooks/use-media-query", () => ({
+  useIsMobile: () => false,
+}));
+
+vi.mock("@/hooks/use-sidebar", () => ({
+  useSidebar: () => ({
+    isOpen: true,
+    toggle: vi.fn(),
+    open: vi.fn(),
+    close: vi.fn(),
+  }),
 }));
 
 afterEach(cleanup);
 
-describe("CollapsedSidebarActions", () => {
-  it("keeps search and new session actions available", () => {
-    const onSearchSessions = vi.fn();
-    const onNewSession = vi.fn();
+describe("CollapsedSidebarControls", () => {
+  it("renders the sidebar, search, and new session actions inline", () => {
+    vi.mocked(useSession).mockReturnValue({
+      data: { user: { name: "Test User" }, expires: "2099-01-01" },
+      status: "authenticated",
+      update: vi.fn(),
+    });
+    const push = vi.fn();
+    vi.mocked(useRouter).mockReturnValue({ push } as never);
 
     render(
-      <CollapsedSidebarActions onSearchSessions={onSearchSessions} onNewSession={onNewSession} />
+      <SidebarLayout>
+        <CollapsedSidebarControls />
+      </SidebarLayout>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Search sessions/ }));
-    fireEvent.click(screen.getByRole("button", { name: /New session/ }));
+    const controls = screen.getByRole("button", { name: /Open sidebar/ }).parentElement;
+    expect(controls).toHaveClass("flex", "items-center");
+    const buttons = controls?.querySelectorAll("button");
+    expect(buttons).toHaveLength(3);
+    expect(Array.from(buttons!, (button) => button.getAttribute("aria-label"))).toEqual([
+      expect.stringMatching(/^Open sidebar/),
+      expect.stringMatching(/^Search sessions/),
+      expect.stringMatching(/^New session/),
+    ]);
 
-    expect(onSearchSessions).toHaveBeenCalledOnce();
-    expect(onNewSession).toHaveBeenCalledOnce();
+    fireEvent.click(buttons![2]);
+    expect(push).toHaveBeenCalledWith("/");
   });
 });

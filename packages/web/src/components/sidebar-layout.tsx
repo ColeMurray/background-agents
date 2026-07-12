@@ -11,14 +11,17 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { GitHubIcon, GoogleIcon } from "@/components/ui/icons";
+import { GitHubIcon, GoogleIcon, SidebarIcon } from "@/components/ui/icons";
 import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
+import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
 interface SidebarContextValue {
   isOpen: boolean;
   toggle: () => void;
   open: () => void;
   close: () => void;
+  searchSessions: () => void;
+  newSession: () => void;
 }
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
@@ -35,19 +38,22 @@ interface SidebarLayoutProps {
   children: React.ReactNode;
 }
 
-interface CollapsedSidebarActionsProps {
-  onSearchSessions: () => void;
-  onNewSession: () => void;
-}
+export function CollapsedSidebarControls() {
+  const { toggle, searchSessions, newSession } = useSidebarContext();
 
-export function CollapsedSidebarActions({
-  onSearchSessions,
-  onNewSession,
-}: CollapsedSidebarActionsProps) {
   return (
-    <div className="w-12 flex-shrink-0 border-r border-border-muted bg-background px-2 py-3 flex flex-col items-center gap-2">
-      <SearchSessionsButton onClick={onSearchSessions} />
-      <NewSessionButton onClick={onNewSession} />
+    <div className="flex items-center gap-2">
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={toggle}
+        title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+        aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+      >
+        <SidebarIcon className="w-4 h-4" />
+      </Button>
+      <SearchSessionsButton onClick={searchSessions} />
+      <NewSessionButton onClick={newSession} />
     </div>
   );
 }
@@ -132,7 +138,13 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   }
 
   return (
-    <SidebarContext.Provider value={sidebar}>
+    <SidebarContext.Provider
+      value={{
+        ...sidebar,
+        searchSessions: handleSearchSessions,
+        newSession: handleNewSession,
+      }}
+    >
       <div className="flex h-dvh overflow-hidden">
         {/* Mobile: overlay backdrop */}
         {isMobile && (
@@ -164,12 +176,6 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
             onSessionSelect={sidebar.close}
           />
         </div>
-        {!isMobile && !sidebar.isOpen && (
-          <CollapsedSidebarActions
-            onSearchSessions={handleSearchSessions}
-            onNewSession={handleNewSession}
-          />
-        )}
         <main className="flex-1 overflow-hidden">{children}</main>
       </div>
       <GlobalCommandMenu

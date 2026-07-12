@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -33,7 +33,8 @@ export default function IntegrationDetailPage() {
     <div className="h-full flex flex-col">
       <header className="border-b border-border-muted flex-shrink-0">
         <div className="px-4 py-3 flex items-center gap-2">
-          {(!isOpen || isMobile) && (
+          {!isOpen && <CollapsedSidebarControls />}
+          {isOpen && isMobile && (
             <button
               onClick={toggle}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
