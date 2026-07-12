@@ -4,17 +4,10 @@ const nonEmptyString = z.string().min(1);
 const responseScopeSchema = z.union([z.string(), z.array(z.string())]);
 const safeIntegerSchema = z.number().int().refine(Number.isSafeInteger);
 
-export const linearAuthorizationCodeTokenResponseSchema = z.object({
+export const linearAuthorizationCodeAccessTokenSchema = z.object({
   access_token: nonEmptyString,
   token_type: nonEmptyString,
-  expires_in: z.number().positive(),
-  refresh_token: nonEmptyString,
-  scope: responseScopeSchema.optional(),
 });
-
-export type LinearAuthorizationCodeTokenResponse = z.infer<
-  typeof linearAuthorizationCodeTokenResponseSchema
->;
 
 export const linearClientCredentialsTokenResponseSchema = z.object({
   access_token: nonEmptyString,

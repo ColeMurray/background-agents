@@ -1,10 +1,9 @@
 import type { Env } from "../types";
 import {
-  linearAuthorizationCodeTokenResponseSchema,
+  linearAuthorizationCodeAccessTokenSchema,
   linearClientCredentialsTokenResponseSchema,
   linearIdentityResponseSchema,
   linearOAuthErrorResponseSchema,
-  type LinearAuthorizationCodeTokenResponse,
 } from "./linear-credential-schemas";
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
@@ -149,7 +148,7 @@ function postTokenRequest(env: Env, body: URLSearchParams): Promise<Response> {
 export async function exchangeLinearAuthorizationCode(
   env: Env,
   code: string
-): Promise<LinearAuthorizationCodeTokenResponse> {
+): Promise<{ accessToken: string }> {
   let response: Response;
   try {
     response = await postTokenRequest(
@@ -175,11 +174,11 @@ export async function exchangeLinearAuthorizationCode(
   } catch {
     throw new Error("Linear authorization-code token response was malformed");
   }
-  const parsed = linearAuthorizationCodeTokenResponseSchema.safeParse(body);
+  const parsed = linearAuthorizationCodeAccessTokenSchema.safeParse(body);
   if (!parsed.success || parsed.data.token_type.toLowerCase() !== "bearer") {
     throw new Error("Linear authorization-code token response was malformed");
   }
-  return parsed.data;
+  return { accessToken: parsed.data.access_token };
 }
 
 export async function issueLinearClientCredentialsToken(

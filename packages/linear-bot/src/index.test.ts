@@ -152,7 +152,11 @@ describe("GET /oauth/callback", () => {
     });
     const env = makeLinearBotEnv(kv);
     const fetchMock = createLinearFetchMock({
-      authorizationCode: () => linearAuthorizationCodeResponse(),
+      authorizationCode: () =>
+        Response.json({
+          access_token: "installation-access-token",
+          token_type: "Bearer",
+        }),
       clientCredentials: () => linearClientCredentialsResponse(),
       identity: () => linearIdentityResponse(),
     });

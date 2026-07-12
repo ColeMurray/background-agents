@@ -172,7 +172,7 @@ export async function completeLinearOAuthInstallation(
   code: string
 ): Promise<{ orgName: string }> {
   const installationToken = await exchangeLinearAuthorizationCode(env, code);
-  const installationIdentity = await fetchLinearIdentity(installationToken.access_token);
+  const installationIdentity = await fetchLinearIdentity(installationToken.accessToken);
   const runtimeCredential = await issueVerifiedCredential(
     env,
     installationIdentity.organizationId,
