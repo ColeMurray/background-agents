@@ -40,6 +40,12 @@ export function createStartCallbackRouter(
     const parsed = linearStartCallbackSchema.safeParse(rawPayload);
     if (!parsed.success) return c.json({ error: "invalid payload" }, 400);
     const payload = parsed.data;
+    const callbackLogFields = {
+      trace_id: traceId,
+      session_id: payload.sessionId,
+      message_id: payload.messageId,
+      issue_id: payload.context.issueId,
+    };
 
     if (!c.env.INTERNAL_CALLBACK_SECRET) {
       return c.json({ error: "not configured" }, 500);
@@ -56,10 +62,7 @@ export function createStartCallbackRouter(
     const ageMs = requestStartedAt - payload.timestamp;
     if (ageMs > START_CALLBACK_MAX_AGE_MS || ageMs < -START_CALLBACK_MAX_FUTURE_SKEW_MS) {
       log.warn("callback.started", {
-        trace_id: traceId,
-        session_id: payload.sessionId,
-        message_id: payload.messageId,
-        issue_id: payload.context.issueId,
+        ...callbackLogFields,
         outcome: "skipped",
         skip_reason: "stale_callback",
         age_ms: ageMs,
@@ -77,10 +80,7 @@ export function createStartCallbackRouter(
       client = await dependencies.getLinearClient(c.env, context.organizationId, context.appUserId);
     } catch (error) {
       log.warn("callback.started", {
-        trace_id: traceId,
-        session_id: payload.sessionId,
-        message_id: payload.messageId,
-        issue_id: context.issueId,
+        ...callbackLogFields,
         outcome: "error",
         error: error instanceof Error ? error : new Error(String(error)),
         duration_ms: dependencies.now() - requestStartedAt,
@@ -92,10 +92,7 @@ export function createStartCallbackRouter(
     try {
       const result = await dependencies.transitionIssueToStarted(client, context.issueId);
       log.info("callback.started", {
-        trace_id: traceId,
-        session_id: payload.sessionId,
-        message_id: payload.messageId,
-        issue_id: context.issueId,
+        ...callbackLogFields,
         issue_identifier: context.issueIdentifier,
         outcome: result.outcome,
         ...(result.outcome !== "issue_not_found"
@@ -109,10 +106,7 @@ export function createStartCallbackRouter(
       return c.json({ ok: true, outcome: result.outcome });
     } catch (error) {
       log.warn("callback.started", {
-        trace_id: traceId,
-        session_id: payload.sessionId,
-        message_id: payload.messageId,
-        issue_id: context.issueId,
+        ...callbackLogFields,
         outcome: "error",
         error: error instanceof Error ? error : new Error(String(error)),
         duration_ms: dependencies.now() - requestStartedAt,
