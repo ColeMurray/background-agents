@@ -21,6 +21,37 @@ function parseWsMessage(raw: unknown): ServerMessage | null {
   return result.success ? result.data : null;
 }
 
+function reconnectDelayMs(attemptsSoFar: number): number {
+  return Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(2, attemptsSoFar), MAX_RECONNECT_DELAY_MS);
+}
+
+/** What a close event calls for, decided as data; the caller applies effects. */
+type CloseDirective =
+  | { action: "auth_required" }
+  | { action: "session_expired" }
+  | { action: "retry"; delayMs: number }
+  | { action: "give_up" }
+  | { action: "none" };
+
+function closeDirective(
+  event: Pick<CloseEvent, "code" | "wasClean">,
+  attemptsSoFar: number
+): CloseDirective {
+  if (event.code === WS_CLOSE_AUTH_REQUIRED) {
+    return { action: "auth_required" };
+  }
+  if (event.code === WS_CLOSE_SESSION_EXPIRED) {
+    return { action: "session_expired" };
+  }
+  if (event.wasClean) {
+    return { action: "none" };
+  }
+  if (attemptsSoFar < MAX_RECONNECT_ATTEMPTS) {
+    return { action: "retry", delayMs: reconnectDelayMs(attemptsSoFar) };
+  }
+  return { action: "give_up" };
+}
+
 export interface SessionTransportHandlers {
   /** A schema-validated server message arrived. */
   onMessage: (message: ServerMessage) => void;
@@ -104,6 +135,125 @@ export function useSessionTransport(
     }
   }, [sessionId]);
 
+  /**
+   * Make sure `wsTokenRef` holds an auth token, fetching one if needed.
+   * Returns false when the connect attempt should stop: the fetch failed, or
+   * `epoch` was superseded (reconnect()/unmount) while awaiting — in which
+   * case the in-flight flag is released only if this attempt still owns it,
+   * and the stale attempt's token is never stored.
+   */
+  const ensureWsToken = useCallback(
+    async (epoch: number): Promise<boolean> => {
+      if (wsTokenRef.current) {
+        return true;
+      }
+      const token = await fetchWsToken();
+      if (epoch !== connectEpochRef.current) {
+        if (connectingEpochRef.current === epoch) {
+          connectingEpochRef.current = null;
+          setConnecting(false);
+        }
+        return false;
+      }
+      if (!token) {
+        connectingEpochRef.current = null;
+        setConnecting(false);
+        return false;
+      }
+      wsTokenRef.current = token;
+      return true;
+    },
+    [fetchWsToken]
+  );
+
+  const handleSocketOpen = useCallback((ws: WebSocket) => {
+    if (wsRef.current !== ws || !mountedRef.current) {
+      ws.close();
+      return;
+    }
+    console.log("WebSocket connected!");
+    connectingEpochRef.current = null;
+    setConnected(true);
+    setConnecting(false);
+    reconnectAttempts.current = 0;
+
+    // Subscribe to session with the auth token
+    ws.send(
+      JSON.stringify({
+        type: "subscribe",
+        token: wsTokenRef.current,
+        clientId: crypto.randomUUID(),
+      })
+    );
+  }, []);
+
+  const handleSocketMessage = useCallback((ws: WebSocket, event: MessageEvent) => {
+    if (wsRef.current !== ws) return;
+    try {
+      const data = parseWsMessage(JSON.parse(event.data));
+      if (!data) return;
+      handlersRef.current.onMessage(data);
+    } catch (error) {
+      console.error("Failed to parse WebSocket message:", error);
+    }
+  }, []);
+
+  /** `retry` is the connect function to schedule on an unclean close. */
+  const handleSocketClose = useCallback((ws: WebSocket, event: CloseEvent, retry: () => void) => {
+    // Browsers deliver close events asynchronously: a socket discarded by
+    // reconnect() or cleanup can close after its replacement exists. Only
+    // the current socket may mutate shared connection state.
+    if (wsRef.current !== ws) return;
+
+    console.log("WebSocket closed:", {
+      code: event.code,
+      reason: event.reason,
+      wasClean: event.wasClean,
+    });
+    connectingEpochRef.current = null;
+    setConnected(false);
+    setConnecting(false);
+    wsRef.current = null;
+    handlersRef.current.onClose?.();
+
+    const directive = closeDirective(event, reconnectAttempts.current);
+    switch (directive.action) {
+      case "auth_required":
+        setAuthError("Authentication failed. Please sign in again.");
+        // Clear the token so we fetch a new one on reconnect
+        wsTokenRef.current = null;
+        return;
+
+      case "session_expired":
+        // e.g. after server hibernation
+        setConnectionError("Session expired. Please reconnect.");
+        wsTokenRef.current = null;
+        return;
+
+      case "retry":
+        if (!mountedRef.current) return;
+        reconnectAttempts.current++;
+        console.log(
+          `Reconnecting in ${directive.delayMs}ms (attempt ${reconnectAttempts.current})`
+        );
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (mountedRef.current) {
+            retry();
+          }
+        }, directive.delayMs);
+        return;
+
+      case "give_up":
+        if (!mountedRef.current) return;
+        console.error(`WebSocket reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
+        setConnectionError("Connection lost. Please check your network and try reconnecting.");
+        return;
+
+      case "none":
+        return;
+    }
+  }, []);
+
   const connect = useCallback(async () => {
     // Use refs to avoid race conditions with React StrictMode
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -124,25 +274,8 @@ export function useSessionTransport(
     setConnecting(true);
     setAuthError(null);
 
-    // Fetch a WebSocket auth token first
-    if (!wsTokenRef.current) {
-      const token = await fetchWsToken();
-      if (epoch !== connectEpochRef.current) {
-        // Superseded by reconnect() or unmount while awaiting the token.
-        // Release the in-flight flag only if this attempt still owns it, and
-        // never store or use a token fetched for a stale attempt.
-        if (connectingEpochRef.current === epoch) {
-          connectingEpochRef.current = null;
-          setConnecting(false);
-        }
-        return;
-      }
-      if (!token) {
-        connectingEpochRef.current = null;
-        setConnecting(false);
-        return;
-      }
-      wsTokenRef.current = token;
+    if (!(await ensureWsToken(epoch))) {
+      return;
     }
 
     const wsUrl = `${WS_URL}/sessions/${sessionId}/ws`;
@@ -150,98 +283,11 @@ export function useSessionTransport(
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
-
-    ws.onopen = () => {
-      if (wsRef.current !== ws || !mountedRef.current) {
-        ws.close();
-        return;
-      }
-      console.log("WebSocket connected!");
-      connectingEpochRef.current = null;
-      setConnected(true);
-      setConnecting(false);
-      reconnectAttempts.current = 0;
-
-      // Subscribe to session with the auth token
-      ws.send(
-        JSON.stringify({
-          type: "subscribe",
-          token: wsTokenRef.current,
-          clientId: crypto.randomUUID(),
-        })
-      );
-    };
-
-    ws.onmessage = (event) => {
-      if (wsRef.current !== ws) return;
-      try {
-        const data = parseWsMessage(JSON.parse(event.data));
-        if (!data) return;
-        handlersRef.current.onMessage(data);
-      } catch (error) {
-        console.error("Failed to parse WebSocket message:", error);
-      }
-    };
-
-    ws.onclose = (event) => {
-      // Browsers deliver close events asynchronously: a socket discarded by
-      // reconnect() or cleanup can close after its replacement exists. Only
-      // the current socket may mutate shared connection state.
-      if (wsRef.current !== ws) return;
-
-      console.log("WebSocket closed:", {
-        code: event.code,
-        reason: event.reason,
-        wasClean: event.wasClean,
-      });
-      connectingEpochRef.current = null;
-      setConnected(false);
-      setConnecting(false);
-      wsRef.current = null;
-      handlersRef.current.onClose?.();
-
-      // Handle authentication errors
-      if (event.code === WS_CLOSE_AUTH_REQUIRED) {
-        setAuthError("Authentication failed. Please sign in again.");
-        // Clear the token so we fetch a new one on reconnect
-        wsTokenRef.current = null;
-        return;
-      }
-
-      // Handle session expired (e.g., after server hibernation)
-      if (event.code === WS_CLOSE_SESSION_EXPIRED) {
-        setConnectionError("Session expired. Please reconnect.");
-        wsTokenRef.current = null;
-        return;
-      }
-
-      // Only reconnect if mounted and not a clean close
-      if (mountedRef.current && !event.wasClean) {
-        if (reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
-          const delay = Math.min(
-            RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts.current),
-            MAX_RECONNECT_DELAY_MS
-          );
-          reconnectAttempts.current++;
-          console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`);
-
-          reconnectTimeoutRef.current = setTimeout(() => {
-            if (mountedRef.current) {
-              connect();
-            }
-          }, delay);
-        } else {
-          // Exhausted reconnection attempts
-          console.error(`WebSocket reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
-          setConnectionError("Connection lost. Please check your network and try reconnecting.");
-        }
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error("WebSocket error event:", error);
-    };
-  }, [sessionId, fetchWsToken]);
+    ws.onopen = () => handleSocketOpen(ws);
+    ws.onmessage = (event) => handleSocketMessage(ws, event);
+    ws.onclose = (event) => handleSocketClose(ws, event, connect);
+    ws.onerror = (error) => console.error("WebSocket error event:", error);
+  }, [sessionId, ensureWsToken, handleSocketOpen, handleSocketMessage, handleSocketClose]);
 
   // Bump the epoch so a connect() awaiting its token bails instead of opening
   // a socket for an attempt that reconnect() or unmount has abandoned.
