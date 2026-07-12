@@ -345,6 +345,26 @@ configure this in **Step 7b** after running Terraform.
 
 ---
 
+## Step 4b: Create a Linear OAuth App (Optional)
+
+Skip this step if you don't need the Linear Agent integration.
+
+1. Create an application in **Linear Settings → API → Applications**.
+2. Enable webhooks and subscribe to **Agent session events**. **Permission changes** and **Inbox
+   notifications** are also useful operational signals.
+3. Enable **Client credentials tokens**. This Linear-side setting is not managed by Terraform.
+4. Configure these URLs, replacing the deployment name and Workers subdomain:
+   - Callback URL:
+     `https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/oauth/callback`
+   - Webhook URL:
+     `https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/webhook`
+5. Record the client ID, client secret, and webhook signing secret for `terraform.tfvars`.
+
+The app is installed after deployment in **Step 7d**. Runtime access uses replaceable
+client-credentials tokens; authorization-code refresh tokens are not stored as runtime credentials.
+
+---
+
 ## Step 5: Generate Security Secrets
 
 Generate these random secrets (you'll need them for `terraform.tfvars`):
@@ -466,6 +486,12 @@ slack_signing_secret = ""
 enable_github_bot      = false
 github_webhook_secret  = ""          # From Step 5 (required if enabled)
 github_bot_username    = ""          # e.g., "my-app[bot]" (your GitHub App's bot login)
+
+# Linear Agent (set enable_linear_bot = true to deploy the webhook worker)
+enable_linear_bot      = false
+linear_client_id       = ""          # From Step 4b (required if enabled)
+linear_client_secret   = ""          # From Step 4b (required if enabled)
+linear_webhook_secret  = ""          # From Step 4b (required if enabled)
 
 # API Keys
 anthropic_api_key = "sk-ant-..."
@@ -692,6 +718,26 @@ Or construct it from your App's slug: if your app is named `My-Inspect-App`, the
   `@my-app[bot] explain why this test is failing`)
 
 For day-to-day workflows, see [GitHub Integration](./integrations/GITHUB.md).
+
+---
+
+## Step 7d: Install the Linear Agent (If Using Linear)
+
+After the Linear bot Worker is deployed, visit:
+
+```text
+https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/oauth/authorize
+```
+
+A Linear workspace admin must approve the installation. After installation, the agent appears in
+mention and assignment menus. Test it by mentioning the agent on an issue, then use **View Session**
+to follow the corresponding Open-Inspect session.
+
+For upgrades, enable **Client credentials tokens** before deploying. No reinstall is expected for an
+eligible existing installation, but allow already-running sessions to finish before upgrading
+because older callback contexts may not contain the installed app-user identity.
+
+For configuration and troubleshooting, see [Linear Integration](./integrations/LINEAR.md).
 
 ---
 
@@ -977,12 +1023,13 @@ Terraform references the built worker bundles. Build them before running `terraf
 npm run build -w @open-inspect/shared
 
 # Build workers (required before Terraform)
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
 
 # Verify bundles exist
 ls packages/control-plane/dist/index.js
 ls packages/slack-bot/dist/index.js
 ls packages/github-bot/dist/index.js  # Only if enable_github_bot = true
+ls packages/linear-bot/dist/index.js  # Only if enable_linear_bot = true
 ```
 
 ### Slack bot not responding

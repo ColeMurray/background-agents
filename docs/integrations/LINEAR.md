@@ -154,6 +154,9 @@ Linear user preferences are currently admin/API-managed, not set from a self-ser
 - Linear client credentials, runtime access tokens, webhook secrets, and callback secrets stay
   server-side. Runtime access tokens are cached and replaced automatically; refresh tokens are not
   used for runtime API access.
+- Runtime tokens are cached under `oauth:client-credentials:{organizationId}` with their verified
+  workspace/app identity and expire with the provider lease. Do not edit cached token values
+  manually.
 - Linear does not provide Git credentials. Repository access still comes from the deployment's
   configured source-control integration, such as the GitHub App installation.
 - Repository scope in Linear settings controls which resolved repositories can receive
@@ -191,6 +194,29 @@ the Linear project or team.
 
 Open **View Session**. Linear shows status and completion activity, while detailed logs,
 transcripts, artifacts, and file changes live in the Open-Inspect web session.
+
+### Linear stays Working after the web session completes
+
+Linear leaves Working only after the bot delivers a terminal `response` or `error` activity. If the
+web session has completed but Linear has not:
+
+1. Find the Open-Inspect session ID from **View Session**.
+2. Confirm the Linear bot logged `agent_session.followup` for the follow-up webhook.
+3. In control-plane logs, find `prompt.enqueue` for the follow-up message. A healthy Linear prompt
+   has `has_callback_context:true`; `false` means completion had no Linear callback destination.
+4. Confirm control-plane `prompt.complete`, followed by linear-bot `callback.complete`. If the first
+   exists without the second, inspect callback routing and context. If both exist, inspect
+   `linear.emit_activity_failed`, credential identity failures, and GraphQL errors.
+
+A completion that was skipped cannot repair itself later. After deploying a callback-context fix,
+send another follow-up through the same Linear Agent session to produce a new terminal activity, or
+start a new Agent session if the issue mapping has expired.
+
+### Linear client secret was rotated
+
+Deploy the replacement `LINEAR_CLIENT_SECRET` promptly. Linear invalidates tokens minted with the
+old secret; the Worker replaces the cached token after a cache miss, expiry, or HTTP 401 and retries
+the rejected API request once. A reinstall is not normally required.
 
 ### The wrong model was used
 

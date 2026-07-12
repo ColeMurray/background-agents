@@ -5,7 +5,8 @@
 
 import type {
   Env,
-  CallbackContext,
+  IssueSession,
+  LinearCallbackContext,
   LinearIssueDetails,
   AgentSessionWebhook,
   AgentSessionWebhookIssue,
@@ -267,6 +268,35 @@ function getFollowUp(webhook: AgentSessionWebhook): {
   return { content: "Follow-up on the issue.", source: "linear_fallback" };
 }
 
+function buildLinearCallbackContext(params: {
+  webhook: AgentSessionWebhook;
+  issue: AgentSessionWebhookIssue;
+  model: string;
+  repoFullName: string;
+  emitToolProgressActivities?: boolean;
+}): LinearCallbackContext {
+  const { webhook, issue, model, repoFullName, emitToolProgressActivities } = params;
+  return {
+    source: "linear",
+    issueId: issue.id,
+    issueIdentifier: issue.identifier,
+    issueUrl: issue.url,
+    repoFullName,
+    model,
+    agentSessionId: webhook.agentSession.id,
+    organizationId: webhook.organizationId,
+    appUserId: webhook.appUserId,
+    emitToolProgressActivities,
+  };
+}
+
+function getCallbackRepoFullName(session: IssueSession): string {
+  if (session.callbackRepoFullName) return session.callbackRepoFullName;
+  if (session.repoOwner && session.repoName) return `${session.repoOwner}/${session.repoName}`;
+  if (session.environmentId) return `environment:${session.environmentId}`;
+  return "legacy-session";
+}
+
 async function handleFollowUp(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
@@ -291,6 +321,13 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
+  const callbackContext = buildLinearCallbackContext({
+    webhook,
+    issue,
+    model: existingSession.model,
+    repoFullName: getCallbackRepoFullName(existingSession),
+    emitToolProgressActivities: existingSession.emitToolProgressActivities,
+  });
 
   await emitAgentActivity(
     client,
@@ -340,6 +377,7 @@ async function handleFollowUp(
         }),
         authorId: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
         source: "linear",
+        callbackContext,
       }),
     }
   );
@@ -513,6 +551,13 @@ async function handleNewSession(
 
   const headers = await getAuthHeaders(env, traceId);
   const session = sessionResult;
+  const callbackContext = buildLinearCallbackContext({
+    webhook,
+    issue,
+    model,
+    repoFullName: integration.callbackRepoFullName,
+    emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
+  });
 
   await storeIssueSession(env, issue.id, {
     sessionId: session.sessionId,
@@ -521,6 +566,8 @@ async function handleNewSession(
     ...targetRequestFields(target),
     model,
     agentSessionId,
+    callbackRepoFullName: integration.callbackRepoFullName,
+    emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
     createdAt: Date.now(),
   });
 
@@ -542,19 +589,6 @@ async function handleNewSession(
   if (integrationConfig.issueSessionInstructions) {
     prompt += `\n\n## Additional Instructions\n\n${integrationConfig.issueSessionInstructions}`;
   }
-
-  const callbackContext: CallbackContext = {
-    source: "linear",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueUrl: issue.url,
-    repoFullName: integration.callbackRepoFullName,
-    model,
-    agentSessionId,
-    organizationId: orgId,
-    appUserId: webhook.appUserId,
-    emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
-  };
 
   const promptRes = await env.CONTROL_PLANE.fetch(
     `https://internal/sessions/${session.sessionId}/prompt`,

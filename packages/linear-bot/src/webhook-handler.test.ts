@@ -316,7 +316,12 @@ describe("handleAgentSessionEvent environment targets", () => {
       string,
       unknown
     > | null;
-    expect(issueSession).toMatchObject({ sessionId: "session-xyz", environmentId: "env_abc" });
+    expect(issueSession).toMatchObject({
+      sessionId: "session-xyz",
+      environmentId: "env_abc",
+      callbackRepoFullName: "acme/backend",
+      emitToolProgressActivities: true,
+    });
     expect(issueSession).not.toHaveProperty("repoOwner");
     expect(store.has("oauth:token:org-1")).toBe(false);
     expect(store.get("oauth:client-credentials:org-1")).toContain("transitioned-runtime-token");
@@ -404,6 +409,8 @@ describe("handleAgentSessionEvent environment targets", () => {
         sessionId: "session-xyz",
         issueId: "issue-1",
         issueIdentifier: "ENG-42",
+        repoOwner: "acme",
+        repoName: "backend",
         model: "anthropic/claude-haiku-4-5",
         createdAt: Date.now(),
       }),
@@ -431,6 +438,17 @@ describe("handleAgentSessionEvent environment targets", () => {
     );
     expect(JSON.parse(String(promptCall?.[1]?.body))).toMatchObject({
       authorId: "linear:follow-up-human-user",
+      callbackContext: {
+        source: "linear",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        issueUrl: "https://linear.app/acme/issue/ENG-42/wire",
+        repoFullName: "acme/backend",
+        model: "anthropic/claude-haiku-4-5",
+        agentSessionId: "agent-session-1",
+        organizationId: "org-1",
+        appUserId: "app-user-1",
+      },
     });
   });
 

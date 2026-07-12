@@ -110,6 +110,9 @@ export interface IssueSession {
   environmentId?: string;
   model: string;
   agentSessionId?: string;
+  /** Repository used to resolve callback integration settings. */
+  callbackRepoFullName?: string;
+  emitToolProgressActivities?: boolean;
   createdAt: number;
 }
 

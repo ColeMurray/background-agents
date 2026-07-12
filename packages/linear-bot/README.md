@@ -88,7 +88,9 @@ this Linear-side setting.
 For a private, single-workspace deployment whose application credentials resolve to the installed
 workspace, deploy normally after enabling the setting. No uninstall/reinstall, new secret, webhook
 change, or scope reauthorization is expected. The first Linear request mints and verifies a runtime
-token, then removes the legacy refresh-token record.
+token, then removes the legacy refresh-token record. Allow already-running sessions to finish before
+upgrading; callback contexts created by older versions may not contain the installed app-user
+identity required for terminal Agent API delivery.
 
 If the setting is not enabled, Linear reports that the client does not support the
 `client_credentials` grant and the request fails without falling back to the legacy refresh token.
