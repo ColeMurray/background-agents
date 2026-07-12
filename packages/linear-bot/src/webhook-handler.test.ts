@@ -319,9 +319,9 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(issueSession).toMatchObject({
       sessionId: "session-xyz",
       environmentId: "env_abc",
-      callbackRepoFullName: "acme/backend",
-      emitToolProgressActivities: true,
     });
+    expect(issueSession).not.toHaveProperty("callbackRepoFullName");
+    expect(issueSession).not.toHaveProperty("emitToolProgressActivities");
     expect(issueSession).not.toHaveProperty("repoOwner");
     expect(store.has("oauth:token:org-1")).toBe(false);
     expect(store.get("oauth:client-credentials:org-1")).toContain("transitioned-runtime-token");
@@ -448,6 +448,63 @@ describe("handleAgentSessionEvent environment targets", () => {
         agentSessionId: "agent-session-1",
         organizationId: "org-1",
         appUserId: "app-user-1",
+      },
+    });
+  });
+
+  it("resolves current callback settings for an environment follow-up", async () => {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-xyz",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        environmentId: "env_abc",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://internal/environments") {
+        return Response.json({ environments: [environment], total: 1 });
+      }
+      if (url.endsWith("/integration-settings/linear/resolved/acme/backend")) {
+        return Response.json({
+          config: {
+            model: null,
+            reasoningEffort: null,
+            allowUserPreferenceOverride: true,
+            allowLabelModelOverride: true,
+            emitToolProgressActivities: false,
+            issueSessionInstructions: null,
+            enabledRepos: null,
+          },
+        });
+      }
+      if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
+      if (url.endsWith("/prompt")) return Response.json({ ok: true });
+      throw new Error(`Unexpected control-plane fetch to ${url}`);
+    });
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+    webhook.agentActivity = {
+      userId: "follow-up-human-user",
+      content: { type: "prompt", body: "Please continue." },
+    };
+
+    await handleAgentSessionEvent(webhook, env, "trace-environment-follow-up");
+
+    const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
+      String(input).endsWith("/prompt")
+    );
+    expect(JSON.parse(String(promptCall?.[1]?.body))).toMatchObject({
+      callbackContext: {
+        repoFullName: "acme/backend",
+        emitToolProgressActivities: false,
       },
     });
   });

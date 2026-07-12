@@ -5,7 +5,6 @@
 
 import type {
   Env,
-  IssueSession,
   LinearCallbackContext,
   LinearIssueDetails,
   AgentSessionWebhook,
@@ -26,6 +25,7 @@ import { makePlan } from "./plan";
 import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
 import {
   resolveSessionTarget,
+  resolveStoredSessionTarget,
   resolveTargetIntegration,
   targetId,
   targetLabel,
@@ -290,12 +290,6 @@ function buildLinearCallbackContext(params: {
   };
 }
 
-function getCallbackRepoFullName(session: IssueSession): string | undefined {
-  if (session.callbackRepoFullName) return session.callbackRepoFullName;
-  if (session.repoOwner && session.repoName) return `${session.repoOwner}/${session.repoName}`;
-  return undefined;
-}
-
 async function handleFollowUp(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
@@ -320,12 +314,16 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
+  const existingTarget = await resolveStoredSessionTarget(env, existingSession, traceId);
+  const currentIntegration = existingTarget
+    ? await resolveTargetIntegration(env, existingTarget)
+    : null;
   const callbackContext = buildLinearCallbackContext({
     webhook,
     issue,
     model: existingSession.model,
-    repoFullName: getCallbackRepoFullName(existingSession),
-    emitToolProgressActivities: existingSession.emitToolProgressActivities,
+    repoFullName: currentIntegration?.callbackRepoFullName,
+    emitToolProgressActivities: currentIntegration?.config.emitToolProgressActivities,
   });
 
   await emitAgentActivity(
@@ -565,8 +563,6 @@ async function handleNewSession(
     ...targetRequestFields(target),
     model,
     agentSessionId,
-    callbackRepoFullName: integration.callbackRepoFullName,
-    emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
     createdAt: Date.now(),
   });
 
