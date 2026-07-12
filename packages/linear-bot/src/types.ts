@@ -34,35 +34,6 @@ export interface Env {
   LOG_LEVEL?: string;
 }
 
-// ─── OAuth Types ─────────────────────────────────────────────────────────────
-
-export interface LinearAuthorizationCodeTokenResponse {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  refresh_token: string;
-  scope?: string | string[];
-}
-
-export interface LinearClientCredentialsTokenResponse {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  scope?: string | string[];
-}
-
-export interface StoredLinearClientCredentialsToken {
-  version: 1;
-  access_token: string;
-  token_type: "Bearer";
-  scope: string;
-  issued_at: number;
-  expires_at: number;
-  organization_id: string;
-  organization_name: string;
-  app_user_id: string;
-}
-
 // ─── Repo / Config Types ─────────────────────────────────────────────────────
 
 /**

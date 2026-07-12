@@ -105,6 +105,27 @@ describe("Linear client credentials", () => {
     expect(client.accessToken).toBe("replacement-token");
   });
 
+  it("treats a structurally invalid cache entry as a miss", async () => {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": JSON.stringify({
+        version: 1,
+        access_token: "cached-token",
+        token_type: "Bearer",
+        scope: "read,write,app:assignable,app:mentionable",
+        issued_at: Date.now(),
+        expires_at: "not-a-timestamp",
+        organization_id: "org-1",
+        organization_name: "Acme",
+        app_user_id: "app-user-1",
+      }),
+    });
+    vi.stubGlobal("fetch", successfulIssuanceFetch("replacement-token"));
+
+    const client = await getLinearClientOrThrow(makeLinearBotEnv(kv), "org-1", "app-user-1");
+
+    expect(client.accessToken).toBe("replacement-token");
+  });
+
   it("mints a token when the cache cannot be read", async () => {
     const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv);

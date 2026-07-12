@@ -1,4 +1,4 @@
-import type { Env, StoredLinearClientCredentialsToken } from "../types";
+import type { Env } from "../types";
 import { createLogger } from "../logger";
 import {
   deleteLegacyOAuthToken,
@@ -15,6 +15,7 @@ import {
   type IssuedClientCredentialsToken,
   type LinearIdentity,
 } from "./linear-oauth";
+import type { StoredLinearClientCredentialsToken } from "./linear-credential-schemas";
 
 export {
   LINEAR_CLIENT_CREDENTIALS_SCOPE,

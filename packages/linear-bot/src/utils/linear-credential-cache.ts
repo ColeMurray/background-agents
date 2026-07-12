@@ -1,4 +1,8 @@
-import type { Env, StoredLinearClientCredentialsToken } from "../types";
+import type { Env } from "../types";
+import {
+  storedLinearClientCredentialsTokenSchema,
+  type StoredLinearClientCredentialsToken,
+} from "./linear-credential-schemas";
 import { hasCanonicalLinearScope, LINEAR_TOKEN_EXPIRY_SKEW_MS } from "./linear-oauth";
 
 const CLIENT_CREDENTIALS_TOKEN_KEY_PREFIX = "oauth:client-credentials:";
@@ -23,31 +27,19 @@ function parseCachedToken(
   } catch {
     return null;
   }
-  if (!value || typeof value !== "object") return null;
+  const parsed = storedLinearClientCredentialsTokenSchema.safeParse(value);
+  if (!parsed.success) return null;
 
-  const token = value as Partial<StoredLinearClientCredentialsToken>;
+  const token = parsed.data;
   if (
-    token.version !== 1 ||
-    typeof token.access_token !== "string" ||
-    token.access_token.length === 0 ||
-    token.token_type !== "Bearer" ||
     !hasCanonicalLinearScope(token.scope) ||
-    typeof token.issued_at !== "number" ||
-    !Number.isSafeInteger(token.issued_at) ||
-    typeof token.expires_at !== "number" ||
-    !Number.isSafeInteger(token.expires_at) ||
     token.expires_at <= token.issued_at ||
     token.organization_id !== organizationId ||
-    typeof token.organization_name !== "string" ||
-    token.organization_name.length === 0 ||
-    typeof token.app_user_id !== "string" ||
-    token.app_user_id.length === 0 ||
     (expectedAppUserId !== undefined && token.app_user_id !== expectedAppUserId)
   ) {
     return null;
   }
-
-  return token as StoredLinearClientCredentialsToken;
+  return token;
 }
 
 export async function readClientCredentialCache(

@@ -1,8 +1,11 @@
-import type {
-  Env,
-  LinearAuthorizationCodeTokenResponse,
-  LinearClientCredentialsTokenResponse,
-} from "../types";
+import type { Env } from "../types";
+import {
+  linearAuthorizationCodeTokenResponseSchema,
+  linearClientCredentialsTokenResponseSchema,
+  linearIdentityResponseSchema,
+  linearOAuthErrorResponseSchema,
+  type LinearAuthorizationCodeTokenResponse,
+} from "./linear-credential-schemas";
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 const LINEAR_TOKEN_URL = "https://api.linear.app/oauth/token";
@@ -88,45 +91,18 @@ export function hasCanonicalLinearScope(scope: unknown): boolean {
   );
 }
 
-function parseAuthorizationCodeTokenResponse(value: unknown): LinearAuthorizationCodeTokenResponse {
-  if (!value || typeof value !== "object") {
-    throw new Error("Linear authorization-code token response was malformed");
-  }
-
-  const token = value as Partial<LinearAuthorizationCodeTokenResponse>;
-  if (
-    typeof token.access_token !== "string" ||
-    token.access_token.length === 0 ||
-    typeof token.refresh_token !== "string" ||
-    token.refresh_token.length === 0 ||
-    typeof token.token_type !== "string" ||
-    token.token_type.toLowerCase() !== "bearer" ||
-    typeof token.expires_in !== "number" ||
-    !Number.isFinite(token.expires_in) ||
-    token.expires_in <= 0
-  ) {
-    throw new Error("Linear authorization-code token response was malformed");
-  }
-
-  return token as LinearAuthorizationCodeTokenResponse;
-}
-
 function parseClientCredentialsTokenResponse(
   value: unknown,
   issuedAt: number
 ): IssuedClientCredentialsToken {
-  if (!value || typeof value !== "object") {
+  const parsed = linearClientCredentialsTokenResponseSchema.safeParse(value);
+  if (!parsed.success) {
     throw new LinearAuthError({ reason: "client_credentials_malformed_response" });
   }
 
-  const token = value as Partial<LinearClientCredentialsTokenResponse>;
+  const token = parsed.data;
   if (
-    typeof token.access_token !== "string" ||
-    token.access_token.length === 0 ||
-    typeof token.token_type !== "string" ||
     token.token_type.toLowerCase() !== "bearer" ||
-    typeof token.expires_in !== "number" ||
-    !Number.isFinite(token.expires_in) ||
     token.expires_in * 1000 <= LINEAR_TOKEN_EXPIRY_SKEW_MS
   ) {
     throw new LinearAuthError({ reason: "client_credentials_malformed_response" });
@@ -145,8 +121,8 @@ function parseClientCredentialsTokenResponse(
 
 function parseOAuthErrorCode(value: string): string | undefined {
   try {
-    const parsed = JSON.parse(value) as { error?: unknown };
-    return typeof parsed.error === "string" ? parsed.error.slice(0, 100) : undefined;
+    const parsed = linearOAuthErrorResponseSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data.error : undefined;
   } catch {
     return undefined;
   }
@@ -199,7 +175,11 @@ export async function exchangeLinearAuthorizationCode(
   } catch {
     throw new Error("Linear authorization-code token response was malformed");
   }
-  return parseAuthorizationCodeTokenResponse(body);
+  const parsed = linearAuthorizationCodeTokenResponseSchema.safeParse(body);
+  if (!parsed.success || parsed.data.token_type.toLowerCase() !== "bearer") {
+    throw new Error("Linear authorization-code token response was malformed");
+  }
+  return parsed.data;
 }
 
 export async function issueLinearClientCredentialsToken(
@@ -257,23 +237,11 @@ export async function fetchLinearIdentity(accessToken: string): Promise<LinearId
     });
     if (!response.ok) throw new LinearIdentityError(response.status);
 
-    const payload = (await response.json()) as {
-      data?: { viewer?: { id?: string; organization?: { id?: string; name?: string } } };
-      errors?: unknown[];
-    };
-    const viewer = payload.data?.viewer;
-    if (
-      payload.errors?.length ||
-      !viewer ||
-      typeof viewer.id !== "string" ||
-      viewer.id.length === 0 ||
-      typeof viewer.organization?.id !== "string" ||
-      viewer.organization.id.length === 0 ||
-      typeof viewer.organization.name !== "string" ||
-      viewer.organization.name.length === 0
-    ) {
+    const parsed = linearIdentityResponseSchema.safeParse(await response.json());
+    if (!parsed.success || parsed.data.errors?.length) {
       throw new LinearIdentityError();
     }
+    const viewer = parsed.data.data.viewer;
 
     return {
       appUserId: viewer.id,
