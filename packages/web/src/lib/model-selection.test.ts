@@ -79,6 +79,14 @@ describe("resolveModelPreference", () => {
     });
   });
 
+  it("uses the selected model default when only reasoning is invalid", () => {
+    const model = "anthropic/claude-opus-4-8";
+    expect(resolveModelPreference({ model, reasoningEffort: "not-valid" }, [model])).toEqual({
+      model,
+      reasoningEffort: getDefaultReasoningEffort(model),
+    });
+  });
+
   it("omits reasoning for models without reasoning controls", () => {
     expect(
       resolveModelPreference({ model: "opencode/kimi-k2.5", reasoningEffort: "high" }, [

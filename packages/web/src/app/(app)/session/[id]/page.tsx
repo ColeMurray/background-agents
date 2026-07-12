@@ -71,14 +71,21 @@ function SessionPageContent() {
   );
 
   const { handleArchive, handleUnarchive, renameSession } = useSessionListActions(sessionId);
-  const { selectedModel, reasoningEffort, setReasoningEffort, handleModelChange, modelItems } =
-    useModelSelection(sessionState);
+  const {
+    selectedModel,
+    reasoningEffort,
+    setReasoningEffort,
+    handleModelChange,
+    modelItems,
+    loadingEnabledModels,
+  } = useModelSelection(sessionState);
   const { prompt, inputRef, handleSubmit, handleInputChange, handleKeyDown } = usePromptInput(
     isProcessing,
     sendPrompt,
     sendTyping,
     selectedModel,
-    reasoningEffort
+    reasoningEffort,
+    loadingEnabledModels
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
@@ -360,8 +367,8 @@ function useSessionListActions(sessionId: string) {
 }
 
 /**
- * Model and reasoning-effort selection, kept consistent with the enabled-model
- * list and synced from session state once it loads.
+ * Model and reasoning-effort selection derived from session state until the
+ * user takes ownership of an explicit draft.
  */
 function useModelSelection(sessionState: SessionState) {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
@@ -400,7 +407,14 @@ function useModelSelection(sessionState: SessionState) {
     [selectedModel]
   );
 
-  return { selectedModel, reasoningEffort, setReasoningEffort, handleModelChange, modelItems };
+  return {
+    selectedModel,
+    reasoningEffort,
+    setReasoningEffort,
+    handleModelChange,
+    modelItems,
+    loadingEnabledModels,
+  };
 }
 
 /**
@@ -412,7 +426,8 @@ function usePromptInput(
   sendPrompt: ReturnType<typeof useSessionSocket>["sendPrompt"],
   sendTyping: ReturnType<typeof useSessionSocket>["sendTyping"],
   selectedModel: string,
-  reasoningEffort: string | undefined
+  reasoningEffort: string | undefined,
+  loadingEnabledModels: boolean
 ) {
   const [prompt, setPrompt] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -429,7 +444,7 @@ function usePromptInput(
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim() || isProcessing) return;
+    if (!prompt.trim() || isProcessing || loadingEnabledModels) return;
 
     // Drop any queued typing indicator — the prompt supersedes it
     clearTypingTimeout();

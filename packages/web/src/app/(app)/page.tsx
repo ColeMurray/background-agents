@@ -84,6 +84,7 @@ export default function Home() {
   }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch]);
 
   const createSessionForWarming = useCallback(async () => {
+    if (loadingEnabledModels) return null;
     if (pendingSessionId) return pendingSessionId;
     if (sessionCreationPromise.current) return sessionCreationPromise.current;
     const targetRequestFields = buildRequestFields();
@@ -153,6 +154,7 @@ export default function Home() {
     selectedModel,
     reasoningEffort,
     pendingSessionId,
+    loadingEnabledModels,
   ]);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
@@ -182,14 +184,21 @@ export default function Home() {
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
-    if (wasEmpty && value.length > 0 && !pendingSessionId && !isCreatingSession && isLaunchable) {
+    if (
+      wasEmpty &&
+      value.length > 0 &&
+      !pendingSessionId &&
+      !isCreatingSession &&
+      !loadingEnabledModels &&
+      isLaunchable
+    ) {
       createSessionForWarming();
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || loadingEnabledModels) return;
     if (!isLaunchable) {
       setError(
         sessionTarget?.kind === "repos"
