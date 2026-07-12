@@ -82,11 +82,6 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
 
-    // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env).
-    // The spawn failure sets status to "failed" which we need to happen before
-    // the WS connect sets it to "ready", otherwise the two race.
-    await waitForSandboxStatus(stub, "failed");
-
     const { ws } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,
       sandboxId: SANDBOX_ID,

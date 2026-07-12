@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
-import { initSession, seedSandboxAuthHash } from "./helpers";
+import { initSession, seedSandboxAuthHash, waitForSandboxStatus } from "./helpers";
 
 describe("GET /internal/state", () => {
   it("state includes sandbox after init", async () => {
@@ -191,12 +191,13 @@ describe("POST /internal/verify-sandbox-token", () => {
 
   it("validates correct token and rejects wrong token", async () => {
     const { stub } = await initSession();
+    await waitForSandboxStatus(stub, "failed");
 
     // Seed auth_token on the sandbox directly
     const authToken = "test-sandbox-auth-token-12345";
     await runInDurableObject(stub, (instance: SessionDO) => {
       instance.ctx.storage.sql.exec(
-        "UPDATE sandbox SET auth_token = ?, auth_token_hash = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)",
+        "UPDATE sandbox SET auth_token = ?, auth_token_hash = NULL, status = 'running' WHERE id = (SELECT id FROM sandbox LIMIT 1)",
         authToken
       );
     });
@@ -220,5 +221,23 @@ describe("POST /internal/verify-sandbox-token", () => {
     expect(invalidRes.status).toBe(401);
     const invalidBody = await invalidRes.json<{ valid: boolean; error: string }>();
     expect(invalidBody.valid).toBe(false);
+  });
+
+  it("rejects a retained token after the sandbox fails", async () => {
+    const { stub } = await initSession();
+    const authToken = "test-failed-sandbox-token";
+    await seedSandboxAuthHash(stub, { authToken, sandboxId: "sb-failed-token" });
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec("UPDATE sandbox SET status = 'failed'");
+    });
+
+    const response = await stub.fetch("http://internal/internal/verify-sandbox-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: authToken }),
+    });
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ valid: false, error: "Sandbox not running" });
   });
 });
