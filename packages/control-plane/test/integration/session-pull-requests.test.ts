@@ -54,7 +54,10 @@ function makeRecord(overrides?: Partial<SessionPullRequestRecord>): SessionPullR
     headBranch: "open-inspect/session-1",
     baseBranch: "main",
     headSha: "abc123",
+    providerCreatedAt: null,
     providerUpdatedAt: 1_000,
+    mergedAt: null,
+    closedAt: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -239,6 +242,43 @@ describe("SessionPullRequestStore", () => {
     it("rejects a non-positive PR number (CHECK constraint)", async () => {
       const store = new SessionPullRequestStore(env.DB);
       await expect(store.upsert(makeRecord({ prNumber: 0 }))).rejects.toThrow();
+    });
+
+    it("persists outcome timestamps and clears them on a newer write (migration 0042)", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await store.upsert(
+        makeRecord({
+          lifecycleState: "merged",
+          isDraft: false,
+          providerCreatedAt: 500,
+          providerUpdatedAt: 2_000,
+          mergedAt: 1_800,
+          closedAt: 1_800,
+        })
+      );
+
+      const merged = await store.getByArtifactId("artifact-1");
+      expect(merged?.providerCreatedAt).toBe(500);
+      expect(merged?.mergedAt).toBe(1_800);
+      expect(merged?.closedAt).toBe(1_800);
+
+      // A newer write is authoritative for the outcome columns too (the
+      // writer maps them from lifecycle state — e.g. a reopen clears both).
+      await store.upsert(
+        makeRecord({
+          lifecycleState: "open",
+          isDraft: false,
+          providerCreatedAt: 500,
+          providerUpdatedAt: 3_000,
+          mergedAt: null,
+          closedAt: null,
+        })
+      );
+
+      const reopened = await store.getByArtifactId("artifact-1");
+      expect(reopened?.mergedAt).toBeNull();
+      expect(reopened?.closedAt).toBeNull();
+      expect(reopened?.providerCreatedAt).toBe(500);
     });
   });
 

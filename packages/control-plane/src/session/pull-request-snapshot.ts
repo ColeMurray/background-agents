@@ -35,7 +35,10 @@ export const pullRequestSnapshotSchema = z
     repoOwner: z.string(),
     repoName: z.string(),
     repositoryExternalId: z.string().optional(),
+    providerCreatedAt: z.number().optional(),
     providerUpdatedAt: z.number().optional(),
+    mergedAt: z.number().optional(),
+    closedAt: z.number().optional(),
   })
   .refine((snapshot) => snapshot.lifecycleState === "open" || !snapshot.isDraft, {
     message: "isDraft is only valid while the pull request is open",
@@ -64,7 +67,12 @@ export function snapshotToRecord(
     headBranch: snapshot.headBranch,
     baseBranch: snapshot.baseBranch,
     headSha: snapshot.headSha ?? null,
+    providerCreatedAt: snapshot.providerCreatedAt ?? null,
     providerUpdatedAt: snapshot.providerUpdatedAt ?? null,
+    // Outcome timestamps are only meaningful in their state (same rule as the
+    // draft-only-while-open invariant): a reopened PR clears both.
+    mergedAt: snapshot.lifecycleState === "merged" ? (snapshot.mergedAt ?? null) : null,
+    closedAt: snapshot.lifecycleState !== "open" ? (snapshot.closedAt ?? null) : null,
     createdAt: identity.createdAt,
     updatedAt: identity.updatedAt,
   };

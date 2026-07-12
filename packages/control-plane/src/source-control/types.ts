@@ -247,8 +247,14 @@ export interface PullRequestSnapshot {
   repoName: string;
   /** Stable provider repo id */
   repositoryExternalId?: string;
+  /** Provider's created_at (epoch ms) — analytics cohort bucketing */
+  providerCreatedAt?: number;
   /** Provider's updated_at (epoch ms) — the monotonic write guard source */
   providerUpdatedAt?: number;
+  /** Provider's merged_at (epoch ms); only meaningful when merged */
+  mergedAt?: number;
+  /** Provider's closed_at (epoch ms); only meaningful when not open */
+  closedAt?: number;
 }
 
 /**

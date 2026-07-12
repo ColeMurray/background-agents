@@ -21,8 +21,14 @@ export interface SessionPullRequestRecord {
   headBranch: string;
   baseBranch: string;
   headSha: string | null;
+  /** Provider's created_at (epoch ms) — analytics cohort bucketing. */
+  providerCreatedAt: number | null;
   /** Provider's updated_at (epoch ms) — the monotonic guard source. */
   providerUpdatedAt: number | null;
+  /** Provider's merged_at (epoch ms); null unless lifecycleState is merged. */
+  mergedAt: number | null;
+  /** Provider's closed_at (epoch ms); null while the PR is open. */
+  closedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -48,7 +54,10 @@ interface SessionPullRequestRow {
   head_branch: string;
   base_branch: string;
   head_sha: string | null;
+  provider_created_at: number | null;
   provider_updated_at: number | null;
+  merged_at: number | null;
+  closed_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -76,7 +85,10 @@ function toRecord(row: SessionPullRequestRow): SessionPullRequestRecord {
     headBranch: row.head_branch,
     baseBranch: row.base_branch,
     headSha: row.head_sha,
+    providerCreatedAt: row.provider_created_at,
     providerUpdatedAt: row.provider_updated_at,
+    mergedAt: row.merged_at,
+    closedAt: row.closed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -107,8 +119,9 @@ export class SessionPullRequestStore {
         `INSERT INTO session_pull_requests (
            artifact_id, session_id, repository_external_id, repo_owner, repo_name,
            pr_number, url, lifecycle_state, is_draft, head_branch, base_branch,
-           head_sha, provider_updated_at, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           head_sha, provider_created_at, provider_updated_at, merged_at, closed_at,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (artifact_id) DO UPDATE SET
            repository_external_id = excluded.repository_external_id,
            repo_owner = excluded.repo_owner,
@@ -120,7 +133,10 @@ export class SessionPullRequestStore {
            head_branch = excluded.head_branch,
            base_branch = excluded.base_branch,
            head_sha = excluded.head_sha,
+           provider_created_at = excluded.provider_created_at,
            provider_updated_at = excluded.provider_updated_at,
+           merged_at = excluded.merged_at,
+           closed_at = excluded.closed_at,
            updated_at = excluded.updated_at
          WHERE excluded.provider_updated_at IS NULL
             OR session_pull_requests.provider_updated_at IS NULL
@@ -139,7 +155,10 @@ export class SessionPullRequestStore {
         record.headBranch,
         record.baseBranch,
         record.headSha,
+        record.providerCreatedAt,
         record.providerUpdatedAt,
+        record.mergedAt,
+        record.closedAt,
         record.createdAt,
         record.updatedAt
       )

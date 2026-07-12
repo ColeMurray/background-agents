@@ -127,7 +127,10 @@ describe("D1 SessionIndexStore", () => {
         headBranch: "open-inspect/summary-session-old",
         baseBranch: "main",
         headSha: null,
+        providerCreatedAt: null,
         providerUpdatedAt: null,
+        mergedAt: null,
+        closedAt: null,
         createdAt: now,
         updatedAt: now,
       });

@@ -175,6 +175,11 @@ export type {
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  AnalyticsPullRequestFunnel,
+  AnalyticsPullRequestTimeseriesPoint,
+  AnalyticsPullRequestRepoEntry,
+  AnalyticsPullRequestSourceEntry,
+  AnalyticsPullRequestsResponse,
 } from "./analytics";
 
 export * from "./integrations";

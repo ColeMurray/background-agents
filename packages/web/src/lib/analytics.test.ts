@@ -4,7 +4,11 @@ import {
   formatAnalyticsDate,
   formatAnalyticsDuration,
   formatAnalyticsLongDate,
+  formatAnalyticsLongDuration,
   formatCompletionRate,
+  formatPullRequestAcceptanceRate,
+  getCostPerMergedPullRequest,
+  getPullRequestAcceptanceRate,
   sortAnalyticsUserEntries,
 } from "./analytics";
 
@@ -179,5 +183,42 @@ describe("analytics utilities", () => {
   it("falls back to the raw value for invalid analytics dates", () => {
     expect(formatAnalyticsDate("not-a-date")).toBe("not-a-date");
     expect(formatAnalyticsLongDate("not-a-date")).toBe("not-a-date");
+  });
+
+  it("computes acceptance rate over resolved PRs only", () => {
+    // Open PRs are not failures — only merged + closed count as resolved.
+    expect(getPullRequestAcceptanceRate({ merged: 3, closed: 1 })).toBe(0.75);
+    expect(formatPullRequestAcceptanceRate({ merged: 3, closed: 1 })).toBe("75%");
+    expect(getPullRequestAcceptanceRate({ merged: 0, closed: 0 })).toBeNull();
+    expect(formatPullRequestAcceptanceRate({ merged: 0, closed: 0 })).toBe("—");
+  });
+
+  it("computes cost per merged PR from the PR-session cost basis", () => {
+    const base = {
+      funnel: { created: 4, open: 1, draft: 0, merged: 2, closed: 1 },
+      prSessionCost: 3,
+      mergedInWindow: 2,
+      avgTimeToMergeMs: null,
+      openInventory: { total: 1, avgAgeMs: null },
+      timeseries: [],
+      repos: [],
+      sources: [],
+    };
+
+    expect(getCostPerMergedPullRequest(base)).toBe(1.5);
+    expect(
+      getCostPerMergedPullRequest({
+        ...base,
+        funnel: { ...base.funnel, merged: 0 },
+      })
+    ).toBeNull();
+  });
+
+  it("formats day-scale durations with days and hours", () => {
+    const day = 24 * 60 * 60 * 1000;
+    expect(formatAnalyticsLongDuration(3 * day + 4 * 60 * 60 * 1000)).toBe("3d 4h");
+    expect(formatAnalyticsLongDuration(2 * day)).toBe("2d");
+    // Under two days it falls back to the compact formatter.
+    expect(formatAnalyticsLongDuration(90 * 60 * 1000)).toBe("1h 30m");
   });
 });

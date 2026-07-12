@@ -137,7 +137,7 @@ function isSandboxAuthRoute(path: string): boolean {
 
 function isScmAgnosticRoute(path: string): boolean {
   return (
-    /^\/analytics\/(summary|timeseries|breakdown)$/.test(path) ||
+    /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     // Identity upserts are independent of the SCM provider. Only the known auth
     // providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
     /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||

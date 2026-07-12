@@ -96,7 +96,10 @@ const gitlabMergeRequestResponseSchema = z.object({
   target_branch: z.string(),
   sha: z.string().nullable().optional(),
   project_id: z.number().optional(),
+  created_at: z.string().optional(),
   updated_at: z.string().optional(),
+  merged_at: z.string().nullable().optional(),
+  closed_at: z.string().nullable().optional(),
 });
 
 /** The create response additionally carries the API self link. */
@@ -110,10 +113,10 @@ const gitlabProjectLocationSchema = z.object({
   namespace: z.object({ full_path: z.string() }),
 });
 
-/** Parse GitLab's ISO-8601 updated_at into epoch ms; undefined when absent/invalid. */
-function parseProviderUpdatedAt(updatedAt: string | undefined): number | undefined {
-  if (!updatedAt) return undefined;
-  const parsed = Date.parse(updatedAt);
+/** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
+function parseProviderTimestamp(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
@@ -313,7 +316,10 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       repoName: name,
       repositoryExternalId:
         data.project_id !== undefined ? String(data.project_id) : config.repositoryExternalId,
-      providerUpdatedAt: parseProviderUpdatedAt(data.updated_at),
+      providerCreatedAt: parseProviderTimestamp(data.created_at),
+      providerUpdatedAt: parseProviderTimestamp(data.updated_at),
+      mergedAt: parseProviderTimestamp(data.merged_at),
+      closedAt: parseProviderTimestamp(data.closed_at),
     };
   }
 

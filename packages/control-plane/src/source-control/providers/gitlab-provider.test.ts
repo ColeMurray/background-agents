@@ -841,6 +841,26 @@ describe("getPullRequest", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer glpat-test-token");
   });
 
+  it("maps outcome timestamps (created_at / merged_at / closed_at) into the snapshot", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        ...baseMrResponse,
+        state: "merged",
+        draft: false,
+        created_at: "2026-07-08T09:00:00.000Z",
+        merged_at: "2026-07-10T12:00:00.000Z",
+        closed_at: null,
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot.providerCreatedAt).toBe(Date.parse("2026-07-08T09:00:00.000Z"));
+    expect(snapshot.mergedAt).toBe(Date.parse("2026-07-10T12:00:00.000Z"));
+    expect(snapshot.closedAt).toBeUndefined();
+  });
+
   it("maps a merged MR to merged", async () => {
     mockFetch.mockResolvedValueOnce(makeResponse({ ...baseMrResponse, state: "merged" }));
 

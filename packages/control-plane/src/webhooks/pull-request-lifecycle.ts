@@ -168,7 +168,12 @@ async function applyToRecord(
     repoOwner: event.repoOwner,
     repoName: event.repoName,
     repositoryExternalId: facts.repositoryExternalId ?? record.repositoryExternalId ?? undefined,
+    providerCreatedAt: facts.providerCreatedAt ?? record.providerCreatedAt ?? undefined,
     providerUpdatedAt: facts.providerUpdatedAt ?? record.providerUpdatedAt ?? undefined,
+    // Record fallback covers payloads missing the field; snapshotToRecord
+    // clears both when the state no longer carries them (e.g. reopen).
+    mergedAt: facts.mergedAt ?? record.mergedAt ?? undefined,
+    closedAt: facts.closedAt ?? record.closedAt ?? undefined,
   };
 
   return upsertRecordThenMirror(
@@ -244,7 +249,10 @@ async function insertViaBranchFallback(
     repoOwner: event.repoOwner,
     repoName: event.repoName,
     repositoryExternalId: facts.repositoryExternalId,
+    providerCreatedAt: facts.providerCreatedAt,
     providerUpdatedAt: facts.providerUpdatedAt,
+    mergedAt: facts.mergedAt,
+    closedAt: facts.closedAt,
   };
 
   return upsertRecordThenMirror(

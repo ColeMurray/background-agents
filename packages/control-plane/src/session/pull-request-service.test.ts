@@ -727,7 +727,10 @@ describe("SessionPullRequestService", () => {
         headBranch: "open-inspect/session-name-1",
         baseBranch: "main",
         headSha: null,
+        providerCreatedAt: null,
         providerUpdatedAt: null,
+        mergedAt: null,
+        closedAt: null,
         createdAt: expect.any(Number),
         updatedAt: expect.any(Number),
       });

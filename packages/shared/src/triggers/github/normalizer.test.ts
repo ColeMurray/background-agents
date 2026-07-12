@@ -538,6 +538,44 @@ describe("typed pullRequest facts on pull_request events", () => {
     expect(event?.pullRequest?.providerUpdatedAt).toBeUndefined();
   });
 
+  it("carries outcome timestamps (created_at / merged_at / closed_at) when present", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "closed",
+      repository: repo,
+      sender,
+      pull_request: {
+        ...trackedPR,
+        state: "closed",
+        merged: true,
+        created_at: "2026-07-08T09:00:00Z",
+        merged_at: "2026-07-10T12:00:00Z",
+        closed_at: "2026-07-10T12:00:00Z",
+      },
+    });
+
+    expect(event?.pullRequest?.providerCreatedAt).toBe(Date.parse("2026-07-08T09:00:00Z"));
+    expect(event?.pullRequest?.mergedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
+    expect(event?.pullRequest?.closedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
+  });
+
+  it("omits outcome timestamps when the payload sends them as null (open PR)", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: {
+        ...trackedPR,
+        created_at: "2026-07-08T09:00:00Z",
+        merged_at: null,
+        closed_at: null,
+      },
+    });
+
+    expect(event?.pullRequest?.providerCreatedAt).toBe(Date.parse("2026-07-08T09:00:00Z"));
+    expect(event?.pullRequest?.mergedAt).toBeUndefined();
+    expect(event?.pullRequest?.closedAt).toBeUndefined();
+  });
+
   it("carries draft readiness for a draft PR", () => {
     const event = normalizeGitHubEvent("pull_request", {
       action: "opened",

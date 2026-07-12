@@ -68,8 +68,14 @@ export interface GitHubPullRequestEventFacts {
    * canonical PR-record identity used for webhook correlation.
    */
   repositoryExternalId?: string;
+  /** Provider's created_at (epoch ms) — analytics cohort bucketing. */
+  providerCreatedAt?: number;
   /** Provider's updated_at (epoch ms) — the monotonic write guard source. */
   providerUpdatedAt?: number;
+  /** Provider's merged_at (epoch ms); only meaningful when merged. */
+  mergedAt?: number;
+  /** Provider's closed_at (epoch ms); only meaningful when not open. */
+  closedAt?: number;
 }
 
 export interface GitHubAutomationEvent extends BaseAutomationEvent {
@@ -163,7 +169,10 @@ export const automationEventSchema = z.discriminatedUnion("source", [
         isCrossRepository: z.boolean().optional(),
         url: z.string().optional(),
         repositoryExternalId: z.string().optional(),
+        providerCreatedAt: z.number().optional(),
         providerUpdatedAt: z.number().optional(),
+        mergedAt: z.number().optional(),
+        closedAt: z.number().optional(),
       })
       .optional(),
   }),

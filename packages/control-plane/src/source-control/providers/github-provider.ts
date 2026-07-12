@@ -78,7 +78,10 @@ const githubPullResponseSchema = z.object({
   state: z.enum(["open", "closed"]),
   draft: z.boolean().nullable().optional(),
   merged: z.boolean().nullable().optional(),
+  created_at: z.string().optional(),
   updated_at: z.string().optional(),
+  merged_at: z.string().nullable().optional(),
+  closed_at: z.string().nullable().optional(),
   head: z.object({ ref: z.string(), sha: z.string().optional() }),
   base: z.object({
     ref: z.string(),
@@ -99,10 +102,10 @@ const githubRepositoryLocationSchema = z.object({
   owner: z.object({ login: z.string() }),
 });
 
-/** Parse GitHub's ISO-8601 updated_at into epoch ms; undefined when absent/invalid. */
-function parseProviderUpdatedAt(updatedAt: string | undefined): number | undefined {
-  if (!updatedAt) return undefined;
-  const parsed = Date.parse(updatedAt);
+/** Parse a GitHub ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
+function parseProviderTimestamp(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
@@ -326,7 +329,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         repositoryExternalId !== undefined
           ? String(repositoryExternalId)
           : config.repositoryExternalId,
-      providerUpdatedAt: parseProviderUpdatedAt(data.updated_at),
+      providerCreatedAt: parseProviderTimestamp(data.created_at),
+      providerUpdatedAt: parseProviderTimestamp(data.updated_at),
+      mergedAt: parseProviderTimestamp(data.merged_at),
+      closedAt: parseProviderTimestamp(data.closed_at),
     };
   }
 

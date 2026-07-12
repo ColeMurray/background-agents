@@ -138,7 +138,10 @@ describe("refreshSessionPullRequests", () => {
       headBranch: "open-inspect/public-session-1",
       baseBranch: "main",
       headSha: "abc123",
+      providerCreatedAt: null,
       providerUpdatedAt: 6000,
+      mergedAt: null,
+      closedAt: null,
       createdAt: 1000,
       updatedAt: 100_000,
     });
