@@ -31,6 +31,7 @@ import {
   evaluateHeartbeatHealth,
   evaluateConnectingTimeout,
   evaluateWarmDecision,
+  isDeadSandboxStatus,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
@@ -949,8 +950,7 @@ export class SandboxLifecycleManager {
     }
 
     // Track previous status for non-terminal states
-    const isTerminalState =
-      sandbox.status === "stopped" || sandbox.status === "stale" || sandbox.status === "failed";
+    const isTerminalState = isDeadSandboxStatus(sandbox.status);
     const previousStatus = sandbox.status;
 
     if (!isTerminalState) {
@@ -1078,7 +1078,7 @@ export class SandboxLifecycleManager {
     });
 
     // Skip if sandbox is already in terminal state
-    if (sandbox.status === "stopped" || sandbox.status === "failed" || sandbox.status === "stale") {
+    if (isDeadSandboxStatus(sandbox.status)) {
       this.log.debug("Alarm: sandbox in terminal state, skipping", {
         sandbox_status: sandbox.status,
       });

@@ -909,7 +909,10 @@ export class SessionDO extends DurableObject<Env> {
       const sandbox = this.getSandbox();
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
-      // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout)
+      // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout).
+      // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
+      // still connect — a slow boot that outlived the connecting watchdog
+      // self-heals here by flipping the status back to ready.
       if (sandbox?.status === "stopped" || sandbox?.status === "stale") {
         this.log.warn("ws.connect", {
           event: "ws.connect",

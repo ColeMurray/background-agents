@@ -343,25 +343,31 @@ describe("createSandboxHandler", () => {
   // credential broker is called during the initial clone, before the sandbox
   // WebSocket connect flips the status to ready. "running" is not currently
   // produced by any lifecycle path but remains a valid live state.
-  it.each(["pending", "spawning", "connecting", "warming", "syncing", "ready", "running"] as const)(
-    "accepts a valid token when sandbox is %s",
-    async (status) => {
-      const { handler, getSandbox, isValidSandboxToken } = createHandler();
-      getSandbox.mockReturnValue({ status } as SandboxRow);
-      vi.mocked(isValidSandboxToken).mockResolvedValue(true);
+  it.each([
+    "pending",
+    "spawning",
+    "connecting",
+    "warming",
+    "syncing",
+    "ready",
+    "running",
+    "snapshotting",
+  ] as const)("accepts a valid token when sandbox is %s", async (status) => {
+    const { handler, getSandbox, isValidSandboxToken } = createHandler();
+    getSandbox.mockReturnValue({ status } as SandboxRow);
+    vi.mocked(isValidSandboxToken).mockResolvedValue(true);
 
-      const response = await handler.verifySandboxToken(
-        new Request("http://internal/internal/verify-sandbox-token", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: "abc" }),
-        })
-      );
+    const response = await handler.verifySandboxToken(
+      new Request("http://internal/internal/verify-sandbox-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: "abc" }),
+      })
+    );
 
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ valid: true });
-    }
-  );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ valid: true });
+  });
 
   it("returns 401 when sandbox token is invalid", async () => {
     const { handler, getSandbox, isValidSandboxToken, log } = createHandler();
