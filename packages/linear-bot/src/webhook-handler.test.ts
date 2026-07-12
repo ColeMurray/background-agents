@@ -433,6 +433,40 @@ describe("handleAgentSessionEvent environment targets", () => {
       authorId: "linear:follow-up-human-user",
     });
   });
+
+  it("does not attribute a follow-up to the original creator when its author is missing", async () => {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-xyz",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
+      if (url.endsWith("/prompt")) return Response.json({ ok: true });
+      throw new Error(`Unexpected control-plane fetch to ${url}`);
+    });
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+    webhook.agentActivity = {
+      content: { type: "prompt", body: "Please continue anonymously." },
+    };
+
+    await handleAgentSessionEvent(webhook, env, "trace-follow-up-anonymous");
+
+    const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
+      String(input).endsWith("/prompt")
+    );
+    expect(JSON.parse(String(promptCall?.[1]?.body))).not.toHaveProperty("authorId");
+  });
 });
 
 describe("handleAgentSessionEvent auth failures", () => {

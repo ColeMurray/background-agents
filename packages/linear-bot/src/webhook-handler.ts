@@ -237,12 +237,34 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   });
 }
 
-function getInitiatingUserId(webhook: AgentSessionWebhook): string | undefined {
-  return (
-    webhook.agentActivity?.userId ??
-    webhook.agentSession.comment?.userId ??
-    webhook.agentSession.creatorId
-  );
+function getNewSessionActorUserId(webhook: AgentSessionWebhook): string | undefined {
+  return webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId;
+}
+
+function getFollowUp(webhook: AgentSessionWebhook): {
+  content: string;
+  source: "linear_agent_activity" | "linear_comment" | "linear_fallback";
+  actorUserId?: string;
+} {
+  const activityBody = webhook.agentActivity?.content?.body;
+  if (activityBody) {
+    return {
+      content: activityBody,
+      source: "linear_agent_activity",
+      actorUserId: webhook.agentActivity?.userId,
+    };
+  }
+
+  const comment = webhook.agentSession.comment;
+  if (comment?.body) {
+    return {
+      content: comment.body,
+      source: "linear_comment",
+      actorUserId: comment.userId,
+    };
+  }
+
+  return { content: "Follow-up on the issue.", source: "linear_fallback" };
 }
 
 async function handleFollowUp(
@@ -253,10 +275,8 @@ async function handleFollowUp(
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
-  const comment = webhook.agentSession.comment;
-  const agentActivity = webhook.agentActivity;
   const orgId = webhook.organizationId;
-  const initiatingUserId = getInitiatingUserId(webhook);
+  const followUp = getFollowUp(webhook);
 
   const client = await getAgentSessionLinearClient({
     env,
@@ -271,12 +291,6 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
-
-  const followUpContent =
-    agentActivity?.content?.body || comment?.body || "Follow-up on the issue.";
-  const followUpMetadata = agentActivity?.content?.body
-    ? { followUpSource: "linear_agent_activity", followUpAuthor: "linear" }
-    : { followUpSource: "linear_comment", followUpAuthor: "unknown" };
 
   await emitAgentActivity(
     client,
@@ -319,12 +333,12 @@ async function handleFollowUp(
       body: JSON.stringify({
         content: buildFollowUpPrompt({
           issueIdentifier: issue.identifier,
-          followUpContent,
-          followUpSource: followUpMetadata.followUpSource,
-          followUpAuthor: followUpMetadata.followUpAuthor,
+          followUpContent: followUp.content,
+          followUpSource: followUp.source,
+          followUpAuthor: followUp.actorUserId ? "linear" : "unknown",
           sessionContextSummary,
         }),
-        authorId: `linear:${initiatingUserId ?? "unknown"}`,
+        authorId: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
         source: "linear",
       }),
     }
@@ -429,15 +443,15 @@ async function handleNewSession(
   let userReasoningEffort: string | undefined;
   let actorDisplayName: string | undefined;
   let actorEmail: string | undefined;
-  const initiatingUserId = getInitiatingUserId(webhook);
-  if (initiatingUserId) {
-    const prefs = await getUserPreferences(env, initiatingUserId);
+  const sessionActorUserId = getNewSessionActorUserId(webhook);
+  if (sessionActorUserId) {
+    const prefs = await getUserPreferences(env, sessionActorUserId);
     if (prefs?.model) {
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
 
-    const linearUser = await fetchUser(client, initiatingUserId);
+    const linearUser = await fetchUser(client, sessionActorUserId);
     actorDisplayName = linearUser?.name;
     actorEmail = linearUser?.email ?? undefined;
   }
@@ -474,7 +488,7 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
-      actorUserId: initiatingUserId,
+      actorUserId: sessionActorUserId,
       actorDisplayName,
       actorEmail,
     },
@@ -549,7 +563,7 @@ async function handleNewSession(
       headers,
       body: JSON.stringify({
         content: prompt,
-        authorId: `linear:${initiatingUserId ?? "unknown"}`,
+        authorId: sessionActorUserId ? `linear:${sessionActorUserId}` : undefined,
         source: "linear",
         callbackContext,
       }),
