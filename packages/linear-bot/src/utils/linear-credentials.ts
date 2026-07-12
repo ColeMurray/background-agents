@@ -25,6 +25,7 @@ export {
 } from "./linear-oauth";
 
 const log = createLogger("linear-credentials");
+const credentialIssuanceByIdentity = new Map<string, Promise<string>>();
 
 interface ClientCredentialOptions {
   forceRenew?: boolean;
@@ -139,17 +140,12 @@ async function readUsableCredential(
   return null;
 }
 
-export async function getClientCredentialsTokenOrThrow(
+async function issueAndPersistCredential(
   env: Env,
   organizationId: string,
-  options: ClientCredentialOptions = {}
+  expectedAppUserId?: string
 ): Promise<string> {
-  if (!options.forceRenew) {
-    const cachedToken = await readUsableCredential(env, organizationId, options.expectedAppUserId);
-    if (cachedToken) return cachedToken;
-  }
-
-  const credential = await issueVerifiedCredential(env, organizationId, options.expectedAppUserId);
+  const credential = await issueVerifiedCredential(env, organizationId, expectedAppUserId);
   try {
     await persistVerifiedCredential(env, credential);
   } catch (error) {
@@ -165,6 +161,31 @@ export async function getClientCredentialsTokenOrThrow(
     expires_at: credential.expires_at,
   });
   return credential.access_token;
+}
+
+export async function getClientCredentialsTokenOrThrow(
+  env: Env,
+  organizationId: string,
+  options: ClientCredentialOptions = {}
+): Promise<string> {
+  if (!options.forceRenew) {
+    const cachedToken = await readUsableCredential(env, organizationId, options.expectedAppUserId);
+    if (cachedToken) return cachedToken;
+  }
+
+  const issuanceKey = JSON.stringify([organizationId, options.expectedAppUserId ?? null]);
+  const existingIssuance = credentialIssuanceByIdentity.get(issuanceKey);
+  if (existingIssuance) return existingIssuance;
+
+  const issuance = issueAndPersistCredential(env, organizationId, options.expectedAppUserId);
+  credentialIssuanceByIdentity.set(issuanceKey, issuance);
+  try {
+    return await issuance;
+  } finally {
+    if (credentialIssuanceByIdentity.get(issuanceKey) === issuance) {
+      credentialIssuanceByIdentity.delete(issuanceKey);
+    }
+  }
 }
 
 export async function completeLinearOAuthInstallation(

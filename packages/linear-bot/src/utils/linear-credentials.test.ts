@@ -245,6 +245,58 @@ describe("Linear client credentials", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("shares concurrent credential renewals for the same installed app", async () => {
+    const { kv } = createFakeKV();
+    let releaseTokenResponse: ((response: Response) => void) | undefined;
+    const tokenResponse = new Promise<Response>((resolve) => {
+      releaseTokenResponse = resolve;
+    });
+    const fetchMock = createLinearFetchMock({
+      clientCredentials: () => tokenResponse,
+      identity: () => linearIdentityResponse(),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeLinearBotEnv(kv);
+
+    const first = getClientCredentialsTokenOrThrow(env, "org-1", {
+      forceRenew: true,
+      expectedAppUserId: "app-user-1",
+    });
+    const second = getClientCredentialsTokenOrThrow(env, "org-1", {
+      forceRenew: true,
+      expectedAppUserId: "app-user-1",
+    });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    releaseTokenResponse?.(linearClientCredentialsResponse("shared-token"));
+
+    await expect(Promise.all([first, second])).resolves.toEqual(["shared-token", "shared-token"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases a failed credential renewal for a later retry", async () => {
+    const { kv } = createFakeKV();
+    let attempts = 0;
+    const fetchMock = createLinearFetchMock({
+      clientCredentials: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("offline");
+        return linearClientCredentialsResponse("recovered-token");
+      },
+      identity: () => linearIdentityResponse(),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeLinearBotEnv(kv);
+    const options = { forceRenew: true, expectedAppUserId: "app-user-1" };
+
+    await expect(getClientCredentialsTokenOrThrow(env, "org-1", options)).rejects.toMatchObject({
+      reason: "client_credentials_error",
+    });
+    await expect(getClientCredentialsTokenOrThrow(env, "org-1", options)).resolves.toBe(
+      "recovered-token"
+    );
+  });
+
   it("rejects a token for a different Linear organization without caching it", async () => {
     const { kv, store } = createFakeKV();
     vi.stubGlobal("fetch", successfulIssuanceFetch("wrong-workspace-token", "org-2"));
