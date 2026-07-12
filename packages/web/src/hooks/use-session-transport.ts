@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { parseWsMessage } from "@/lib/session-socket/adapters";
+import { serverMessageSchema } from "@open-inspect/shared";
 import type { ServerMessage } from "@open-inspect/shared";
 
 // WebSocket URL (should come from env in production)
@@ -15,6 +15,11 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 const PING_INTERVAL_MS = 30000;
+
+function parseWsMessage(raw: unknown): ServerMessage | null {
+  const result = serverMessageSchema.safeParse(raw);
+  return result.success ? result.data : null;
+}
 
 export interface SessionTransportHandlers {
   /** A schema-validated server message arrived. */

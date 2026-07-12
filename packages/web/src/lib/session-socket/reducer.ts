@@ -1,6 +1,7 @@
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, ServerMessage, SessionState } from "@open-inspect/shared";
-import { collapseReplayTokenEvents, toUiArtifact, toUiSandboxEvent } from "./adapters";
+import { toUiArtifact } from "./artifact-metadata";
+import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 
 export interface HistoryCursor {
   timestamp: number;

@@ -1,128 +1,17 @@
-import type { Artifact, SandboxEvent } from "@/types/session";
-import { serverMessageSchema, toDisplayStatus } from "@open-inspect/shared";
+import type { Artifact } from "@/types/session";
+import { toDisplayStatus } from "@open-inspect/shared";
 import type {
   PullRequestDisplayStatus,
   ScreenshotArtifactMetadata,
-  ServerMessage,
   SessionArtifact,
   VideoArtifactMetadata,
 } from "@open-inspect/shared";
 
-export type AssistantTokenEvent = Extract<SandboxEvent, { type: "token" }>;
-
 /**
- * The latest streamed assistant text for an in-flight message. Token events
- * contain the full accumulated text (not incremental), so only the most
- * recent one needs to be retained.
+ * Maps the wire artifact shape (`SessionArtifact`, with loosely-typed
+ * metadata) to the UI `Artifact`, narrowing each metadata field to its
+ * expected type and deriving the PR display status.
  */
-export type PendingAssistantText = Pick<
-  AssistantTokenEvent,
-  "content" | "messageId" | "sandboxId" | "timestamp"
->;
-
-export function parseWsMessage(raw: unknown): ServerMessage | null {
-  const result = serverMessageSchema.safeParse(raw);
-  return result.success ? result.data : null;
-}
-
-export function toUiSandboxEvent(event: SandboxEvent): SandboxEvent {
-  return {
-    ...event,
-    timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now() / 1000,
-  };
-}
-
-function isRenderableTokenEvent(event: SandboxEvent): event is AssistantTokenEvent {
-  return event.type === "token" && Boolean(event.content) && Boolean(event.messageId);
-}
-
-/**
- * Token events contain cumulative text. Replay should show one final token per
- * message, independent of tied storage ordering between token and completion.
- */
-export function collapseReplayTokenEvents(events: SandboxEvent[]): SandboxEvent[] {
-  const tokenByMessageId = new Map<string, AssistantTokenEvent>();
-
-  for (const event of events) {
-    if (isRenderableTokenEvent(event)) {
-      tokenByMessageId.set(event.messageId, event);
-    }
-  }
-
-  if (tokenByMessageId.size === 0) {
-    return events;
-  }
-
-  const result: SandboxEvent[] = [];
-  const emittedTokenMessageIds = new Set<string>();
-
-  for (const evt of events) {
-    if (isRenderableTokenEvent(evt)) {
-      continue;
-    }
-
-    if (evt.type === "execution_complete") {
-      const token = tokenByMessageId.get(evt.messageId);
-      if (token && !emittedTokenMessageIds.has(evt.messageId)) {
-        result.push(token);
-        emittedTokenMessageIds.add(evt.messageId);
-      }
-    }
-
-    result.push(evt);
-  }
-
-  for (const [messageId, token] of tokenByMessageId) {
-    if (!emittedTokenMessageIds.has(messageId)) {
-      result.push(token);
-    }
-  }
-
-  return result;
-}
-
-export interface LiveEventIngestion {
-  /** The pending assistant text after processing this event. */
-  pending: PendingAssistantText | null;
-  /** Events ready to append to the visible event log. */
-  append: SandboxEvent[];
-}
-
-/**
- * Step function for live sandbox events. Streamed token text is buffered
- * (not displayed) until its execution completes, at which point the final
- * text is emitted once with the token's original timestamp. All other
- * events pass through unchanged.
- */
-export function ingestLiveSandboxEvent(
-  pending: PendingAssistantText | null,
-  event: SandboxEvent
-): LiveEventIngestion {
-  if (event.type === "token" && event.content && event.messageId) {
-    return {
-      pending: {
-        content: event.content,
-        messageId: event.messageId,
-        sandboxId: event.sandboxId,
-        timestamp: event.timestamp,
-      },
-      append: [],
-    };
-  }
-
-  if (event.type === "execution_complete") {
-    return {
-      pending: null,
-      append: pending ? [pendingToTokenEvent(pending), event] : [event],
-    };
-  }
-
-  return { pending, append: [event] };
-}
-
-export function pendingToTokenEvent(pending: PendingAssistantText): AssistantTokenEvent {
-  return { type: "token", ...pending };
-}
 
 const PR_DISPLAY_STATUSES = new Set<PullRequestDisplayStatus>([
   "open",

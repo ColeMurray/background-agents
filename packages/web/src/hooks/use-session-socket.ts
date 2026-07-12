@@ -8,9 +8,9 @@ import {
   pendingToTokenEvent,
   toUiSandboxEvent,
   type PendingAssistantText,
-} from "@/lib/session-socket/adapters";
-import { cacheKeysToRevalidate } from "@/lib/session-socket/cache";
+} from "@/lib/session-socket/event-log";
 import { initialSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
+import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, ServerMessage, SessionState } from "@open-inspect/shared";
 
@@ -55,10 +55,10 @@ interface UseSessionSocketReturn {
  * Session view over a WebSocket connection, composed from four layers:
  *
  * - transport (connect/auth/reconnect/ping): `useSessionTransport`
- * - event normalization and token buffering: `lib/session-socket/adapters`
+ * - event-log construction and token buffering: `lib/session-socket/event-log`
  * - view-state projection: `lib/session-socket/reducer`
- * - SWR revalidation: `lib/session-socket/cache` (applied below, the only
- *   place this hook touches the cache)
+ * - SWR revalidation: `lib/session-socket/swr-revalidation` (applied below,
+ *   the only place this hook touches the cache)
  */
 export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const [state, dispatch] = useReducer(sessionSocketReducer, initialSessionSocketState);
@@ -95,7 +95,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       }
 
       dispatch({ type: "server_message", message });
-      for (const key of cacheKeysToRevalidate(message, sessionId)) {
+      for (const key of swrKeysToRevalidate(message, sessionId)) {
         mutate(key);
       }
     },
