@@ -73,4 +73,18 @@ describe("router authentication telemetry", () => {
     expect(response.status).toBe(401);
     expect(hasHmacFailure(warn)).toBe(true);
   });
+
+  it("logs an HMAC failure for a non-sandbox route", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const response = await handleRequest(
+      new Request("https://test.local/analytics/summary", {
+        headers: { Authorization: "Bearer invalid-token" },
+      }),
+      createEnv(401) as never
+    );
+
+    expect(response.status).toBe(401);
+    expect(hasHmacFailure(warn)).toBe(true);
+  });
 });
