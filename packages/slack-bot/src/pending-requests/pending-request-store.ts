@@ -1,7 +1,7 @@
 import { createKvCacheStore } from "@open-inspect/shared";
 import type { Env } from "../types";
 
-const PENDING_REQUEST_TTL_SECONDS = 3600;
+const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
 
 export interface PendingRequest {
   message: string;
@@ -24,7 +24,7 @@ export async function storePendingRequest(
   await createKvCacheStore(env.SLACK_KV).put(
     pendingRequestKey(channel, threadTs),
     JSON.stringify(request),
-    { expirationTtl: PENDING_REQUEST_TTL_SECONDS }
+    { expirationTtl: PENDING_REQUEST_TTL_MS / 1000 }
   );
 }
 

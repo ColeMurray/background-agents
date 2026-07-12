@@ -96,4 +96,21 @@ describe("thread session store", () => {
     await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toBeNull();
     await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toBeNull();
   });
+
+  it("handles KV write and delete failures", async () => {
+    const session: ThreadSession = {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "openai/gpt-5.4",
+      createdAt: 123,
+    };
+    mocks.put.mockRejectedValue(new Error("KV write unavailable"));
+    mocks.deleteValue.mockRejectedValue(new Error("KV delete unavailable"));
+
+    await expect(
+      storeThreadSession(mocks.env, "C123", "111.222", session)
+    ).resolves.toBeUndefined();
+    await expect(clearThreadSession(mocks.env, "C123", "111.222")).resolves.toBeUndefined();
+  });
 });
