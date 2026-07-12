@@ -263,7 +263,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       targetBranch: data.target_branch,
       headSha: data.sha ?? undefined,
       repositoryExternalId: data.project_id !== undefined ? String(data.project_id) : undefined,
-      providerUpdatedAt: parseProviderUpdatedAt(data.updated_at),
+      providerUpdatedAt: parseProviderTimestamp(data.updated_at),
     };
   }
 

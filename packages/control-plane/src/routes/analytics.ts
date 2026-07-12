@@ -4,12 +4,11 @@ import {
   type AnalyticsBreakdownBy,
   type AnalyticsDays,
 } from "@open-inspect/shared";
+import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
 import {
-  type AnalyticsFilters,
-  AnalyticsStore,
-  HUMAN_SPAWN_SOURCES,
   type PullRequestAnalyticsFilters,
-} from "../db/analytics-store";
+  PullRequestAnalyticsStore,
+} from "../db/pull-request-analytics-store";
 import type { Env } from "../types";
 import { type RequestContext, type Route, error, json, parsePattern } from "./shared";
 
@@ -109,8 +108,8 @@ async function handlePullRequests(
     return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
   }
 
-  const store = new AnalyticsStore(env.DB);
-  return json(await store.getPullRequests(getPullRequestFilters(days)));
+  const store = new PullRequestAnalyticsStore(env.DB);
+  return json(await store.get(getPullRequestFilters(days)));
 }
 
 export const analyticsRoutes: Route[] = [

@@ -232,7 +232,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       headSha: data.head.sha,
       repositoryExternalId:
         repositoryExternalId !== undefined ? String(repositoryExternalId) : undefined,
-      providerUpdatedAt: parseProviderUpdatedAt(data.updated_at),
+      providerUpdatedAt: parseProviderTimestamp(data.updated_at),
     };
 
     // Add labels if requested

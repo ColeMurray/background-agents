@@ -120,10 +120,12 @@ export function getCostPerMergedPullRequest(
 
 /** Duration formatter for day-scale spans (merge cycle time, open-PR age). */
 export function formatAnalyticsLongDuration(durationMs: number): string {
-  const totalHours = durationMs / 3_600_000;
+  // Round to whole hours before splitting so the remainder can never render
+  // as an invalid "2d 24h" — 2d 23h 45m carries into 3d.
+  const totalHours = Math.round(durationMs / 3_600_000);
   if (totalHours >= 48) {
     const days = Math.floor(totalHours / 24);
-    const hours = Math.round(totalHours % 24);
+    const hours = totalHours % 24;
     return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
   }
   return formatAnalyticsDuration(durationMs);

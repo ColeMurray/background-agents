@@ -1,3 +1,5 @@
+import type { SpawnSource } from "./statuses";
+
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
 
@@ -86,7 +88,7 @@ export interface AnalyticsPullRequestRepoEntry {
 
 export interface AnalyticsPullRequestSourceEntry {
   /** The producing session's spawn_source. */
-  source: string;
+  source: SpawnSource;
   created: number;
   merged: number;
 }

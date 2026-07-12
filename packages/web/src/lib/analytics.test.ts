@@ -216,8 +216,11 @@ describe("analytics utilities", () => {
 
   it("formats day-scale durations with days and hours", () => {
     const day = 24 * 60 * 60 * 1000;
-    expect(formatAnalyticsLongDuration(3 * day + 4 * 60 * 60 * 1000)).toBe("3d 4h");
+    const hour = 60 * 60 * 1000;
+    expect(formatAnalyticsLongDuration(3 * day + 4 * hour)).toBe("3d 4h");
     expect(formatAnalyticsLongDuration(2 * day)).toBe("2d");
+    // Rounded hours carry into the day count — never an invalid "2d 24h".
+    expect(formatAnalyticsLongDuration(2 * day + 23 * hour + 45 * 60 * 1000)).toBe("3d");
     // Under two days it falls back to the compact formatter.
     expect(formatAnalyticsLongDuration(90 * 60 * 1000)).toBe("1h 30m");
   });

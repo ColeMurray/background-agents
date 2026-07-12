@@ -18,3 +18,14 @@
 ALTER TABLE session_pull_requests ADD COLUMN provider_created_at INTEGER;
 ALTER TABLE session_pull_requests ADD COLUMN merged_at INTEGER;
 ALTER TABLE session_pull_requests ADD COLUMN closed_at INTEGER;
+
+-- The PR analytics endpoint range-scans the cohort expression and merged_at
+-- on every dashboard refresh; these keep those reads off full table scans as
+-- the PR table grows. The expression index matches the exact COALESCE the
+-- queries use (prCreatedAtExpr in pull-request-analytics-store.ts).
+CREATE INDEX IF NOT EXISTS idx_spr_analytics_created
+  ON session_pull_requests (COALESCE(provider_created_at, created_at));
+
+CREATE INDEX IF NOT EXISTS idx_spr_merged_at
+  ON session_pull_requests (merged_at)
+  WHERE merged_at IS NOT NULL;
