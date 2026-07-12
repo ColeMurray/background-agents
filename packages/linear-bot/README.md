@@ -12,7 +12,7 @@ For day-to-day usage, see the user-facing
 ```
 @OpenInspect on issue → Linear sends AgentSessionEvent webhook →
   Agent emits "Thinking..." → Resolves repo → Creates session →
-  Prompt reaches sandbox → Eligible issue may move to team's first Started status →
+  Prompt reaches sandbox → Eligible issue may move to team's lowest-position started state →
   Agent emits "Working on owner/repo..." → Agent codes in sandbox →
   Completion callback → Agent emits "PR opened: <link>"
 ```
@@ -23,7 +23,7 @@ For day-to-day usage, see the user-facing
 4. Resolves the target GitHub repo (see [Repo Resolution](#repo-resolution) below)
 5. Creates an Open-Inspect coding session and sends the issue as a prompt
 6. After a human-initiated prompt reaches a live sandbox, moves an eligible issue to the team's
-   first Started status when the signed callback is delivered and accepted
+   lowest-position `started` workflow state when the signed callback is delivered and accepted
 7. Emits a `Thought` activity with a link to the live session
 8. When the agent completes, emits a final `Response` with the PR link
 
@@ -235,9 +235,9 @@ Built on Linear's [Agents API](https://linear.app/developers/agents):
 - **Raw Linear GraphQL API** — direct `fetch` calls (no SDK, Workers can't import CJS)
 - **AgentSessionEvent** — native trigger when users @mention or assign
 - **AgentActivity** — native status updates visible in Linear's UI
-- **Issue workflow transition** — eligible human-started work may move to the team's first Started
-  status after sandbox dispatch and callback validation; skipped or failed transitions never block
-  execution
+- **Issue workflow transition** — eligible human-started work may move to the team's lowest-position
+  `started` workflow state after sandbox dispatch and callback validation; skipped or failed
+  transitions never block execution
 - **Hono** for HTTP routing
 - **KV** for the replaceable runtime-token cache, issue-to-session mapping, and configuration
 - **Service binding** to the control plane for session management

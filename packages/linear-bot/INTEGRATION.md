@@ -57,7 +57,8 @@ viewer organization must match the webhook organization.
 2. Agent emits `Thought` activities (visible as "thinking" in Linear)
 3. Agent creates Open-Inspect session and sends prompt
 4. When a human-initiated prompt is dispatched to a live sandbox, the control plane sends a signed
-   start callback and the agent moves an eligible issue to the team's first Started status
+   start callback and the agent moves an eligible issue to the team's lowest-position `started`
+   workflow state
 5. Agent emits a `Thought` with the session link while work continues
 6. On completion callback, agent emits `Response` with PR link
 
