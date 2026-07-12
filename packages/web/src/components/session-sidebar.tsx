@@ -58,6 +58,38 @@ import type { Session } from "@open-inspect/shared";
 export type SessionItem = Session;
 
 export const MOBILE_LONG_PRESS_MS = 450;
+
+interface SidebarActionButtonProps {
+  onClick?: () => void;
+}
+
+export function SearchSessionsButton({ onClick }: SidebarActionButtonProps) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={onClick}
+      title={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
+      aria-label={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
+    >
+      <SearchIcon className="w-4 h-4" />
+    </Button>
+  );
+}
+
+export function NewSessionButton({ onClick }: SidebarActionButtonProps) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={onClick}
+      title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
+      aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
+    >
+      <PlusIcon className="w-4 h-4" />
+    </Button>
+  );
+}
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 type SessionCreatorFilter = "all" | "mine";
 
@@ -346,26 +378,10 @@ export function SessionSidebar({
           >
             <SidebarIcon className="w-4 h-4" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onSearchSessions}
-            title={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
-            aria-label={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
-          >
-            <SearchIcon className="w-4 h-4" />
-          </Button>
+          <SearchSessionsButton onClick={onSearchSessions} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onNewSession}
-            title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
-            aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
-          >
-            <PlusIcon className="w-4 h-4" />
-          </Button>
+          <NewSessionButton onClick={onNewSession} />
           <Link
             href="/settings"
             onClick={handleNavigationSelect}

@@ -4,16 +4,15 @@ import { createContext, useCallback, useContext, useState } from "react";
 import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { SessionSidebar } from "./session-sidebar";
+import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
 import { GlobalCommandMenu } from "./global-command-menu";
 import { useSidebar } from "@/hooks/use-sidebar";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { GitHubIcon, GoogleIcon, PlusIcon, SearchIcon } from "@/components/ui/icons";
+import { GitHubIcon, GoogleIcon } from "@/components/ui/icons";
 import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -47,24 +46,8 @@ export function CollapsedSidebarActions({
 }: CollapsedSidebarActionsProps) {
   return (
     <div className="w-12 flex-shrink-0 border-r border-border-muted bg-background px-2 py-3 flex flex-col items-center gap-2">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onSearchSessions}
-        title={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
-        aria-label={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
-      >
-        <SearchIcon className="w-4 h-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onNewSession}
-        title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
-        aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
-      >
-        <PlusIcon className="w-4 h-4" />
-      </Button>
+      <SearchSessionsButton onClick={onSearchSessions} />
+      <NewSessionButton onClick={onNewSession} />
     </div>
   );
 }
