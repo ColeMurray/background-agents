@@ -179,4 +179,18 @@ describe("POST /start", () => {
     expect(response.status).toBe(400);
     expect(getLinearClient).not.toHaveBeenCalled();
   });
+
+  it("rejects callback context fields outside the shared contract", async () => {
+    const router = createStartCallbackRouter({
+      getLinearClient: vi.fn(),
+      transitionIssueToStarted: vi.fn(),
+      now: () => NOW,
+    });
+    const base = await signedPayload();
+    const context = { ...base.context, unexpectedPolicy: true };
+
+    const response = await postStart(router, signedPayload({ context }));
+
+    expect(response.status).toBe(400);
+  });
 });

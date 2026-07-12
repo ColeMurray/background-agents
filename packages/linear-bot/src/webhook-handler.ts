@@ -284,8 +284,8 @@ function buildLinearCallbackContext(params: {
     emitToolProgressActivities,
     transitionIssueOnStart,
   } = params;
-  return {
-    source: "linear",
+  const context = {
+    source: "linear" as const,
     issueId: issue.id,
     issueIdentifier: issue.identifier,
     issueUrl: issue.url,
@@ -295,7 +295,13 @@ function buildLinearCallbackContext(params: {
     organizationId: webhook.organizationId,
     appUserId: webhook.appUserId,
     emitToolProgressActivities,
-    transitionIssueOnStart,
+  };
+  if (transitionIssueOnStart === true) {
+    return { ...context, transitionIssueOnStart: true };
+  }
+  return {
+    ...context,
+    ...(transitionIssueOnStart === false ? { transitionIssueOnStart: false as const } : {}),
   };
 }
 

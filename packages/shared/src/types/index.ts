@@ -86,6 +86,8 @@ export type { ServerMessage } from "./server-messages";
 
 export {
   userPreferencesRequestSchema,
+  linearCallbackContextSchema,
+  linearStartCallbackSchema,
   createSessionRequestSchema,
   createSessionInputSchema,
   createMediaArtifactRequestSchema,
@@ -99,6 +101,7 @@ export type {
   UserPreferencesRequest,
   SlackCallbackContext,
   LinearCallbackContext,
+  LinearStartCallback,
   AutomationCallbackContext,
   CallbackContext,
   CreateSessionRequest,

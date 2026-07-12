@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { z } from "zod";
+import { linearStartCallbackSchema } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { verifyCallbackSignature } from "../utils/crypto";
@@ -9,32 +9,6 @@ import { transitionIssueToStarted } from "../utils/issue-start-transition";
 const log = createLogger("callback");
 const START_CALLBACK_MAX_AGE_MS = 5 * 60 * 1000;
 const START_CALLBACK_MAX_FUTURE_SKEW_MS = 60 * 1000;
-
-const nonEmptyString = z.string().trim().min(1);
-const callbackContextSchema = z
-  .object({
-    source: z.literal("linear"),
-    issueId: nonEmptyString,
-    issueIdentifier: z.string().optional(),
-  })
-  .passthrough();
-
-const startCallbackSchema = z.object({
-  sessionId: nonEmptyString,
-  messageId: nonEmptyString,
-  timestamp: z.number().refine(Number.isFinite),
-  signature: nonEmptyString,
-  context: z.union([
-    callbackContextSchema.extend({
-      transitionIssueOnStart: z.literal(true),
-      organizationId: nonEmptyString,
-      appUserId: nonEmptyString,
-    }),
-    callbackContextSchema.extend({
-      transitionIssueOnStart: z.literal(false).optional(),
-    }),
-  ]),
-});
 
 interface StartCallbackDependencies {
   getLinearClient: typeof getLinearClient;
@@ -63,7 +37,7 @@ export function createStartCallbackRouter(
       return c.json({ error: "invalid payload" }, 400);
     }
 
-    const parsed = startCallbackSchema.safeParse(rawPayload);
+    const parsed = linearStartCallbackSchema.safeParse(rawPayload);
     if (!parsed.success) return c.json({ error: "invalid payload" }, 400);
     const payload = parsed.data;
 
