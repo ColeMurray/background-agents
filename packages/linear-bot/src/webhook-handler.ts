@@ -175,7 +175,7 @@ async function getAgentSessionLinearClient(params: {
   agentSessionId: string;
   issue: AgentSessionWebhookIssue;
   mode: "start" | "follow_up";
-  expectedAppUserId?: string;
+  expectedAppUserId: string;
 }): Promise<LinearApiClient | null> {
   const { env, traceId, orgId, agentSessionId, issue, mode, expectedAppUserId } = params;
 
@@ -538,6 +538,7 @@ async function handleNewSession(
     model,
     agentSessionId,
     organizationId: orgId,
+    appUserId: webhook.appUserId,
     emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
   };
 

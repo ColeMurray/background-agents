@@ -44,6 +44,8 @@ export interface LinearCallbackContext {
   model: string;
   agentSessionId?: string;
   organizationId?: string;
+  /** Installed Linear app-user identity used to verify runtime credentials. */
+  appUserId?: string;
   emitToolProgressActivities?: boolean;
 }
 

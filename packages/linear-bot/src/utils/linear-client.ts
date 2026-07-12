@@ -47,7 +47,7 @@ export interface LinearApiClient {
 export async function getLinearClient(
   env: Env,
   orgId: string,
-  expectedAppUserId?: string
+  expectedAppUserId: string
 ): Promise<LinearApiClient | null> {
   try {
     return await getLinearClientOrThrow(env, orgId, expectedAppUserId);
@@ -60,7 +60,7 @@ export async function getLinearClient(
 export async function getLinearClientOrThrow(
   env: Env,
   orgId: string,
-  expectedAppUserId?: string
+  expectedAppUserId: string
 ): Promise<LinearApiClient> {
   return {
     accessToken: await getClientCredentialsTokenOrThrow(env, orgId, { expectedAppUserId }),

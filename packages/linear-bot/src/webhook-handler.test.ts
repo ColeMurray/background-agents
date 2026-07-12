@@ -379,6 +379,16 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(body).toMatchObject({ repoOwner: "acme", repoName: "backend" });
     expect(body).not.toHaveProperty("environmentId");
 
+    const promptCall = fetchMock.mock.calls.find(
+      ([input]) => String(input) === "https://internal/sessions/session-xyz/prompt"
+    );
+    expect(JSON.parse(String(promptCall?.[1]?.body))).toMatchObject({
+      callbackContext: {
+        organizationId: "org-1",
+        appUserId: "app-user-1",
+      },
+    });
+
     const issueSession = JSON.parse(store.get("issue:issue-1") ?? "null") as Record<
       string,
       unknown
