@@ -242,6 +242,10 @@ function getNewSessionActorUserId(webhook: AgentSessionWebhook): string | undefi
   return webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId;
 }
 
+function shouldTransitionIssueOnStart(webhook: AgentSessionWebhook): boolean {
+  return webhook.action === "created" && Boolean(webhook.agentSession.creatorId?.trim());
+}
+
 function getFollowUp(webhook: AgentSessionWebhook): {
   content: string;
   source: "linear_agent_activity" | "linear_comment" | "linear_fallback";
@@ -569,8 +573,7 @@ async function handleNewSession(
     model,
     repoFullName: integration.callbackRepoFullName,
     emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
-    transitionIssueOnStart:
-      webhook.action === "created" && Boolean(webhook.agentSession.creatorId?.trim()),
+    transitionIssueOnStart: shouldTransitionIssueOnStart(webhook),
   });
 
   await storeIssueSession(env, issue.id, {
