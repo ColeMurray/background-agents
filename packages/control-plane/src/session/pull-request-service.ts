@@ -1,4 +1,4 @@
-import { generateBranchName, type SessionArtifact } from "@open-inspect/shared";
+import { generateBranchName, toDisplayStatus, type SessionArtifact } from "@open-inspect/shared";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -330,7 +330,9 @@ export class SessionPullRequestService {
         kind: "created",
         prNumber: prResult.id,
         prUrl: prResult.webUrl,
-        state: prResult.state,
+        // The provider returns only status facts; the display state is
+        // derived here, at the response boundary.
+        state: toDisplayStatus(prResult),
       };
     } catch (error) {
       this.deps.log.error("PR creation failed", {

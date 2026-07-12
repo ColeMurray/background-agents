@@ -169,7 +169,6 @@ describe("GitLabSourceControlProvider", () => {
         id: 5,
         webUrl: "https://gitlab.com/acme/web/-/merge_requests/5",
         apiUrl: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/5",
-        state: "open",
         lifecycleState: "open",
         isDraft: false,
         sourceBranch: "feature/foo",
@@ -290,7 +289,8 @@ describe("GitLabSourceControlProvider", () => {
         }
       );
 
-      expect(result.state).toBe("merged");
+      expect(result.lifecycleState).toBe("merged");
+      expect(result.isDraft).toBe(false);
     });
 
     it("maps closed MR state correctly", async () => {
@@ -325,7 +325,8 @@ describe("GitLabSourceControlProvider", () => {
         }
       );
 
-      expect(result.state).toBe("closed");
+      expect(result.lifecycleState).toBe("closed");
+      expect(result.isDraft).toBe(false);
     });
 
     it("maps draft MR state correctly", async () => {
@@ -360,7 +361,8 @@ describe("GitLabSourceControlProvider", () => {
         }
       );
 
-      expect(result.state).toBe("draft");
+      expect(result.lifecycleState).toBe("open");
+      expect(result.isDraft).toBe(true);
     });
   });
 

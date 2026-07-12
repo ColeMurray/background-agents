@@ -6,7 +6,6 @@
  */
 
 import { z } from "zod";
-import { toDisplayStatus } from "@open-inspect/shared";
 import type { InstallationRepository, PullRequestStatus } from "@open-inspect/shared";
 import type {
   SourceControlProvider,
@@ -255,7 +254,6 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       id: data.iid,
       webUrl: data.web_url,
       apiUrl: data._links.self,
-      state: toDisplayStatus(status),
       lifecycleState: status.lifecycleState,
       isDraft: status.isDraft,
       sourceBranch: data.source_branch,

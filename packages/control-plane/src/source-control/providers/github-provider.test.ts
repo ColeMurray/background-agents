@@ -593,7 +593,6 @@ describe("createPullRequest state capture", () => {
 
     expect(result.headSha).toBe("abc123");
     expect(result.repositoryExternalId).toBe("9001");
-    expect(result.state).toBe("open");
     expect(result.lifecycleState).toBe("open");
     expect(result.isDraft).toBe(false);
     expect(result.providerUpdatedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
