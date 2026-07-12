@@ -30,6 +30,15 @@ async function seedSession(id: string): Promise<void> {
   });
 }
 
+async function countRecordsForSession(sessionId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM session_pull_requests WHERE session_id = ?"
+  )
+    .bind(sessionId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 function makeRecord(overrides?: Partial<SessionPullRequestRecord>): SessionPullRequestRecord {
   const now = Date.now();
   return {
@@ -104,9 +113,8 @@ describe("SessionPullRequestStore", () => {
       const second = await store.upsert(record);
 
       expect(second.applied).toBe(true);
-      const rows = await store.getBySession("session-1");
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toEqual(record);
+      expect(await store.getByArtifactId("artifact-1")).toEqual(record);
+      expect(await countRecordsForSession("session-1")).toBe(1);
     });
 
     it("applies a newer provider state", async () => {
@@ -218,8 +226,7 @@ describe("SessionPullRequestStore", () => {
 
       const row = await store.getByArtifactId("artifact-1");
       expect(row?.repositoryExternalId).toBe("9001");
-      const rows = await store.getBySession("session-1");
-      expect(rows).toHaveLength(1);
+      expect(await countRecordsForSession("session-1")).toBe(1);
     });
 
     it("rejects a second record for the same PR identity under a different artifact id", async () => {
@@ -302,25 +309,6 @@ describe("SessionPullRequestStore", () => {
       await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("session-1").run();
 
       expect(await store.getByArtifactId("artifact-1")).toBeNull();
-    });
-
-    it("deleteBySession removes only that session's records", async () => {
-      await seedSession("session-2");
-      const store = new SessionPullRequestStore(env.DB);
-      await store.upsert(makeRecord());
-      await store.upsert(
-        makeRecord({
-          artifactId: "b1",
-          sessionId: "session-2",
-          prNumber: 8,
-          repositoryExternalId: "9001",
-        })
-      );
-
-      await store.deleteBySession("session-1");
-
-      expect(await store.getByArtifactId("artifact-1")).toBeNull();
-      expect(await store.getByArtifactId("b1")).not.toBeNull();
     });
   });
 });

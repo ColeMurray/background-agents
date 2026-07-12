@@ -11,9 +11,9 @@ export interface PullRequestSummaryDisplay {
    */
   state: PullRequestDisplayStatus;
   /**
-   * Fixed-height indicator text (design §7): a single PR renders its display
-   * status ("PR merged"); several render the count plus the most informative
-   * bucket — open (incl. drafts) wins, then merged, then closed.
+   * The state icon's tooltip / accessible name: a single PR renders its
+   * display status ("PR merged"); several render the count plus the most
+   * informative bucket — open (incl. drafts) wins, then merged, then closed.
    */
   label: string;
 }

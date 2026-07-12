@@ -18,7 +18,6 @@ export type {
   GetRepositoryConfig,
   CreatePullRequestConfig,
   CreatePullRequestResult,
-  GetPullRequestConfig,
   PullRequestSnapshot,
   RepositoryAccessResult,
 } from "./types";

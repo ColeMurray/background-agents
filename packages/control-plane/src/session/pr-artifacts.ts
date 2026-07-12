@@ -7,9 +7,9 @@ import type { ArtifactRow } from "./types";
  * no identity — artifacts written before multi-repo support, which by
  * construction belong to the session's primary repository. The canonical
  * home of that convention: both the duplicate-PR guard and the per-repo
- * prUrl projection go through here.
+ * artifact find go through here.
  */
-export function parsePrArtifactRepo(metadata: string | null): RepoIdentity | null {
+function parsePrArtifactRepo(metadata: string | null): RepoIdentity | null {
   if (!metadata) return null;
   try {
     const parsed: unknown = JSON.parse(metadata);

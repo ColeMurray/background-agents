@@ -225,7 +225,7 @@ export class SessionIndexStore {
   }
 
   /**
-   * Whether the session exists and the repository is one of its members
+   * Whether the session exists and the repository is in its repository set
    * (the scalar primary mirror or a session_repositories row). This is the
    * webhook branch-fallback gate (design §5.2): a branch-derived insert may
    * only attach to a session already associated with the event's repository.
@@ -329,7 +329,7 @@ export class SessionIndexStore {
   }
 
   /**
-   * Attach member repository lists and PR status summaries to the paged
+   * Attach repository lists and PR status summaries to the paged
    * entries. The two lookups are independent — each is one grouped query
    * keyed by the same session ids — so they run in parallel and merge onto
    * the entries in a single pass. Sessions without rows are returned without
@@ -356,7 +356,7 @@ export class SessionIndexStore {
     });
   }
 
-  /** Member repository lists for the given sessions, in one query. */
+  /** Repository lists for the given sessions, in one query. */
   private async repositoriesForSessions(
     sessionIds: readonly string[]
   ): Promise<Map<string, SessionIndexRepository[]>> {

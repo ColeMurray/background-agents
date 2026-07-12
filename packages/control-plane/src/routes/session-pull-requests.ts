@@ -6,9 +6,8 @@ import { sessionRoute, type SessionRouteContext } from "./session-route";
 /**
  * Manual PR sync (design §5.3): forwards to the session DO's internal
  * refresh route, which kicks a background read-through and answers 202
- * immediately. Per-PR rate limiting lives in the DO's refresh service.
- * Deliberately no session-index touch — PR changes must never reorder the
- * session list.
+ * immediately. Deliberately no session-index touch — PR changes must never
+ * reorder the session list.
  */
 async function handleRefreshPullRequests(
   _request: Request,

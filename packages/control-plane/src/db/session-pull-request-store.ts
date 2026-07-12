@@ -197,17 +197,6 @@ export class SessionPullRequestStore {
     return legacyRow ? toRecord(legacyRow) : null;
   }
 
-  async getBySession(sessionId: string): Promise<SessionPullRequestRecord[]> {
-    const result = await this.db
-      .prepare(
-        "SELECT * FROM session_pull_requests WHERE session_id = ? ORDER BY created_at, pr_number"
-      )
-      .bind(sessionId)
-      .all<SessionPullRequestRow>();
-
-    return (result.results || []).map(toRecord);
-  }
-
   /**
    * One grouped query producing per-session PR counts by display status for
    * the session list (mirrors the withRepositories join pattern). Sessions
@@ -245,17 +234,5 @@ export class SessionPullRequestStore {
       });
     }
     return summaries;
-  }
-
-  /**
-   * Explicit per-session cleanup. The FK cascade on sessions covers the
-   * normal delete path; this exists for callers that clear PR records
-   * without deleting the session.
-   */
-  async deleteBySession(sessionId: string): Promise<void> {
-    await this.db
-      .prepare("DELETE FROM session_pull_requests WHERE session_id = ?")
-      .bind(sessionId)
-      .run();
   }
 }

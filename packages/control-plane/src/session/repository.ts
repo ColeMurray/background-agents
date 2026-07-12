@@ -231,10 +231,9 @@ export interface CreateArtifactData {
 
 /**
  * Data for updating an artifact's content in place (PR lifecycle updates).
- * `url` is omitted to leave the stored URL unchanged.
  */
 export interface UpdateArtifactData {
-  url?: string;
+  url: string;
   metadata: string | null;
   updatedAt: number;
 }
@@ -982,18 +981,9 @@ export class SessionRepository {
   }
 
   updateArtifact(artifactId: string, data: UpdateArtifactData): void {
-    if (data.url !== undefined) {
-      this.sql.exec(
-        `UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?`,
-        data.url,
-        data.metadata,
-        data.updatedAt,
-        artifactId
-      );
-      return;
-    }
     this.sql.exec(
-      `UPDATE artifacts SET metadata = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?`,
+      data.url,
       data.metadata,
       data.updatedAt,
       artifactId

@@ -35,7 +35,7 @@ describe("D1 SessionIndexStore", () => {
   });
 
   describe("isRepositoryAssociated", () => {
-    it("matches the scalar primary and member rows case-insensitively", async () => {
+    it("matches the scalar primary and session_repositories rows case-insensitively", async () => {
       const store = new SessionIndexStore(env.DB);
       const now = Date.now();
 
@@ -64,7 +64,7 @@ describe("D1 SessionIndexStore", () => {
       expect(await store.isRepositoryAssociated("missing-session", "acme", "web-app")).toBe(false);
     });
 
-    it("matches the scalar primary for pre-multi-repo sessions without member rows", async () => {
+    it("matches the scalar primary for pre-multi-repo sessions without session_repositories rows", async () => {
       const store = new SessionIndexStore(env.DB);
       const now = Date.now();
 

@@ -106,7 +106,6 @@ const baseEventSchema = z.object({
 // the fork was deleted.
 const prRepoRefSchema = z.object({
   id: z.number().optional(),
-  full_name: z.string().optional(),
 });
 
 const pullRequestObjectSchema = z.object({

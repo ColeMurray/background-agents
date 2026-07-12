@@ -466,8 +466,8 @@ describe("normalizeGitHubEvent", () => {
 // ─── Typed pull-request facts (PR lifecycle tracking) ─────────────────────────
 
 describe("typed pullRequest facts on pull_request events", () => {
-  const sameRepo = { id: 9001, full_name: "acme-org/my-app" };
-  const forkRepo = { id: 4242, full_name: "quueli/my-app" };
+  const sameRepo = { id: 9001 };
+  const forkRepo = { id: 4242 };
 
   const trackedPR = {
     ...basePR,

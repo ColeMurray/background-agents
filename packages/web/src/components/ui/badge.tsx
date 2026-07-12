@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /**
  * Text-color token per PR badge display state.
  */
-export const PR_STATE_TEXT_CLASS = {
+const PR_STATE_TEXT_CLASS = {
   open: "text-accent",
   draft: "text-muted-foreground",
   merged: "text-success",

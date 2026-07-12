@@ -527,10 +527,6 @@ export class SessionDO extends DurableObject<Env> {
         },
         getArtifactById: (artifactId) => this.repository.getArtifactById(artifactId),
         updateArtifact: (artifactId, data) => this.repository.updateArtifact(artifactId, data),
-        // Backend-only until the stack completes: the snapshot route's callers
-        // (webhook + read-through) and the web artifact_updated consumer land
-        // in the next two slices. Interim clients ignore unknown message types
-        // and converge on reconnect (rolling-compat contract).
         broadcastArtifactUpdated: (artifact) => {
           this.broadcast({
             type: "artifact_updated",
