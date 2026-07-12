@@ -307,10 +307,25 @@ async function handleCompletionCallback(
     if (context.agentSessionId && context.organizationId && context.appUserId) {
       const client = await getLinearClient(env, context.organizationId, context.appUserId);
       if (client) {
-        await emitAgentActivity(client, context.agentSessionId, {
+        const activityDelivered = await emitAgentActivity(client, context.agentSessionId, {
           type: activityType,
           body: message,
         });
+        if (!activityDelivered) {
+          log.error("callback.complete", {
+            trace_id: traceId,
+            session_id: sessionId,
+            issue_id: context.issueId,
+            issue_identifier: context.issueIdentifier,
+            agent_session_id: context.agentSessionId,
+            outcome: "error",
+            agent_success: payload.success,
+            delivery: "agent_activity",
+            delivery_outcome: "error",
+            duration_ms: Date.now() - startTime,
+          });
+          return;
+        }
 
         // Update plan to completed/failed
         await updateAgentSession(client, context.agentSessionId, {

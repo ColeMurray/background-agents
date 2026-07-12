@@ -206,7 +206,8 @@ web session has completed but Linear has not:
    has `has_callback_context:true`; `false` means completion had no Linear callback destination.
 4. Confirm control-plane `prompt.complete`, followed by linear-bot `callback.complete`. If the first
    exists without the second, inspect callback routing and context. If both exist, inspect
-   `linear.emit_activity_failed`, credential identity failures, and GraphQL errors.
+   `delivery_outcome`, `linear.emit_activity_failed`, credential identity failures, and GraphQL
+   errors. Only `delivery_outcome:success` confirms the terminal activity reached Linear.
 
 A completion that was skipped cannot repair itself later. After deploying a callback-context fix,
 send another follow-up through the same Linear Agent session to produce a new terminal activity, or

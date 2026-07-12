@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchUser } from "./linear-client";
+import { emitAgentActivity, fetchUser } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
 
 const client: LinearApiClient = {
@@ -85,5 +85,24 @@ describe("fetchUser", () => {
 
     const result = await fetchUser(client, "user-1");
     expect(result).toBeNull();
+  });
+});
+
+describe("emitAgentActivity", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("reports a failed terminal activity delivery", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
+
+    await expect(
+      emitAgentActivity(client, "agent-session-1", {
+        type: "response",
+        body: "Finished",
+      })
+    ).resolves.toBe(false);
   });
 });

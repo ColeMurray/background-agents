@@ -148,7 +148,7 @@ export async function emitAgentActivity(
   agentSessionId: string,
   content: Record<string, unknown>,
   ephemeral?: boolean
-): Promise<void> {
+): Promise<boolean> {
   try {
     await linearGraphQL(
       client,
@@ -163,11 +163,13 @@ export async function emitAgentActivity(
         input: { agentSessionId, content, ephemeral },
       }
     );
+    return true;
   } catch (err) {
     log.error("linear.emit_activity_failed", {
       agent_session_id: agentSessionId,
       error: err instanceof Error ? err : new Error(String(err)),
     });
+    return false;
   }
 }
 
