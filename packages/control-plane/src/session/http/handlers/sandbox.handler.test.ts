@@ -316,45 +316,29 @@ describe("createSandboxHandler", () => {
     expect(log.warn).toHaveBeenCalledWith("Sandbox token verification failed: no sandbox");
   });
 
-  it("returns 410 when sandbox is stopped", async () => {
-    const { handler, getSandbox, log } = createHandler();
-    getSandbox.mockReturnValue({ status: "stopped" } as SandboxRow);
+  it.each(["pending", "stopped", "stale", "failed"] as const)(
+    "returns 410 when sandbox is %s",
+    async (status) => {
+      const { handler, getSandbox, isValidSandboxToken, log } = createHandler();
+      getSandbox.mockReturnValue({ status } as SandboxRow);
 
-    const response = await handler.verifySandboxToken(
-      new Request("http://internal/internal/verify-sandbox-token", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: "abc" }),
-      })
-    );
+      const response = await handler.verifySandboxToken(
+        new Request("http://internal/internal/verify-sandbox-token", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "abc" }),
+        })
+      );
 
-    expect(response.status).toBe(410);
-    expect(await response.json()).toEqual({ valid: false, error: "Sandbox stopped" });
-    expect(log.warn).toHaveBeenCalledWith(
-      "Sandbox token verification failed: sandbox is stopped/stale",
-      { status: "stopped" }
-    );
-  });
-
-  it("returns 410 when sandbox is stale", async () => {
-    const { handler, getSandbox, log } = createHandler();
-    getSandbox.mockReturnValue({ status: "stale" } as SandboxRow);
-
-    const response = await handler.verifySandboxToken(
-      new Request("http://internal/internal/verify-sandbox-token", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: "abc" }),
-      })
-    );
-
-    expect(response.status).toBe(410);
-    expect(await response.json()).toEqual({ valid: false, error: "Sandbox stopped" });
-    expect(log.warn).toHaveBeenCalledWith(
-      "Sandbox token verification failed: sandbox is stopped/stale",
-      { status: "stale" }
-    );
-  });
+      expect(response.status).toBe(410);
+      expect(await response.json()).toEqual({ valid: false, error: "Sandbox not running" });
+      expect(log.warn).toHaveBeenCalledWith(
+        "Sandbox token verification failed: sandbox is not running",
+        { status }
+      );
+      expect(isValidSandboxToken).not.toHaveBeenCalled();
+    }
+  );
 
   it("returns 401 when sandbox token is invalid", async () => {
     const { handler, getSandbox, isValidSandboxToken, log } = createHandler();
