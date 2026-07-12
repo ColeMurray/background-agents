@@ -92,6 +92,24 @@ function jsonResponse(body: unknown) {
 }
 
 describe("SessionSidebar", () => {
+  it("shows the user profile at the bottom of the sidebar", async () => {
+    const { container } = render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    const profileButton = await screen.findByRole("button", { name: "Signed in as Test User" });
+    expect(profileButton).toHaveTextContent("Test User");
+    expect(container.querySelector("aside")?.lastElementChild).toContainElement(profileButton);
+  });
+
   it("renders the PR status summary on session rows", async () => {
     const single = createSession(1, {
       updatedAt: 4000,

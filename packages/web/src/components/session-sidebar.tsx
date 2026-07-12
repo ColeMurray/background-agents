@@ -378,7 +378,6 @@ export function SessionSidebar({
           >
             <SettingsIcon className="w-4 h-4" />
           </Link>
-          <UserMenu user={authSession?.user} />
         </div>
       </div>
 
@@ -506,6 +505,10 @@ export function SessionSidebar({
           </>
         )}
       </div>
+
+      <div className="border-t border-border-muted p-2">
+        <UserMenu user={authSession?.user} />
+      </div>
     </aside>
   );
 }
@@ -515,24 +518,23 @@ function UserMenu({ user }: { user?: { name?: string | null; image?: string | nu
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className="w-7 h-7 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary"
+          className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm font-medium text-foreground transition hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary"
           aria-label={`Signed in as ${user?.name || "User"}`}
           title={`Signed in as ${user?.name || "User"}`}
         >
-          {user?.image ? (
-            <img
-              src={user.image}
-              alt={user.name || "User"}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <span className="w-full h-full rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground">
-              {user?.name?.charAt(0).toUpperCase() || "?"}
-            </span>
-          )}
+          <span className="h-7 w-7 shrink-0 overflow-hidden rounded-full">
+            {user?.image ? (
+              <img src={user.image} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <span className="flex h-full w-full items-center justify-center rounded-full bg-card text-xs font-medium text-foreground">
+                {user?.name?.charAt(0).toUpperCase() || "?"}
+              </span>
+            )}
+          </span>
+          <span className="min-w-0 truncate">{user?.name || "User"}</span>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={4}>
+      <DropdownMenuContent align="start" side="top" sideOffset={4}>
         <DropdownMenuLabel className="font-medium truncate">
           {user?.name || "User"}
         </DropdownMenuLabel>
