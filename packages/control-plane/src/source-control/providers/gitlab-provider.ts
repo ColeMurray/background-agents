@@ -250,15 +250,19 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       "Failed to create merge request"
     );
 
+    const status = deriveGitLabMergeRequestStatus(data);
     return {
       id: data.iid,
       webUrl: data.web_url,
       apiUrl: data._links.self,
-      state: toDisplayStatus(deriveGitLabMergeRequestStatus(data)),
+      state: toDisplayStatus(status),
+      lifecycleState: status.lifecycleState,
+      isDraft: status.isDraft,
       sourceBranch: data.source_branch,
       targetBranch: data.target_branch,
       headSha: data.sha ?? undefined,
       repositoryExternalId: data.project_id !== undefined ? String(data.project_id) : undefined,
+      providerUpdatedAt: parseProviderUpdatedAt(data.updated_at),
     };
   }
 

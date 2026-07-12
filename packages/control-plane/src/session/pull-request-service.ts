@@ -1,8 +1,4 @@
-import {
-  generateBranchName,
-  type PullRequestStatus,
-  type SessionArtifact,
-} from "@open-inspect/shared";
+import { generateBranchName, type SessionArtifact } from "@open-inspect/shared";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -129,16 +125,6 @@ export interface PullRequestServiceDeps {
    * deployment has no D1 binding; the write is best-effort either way.
    */
   sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
-}
-
-/**
- * Inverse of toDisplayStatus for provider create results: "draft" is the
- * display collapse of open + draft, every other display state is non-draft.
- */
-function statusFromDisplayState(state: "open" | "closed" | "merged" | "draft"): PullRequestStatus {
-  return state === "draft"
-    ? { lifecycleState: "open", isDraft: true }
-    : { lifecycleState: state, isDraft: false };
 }
 
 /**
@@ -302,21 +288,21 @@ export class SessionPullRequestService {
 
       const artifactId = this.deps.generateId();
       const now = Date.now();
-      const status = statusFromDisplayState(prResult.state);
       // The one PR lifecycle snapshot mapping (pull-request-snapshot.ts):
       // artifact metadata and the D1 record both derive from this snapshot,
       // so creation cannot drift from the update paths' field mapping.
       const snapshot: PullRequestSnapshotInput = {
         number: prResult.id,
         url: prResult.webUrl,
-        lifecycleState: status.lifecycleState,
-        isDraft: status.isDraft,
+        lifecycleState: prResult.lifecycleState,
+        isDraft: prResult.isDraft,
         headBranch: sanitizedHeadBranch,
         baseBranch,
         headSha: prResult.headSha,
         repoOwner: targetRepo.repoOwner,
         repoName: targetRepo.repoName,
         repositoryExternalId: prResult.repositoryExternalId,
+        providerUpdatedAt: prResult.providerUpdatedAt,
       };
       const artifactMetadata = mergeSnapshotMetadata({}, snapshot);
       this.deps.repository.createArtifact({

@@ -217,16 +217,20 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     );
 
     const repositoryExternalId = data.base.repo?.id;
+    const status = deriveGitHubPullRequestStatus(data);
     const result: CreatePullRequestResult = {
       id: data.number,
       webUrl: data.html_url,
       apiUrl: data.url,
-      state: toDisplayStatus(deriveGitHubPullRequestStatus(data)),
+      state: toDisplayStatus(status),
+      lifecycleState: status.lifecycleState,
+      isDraft: status.isDraft,
       sourceBranch: data.head.ref,
       targetBranch: data.base.ref,
       headSha: data.head.sha,
       repositoryExternalId:
         repositoryExternalId !== undefined ? String(repositoryExternalId) : undefined,
+      providerUpdatedAt: parseProviderUpdatedAt(data.updated_at),
     };
 
     // Add labels if requested

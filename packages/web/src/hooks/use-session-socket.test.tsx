@@ -905,6 +905,41 @@ describe("useSessionSocket", () => {
     expect(mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
   });
 
+  it("does not revalidate the session list for non-PR artifacts", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage([]));
+    });
+    mutateMock.mockClear();
+
+    act(() => {
+      socket.receive({
+        type: "artifact_created",
+        artifact: {
+          id: "artifact-shot-1",
+          type: "screenshot",
+          url: "https://example.com/shot.png",
+          metadata: null,
+          createdAt: 100,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      // The artifact still upserts into the session view; only the sidebar
+      // revalidation is PR-gated (media events arrive at high frequency).
+      expect(result.current.artifacts.map((artifact) => artifact.id)).toEqual(["artifact-shot-1"]);
+    });
+    expect(mutateMock).not.toHaveBeenCalledWith(isUnarchivedSessionListKey);
+  });
+
   it("derives prState from tracked lifecycle metadata over the legacy state key", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 

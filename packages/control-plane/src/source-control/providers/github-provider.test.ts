@@ -594,6 +594,9 @@ describe("createPullRequest state capture", () => {
     expect(result.headSha).toBe("abc123");
     expect(result.repositoryExternalId).toBe("9001");
     expect(result.state).toBe("open");
+    expect(result.lifecycleState).toBe("open");
+    expect(result.isDraft).toBe(false);
+    expect(result.providerUpdatedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
   });
 
   it("leaves capture fields undefined when the response omits them", async () => {
@@ -631,6 +634,7 @@ describe("createPullRequest state capture", () => {
 
     expect(result.headSha).toBeUndefined();
     expect(result.repositoryExternalId).toBeUndefined();
+    expect(result.providerUpdatedAt).toBeUndefined();
   });
 });
 

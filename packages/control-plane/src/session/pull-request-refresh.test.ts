@@ -80,6 +80,9 @@ function createHarness(artifacts: ArtifactRow[], session: SessionRow | null = cr
   const repository = {
     getSession: vi.fn(() => session),
     listArtifacts: vi.fn(() => [...rows]),
+    getArtifactById: vi.fn(
+      (artifactId: string) => rows.find((row) => row.id === artifactId) ?? null
+    ),
     updateArtifact,
   };
   const getPullRequest = vi.fn(async () => createSnapshot());
@@ -87,6 +90,7 @@ function createHarness(artifacts: ArtifactRow[], session: SessionRow | null = cr
 
   return {
     repository,
+    rows,
     getPullRequest,
     upsert,
     refresh: () => refreshSessionPullRequests(repository, { getPullRequest }, { upsert }),
@@ -240,6 +244,32 @@ describe("refreshSessionPullRequests", () => {
       }),
     ]);
     expect(harness.repository.updateArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not regress a mirror that a webhook push advanced during the pass's awaits", async () => {
+    const harness = createHarness([createPrArtifact()]);
+    // Simulate a webhook snapshot push interleaving with this pass: while
+    // the refresh awaits its D1 upsert, the artifact row advances past the
+    // snapshot the refresh is holding (createSnapshot has
+    // providerUpdatedAt 6000).
+    harness.upsert.mockImplementation(async () => {
+      harness.rows[0] = {
+        ...harness.rows[0],
+        metadata: JSON.stringify({
+          ...(JSON.parse(harness.rows[0].metadata ?? "{}") as Record<string, unknown>),
+          lifecycleState: "closed",
+          providerUpdatedAt: 9000,
+        }),
+      };
+      return { applied: true };
+    });
+
+    const result = await harness.refresh();
+
+    // The apply-time re-read sees the newer row, so the staleness guard
+    // rejects this pass's snapshot instead of overwriting the webhook's.
+    expect(result.updated).toEqual([]);
+    expect(harness.repository.updateArtifact).not.toHaveBeenCalled();
   });
 
   it("does not touch the DO mirror when the D1 monotonic guard rejects the snapshot", async () => {

@@ -191,6 +191,19 @@ describe("processPullRequestLifecycleEvent", () => {
     expect(harness.pushSnapshotToSession).not.toHaveBeenCalled();
   });
 
+  it("still mirrors the snapshot when the D1 upsert throws (best-effort authority)", async () => {
+    harness.getByIdentity.mockResolvedValue(createRecord());
+    harness.upsert.mockRejectedValue(new Error("D1 unavailable"));
+
+    const outcome = await processPullRequestLifecycleEvent(harness.deps, createEvent());
+
+    // Same contract as creation and read-through: a D1 failure never blocks
+    // the mirror (which applies its own monotonic guard); redelivery or
+    // read-through repairs the record.
+    expect(outcome).toBe("record_write_failed");
+    expect(harness.pushSnapshotToSession).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves stored identity fields the webhook did not carry", async () => {
     harness.getByIdentity.mockResolvedValue(
       createRecord({ headSha: "stored-sha", providerUpdatedAt: 1000 })

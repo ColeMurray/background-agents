@@ -142,6 +142,7 @@ describe("GitLabSourceControlProvider", () => {
           draft: false,
           source_branch: "feature/foo",
           target_branch: "main",
+          updated_at: "2026-07-10T12:00:00Z",
         })
       );
 
@@ -169,8 +170,11 @@ describe("GitLabSourceControlProvider", () => {
         webUrl: "https://gitlab.com/acme/web/-/merge_requests/5",
         apiUrl: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/5",
         state: "open",
+        lifecycleState: "open",
+        isDraft: false,
         sourceBranch: "feature/foo",
         targetBranch: "main",
+        providerUpdatedAt: Date.parse("2026-07-10T12:00:00Z"),
       });
     });
 

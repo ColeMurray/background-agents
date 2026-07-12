@@ -60,6 +60,7 @@ export type PullRequestLifecycleOutcome =
   | "no_state"
   | "updated"
   | "stale"
+  | "record_write_failed"
   | "no_branch_session"
   | "session_not_associated"
   | "no_matching_artifact"
@@ -97,7 +98,10 @@ function equalsIgnoreCase(a: string | null | undefined, b: string): boolean {
  * The single authority-then-mirror sequence: upsert the D1 record, and only
  * when the monotonic guard accepted the write push the snapshot into the DO
  * mirror. A rejected write is "stale" and must never reach the mirror — the
- * authority record already holds a newer provider state.
+ * authority record already holds a newer provider state. A *thrown* upsert
+ * is different: D1 is best-effort on every freshness path, so the mirror
+ * (which applies its own monotonic guard) still gets the snapshot and the
+ * outcome reports the record failure; redelivery or read-through repairs D1.
  */
 async function upsertRecordThenMirror(
   deps: PullRequestLifecycleDeps,
@@ -105,11 +109,16 @@ async function upsertRecordThenMirror(
   identity: { artifactId: string; sessionId: string; createdAt: number; updatedAt: number },
   outcome: "updated" | "inserted"
 ): Promise<PullRequestLifecycleOutcome> {
-  const { applied } = await deps.store.upsert(snapshotToRecord(snapshot, identity));
-  if (!applied) return "stale";
+  let recordWriteFailed = false;
+  try {
+    const { applied } = await deps.store.upsert(snapshotToRecord(snapshot, identity));
+    if (!applied) return "stale";
+  } catch {
+    recordWriteFailed = true;
+  }
 
   await deps.pushSnapshotToSession(identity.sessionId, identity.artifactId, snapshot);
-  return outcome;
+  return recordWriteFailed ? "record_write_failed" : outcome;
 }
 
 export async function processPullRequestLifecycleEvent(

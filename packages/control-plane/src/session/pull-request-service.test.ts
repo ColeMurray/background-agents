@@ -72,6 +72,8 @@ function createMockProvider() {
       webUrl: "https://github.com/acme/web/pull/42",
       apiUrl: "https://api.github.com/repos/acme/web/pulls/42",
       state: "open" as const,
+      lifecycleState: "open" as const,
+      isDraft: false,
       sourceBranch: "open-inspect/session-name-1",
       targetBranch: "main",
     })),
@@ -743,6 +745,8 @@ describe("SessionPullRequestService", () => {
         webUrl: "https://github.com/acme/web/pull/42",
         apiUrl: "https://api.github.com/repos/acme/web/pulls/42",
         state: "open",
+        lifecycleState: "open",
+        isDraft: false,
         sourceBranch: "open-inspect/session-name-1",
         targetBranch: "main",
         headSha: "abc123",
@@ -767,12 +771,41 @@ describe("SessionPullRequestService", () => {
       );
     });
 
-    it("maps a draft creation to open + isDraft while keeping the display state", async () => {
+    it("seeds the monotonic guard with the provider's updated_at from creation", async () => {
+      vi.mocked(harness.provider.createPullRequest).mockResolvedValue({
+        id: 42,
+        webUrl: "https://github.com/acme/web/pull/42",
+        apiUrl: "https://api.github.com/repos/acme/web/pulls/42",
+        state: "open",
+        lifecycleState: "open",
+        isDraft: false,
+        sourceBranch: "open-inspect/session-name-1",
+        targetBranch: "main",
+        providerUpdatedAt: 1_720_000_000_000,
+      });
+
+      await harness.service.createPullRequest(createInput());
+
+      // A first webhook that raced ahead of this write can no longer be
+      // regressed by a timestamp-less (guard-authoritative) creation record.
+      expect(harness.sessionPullRequests.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ providerUpdatedAt: 1_720_000_000_000 })
+      );
+      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ providerUpdatedAt: 1_720_000_000_000 }),
+        })
+      );
+    });
+
+    it("stores the provider's status facts for a draft creation, keeping the display state", async () => {
       vi.mocked(harness.provider.createPullRequest).mockResolvedValue({
         id: 42,
         webUrl: "https://github.com/acme/web/pull/42",
         apiUrl: "https://api.github.com/repos/acme/web/pulls/42",
         state: "draft",
+        lifecycleState: "open",
+        isDraft: true,
         sourceBranch: "open-inspect/session-name-1",
         targetBranch: "main",
       });

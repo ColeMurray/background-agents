@@ -24,6 +24,7 @@ import type { ArtifactRow, SessionRow } from "./types";
 export interface PullRequestRefreshRepository {
   getSession(): SessionRow | null;
   listArtifacts(): ArtifactRow[];
+  getArtifactById(artifactId: string): ArtifactRow | null;
   updateArtifact(artifactId: string, data: UpdateArtifactData): void;
 }
 
@@ -149,10 +150,17 @@ export async function refreshSessionPullRequests(
     }
     if (!recordAccepted) continue;
 
-    const artifactUpdate = preparePullRequestArtifactUpdate(artifact, snapshot, Date.now());
+    // Re-read the row at apply time: a webhook snapshot push can land on this
+    // DO between this pass's awaits, and the staleness guard must evaluate
+    // against the artifact's current state, not the pre-await copy (the
+    // snapshot-push handler re-reads the same way).
+    const currentArtifact = repository.getArtifactById(artifact.id);
+    if (!currentArtifact) continue;
+
+    const artifactUpdate = preparePullRequestArtifactUpdate(currentArtifact, snapshot, Date.now());
     if (!artifactUpdate) continue;
 
-    repository.updateArtifact(artifact.id, artifactUpdate.update);
+    repository.updateArtifact(currentArtifact.id, artifactUpdate.update);
     updated.push(artifactUpdate.artifact);
   }
 

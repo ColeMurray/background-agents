@@ -50,7 +50,19 @@ async function trackPullRequestLifecycle(
     if (!env.DB || !env.SESSION) return;
 
     const parsed = automationEventSchema.safeParse(rawEvent);
-    if (!parsed.success || parsed.data.source !== "github" || !parsed.data.pullRequest) return;
+    if (!parsed.success) {
+      // Distinguish schema drift from the benign "not a PR event" skip: if
+      // the bot and control plane ever disagree on the envelope shape, PR
+      // tracking would otherwise go dark with zero signal.
+      if (typeof rawEvent.eventType === "string" && rawEvent.eventType.startsWith("pull_request")) {
+        log.warn("pull_request_lifecycle.envelope_parse_failed", {
+          event_type: rawEvent.eventType,
+          issues: parsed.error.issues.slice(0, 5).map((issue) => issue.path.join(".")),
+        });
+      }
+      return;
+    }
+    if (parsed.data.source !== "github" || !parsed.data.pullRequest) return;
     const event = parsed.data;
 
     const sessionRuntime = createSessionRuntimeClient(env, ctx);
