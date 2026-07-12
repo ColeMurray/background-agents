@@ -1,4 +1,14 @@
-import { DEFAULT_MODEL, getValidModelOrDefault } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  getValidModelOrDefault,
+  isValidReasoningEffort,
+} from "@open-inspect/shared";
+
+export interface ModelPreference {
+  model: string;
+  reasoningEffort?: string;
+}
 
 /**
  * Pick the model the automation form should actually use, given a desired model
@@ -17,4 +27,18 @@ export function resolveEnabledModel(model: string, enabledModels: string[]): str
   if (enabled.has(desired)) return desired;
   if (enabled.has(DEFAULT_MODEL)) return DEFAULT_MODEL;
   return enabledModels[0] ?? DEFAULT_MODEL;
+}
+
+export function resolveModelPreference(
+  preference: ModelPreference,
+  enabledModels: string[]
+): ModelPreference {
+  const model = resolveEnabledModel(preference.model, enabledModels);
+  return {
+    model,
+    reasoningEffort:
+      preference.reasoningEffort && isValidReasoningEffort(model, preference.reasoningEffort)
+        ? preference.reasoningEffort
+        : getDefaultReasoningEffort(model),
+  };
 }

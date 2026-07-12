@@ -22,6 +22,7 @@ import {
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
+import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { ComboboxGroup } from "@/components/ui/combobox";
 
@@ -363,12 +364,18 @@ function useSessionListActions(sessionId: string) {
  * list and synced from session state once it loads.
  */
 function useModelSelection(sessionState: SessionState) {
-  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
-  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort(DEFAULT_MODEL)
-  );
+  const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
+  const { model: selectedModel, reasoningEffort } = resolveModelPreference(
+    modelPreferenceDraft ?? {
+      model: sessionState?.model ?? DEFAULT_MODEL,
+      reasoningEffort:
+        sessionState?.reasoningEffort ??
+        getDefaultReasoningEffort(sessionState?.model ?? DEFAULT_MODEL),
+    },
+    enabledModels
+  );
   const modelItems = useMemo<ComboboxGroup[]>(
     () =>
       enabledModelOptions.map((group) => ({
@@ -383,28 +390,15 @@ function useModelSelection(sessionState: SessionState) {
   );
 
   const handleModelChange = useCallback((model: string) => {
-    setSelectedModel(model);
-    setReasoningEffort(getDefaultReasoningEffort(model));
+    setModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
   }, []);
 
-  // Reset to default if the selected model is no longer enabled
-  useEffect(() => {
-    if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
-      const fallback = enabledModels[0] ?? DEFAULT_MODEL;
-      setSelectedModel(fallback);
-      setReasoningEffort(getDefaultReasoningEffort(fallback));
-    }
-  }, [enabledModels, selectedModel]);
-
-  // Sync selectedModel and reasoningEffort with session state when it loads
-  useEffect(() => {
-    if (sessionState?.model) {
-      setSelectedModel(sessionState.model);
-      setReasoningEffort(
-        sessionState.reasoningEffort ?? getDefaultReasoningEffort(sessionState.model)
-      );
-    }
-  }, [sessionState?.model, sessionState?.reasoningEffort]);
+  const setReasoningEffort = useCallback(
+    (nextReasoningEffort: string | undefined) => {
+      setModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
+    },
+    [selectedModel]
+  );
 
   return { selectedModel, reasoningEffort, setReasoningEffort, handleModelChange, modelItems };
 }

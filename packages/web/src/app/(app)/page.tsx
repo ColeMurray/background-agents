@@ -12,12 +12,8 @@ import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { APP_NAME } from "@/lib/site-config";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  isValidReasoningEffort,
-  type ModelCategory,
-} from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
+import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {
   useSessionTargetPicker,
@@ -36,10 +32,11 @@ export default function Home() {
   const router = useRouter();
   const picker = useSessionTargetPicker();
   const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
-  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
-  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort(DEFAULT_MODEL)
-  );
+  const [storedPreference, setStoredPreference] = useState<ModelPreference>({
+    model: DEFAULT_MODEL,
+    reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
+  });
+  const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -49,42 +46,31 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   // Keyed by the picker's configKey so environment/ad-hoc selections
   // invalidate a warmed session exactly like repo/branch changes do.
-  const pendingConfigRef = useRef<{ target: string; model: string; branch: string } | null>(null);
+  const pendingConfigRef = useRef<{
+    target: string;
+    model: string;
+    reasoningEffort?: string;
+    branch: string;
+  } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
   const { enabledModels, enabledModelOptions } = useEnabledModels();
 
   useEffect(() => {
-    if (enabledModels.length === 0 || hasHydratedModelPreferences) return;
+    if (hasHydratedModelPreferences) return;
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
-    const selectedModelFromStorage =
-      storedModel && enabledModels.includes(storedModel)
-        ? storedModel
-        : (enabledModels[0] ?? DEFAULT_MODEL);
-
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
-    const reasoningEffortFromStorage =
-      storedReasoningEffort &&
-      isValidReasoningEffort(selectedModelFromStorage, storedReasoningEffort)
-        ? storedReasoningEffort
-        : getDefaultReasoningEffort(selectedModelFromStorage);
-
-    setSelectedModel(selectedModelFromStorage);
-    setReasoningEffort(reasoningEffortFromStorage);
+    setStoredPreference({
+      model: storedModel ?? DEFAULT_MODEL,
+      reasoningEffort: storedReasoningEffort ?? undefined,
+    });
     setHasHydratedModelPreferences(true);
-  }, [enabledModels, hasHydratedModelPreferences]);
+  }, [hasHydratedModelPreferences]);
 
-  useEffect(() => {
-    if (!hasHydratedModelPreferences) return;
-    localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, selectedModel);
-
-    if (reasoningEffort) {
-      localStorage.setItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY, reasoningEffort);
-      return;
-    }
-
-    localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
-  }, [hasHydratedModelPreferences, selectedModel, reasoningEffort]);
+  const { model: selectedModel, reasoningEffort } = resolveModelPreference(
+    modelPreferenceDraft ?? storedPreference,
+    enabledModels
+  );
 
   useEffect(() => {
     if (abortControllerRef.current) {
@@ -95,7 +81,7 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [sessionTarget, selectedModel, selectedBranch]);
+  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
@@ -107,6 +93,7 @@ export default function Home() {
     const currentConfig = {
       target: configKey,
       model: selectedModel,
+      reasoningEffort,
       branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
     };
     pendingConfigRef.current = currentConfig;
@@ -132,6 +119,7 @@ export default function Home() {
           if (
             pendingConfigRef.current?.target === currentConfig.target &&
             pendingConfigRef.current?.model === currentConfig.model &&
+            pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
             pendingConfigRef.current?.branch === currentConfig.branch
           ) {
             setPendingSessionId(data.sessionId);
@@ -167,26 +155,29 @@ export default function Home() {
     pendingSessionId,
   ]);
 
-  // Reset selections when model preferences change (only after hydration)
-  useEffect(() => {
-    if (!hasHydratedModelPreferences) return;
-
-    if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
-      const fallback = enabledModels[0] ?? DEFAULT_MODEL;
-      setSelectedModel(fallback);
-      setReasoningEffort(getDefaultReasoningEffort(fallback));
-      return;
+  const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
+    setModelPreferenceDraft(preference);
+    localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, preference.model);
+    if (preference.reasoningEffort) {
+      localStorage.setItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY, preference.reasoningEffort);
+    } else {
+      localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
     }
-
-    if (reasoningEffort && !isValidReasoningEffort(selectedModel, reasoningEffort)) {
-      setReasoningEffort(getDefaultReasoningEffort(selectedModel));
-    }
-  }, [hasHydratedModelPreferences, enabledModels, selectedModel, reasoningEffort]);
-
-  const handleModelChange = useCallback((model: string) => {
-    setSelectedModel(model);
-    setReasoningEffort(getDefaultReasoningEffort(model));
   }, []);
+
+  const handleModelChange = useCallback(
+    (model: string) => {
+      saveModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
+    },
+    [saveModelPreferenceDraft]
+  );
+
+  const handleReasoningEffortChange = useCallback(
+    (nextReasoningEffort: string | undefined) => {
+      saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
+    },
+    [saveModelPreferenceDraft, selectedModel]
+  );
 
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
@@ -254,7 +245,7 @@ export default function Home() {
       selectedModel={selectedModel}
       setSelectedModel={handleModelChange}
       reasoningEffort={reasoningEffort}
-      setReasoningEffort={setReasoningEffort}
+      setReasoningEffort={handleReasoningEffortChange}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
       creating={creating}
