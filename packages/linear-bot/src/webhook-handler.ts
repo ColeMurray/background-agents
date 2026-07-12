@@ -272,7 +272,7 @@ function buildLinearCallbackContext(params: {
   webhook: AgentSessionWebhook;
   issue: AgentSessionWebhookIssue;
   model: string;
-  repoFullName: string;
+  repoFullName?: string;
   emitToolProgressActivities?: boolean;
 }): LinearCallbackContext {
   const { webhook, issue, model, repoFullName, emitToolProgressActivities } = params;
@@ -290,11 +290,10 @@ function buildLinearCallbackContext(params: {
   };
 }
 
-function getCallbackRepoFullName(session: IssueSession): string {
+function getCallbackRepoFullName(session: IssueSession): string | undefined {
   if (session.callbackRepoFullName) return session.callbackRepoFullName;
   if (session.repoOwner && session.repoName) return `${session.repoOwner}/${session.repoName}`;
-  if (session.environmentId) return `environment:${session.environmentId}`;
-  return "legacy-session";
+  return undefined;
 }
 
 async function handleFollowUp(

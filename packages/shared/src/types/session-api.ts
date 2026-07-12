@@ -40,7 +40,8 @@ export interface LinearCallbackContext {
   issueId: string;
   issueIdentifier: string;
   issueUrl: string;
-  repoFullName: string;
+  /** Settings repository when one can be resolved for this Linear message. */
+  repoFullName?: string;
   model: string;
   agentSessionId?: string;
   organizationId?: string;

@@ -64,7 +64,7 @@ viewer organization must match the webhook organization.
 The `callbackContext` is stored on every queued message, including follow-ups. It includes the
 `agentSessionId`, `organizationId`, and installed `appUserId` so completion can verify the runtime
 credential and emit `AgentActivity` on the correct Linear session. It also carries issue, model,
-repository/settings, and tool-progress fields needed by callback delivery.
+optional repository/settings, and tool-progress fields needed by callback delivery.
 
 Callback context is message-scoped rather than inherited by the control plane. A producer that
 queues a follow-up must attach it again; otherwise the control plane has no safe callback
