@@ -44,6 +44,39 @@ describe("toUiArtifact", () => {
     expect(artifact.metadata?.prState).toBe("closed");
   });
 
+  it("derives prState merged from tracked lifecycle metadata", () => {
+    const artifact = toUiArtifact({
+      id: "artifact-pr-3",
+      type: "pr",
+      url: "https://github.com/acme/web/pull/3",
+      // Stale legacy display key vs. tracked lifecycle: lifecycle wins.
+      metadata: { number: 3, state: "open", lifecycleState: "merged" },
+      createdAt: 100,
+    });
+    expect(artifact.metadata?.prState).toBe("merged");
+  });
+
+  it("keeps hasAudio only as an explicit false flag", () => {
+    const silent = toUiArtifact({
+      id: "artifact-video-1",
+      type: "video",
+      url: "sessions/s/media/v1.mp4",
+      metadata: { mimeType: "video/mp4", hasAudio: false },
+      createdAt: 100,
+    });
+    expect(silent.metadata).toEqual(expect.objectContaining({ hasAudio: false }));
+
+    // true is the default assumption, so it narrows to undefined.
+    const withAudio = toUiArtifact({
+      id: "artifact-video-2",
+      type: "video",
+      url: "sessions/s/media/v2.mp4",
+      metadata: { mimeType: "video/mp4", hasAudio: true },
+      createdAt: 100,
+    });
+    expect(withAudio.metadata).toEqual(expect.objectContaining({ hasAudio: undefined }));
+  });
+
   it("drops wrong-type metadata fields during narrowing", () => {
     const artifact = toUiArtifact({
       id: "artifact-shot-1",

@@ -52,11 +52,19 @@ export function useSessionTransport(
   handlers: SessionTransportHandlers
 ): UseSessionTransportReturn {
   const wsRef = useRef<WebSocket | null>(null);
-  const connectingRef = useRef(false);
   const mountedRef = useRef(true);
   const wsTokenRef = useRef<string | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
+  // Monotonic id for connection attempts. reconnect() and unmount bump it so
+  // a connect() that resumes after awaiting its token can tell it has been
+  // superseded and must not open a socket.
+  const connectEpochRef = useRef(0);
+  // Epoch of the connect() currently between entry and socket creation, or
+  // null when none is in flight. Recording the owner (rather than a boolean)
+  // lets a superseded connect release the flag without clobbering a newer
+  // attempt's.
+  const connectingEpochRef = useRef<number | null>(null);
 
   // Latest-handler ref so connect() stays stable across renders.
   const handlersRef = useRef(handlers);
@@ -97,7 +105,7 @@ export function useSessionTransport(
   }, [sessionId]);
 
   const connect = useCallback(async () => {
-    // Use ref to avoid race conditions with React StrictMode
+    // Use refs to avoid race conditions with React StrictMode
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       console.log("WebSocket already open");
       return;
@@ -106,20 +114,31 @@ export function useSessionTransport(
       console.log("WebSocket already connecting");
       return;
     }
-    if (connectingRef.current) {
+    if (connectingEpochRef.current !== null) {
       console.log("Connection in progress (ref)");
       return;
     }
 
-    connectingRef.current = true;
+    const epoch = connectEpochRef.current;
+    connectingEpochRef.current = epoch;
     setConnecting(true);
     setAuthError(null);
 
     // Fetch a WebSocket auth token first
     if (!wsTokenRef.current) {
       const token = await fetchWsToken();
+      if (epoch !== connectEpochRef.current) {
+        // Superseded by reconnect() or unmount while awaiting the token.
+        // Release the in-flight flag only if this attempt still owns it, and
+        // never store or use a token fetched for a stale attempt.
+        if (connectingEpochRef.current === epoch) {
+          connectingEpochRef.current = null;
+          setConnecting(false);
+        }
+        return;
+      }
       if (!token) {
-        connectingRef.current = false;
+        connectingEpochRef.current = null;
         setConnecting(false);
         return;
       }
@@ -133,12 +152,12 @@ export function useSessionTransport(
     wsRef.current = ws;
 
     ws.onopen = () => {
-      if (!mountedRef.current) {
+      if (wsRef.current !== ws || !mountedRef.current) {
         ws.close();
         return;
       }
       console.log("WebSocket connected!");
-      connectingRef.current = false;
+      connectingEpochRef.current = null;
       setConnected(true);
       setConnecting(false);
       reconnectAttempts.current = 0;
@@ -154,6 +173,7 @@ export function useSessionTransport(
     };
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
       try {
         const data = parseWsMessage(JSON.parse(event.data));
         if (!data) return;
@@ -164,12 +184,17 @@ export function useSessionTransport(
     };
 
     ws.onclose = (event) => {
+      // Browsers deliver close events asynchronously: a socket discarded by
+      // reconnect() or cleanup can close after its replacement exists. Only
+      // the current socket may mutate shared connection state.
+      if (wsRef.current !== ws) return;
+
       console.log("WebSocket closed:", {
         code: event.code,
         reason: event.reason,
         wasClean: event.wasClean,
       });
-      connectingRef.current = false;
+      connectingEpochRef.current = null;
       setConnected(false);
       setConnecting(false);
       wsRef.current = null;
@@ -218,6 +243,13 @@ export function useSessionTransport(
     };
   }, [sessionId, fetchWsToken]);
 
+  // Bump the epoch so a connect() awaiting its token bails instead of opening
+  // a socket for an attempt that reconnect() or unmount has abandoned.
+  const invalidateInFlightConnect = useCallback(() => {
+    connectEpochRef.current++;
+    connectingEpochRef.current = null;
+  }, []);
+
   const isOpen = useCallback(() => wsRef.current?.readyState === WebSocket.OPEN, []);
 
   const send = useCallback((payload: Record<string, unknown>) => {
@@ -228,17 +260,24 @@ export function useSessionTransport(
   }, []);
 
   const reconnect = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
+    // A connect() still awaiting its token must not open a second socket
+    // alongside the one this call creates.
+    invalidateInFlightConnect();
+    const discarded = wsRef.current;
+    if (discarded) {
       wsRef.current = null;
+      discarded.close();
+      // The discarded socket's close event is ignored by the identity guard
+      // (and may arrive late), so notify the protocol layer directly.
+      handlersRef.current.onClose?.();
+      setConnected(false);
     }
-    connectingRef.current = false;
     reconnectAttempts.current = 0;
     wsTokenRef.current = null; // Clear token to fetch fresh one
     setAuthError(null);
     setConnectionError(null);
     connect();
-  }, [connect]);
+  }, [connect, invalidateInFlightConnect]);
 
   // Connect on mount
   useEffect(() => {
@@ -247,16 +286,17 @@ export function useSessionTransport(
 
     return () => {
       mountedRef.current = false;
+      invalidateInFlightConnect();
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      if (wsRef.current) {
-        wsRef.current.close();
+      const discarded = wsRef.current;
+      if (discarded) {
         wsRef.current = null;
+        discarded.close();
       }
-      connectingRef.current = false;
     };
-  }, [connect]);
+  }, [connect, invalidateInFlightConnect]);
 
   // Ping periodically to keep connection alive.
   useEffect(() => {

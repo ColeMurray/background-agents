@@ -208,6 +208,16 @@ describe("sessionSocketReducer", () => {
       expect(state.events.map((event) => event.timestamp)).toEqual([5, 10]);
     });
 
+    it("clears a stuck loadingHistory when a new subscribed snapshot arrives", () => {
+      // A fetch_history dropped by a disconnect never gets a history_page;
+      // the reconnect snapshot must unblock loadOlderEvents.
+      const base = reduce(subscribedState(), { type: "history_requested" });
+      expect(base.loadingHistory).toBe(true);
+
+      const state = reduce(base, serverMessage(createSubscribedMessage()));
+      expect(state.loadingHistory).toBe(false);
+    });
+
     it("resets loading when the server rejects a request with an error", () => {
       const base = reduce(subscribedState(), { type: "history_requested" });
       const state = reduce(

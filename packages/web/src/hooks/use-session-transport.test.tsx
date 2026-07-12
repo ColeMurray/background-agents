@@ -228,6 +228,72 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
+  it("ignores a late close event from a socket replaced by reconnect", async () => {
+    const { result, socket } = await openSocket();
+
+    act(() => {
+      result.current.reconnect();
+    });
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+    const replacement = FakeWebSocket.instances[1];
+    act(() => {
+      replacement.open();
+    });
+    await waitFor(() => {
+      expect(result.current.connected).toBe(true);
+    });
+
+    // Browsers deliver close events asynchronously, so the discarded socket's
+    // close can arrive after the replacement is live. It must not corrupt the
+    // replacement's state or schedule a reconnect.
+    act(() => {
+      socket.onclose?.({ code: 1006, reason: "", wasClean: false } as CloseEvent);
+    });
+
+    expect(result.current.connected).toBe(true);
+    expect(result.current.isOpen()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("does not open a duplicate socket when reconnect() interrupts an in-flight token fetch", async () => {
+    const resolvers: Array<(value: Response) => void> = [];
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => resolvers.push(resolve)));
+    const { result } = renderTransport();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      result.current.reconnect();
+    });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    // The stale fetch resolves first: the superseded connect must not open a
+    // socket or store its token.
+    await act(async () => {
+      resolvers[0](Response.json({ token: "stale-token" }));
+    });
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    await act(async () => {
+      resolvers[1](Response.json({ token: "fresh-token" }));
+    });
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      FakeWebSocket.instances[0].open();
+    });
+    expect(FakeWebSocket.instances[0].sentMessages).toEqual([
+      expect.objectContaining({ token: "fresh-token" }),
+    ]);
+  });
+
   it("sends keepalive pings while the socket is open", async () => {
     vi.useFakeTimers();
     renderTransport();

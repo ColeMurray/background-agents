@@ -154,6 +154,9 @@ function reduceServerMessage(
           : [],
         hasMoreHistory: message.replay?.hasMore ?? false,
         cursor: message.replay?.cursor ?? null,
+        // A fetch_history dropped by a disconnect would otherwise leave this
+        // stuck true and block loadOlderEvents after the reconnect.
+        loadingHistory: false,
       };
 
     case "history_page":
