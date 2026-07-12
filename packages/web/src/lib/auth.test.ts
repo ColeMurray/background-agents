@@ -7,6 +7,7 @@ import {
   applySessionUser,
   getStaticSignInReason,
   getVerifiedGitHubEmails,
+  normalizeGitHubUserInfoProfile,
 } from "./auth";
 
 vi.mock("@open-inspect/shared", async (importOriginal) => {
@@ -568,6 +569,44 @@ describe("getStaticSignInReason", () => {
         })
       ).toBeNull();
     });
+  });
+});
+
+describe("normalizeGitHubUserInfoProfile", () => {
+  const verifiedEmails = [
+    { email: "octo@company.com", primary: true, verified: true, visibility: null },
+    { email: "other@company.com", primary: false, verified: true, visibility: "private" },
+  ];
+
+  it("parses a valid GitHub profile and attaches verified emails", () => {
+    expect(
+      normalizeGitHubUserInfoProfile(
+        {
+          id: 12345,
+          login: "octocat",
+          email: "old@example.com",
+          avatar_url: "https://example.com/a.png",
+        },
+        verifiedEmails
+      )
+    ).toEqual({
+      id: 12345,
+      login: "octocat",
+      email: "octo@company.com",
+      avatar_url: "https://example.com/a.png",
+      verifiedEmails,
+    });
+  });
+
+  it("accepts GitHub profiles with a null email", () => {
+    expect(
+      normalizeGitHubUserInfoProfile({ id: 12345, login: "octocat", email: null }, [])
+    ).toEqual({ id: 12345, login: "octocat", email: null, verifiedEmails: [] });
+  });
+
+  it("rejects malformed or partial GitHub profiles", () => {
+    expect(normalizeGitHubUserInfoProfile({ id: 12345 }, verifiedEmails)).toBeNull();
+    expect(normalizeGitHubUserInfoProfile({ id: {}, login: "octocat" }, verifiedEmails)).toBeNull();
   });
 });
 
