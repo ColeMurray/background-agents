@@ -102,6 +102,28 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ws!.close();
   });
 
+  it("failed sandbox can reconnect and self-heal to ready", async () => {
+    const name = `ws-sandbox-selfheal-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    // The WS upgrade gate deliberately admits "failed" sandboxes: a slow boot
+    // that outlived the connecting watchdog recovers here, unlike stopped or
+    // stale which are rejected with 410.
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "failed",
+    });
+
+    const { ws } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await waitForSandboxStatus(stub, "ready");
+    ws!.close();
+  });
+
   it("sandbox WS message is stored as event", async () => {
     const name = `ws-sandbox-event-${Date.now()}`;
     const { stub } = await initNamedSession(name);
