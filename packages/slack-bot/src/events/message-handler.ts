@@ -64,27 +64,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     return;
   }
 
-  let previousMessages: string[] | undefined;
-  if (threadTs) {
-    try {
-      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, 10);
-      if (threadResult.ok && threadResult.messages) {
-        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
-        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
-        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-        previousMessages = filtered
-          .map((m) => {
-            if (m.bot_id) return `[Bot]: ${m.text}`;
-            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
-            return `[${name}]: ${m.text}`;
-          })
-          .slice(-10);
-      }
-    } catch {
-      // Thread context is best effort.
-    }
-  }
-
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
     if (existingSession) {
@@ -128,6 +107,27 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         thread_ts: threadTs,
       });
       await clearThreadSession(env, channel, threadTs);
+    }
+  }
+
+  let previousMessages: string[] | undefined;
+  if (threadTs) {
+    try {
+      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, 10);
+      if (threadResult.ok && threadResult.messages) {
+        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
+        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
+        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
+        previousMessages = filtered
+          .map((m) => {
+            if (m.bot_id) return `[Bot]: ${m.text}`;
+            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+            return `[${name}]: ${m.text}`;
+          })
+          .slice(-10);
+      }
+    } catch {
+      // Thread context is best effort.
     }
   }
 

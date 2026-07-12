@@ -59,8 +59,20 @@ export async function handleSlackEvent(
     );
     return;
   }
-  if (event.type === "app_mention" && event.text && event.channel && event.ts) {
-    await handleAppMention(event as Required<typeof event>, env, traceId, scheduleBackground);
+  if (event.type === "app_mention" && event.text && event.user && event.channel && event.ts) {
+    await handleAppMention(
+      {
+        type: event.type,
+        text: event.text,
+        user: event.user,
+        channel: event.channel,
+        ts: event.ts,
+        thread_ts: event.thread_ts,
+      },
+      env,
+      traceId,
+      scheduleBackground
+    );
     return;
   }
   if (event.type === "message") await handleChannelTrigger(event, env, traceId);

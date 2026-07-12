@@ -53,17 +53,16 @@ export async function startSessionAndSendPrompt(
     // Identity linking is best effort.
   }
 
-  const session = await createSession(
-    env,
+  const session = await createSession(env, {
     target,
     model,
     reasoningEffort,
     branch,
     traceId,
-    userId,
-    displayName,
-    email
-  );
+    slackUserId: userId,
+    actorDisplayName: displayName,
+    actorEmail: email,
+  });
   if (!session) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
@@ -74,12 +73,6 @@ export async function startSessionAndSendPrompt(
     return null;
   }
 
-  await storeThreadSession(
-    env,
-    channel,
-    threadTs,
-    buildThreadSession(session.sessionId, target, model, reasoningEffort)
-  );
   const callbackContext: CallbackContext = {
     source: "slack",
     channel,
@@ -107,5 +100,11 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
+  await storeThreadSession(
+    env,
+    channel,
+    threadTs,
+    buildThreadSession(session.sessionId, target, model, reasoningEffort)
+  );
   return { sessionId: session.sessionId };
 }

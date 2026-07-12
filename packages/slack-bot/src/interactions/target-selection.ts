@@ -50,7 +50,6 @@ export async function handleTargetSelection(
     blocks: buildWorkingMessageBlocks(label),
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   const sessionResult = await startSessionAndSendPrompt(
     env,
     target,

@@ -1,10 +1,19 @@
 import { createKvCacheStore } from "@open-inspect/shared";
+import { z } from "zod";
 import { createLogger } from "../logger";
 import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env, ThreadSession } from "../types";
 
 const log = createLogger("handler");
-const THREAD_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+const THREAD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const threadSessionSchema = z.object({
+  sessionId: z.string().min(1),
+  repoId: z.string().min(1),
+  repoFullName: z.string().min(1),
+  model: z.string().min(1),
+  reasoningEffort: z.string().min(1).optional(),
+  createdAt: z.number().finite().nonnegative(),
+});
 
 function getThreadSessionKey(channel: string, threadTs: string): string {
   return `thread:${channel}:${threadTs}`;
@@ -20,7 +29,8 @@ export async function lookupThreadSession(
       getThreadSessionKey(channel, threadTs),
       "json"
     );
-    return data && typeof data === "object" ? (data as ThreadSession) : null;
+    const result = threadSessionSchema.safeParse(data);
+    return result.success ? result.data : null;
   } catch (e) {
     log.error("kv.get", {
       key_prefix: "thread",
@@ -42,7 +52,7 @@ export async function storeThreadSession(
     await createKvCacheStore(env.SLACK_KV).put(
       getThreadSessionKey(channel, threadTs),
       JSON.stringify(session),
-      { expirationTtl: THREAD_SESSION_TTL_SECONDS }
+      { expirationTtl: THREAD_SESSION_TTL_MS / 1000 }
     );
   } catch (e) {
     log.error("kv.put", {

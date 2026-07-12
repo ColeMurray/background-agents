@@ -1,15 +1,18 @@
 import { createKvCacheStore } from "@open-inspect/shared";
+import { z } from "zod";
 import type { Env } from "../types";
 
 const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
 
-export interface PendingRequest {
-  message: string;
-  userId: string;
-  previousMessages?: string[];
-  channelName?: string;
-  channelDescription?: string;
-}
+const pendingRequestSchema = z.object({
+  message: z.string().min(1),
+  userId: z.string().min(1),
+  previousMessages: z.array(z.string()).optional(),
+  channelName: z.string().optional(),
+  channelDescription: z.string().optional(),
+});
+
+export type PendingRequest = z.infer<typeof pendingRequestSchema>;
 
 function pendingRequestKey(channel: string, threadTs: string): string {
   return `pending:${channel}:${threadTs}`;
@@ -37,7 +40,8 @@ export async function getPendingRequest(
     pendingRequestKey(channel, threadTs),
     "json"
   );
-  return data && typeof data === "object" ? (data as PendingRequest) : null;
+  const result = pendingRequestSchema.safeParse(data);
+  return result.success ? result.data : null;
 }
 
 export async function deletePendingRequest(

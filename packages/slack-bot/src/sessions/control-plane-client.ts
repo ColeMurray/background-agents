@@ -10,18 +10,33 @@ import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } fr
 import type { CallbackContext, Env } from "../types";
 
 const log = createLogger("handler");
+export const CONTROL_PLANE_REQUEST_TIMEOUT_MS = 10_000;
+
+interface CreateSessionOptions {
+  target: SlackSessionTarget;
+  model: string;
+  reasoningEffort?: string;
+  branch?: string;
+  traceId?: string;
+  slackUserId?: string;
+  actorDisplayName?: string;
+  actorEmail?: string;
+}
 
 export async function createSession(
   env: Env,
-  target: SlackSessionTarget,
-  model: string,
-  reasoningEffort: string | undefined,
-  branch: string | undefined,
-  traceId?: string,
-  slackUserId?: string,
-  actorDisplayName?: string,
-  actorEmail?: string
+  options: CreateSessionOptions
 ): Promise<CreateSessionResponse | null> {
+  const {
+    target,
+    model,
+    reasoningEffort,
+    branch,
+    traceId,
+    slackUserId,
+    actorDisplayName,
+    actorEmail,
+  } = options;
   const startTime = Date.now();
   const base = {
     trace_id: traceId,
@@ -45,6 +60,7 @@ export async function createSession(
         actorDisplayName,
         actorEmail,
       }),
+      signal: AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       log.error("control_plane.create_session", {
@@ -102,6 +118,7 @@ export async function sendPrompt(
         method: "POST",
         headers,
         body: JSON.stringify({ content, authorId, source: "slack", callbackContext }),
+        signal: AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS),
       }
     );
     if (!response.ok) {

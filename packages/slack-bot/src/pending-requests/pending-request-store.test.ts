@@ -57,4 +57,33 @@ describe("pending request store", () => {
     await expect(getPendingRequest(mocks.env, "C123", "111.222")).resolves.toBeNull();
     await expect(getPendingRequest(mocks.env, "C123", "111.222")).resolves.toBeNull();
   });
+
+  it.each([
+    {},
+    [],
+    { message: "Fix it" },
+    { userId: "U123" },
+    { message: 123, userId: "U123" },
+    { message: "Fix it", userId: "" },
+    { message: "Fix it", userId: "U123", previousMessages: ["valid", 123] },
+    { message: "Fix it", userId: "U123", channelName: 123 },
+  ])("rejects malformed records: %j", async (record) => {
+    mocks.get.mockResolvedValue(record);
+
+    await expect(getPendingRequest(mocks.env, "C123", "111.222")).resolves.toBeNull();
+  });
+
+  it("accepts valid minimal and complete records", async () => {
+    const minimal = { message: "Fix it", userId: "U123" };
+    const complete = {
+      ...minimal,
+      previousMessages: ["Earlier context"],
+      channelName: "engineering",
+      channelDescription: "Build discussion",
+    };
+    mocks.get.mockResolvedValueOnce(minimal).mockResolvedValueOnce(complete);
+
+    await expect(getPendingRequest(mocks.env, "C123", "111.222")).resolves.toEqual(minimal);
+    await expect(getPendingRequest(mocks.env, "C123", "111.222")).resolves.toEqual(complete);
+  });
 });
