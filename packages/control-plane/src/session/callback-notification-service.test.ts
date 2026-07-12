@@ -276,6 +276,23 @@ describe("CallbackNotificationService", () => {
       expect(harness.sleep).toHaveBeenCalledWith(1000);
     });
 
+    it("retries when failure logging throws", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "linear", issueId: "issue-1" }),
+        source: "linear",
+      });
+      harness.linearBot.fetch
+        .mockResolvedValueOnce(new Response("retry", { status: 503 }))
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+      vi.mocked(harness.log.warn).mockImplementationOnce(() => {
+        throw new Error("log sink unavailable");
+      });
+
+      await harness.service.notifyStarted("msg-1");
+
+      expect(harness.linearBot.fetch).toHaveBeenCalledTimes(2);
+    });
+
     it("contains start callback failure after the bounded retry", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({

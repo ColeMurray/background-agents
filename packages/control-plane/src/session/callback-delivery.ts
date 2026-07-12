@@ -19,7 +19,11 @@ export async function deliverWithRetry(
     } catch (error) {
       failure = { attempt, error };
     }
-    await onFailure(failure);
+    try {
+      await onFailure(failure);
+    } catch {
+      // Observability must not alter the delivery retry policy.
+    }
 
     if (attempt < CALLBACK_ATTEMPTS) await sleep(CALLBACK_RETRY_DELAY_MS);
   }
