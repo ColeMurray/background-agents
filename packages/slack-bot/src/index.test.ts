@@ -158,7 +158,11 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
 
 function makeSessionEnv(
   order: string[] = [],
-  responses: { session?: unknown; prompt?: unknown | unknown[] } = {}
+  responses: {
+    session?: unknown;
+    prompt?: unknown | unknown[];
+    promptStatus?: number | number[];
+  } = {}
 ): Env {
   const env = makeEnv();
   let promptResponseIndex = 0;
@@ -203,8 +207,11 @@ function makeSessionEnv(
         const promptResponse = Array.isArray(responses.prompt)
           ? responses.prompt[promptResponseIndex++]
           : responses.prompt;
+        const promptStatus = Array.isArray(responses.promptStatus)
+          ? responses.promptStatus[promptResponseIndex - 1]
+          : responses.promptStatus;
         return new Response(JSON.stringify(promptResponse ?? { messageId: "msg-1" }), {
-          status: 200,
+          status: promptStatus ?? 200,
           headers: { "Content-Type": "application/json" },
         });
       }
@@ -764,12 +771,63 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("preserves an existing session mapping after a transient prompt failure", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order, { prompt: {} });
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+      delete: ReturnType<typeof vi.fn>;
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+    const mapping = {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
+      createdAt: Date.now(),
+    };
+    await kv.put("thread:C123:111.222", JSON.stringify(mapping));
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(order).not.toContain("session");
+    expect(kv.delete).not.toHaveBeenCalledWith("thread:C123:111.222");
+    await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(mapping);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({ text: "Sorry, I couldn't send your follow-up. Please try again." })
+    );
+    expect(
+      slackFetch.mock.calls.some(([input]) => String(input).includes("conversations.replies"))
+    ).toBe(false);
+
+    slackFetch.mockRestore();
+  });
+
   it("fetches thread history after an existing session proves stale", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {
       threadMessages: [{ type: "message", text: "Earlier request", user: "U456", ts: "111.222" }],
     });
-    const env = makeSessionEnv(order, { prompt: [{}, { messageId: "msg-2" }] });
+    const env = makeSessionEnv(order, {
+      prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
+      promptStatus: [404, 200],
+    });
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
       "thread:C123:111.222",
       JSON.stringify({

@@ -23,6 +23,10 @@ interface CreateSessionOptions {
   actorEmail?: string;
 }
 
+export type SendPromptResult =
+  | { ok: true; data: SendPromptResponse }
+  | { ok: false; reason: "stale" | "transient" };
+
 export async function createSession(
   env: Env,
   options: CreateSessionOptions
@@ -107,7 +111,7 @@ export async function sendPrompt(
   authorId: string,
   callbackContext?: CallbackContext,
   traceId?: string
-): Promise<SendPromptResponse | null> {
+): Promise<SendPromptResult> {
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
@@ -128,7 +132,7 @@ export async function sendPrompt(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return null;
+      return { ok: false, reason: response.status === 404 ? "stale" : "transient" };
     }
     const result = sendPromptResponseSchema.safeParse(await response.json());
     if (!result.success) {
@@ -138,7 +142,7 @@ export async function sendPrompt(
         error: new Error("Invalid control plane send prompt response"),
         duration_ms: Date.now() - startTime,
       });
-      return null;
+      return { ok: false, reason: "transient" };
     }
     log.info("control_plane.send_prompt", {
       ...base,
@@ -147,7 +151,7 @@ export async function sendPrompt(
       http_status: 200,
       duration_ms: Date.now() - startTime,
     });
-    return result.data;
+    return { ok: true, data: result.data };
   } catch (e) {
     log.error("control_plane.send_prompt", {
       ...base,
@@ -155,6 +159,6 @@ export async function sendPrompt(
       error: e instanceof Error ? e : new Error(String(e)),
       duration_ms: Date.now() - startTime,
     });
-    return null;
+    return { ok: false, reason: "transient" };
   }
 }

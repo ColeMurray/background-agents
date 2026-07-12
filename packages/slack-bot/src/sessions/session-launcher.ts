@@ -91,7 +91,7 @@ export async function startSessionAndSendPrompt(
     callbackContext,
     traceId
   );
-  if (!promptResult) {
+  if (!promptResult.ok) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,

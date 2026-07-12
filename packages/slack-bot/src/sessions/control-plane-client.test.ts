@@ -67,8 +67,20 @@ describe("control plane client timeouts", () => {
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     controller.abort(new DOMException("Timed out", "TimeoutError"));
 
-    await expect(result).resolves.toBeNull();
+    await expect(result).resolves.toEqual({ ok: false, reason: "transient" });
     expect(timeoutSpy).toHaveBeenCalledWith(CONTROL_PLANE_REQUEST_TIMEOUT_MS);
     expect(fetch.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+
+  it("classifies only not-found prompt responses as stale", async () => {
+    const notFoundFetch = vi.fn(async () => new Response(null, { status: 404 }));
+    const serverErrorFetch = vi.fn(async () => new Response(null, { status: 503 }));
+
+    await expect(
+      sendPrompt(makeEnv(notFoundFetch), "missing-session", "Fix it", "slack:U123")
+    ).resolves.toEqual({ ok: false, reason: "stale" });
+    await expect(
+      sendPrompt(makeEnv(serverErrorFetch), "session-1", "Fix it", "slack:U123")
+    ).resolves.toEqual({ ok: false, reason: "transient" });
   });
 });

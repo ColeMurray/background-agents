@@ -6,7 +6,7 @@ import type { Env, ThreadSession } from "../types";
 
 const log = createLogger("handler");
 const THREAD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const threadSessionSchema = z.object({
+const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
   sessionId: z.string().min(1),
   repoId: z.string().min(1),
   repoFullName: z.string().min(1),

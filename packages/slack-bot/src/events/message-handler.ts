@@ -87,7 +87,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         callbackContext,
         traceId
       );
-      if (promptResult) {
+      if (promptResult.ok) {
         const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
         if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
           log.warn("slack.reaction.add", {
@@ -98,6 +98,15 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
             slack_error: reactionResult.error,
           });
         }
+        return;
+      }
+      if (promptResult.reason === "transient") {
+        await postMessage(
+          env.SLACK_BOT_TOKEN,
+          channel,
+          "Sorry, I couldn't send your follow-up. Please try again.",
+          { thread_ts: threadTs }
+        );
         return;
       }
       log.warn("thread_session.stale", {
