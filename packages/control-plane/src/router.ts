@@ -251,16 +251,13 @@ async function verifySandboxAuth(
  *
  * @param request - The incoming request
  * @param env - Environment bindings
- * @param path - Request path for logging
  * @param ctx - Request correlation context
  * @returns null if authentication passes, or an error Response to return immediately
  */
 async function requireInternalAuth(
   request: Request,
   env: Env,
-  path: string,
-  ctx: RequestContext,
-  logFailure = true
+  ctx: RequestContext
 ): Promise<Response | null> {
   if (!env.INTERNAL_CALLBACK_SECRET) {
     logger.error("INTERNAL_CALLBACK_SECRET not configured - rejecting request", {
@@ -277,16 +274,6 @@ async function requireInternalAuth(
   );
 
   if (!isValid) {
-    const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    if (logFailure) {
-      logger.warn("Auth failed: HMAC", {
-        event: "auth.hmac_failed",
-        http_path: path,
-        client_ip: clientIP,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-    }
     return error("Unauthorized", 401);
   }
 
@@ -391,7 +378,8 @@ export async function handleRequest(
   if (!isPublicRoute(path)) {
     const acceptsSandboxAuth = isSandboxAuthRoute(path);
     // First try HMAC auth (for web app, slack bot, etc.)
-    const hmacAuthError = await requireInternalAuth(request, env, path, ctx, !acceptsSandboxAuth);
+    const hmacAuthError = await requireInternalAuth(request, env, ctx);
+    let authError = hmacAuthError;
 
     if (hmacAuthError) {
       // HMAC auth failed - check if this route accepts sandbox auth
@@ -402,24 +390,26 @@ export async function handleRequest(
           const sessionId = sessionIdMatch[1];
           const sandboxAuthError = await verifySandboxAuth(request, env, sessionId, ctx);
           if (!sandboxAuthError) {
-            // Sandbox auth passed, continue to route handler
+            authError = null;
           } else {
-            // Both HMAC and sandbox auth failed
-            const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-            logger.warn("Auth failed: HMAC", {
-              event: "auth.hmac_failed",
-              http_path: path,
-              client_ip: clientIP,
-              request_id: ctx.request_id,
-              trace_id: ctx.trace_id,
-            });
-            return withCorsAndTraceHeaders(sandboxAuthError, ctx);
+            authError = sandboxAuthError;
           }
         }
-      } else {
-        // Not a sandbox auth route, return HMAC auth error
-        return withCorsAndTraceHeaders(hmacAuthError, ctx);
       }
+    }
+
+    if (authError) {
+      if (hmacAuthError?.status === 401) {
+        const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
+        logger.warn("Auth failed: HMAC", {
+          event: "auth.hmac_failed",
+          http_path: path,
+          client_ip: clientIP,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+      }
+      return withCorsAndTraceHeaders(authError, ctx);
     }
   }
 
