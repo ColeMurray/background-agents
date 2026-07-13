@@ -5,6 +5,7 @@ import { createLogger } from "../logger";
 import type { Env } from "../types";
 
 const log = createLogger("handler");
+const EVENT_DEDUPE_TTL_MS = 60 * 60 * 1000;
 export const eventRoutes = new Hono<{ Bindings: Env }>();
 
 eventRoutes.post("/events", async (c) => {
@@ -43,7 +44,7 @@ eventRoutes.post("/events", async (c) => {
       log.debug("slack.event.duplicate", { trace_id: traceId, event_id: eventId });
       return c.json({ ok: true });
     }
-    await cacheStore.put(dedupeKey, "1", { expirationTtl: 3600 });
+    await cacheStore.put(dedupeKey, "1", { expirationTtl: EVENT_DEDUPE_TTL_MS / 1000 });
   }
   const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
   const eventTask = Promise.resolve().then(() =>

@@ -64,27 +64,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     return;
   }
 
-  let previousMessages: string[] | undefined;
-  if (threadTs) {
-    try {
-      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, 10);
-      if (threadResult.ok && threadResult.messages) {
-        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
-        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
-        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-        previousMessages = filtered
-          .map((m) => {
-            if (m.bot_id) return `[Bot]: ${m.text}`;
-            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
-            return `[${name}]: ${m.text}`;
-          })
-          .slice(-10);
-      }
-    } catch {
-      // Thread context is best effort.
-    }
-  }
-
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
     if (existingSession) {
@@ -108,7 +87,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         callbackContext,
         traceId
       );
-      if (promptResult) {
+      if (promptResult.ok) {
         const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
         if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
           log.warn("slack.reaction.add", {
@@ -121,6 +100,15 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         }
         return;
       }
+      if (promptResult.reason === "transient") {
+        await postMessage(
+          env.SLACK_BOT_TOKEN,
+          channel,
+          "Sorry, I couldn't send your follow-up. Please try again.",
+          { thread_ts: threadTs }
+        );
+        return;
+      }
       log.warn("thread_session.stale", {
         trace_id: traceId,
         session_id: existingSession.sessionId,
@@ -128,6 +116,27 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         thread_ts: threadTs,
       });
       await clearThreadSession(env, channel, threadTs);
+    }
+  }
+
+  let previousMessages: string[] | undefined;
+  if (threadTs) {
+    try {
+      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, 10);
+      if (threadResult.ok && threadResult.messages) {
+        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
+        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
+        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
+        previousMessages = filtered
+          .map((m) => {
+            if (m.bot_id) return `[Bot]: ${m.text}`;
+            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+            return `[${name}]: ${m.text}`;
+          })
+          .slice(-10);
+      }
+    } catch {
+      // Thread context is best effort.
     }
   }
 
