@@ -523,7 +523,7 @@ def _git_ls_remote_sha(
 
 
 def _parse_runtime_version_number(runtime_version: str) -> int | None:
-    """Numeric prefix of a SANDBOX_VERSION ("v53-list-native" → 53), or None."""
+    """Numeric prefix of a SANDBOX_VERSION ("v54-opencode" → 54), or None."""
     match = re.match(r"^v(\d+)", runtime_version)
     return int(match.group(1)) if match else None
 

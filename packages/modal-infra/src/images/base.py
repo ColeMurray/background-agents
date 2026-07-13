@@ -22,18 +22,9 @@ SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
 # OpenCode version to install.
 #
-# Pinned to 1.14.41 — the last release before opencode's Hono → Effect Schema
-# migration (landed across v1.14.42+, released 2026-05-09 onward) broke event
-# publishing on the legacy `/event` SSE endpoint. With newer versions the
-# bridge connects, posts the prompt, opencode processes it and records the
-# assistant response in the session store, but no `message.updated` /
-# `message.part.updated` / `session.idle` events are streamed back — so the
-# session shows execution_complete with no reply.
-#
-# Symptom in bridge logs: `prompt.run outcome=success duration_ms=35-367`,
-# which means `_stream_opencode_response_sse` returned with zero yielded
-# events. Tracked in #567.
-OPENCODE_VERSION = "1.14.41"
+# OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
+# eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
+OPENCODE_VERSION = "1.17.18"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -46,8 +37,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v52: bake opencode global deps
-CACHE_BUSTER = "v53-list-native-runtime"
+# v54: upgrade OpenCode after upstream SSE fixes
+CACHE_BUSTER = "v54-opencode-1-17-18"
 
 # Base image with all development tools
 base_image = (

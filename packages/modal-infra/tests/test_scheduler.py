@@ -115,7 +115,7 @@ def _image(**overrides):
                 {"repoOwner": "acme", "repoName": "api", "baseSha": "sha-api"},
             ]
         ),
-        "runtime_version": "v53-list-native-runtime",
+        "runtime_version": "v54-opencode-1-17-18",
     }
     image.update(overrides)
     return image
@@ -425,7 +425,7 @@ REPOSITORY_SHAS = [
     {"repoOwner": "acme", "repoName": "web", "baseSha": "sha-web"},
     {"repoOwner": "acme", "repoName": "api", "baseSha": "sha-api"},
 ]
-RUNTIME_VERSION = "v53-list-native-runtime"
+RUNTIME_VERSION = "v54-opencode-1-17-18"
 
 
 class TestBuildImageCallbackPayloads:

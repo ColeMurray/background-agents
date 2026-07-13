@@ -450,7 +450,7 @@ def _make_opencode_deps_staging(tmp_path: Path) -> Path:
     """Build a fake /app/opencode-deps staging tree (plugin-only, in sync)."""
     deps_cache = tmp_path / "opencode-deps"
     deps_cache.mkdir()
-    (deps_cache / "package.json").write_text('{"dependencies": {"@opencode-ai/plugin": "1.14.41"}}')
+    (deps_cache / "package.json").write_text('{"dependencies": {"@opencode-ai/plugin": "1.17.18"}}')
     (deps_cache / "package-lock.json").write_text('{"lockfileVersion": 3}')
     plugin = deps_cache / "node_modules" / "@opencode-ai" / "plugin"
     plugin.mkdir(parents=True)

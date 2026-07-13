@@ -51,7 +51,7 @@ describe("computeRepositoriesFingerprint", () => {
 
 describe("parseRuntimeVersionNumber", () => {
   it("parses the numeric prefix of a SANDBOX_VERSION", () => {
-    expect(parseRuntimeVersionNumber("v53-list-native-runtime")).toBe(53);
+    expect(parseRuntimeVersionNumber("v54-opencode-1-17-18")).toBe(54);
     expect(parseRuntimeVersionNumber("v7")).toBe(7);
   });
 

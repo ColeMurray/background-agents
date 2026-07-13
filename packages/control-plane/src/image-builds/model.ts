@@ -80,8 +80,8 @@ export interface ImageBuildCallbackBuild {
 export const MIN_COMPATIBLE_RUNTIME_VERSION = 53;
 
 /**
- * Parse the numeric prefix of a SANDBOX_VERSION ("v53-list-native-runtime"
- * → 53). Returns null when unparseable — callers fail closed: registration
+ * Parse the numeric prefix of a SANDBOX_VERSION ("v54-opencode-1-17-18"
+ * → 54). Returns null when unparseable — callers fail closed: registration
  * rejects the callback, and spawn selection treats the image as below the
  * floor.
  */
