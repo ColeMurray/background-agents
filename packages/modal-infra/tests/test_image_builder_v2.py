@@ -345,7 +345,7 @@ class TestBuildError:
 
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
 REPOSITORY_SHAS = [{"repoOwner": "acme", "repoName": "repo", "baseSha": "abc123"}]
-RUNTIME_VERSION = "v53-list-native-runtime"
+RUNTIME_VERSION = "v54-opencode-1-17-18"
 
 
 class TestBuildImage:
