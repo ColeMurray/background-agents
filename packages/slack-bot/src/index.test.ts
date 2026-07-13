@@ -353,6 +353,33 @@ describe("POST /events", () => {
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
   });
 
+  it("rejects malformed Slack event payloads", async () => {
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      new Request("http://localhost/events", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-slack-signature": "v0=test",
+          "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+        },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: 123,
+          event: { text: "missing event type" },
+        }),
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid Slack event payload" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
   it("publishes App Home when the home tab is opened", async () => {
     mockPublishView.mockResolvedValue({ ok: true });
     const env = makeEnv();

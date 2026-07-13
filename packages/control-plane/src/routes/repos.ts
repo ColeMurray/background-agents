@@ -4,7 +4,7 @@
 
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore, repoMetadataSchema } from "@open-inspect/shared";
 import type {
   EnrichedRepository,
   InstallationRepository,
@@ -231,21 +231,18 @@ async function handleUpdateRepoMetadata(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  const body = (await request.json()) as RepoMetadata;
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
 
-  // Validate and clean the metadata structure (remove undefined fields)
-  const metadata = Object.fromEntries(
-    Object.entries({
-      description: body.description,
-      aliases: Array.isArray(body.aliases) ? body.aliases : undefined,
-      channelAssociations: Array.isArray(body.channelAssociations)
-        ? body.channelAssociations
-        : undefined,
-      keywords: Array.isArray(body.keywords) ? body.keywords : undefined,
-      defaultEnvironmentId:
-        typeof body.defaultEnvironmentId === "string" ? body.defaultEnvironmentId : undefined,
-    }).filter(([, v]) => v !== undefined)
-  ) as RepoMetadata;
+  const parsedMetadata = repoMetadataSchema.safeParse(rawBody);
+  if (!parsedMetadata.success) {
+    return error("Invalid repository metadata", 400);
+  }
+  const metadata: RepoMetadata = parsedMetadata.data;
 
   const metadataStore = new RepoMetadataStore(env.DB);
 

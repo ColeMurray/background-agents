@@ -7,6 +7,7 @@ import {
   createSessionRequestSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
+  repoMetadataSchema,
   RepositoryPairValidationError,
   sandboxEventSchema,
   serverMessageSchema,
@@ -483,6 +484,41 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe("repoMetadataSchema", () => {
+    it("parses valid repository metadata", () => {
+      const result = repoMetadataSchema.safeParse({
+        description: "Primary application repo",
+        aliases: ["app", "frontend"],
+        channelAssociations: ["C123"],
+        keywords: ["ui"],
+        defaultEnvironmentId: "env-123",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects malformed partial repository metadata", () => {
+      const result = repoMetadataSchema.safeParse({
+        description: "Primary application repo",
+        aliases: ["app", 123],
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("strips unknown fields at the request boundary", () => {
+      const result = repoMetadataSchema.safeParse({
+        description: "Primary application repo",
+        unexpected: "ignored",
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toEqual({ description: "Primary application repo" });
+      }
     });
   });
 });
