@@ -78,7 +78,8 @@ describe("thread session store", () => {
           },
         },
         "openai/gpt-5.4",
-        "high"
+        "high",
+        "111.222"
       )
     ).toEqual({
       sessionId: "session-1",
@@ -87,6 +88,7 @@ describe("thread session store", () => {
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
       createdAt: 456,
+      lastPromptTs: "111.222",
     });
   });
 
@@ -116,6 +118,14 @@ describe("thread session store", () => {
       reasoningEffort: 123,
       createdAt: 123,
     },
+    {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "openai/gpt-5.4",
+      createdAt: 123,
+      lastPromptTs: 333.444,
+    },
   ])("rejects malformed records: %j", async (record) => {
     mocks.get.mockResolvedValue(record);
 
@@ -135,6 +145,23 @@ describe("thread session store", () => {
 
     await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(base);
     await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(withReasoning);
+  });
+
+  it("accepts persisted records with and without a last prompt ts", async () => {
+    const base: ThreadSession = {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "openai/gpt-5.4",
+      createdAt: 123,
+    };
+    const withLastPrompt = { ...base, lastPromptTs: "333.444" };
+    mocks.get.mockResolvedValueOnce(base).mockResolvedValueOnce(withLastPrompt);
+
+    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(base);
+    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(
+      withLastPrompt
+    );
   });
 
   it("handles KV write and delete failures", async () => {

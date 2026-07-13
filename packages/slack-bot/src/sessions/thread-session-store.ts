@@ -13,6 +13,7 @@ const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
   model: z.string().min(1),
   reasoningEffort: z.string().min(1).optional(),
   createdAt: z.number().finite().nonnegative(),
+  lastPromptTs: z.string().min(1).optional(),
 });
 
 function getThreadSessionKey(channel: string, threadTs: string): string {
@@ -85,7 +86,8 @@ export function buildThreadSession(
   sessionId: string,
   target: SlackSessionTarget,
   model: string,
-  reasoningEffort?: string
+  reasoningEffort?: string,
+  lastPromptTs?: string
 ): ThreadSession {
   return {
     sessionId,
@@ -94,5 +96,6 @@ export function buildThreadSession(
     model,
     reasoningEffort,
     createdAt: Date.now(),
+    lastPromptTs,
   };
 }

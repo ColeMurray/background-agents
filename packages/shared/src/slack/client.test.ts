@@ -350,6 +350,19 @@ describe("getThreadMessages", () => {
     expect(url).toBe("https://slack.com/api/conversations.replies?channel=C123&ts=1.0&limit=5");
   });
 
+  it("passes oldest to fetch only newer replies", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true, messages: [] }));
+
+    await getThreadMessages("xoxb-token", "C123", "1.0", 5, "1.5");
+
+    const [url] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe(
+      "https://slack.com/api/conversations.replies?channel=C123&ts=1.0&limit=5&oldest=1.5"
+    );
+  });
+
   it("defaults limit to 10 when not provided", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

@@ -294,12 +294,14 @@ export function getThreadMessages(
   token: string,
   channelId: string,
   threadTs: string,
-  limit = 10
+  limit = 10,
+  oldest?: string
 ): Promise<SlackEnvelope<{ messages: SlackThreadMessage[] }>> {
   return slackGet(token, "conversations.replies", {
     channel: channelId,
     ts: threadTs,
     limit: String(limit),
+    ...(oldest ? { oldest } : {}),
   });
 }
 

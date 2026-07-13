@@ -17,16 +17,69 @@ import {
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
-import { formatChannelContext } from "../messages/context";
+import { formatChannelContext, formatInterimThreadContext } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { sendPrompt } from "../sessions/control-plane-client";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
-import { clearThreadSession, lookupThreadSession } from "../sessions/thread-session-store";
+import {
+  clearThreadSession,
+  lookupThreadSession,
+  storeThreadSession,
+} from "../sessions/thread-session-store";
 import { buildTargetClarificationBlocks } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
 
 const log = createLogger("handler");
+const THREAD_HISTORY_MESSAGE_LIMIT = 10;
+
+interface ThreadHistoryOptions {
+  /** ts of the message currently being handled, excluded from the history. */
+  excludeTs: string;
+  /** Only include messages posted strictly after this Slack ts. */
+  sinceTs?: string;
+  includeBotMessages: boolean;
+}
+
+async function fetchThreadHistory(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  options: ThreadHistoryOptions
+): Promise<string[] | undefined> {
+  const { excludeTs, sinceTs, includeBotMessages } = options;
+  try {
+    const threadResult = await getThreadMessages(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      threadTs,
+      THREAD_HISTORY_MESSAGE_LIMIT,
+      sinceTs
+    );
+    if (!threadResult.ok || !threadResult.messages) return undefined;
+    const filtered = threadResult.messages.filter((m) => {
+      if (m.ts === excludeTs) return false;
+      if (!includeBotMessages && m.bot_id) return false;
+      // conversations.replies can still return the parent message when
+      // `oldest` is set, so re-check the boundary here.
+      if (sinceTs && parseFloat(m.ts) <= parseFloat(sinceTs)) return false;
+      return true;
+    });
+    if (filtered.length === 0) return undefined;
+    const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
+    const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
+    return filtered
+      .map((m) => {
+        if (m.bot_id) return `[Bot]: ${m.text}`;
+        const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+        return `[${name}]: ${m.text}`;
+      })
+      .slice(-THREAD_HISTORY_MESSAGE_LIMIT);
+  } catch {
+    // Thread context is best effort.
+    return undefined;
+  }
+}
 
 interface IncomingMessageParams {
   text: string;
@@ -79,15 +132,29 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       const channelContext = channelName
         ? formatChannelContext(channelName, channelDescription)
         : "";
+      // The session already has its own turns, so only forward the human
+      // discussion that happened in the thread since the last prompt.
+      const interimMessages = existingSession.lastPromptTs
+        ? await fetchThreadHistory(env, channel, threadTs, {
+            excludeTs: ts,
+            sinceTs: existingSession.lastPromptTs,
+            includeBotMessages: false,
+          })
+        : undefined;
+      const interimContext = interimMessages ? formatInterimThreadContext(interimMessages) : "";
       const promptResult = await sendPrompt(
         env,
         existingSession.sessionId,
-        channelContext + messageText,
+        channelContext + interimContext + messageText,
         `slack:${user}`,
         callbackContext,
         traceId
       );
       if (promptResult.ok) {
+        await storeThreadSession(env, channel, threadTs, {
+          ...existingSession,
+          lastPromptTs: ts,
+        });
         const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
         if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
           log.warn("slack.reaction.add", {
@@ -119,26 +186,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     }
   }
 
-  let previousMessages: string[] | undefined;
-  if (threadTs) {
-    try {
-      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, 10);
-      if (threadResult.ok && threadResult.messages) {
-        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
-        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
-        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-        previousMessages = filtered
-          .map((m) => {
-            if (m.bot_id) return `[Bot]: ${m.text}`;
-            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
-            return `[${name}]: ${m.text}`;
-          })
-          .slice(-10);
-      }
-    } catch {
-      // Thread context is best effort.
-    }
-  }
+  const previousMessages = threadTs
+    ? await fetchThreadHistory(env, channel, threadTs, { excludeTs: ts, includeBotMessages: true })
+    : undefined;
 
   const result = await createClassifier(env).classify(
     messageText,
@@ -183,18 +233,18 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  const sessionResult = await startSessionAndSendPrompt(
-    env,
-    result.target,
+  const sessionResult = await startSessionAndSendPrompt(env, {
+    target: result.target,
     channel,
-    threadKey,
+    threadTs: threadKey,
     messageText,
-    user,
+    userId: user,
+    messageTs: ts,
     previousMessages,
     channelName,
     channelDescription,
-    traceId
-  );
+    traceId,
+  });
   if (!sessionResult) return;
   if (ackTs) {
     await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${label}*...`, {
