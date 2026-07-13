@@ -132,7 +132,6 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
 
   return createE2BProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    gitlabAccessToken: env.GITLAB_ACCESS_TOKEN,
     codeServerPasswordSecret: env.E2B_API_KEY,
     sandboxTimeoutSeconds: parseNumericEnv(
       "E2B_SANDBOX_TIMEOUT_SECONDS",

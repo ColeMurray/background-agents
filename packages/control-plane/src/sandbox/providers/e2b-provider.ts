@@ -38,7 +38,6 @@ const E2B_MAX_TTL_SECONDS = 3600;
 
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;
-  gitlabAccessToken?: string;
   codeServerPasswordSecret: string;
   sandboxTimeoutSeconds: number;
   runtimeCapSeconds: number;
@@ -280,12 +279,16 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   private buildMetadata(config: CreateSandboxConfig): Record<string, string> {
-    return {
+    const metadata: Record<string, string> = {
       openinspect_framework: "open-inspect",
       openinspect_session_id: config.sessionId,
-      openinspect_repo: `${config.repoOwner ?? ""}/${config.repoName ?? ""}`,
       openinspect_expected_sandbox_id: config.sandboxId,
     };
+    // Repo-less (environment/multi-repo) sessions have no single repo to label.
+    if (config.repoOwner && config.repoName) {
+      metadata.openinspect_repo = `${config.repoOwner}/${config.repoName}`;
+    }
+    return metadata;
   }
 
   private buildTunnelUrls(

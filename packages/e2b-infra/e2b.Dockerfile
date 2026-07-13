@@ -54,12 +54,19 @@ RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
   # /tmp/opencode, so make them world-writable (sticky).
   && chmod 1777 /workspace /tmp/opencode
 
+# Put /app on Python's import path via a .pth file so `python3 -m sandbox_runtime`
+# resolves without a PYTHONPATH env var. build-template.py stages sandbox_runtime
+# into /app; git invokes the credential helper below as a subprocess that does not
+# reliably inherit the supervisor's PYTHONPATH, so relying on the env var alone is
+# fragile. This is the E2B equivalent of the pip-installed runtime on Vercel.
+RUN printf '/app\n' > "$(python -c 'import site; print(site.getsitepackages()[0])')/oi-app-path.pth"
+
 # Bake the git credential-helper shim system-wide, matching the Vercel/Daytona
 # base images and the runtime's _ensure_credential_helper_configured fallback.
 # E2B runs as a non-root user that cannot write /usr/local/bin at runtime, so
 # the shim must exist at build time — otherwise private-repo clone/fetch/push
-# get no brokered credentials. The shim execs the runtime's Python helper, found
-# on PYTHONPATH=/app where build-template.py stages sandbox_runtime.
+# get no brokered credentials. The shim execs the runtime's Python helper, which
+# resolves via the /app .pth above regardless of the caller's environment.
 RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"' \
      > /usr/local/bin/oi-git-credentials \
   && chmod 0755 /usr/local/bin/oi-git-credentials \
