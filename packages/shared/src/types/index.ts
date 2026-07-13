@@ -51,12 +51,17 @@ export type {
   ClassificationResult,
 } from "./repository-catalog";
 
+export { toDisplayStatus } from "./artifacts";
 export type {
   SessionArtifact,
   ManualPullRequestArtifactMetadata,
   ScreenshotArtifactMetadata,
   VideoArtifactMetadata,
   PullRequest,
+  PullRequestLifecycleState,
+  PullRequestStatus,
+  PullRequestDisplayStatus,
+  PullRequestArtifactMetadata,
   ArtifactResponse,
   ListArtifactsResponse,
   ToolCallSummary,
@@ -73,6 +78,7 @@ export type {
   SessionMessage,
   SessionState,
   ParticipantPresence,
+  PullRequestSummary,
 } from "./sessions";
 
 export { serverMessageSchema } from "./server-messages";
@@ -80,6 +86,8 @@ export type { ServerMessage } from "./server-messages";
 
 export {
   userPreferencesRequestSchema,
+  linearCallbackContextSchema,
+  linearStartCallbackSchema,
   createSessionRequestSchema,
   createSessionInputSchema,
   createMediaArtifactRequestSchema,
@@ -93,6 +101,7 @@ export type {
   UserPreferencesRequest,
   SlackCallbackContext,
   LinearCallbackContext,
+  LinearStartCallback,
   AutomationCallbackContext,
   CallbackContext,
   CreateSessionRequest,
@@ -150,6 +159,15 @@ export type {
   ListAutomationInvocationsResponse,
 } from "./automations";
 
+export type {
+  ImageBuildStatus,
+  ImageBuildScopeKind,
+  RepositoryShaEntry,
+  ImageBuildRecordView,
+  ImageBuildCompleteCallback,
+  ImageBuildFailedCallback,
+} from "./image-builds";
+
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {
   AnalyticsDays,
@@ -160,6 +178,11 @@ export type {
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  AnalyticsPullRequestFunnel,
+  AnalyticsPullRequestTimeseriesPoint,
+  AnalyticsPullRequestRepoEntry,
+  AnalyticsPullRequestSourceEntry,
+  AnalyticsPullRequestsResponse,
 } from "./analytics";
 
 export * from "./integrations";

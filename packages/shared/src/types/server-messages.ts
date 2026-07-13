@@ -44,6 +44,10 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_ready") }),
   z.object({ type: z.literal("sandbox_error"), error: z.string() }),
   z.object({ type: z.literal("artifact_created"), artifact: sessionArtifactSchema }),
+  // Existing artifact changed (e.g. PR lifecycle update). Consumers upsert by
+  // artifact id; clients predating this message ignore it and resync on
+  // reconnect via `subscribed.artifacts`.
+  z.object({ type: z.literal("artifact_updated"), artifact: sessionArtifactSchema }),
   // repoOwner/repoName identify the repository whose branch updated in a
   // multi-repo session (absent means the session's sole repository).
   z.object({

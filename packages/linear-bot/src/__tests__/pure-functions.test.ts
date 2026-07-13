@@ -4,7 +4,8 @@ import {
   resolveSessionModelSettings,
   resolveStaticTarget,
 } from "../model-resolution";
-import { isValidPayload, verifyCallbackSignature } from "../callbacks";
+import { isValidPayload } from "../callbacks";
+import { verifyCallbackSignature } from "../utils/crypto";
 import { buildOAuthSuccessHtml } from "../index";
 import type { CompletionCallback } from "../types";
 

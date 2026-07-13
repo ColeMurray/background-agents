@@ -3,19 +3,18 @@
 import { useState, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation } from "@/hooks/use-automations";
 import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { BackIcon } from "@/components/ui/icons";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading } = useAutomation(id);
   const [submitting, setSubmitting] = useState(false);
@@ -69,14 +68,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3 flex items-center gap-2">
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+            <CollapsedSidebarControls />
             <Link
               href={`/automations/${id}`}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"

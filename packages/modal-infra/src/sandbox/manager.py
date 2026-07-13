@@ -46,7 +46,7 @@ MAX_TUNNEL_PORTS = 10
 
 
 def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
-    """Modal function timeout for the build worker (build_repo_image).
+    """Modal function timeout for the build worker (build_image).
 
     The worker idles until the build sandbox finishes, then snapshots it
     (SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS) and reports back, so its timeout must

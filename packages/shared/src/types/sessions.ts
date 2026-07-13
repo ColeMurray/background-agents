@@ -25,6 +25,19 @@ export interface SessionParticipant {
   role: ParticipantRole;
 }
 
+/**
+ * Aggregate PR counts for a session, grouped by display status. Computed from
+ * the D1 session_pull_requests table for the session list; total = open +
+ * draft + merged + closed.
+ */
+export interface PullRequestSummary {
+  total: number;
+  open: number;
+  draft: number;
+  merged: number;
+  closed: number;
+}
+
 export interface Session {
   id: string;
   title: string | null;
@@ -53,6 +66,12 @@ export interface Session {
    * renders it.
    */
   environmentId?: string | null;
+  /**
+   * Aggregate PR status counts for the global sidebar. Populated by the
+   * session list index from session_pull_requests; absent while versions
+   * overlap or when the session has no tracked PRs.
+   */
+  pullRequestSummary?: PullRequestSummary;
 }
 
 export interface SessionMessage {

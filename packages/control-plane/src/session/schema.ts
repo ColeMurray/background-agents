@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS participants (
   scm_login TEXT,                                   -- SCM username
   scm_email TEXT,                                   -- For git commit attribution
   scm_name TEXT,                                    -- Display name for git commits
+  auth_name TEXT,                                   -- Provider-agnostic display name (e.g. Google/OIDC) for presence
   role TEXT NOT NULL DEFAULT 'member',              -- 'owner', 'member'
   -- Token storage (AES-GCM encrypted)
   scm_access_token_encrypted TEXT,
@@ -117,7 +118,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
   type TEXT NOT NULL,                               -- 'pr', 'screenshot', 'video', 'preview', 'branch'
   url TEXT,
   metadata TEXT,                                    -- JSON
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL                       -- last content change (PR lifecycle updates)
 );
 
 -- User prompt attachments stored in the media bucket (chat composer uploads).
@@ -441,11 +443,27 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 33,
+    description: "Add auth_name to participants (provider-agnostic presence display name)",
+    run: `ALTER TABLE participants ADD COLUMN auth_name TEXT`,
+  },
+  {
+    id: 34,
+    description: "Add updated_at to artifacts (PR lifecycle tracking)",
+    // SQLite cannot ADD COLUMN with NOT NULL and no default, so migrated DOs
+    // get a nullable column plus a backfill; fresh DOs get NOT NULL from
+    // SCHEMA_SQL and createArtifact always writes it.
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE artifacts ADD COLUMN updated_at INTEGER`);
+      sql.exec(`UPDATE artifacts SET updated_at = created_at WHERE updated_at IS NULL`);
+    },
+  },
+  {
+    id: 35,
     description: "Create uploads table",
     run: UPLOADS_TABLE_SQL,
   },
   {
-    id: 34,
+    id: 36,
     description: "Add retryable cleanup claims to uploads",
     run: `ALTER TABLE uploads ADD COLUMN cleanup_claimed_at INTEGER`,
   },

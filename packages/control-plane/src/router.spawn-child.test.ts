@@ -134,6 +134,14 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const childEntry = store.create.mock.calls[0]?.[0];
     expect(childEntry?.id).toBe(payload.sessionId);
     expect(childEntry?.userId).toBe("canonical-user-123");
+    expect(childEntry?.environmentId).toBe("env_parent");
+
+    const initRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
+      const request = call[0] as Request;
+      return new URL(request.url).pathname === SessionInternalPaths.init;
+    })?.[0] as Request | undefined;
+    expect(initRequest).toBeDefined();
+    await expect(initRequest!.json()).resolves.toMatchObject({ environmentId: "env_parent" });
     expect(store.updateStatus).not.toHaveBeenCalled();
   });
 

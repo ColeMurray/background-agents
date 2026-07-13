@@ -23,7 +23,8 @@ import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypt
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import { resolveRepoImageProvider } from "../repo-images/provider-policy";
+import { createImageBuildLookup } from "../image-builds/lookup";
+import { resolveImageBuildProvider } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -34,13 +35,10 @@ import {
   type WebSocketManager,
   type AlarmScheduler,
   type IdGenerator,
-  type RepoImageLookup,
-  type EnvironmentImageLookup,
+  type ImageBuildLookup,
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
-import { RepoImageStore } from "../db/repo-images";
-import { EnvironmentImageStore } from "../db/environment-images";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
@@ -63,9 +61,12 @@ import type {
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { resolveParticipantName } from "./participant-name";
 import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
+import { refreshSessionPullRequests } from "./pull-request-refresh";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
@@ -200,6 +201,9 @@ export class SessionDO extends DurableObject<Env> {
     listArtifacts: (_request, url) => this.messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
     createPr: (request) => this.pullRequestHandler.createPr(request),
+    pullRequestArtifactSnapshot: (request, url) =>
+      this.pullRequestHandler.pullRequestArtifactSnapshot(request, url),
+    pullRequestsRefresh: () => this.pullRequestHandler.refreshPullRequests(),
     wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
     updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
     archive: (request) => this.sessionLifecycleHandler.archive(request),
@@ -533,14 +537,58 @@ export class SessionDO extends DurableObject<Env> {
               });
             },
             appName: resolveAppName(this.env),
+            sessionPullRequests: this.env.DB ? new SessionPullRequestStore(this.env.DB) : undefined,
           });
 
           return pullRequestService.createPullRequest(input);
         },
+        getArtifactById: (artifactId) => this.repository.getArtifactById(artifactId),
+        updateArtifact: (artifactId, data) => this.repository.updateArtifact(artifactId, data),
+        broadcastArtifactUpdated: (artifact) => {
+          this.broadcast({
+            type: "artifact_updated",
+            artifact,
+          });
+        },
+        now: () => Date.now(),
+        triggerPullRequestRefresh: () => this.schedulePullRequestRefresh("manual"),
       });
     }
 
     return this._pullRequestHandler;
+  }
+
+  /** Fire a background read-through refresh; failures only log. */
+  private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
+    this.ctx.waitUntil(
+      refreshSessionPullRequests(
+        this.repository,
+        this.sourceControlProvider,
+        this.env.DB ? new SessionPullRequestStore(this.env.DB) : null
+      )
+        .then(({ updated, failures }) => {
+          for (const artifact of updated) {
+            this.broadcast({ type: "artifact_updated", artifact });
+          }
+          for (const failure of failures) {
+            this.log.error("Pull request refresh failed for artifact", {
+              trigger,
+              reason: failure.reason,
+              artifact_id: failure.artifactId,
+              pr_number: failure.prNumber,
+              repo_owner: failure.repoOwner,
+              repo_name: failure.repoName,
+              error: failure.error instanceof Error ? failure.error : String(failure.error),
+            });
+          }
+        })
+        .catch((error) => {
+          this.log.error("Pull request refresh failed", {
+            trigger,
+            error: error instanceof Error ? error : String(error),
+          });
+        })
+    );
   }
 
   private get participantsHandler(): ParticipantsHandler {
@@ -743,25 +791,12 @@ export class SessionDO extends DurableObject<Env> {
       sandboxDashboardUrlBuilder,
     };
 
-    // Create image lookups if D1 is available and the provider supports
-    // prebuilt images. Environment images run on the same provider set as
-    // repo images (EnvironmentImageProvider aliases RepoImageProvider).
-    let repoImageLookup: RepoImageLookup | undefined;
-    let environmentImageLookup: EnvironmentImageLookup | undefined;
-    const repoImageProvider = resolveRepoImageProvider(sandboxBackend);
-    if (this.env.DB && repoImageProvider) {
-      const repoImageStore = new RepoImageStore(this.env.DB);
-      repoImageLookup = {
-        getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
-      };
-      const environmentImageStore = new EnvironmentImageStore(this.env.DB);
-      environmentImageLookup = {
-        getLatestReady: (environmentId) =>
-          environmentImageStore.getLatestReadyForSpawn(environmentId, repoImageProvider),
-        markRestoreFailed: (environmentImageId, error) =>
-          environmentImageStore.markRestoreFailed(environmentImageId, error),
-      };
+    // Create the image lookup if D1 is available and the provider supports
+    // prebuilt images.
+    let imageBuildLookup: ImageBuildLookup | undefined;
+    const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
+    if (this.env.DB && imageBuildProvider) {
+      imageBuildLookup = createImageBuildLookup(this.env.DB, imageBuildProvider);
     }
 
     return new SandboxLifecycleManager(
@@ -775,8 +810,7 @@ export class SessionDO extends DurableObject<Env> {
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
       },
-      repoImageLookup,
-      environmentImageLookup
+      imageBuildLookup
     );
   }
 
@@ -892,7 +926,10 @@ export class SessionDO extends DurableObject<Env> {
       const sandbox = this.getSandbox();
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
-      // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout)
+      // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout).
+      // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
+      // still connect — a slow boot that outlived the connecting watchdog
+      // self-heals here by flipping the status back to ready.
       if (sandbox?.status === "stopped" || sandbox?.status === "stale") {
         this.log.warn("ws.connect", {
           event: "ws.connect",
@@ -1261,7 +1298,7 @@ export class SessionDO extends DurableObject<Env> {
     const clientInfo: ClientInfo = {
       participantId: participant.id,
       userId: participant.user_id,
-      name: participant.scm_name || participant.scm_login || participant.user_id,
+      name: resolveParticipantName(participant),
       avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
       lastSeen: Date.now(),
@@ -1295,7 +1332,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       participant: {
         participantId: participant.id,
-        name: participant.scm_name || participant.scm_login || participant.user_id,
+        name: resolveParticipantName(participant),
         avatar: getAvatarUrl(
           participant.scm_login,
           resolveScmProviderFromEnv(this.env.SCM_PROVIDER)
@@ -1310,6 +1347,10 @@ export class SessionDO extends DurableObject<Env> {
 
     // Notify others
     this.presenceService.broadcastPresence();
+
+    // Read-through backstop (design §5.3): opening the session refreshes its
+    // PR state from the provider; changes arrive as artifact_updated.
+    this.schedulePullRequestRefresh("open");
   }
 
   /**
@@ -1333,7 +1374,7 @@ export class SessionDO extends DurableObject<Env> {
     const clientInfo: ClientInfo = {
       participantId: mapping.participant_id,
       userId: mapping.user_id,
-      name: mapping.scm_name || mapping.scm_login || mapping.user_id,
+      name: resolveParticipantName(mapping),
       avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
       lastSeen: Date.now(),

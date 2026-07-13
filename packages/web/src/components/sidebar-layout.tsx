@@ -4,15 +4,16 @@ import { createContext, useCallback, useContext, useState } from "react";
 import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { SessionSidebar } from "./session-sidebar";
+import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
 import { GlobalCommandMenu } from "./global-command-menu";
 import { useSidebar } from "@/hooks/use-sidebar";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
-import { SIDEBAR_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
+import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { GitHubIcon, GoogleIcon } from "@/components/ui/icons";
+import { GitHubIcon, GoogleIcon, SidebarIcon } from "@/components/ui/icons";
 import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
+import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -21,7 +22,13 @@ interface SidebarContextValue {
   close: () => void;
 }
 
+interface AppShellActionsContextValue {
+  searchSessions: () => void;
+  newSession: () => void;
+}
+
 const SidebarContext = createContext<SidebarContextValue | null>(null);
+const AppShellActionsContext = createContext<AppShellActionsContextValue | null>(null);
 
 export function useSidebarContext() {
   const context = useContext(SidebarContext);
@@ -35,6 +42,37 @@ interface SidebarLayoutProps {
   children: React.ReactNode;
 }
 
+export function SidebarToggleButton({ label = "Open sidebar" }: { label?: string }) {
+  const { toggle } = useSidebarContext();
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={toggle}
+      title={`${label} (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+      aria-label={`${label} (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+    >
+      <SidebarIcon className="w-4 h-4" />
+    </Button>
+  );
+}
+
+export function CollapsedSidebarControls() {
+  const actions = useContext(AppShellActionsContext);
+  if (!actions) {
+    throw new Error("CollapsedSidebarControls must be used within a SidebarLayout");
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <SidebarToggleButton />
+      <SearchSessionsButton onClick={actions.searchSessions} />
+      <NewSessionButton onClick={actions.newSession} />
+    </div>
+  );
+}
+
 export function SidebarLayout({ children }: SidebarLayoutProps) {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -44,7 +82,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
 
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
     status === "authenticated" && Boolean(session) && isCommandMenuOpen
-      ? SIDEBAR_SESSIONS_KEY
+      ? COMMAND_MENU_SESSIONS_KEY
       : null
   );
 
@@ -68,6 +106,10 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
 
   const handleOpenCommandMenu = useCallback(() => {
     setIsCommandMenuOpen((prev) => !prev);
+  }, []);
+
+  const handleSearchSessions = useCallback(() => {
+    setIsCommandMenuOpen(true);
   }, []);
 
   useGlobalShortcuts({
@@ -112,45 +154,50 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
 
   return (
     <SidebarContext.Provider value={sidebar}>
-      <div className="flex h-dvh overflow-hidden">
-        {/* Mobile: overlay backdrop */}
-        {isMobile && (
+      <AppShellActionsContext.Provider
+        value={{ searchSessions: handleSearchSessions, newSession: handleNewSession }}
+      >
+        <div className="flex h-dvh overflow-hidden">
+          {/* Mobile: overlay backdrop */}
+          {isMobile && (
+            <div
+              className={`fixed inset-0 z-30 bg-overlay transition-opacity duration-200 ${
+                sidebar.isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+              }`}
+              role="presentation"
+              aria-hidden="true"
+              onClick={sidebar.close}
+            />
+          )}
+          {/* Sidebar: overlay on mobile, push on desktop */}
           <div
-            className={`fixed inset-0 z-30 bg-overlay transition-opacity duration-200 ${
-              sidebar.isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
-            }`}
-            role="presentation"
-            aria-hidden="true"
-            onClick={sidebar.close}
-          />
-        )}
-        {/* Sidebar: overlay on mobile, push on desktop */}
-        <div
-          className={
-            isMobile
-              ? `fixed inset-y-0 left-0 z-40 w-72 transition-transform duration-200 ease-in-out ${
-                  sidebar.isOpen ? "translate-x-0" : "-translate-x-full"
-                }`
-              : `transition-all duration-200 ease-in-out ${
-                  sidebar.isOpen ? "w-72" : "w-0"
-                } flex-shrink-0 overflow-hidden`
-          }
-        >
-          <SessionSidebar
-            onNewSession={handleNewSession}
-            onToggle={sidebar.toggle}
-            onSessionSelect={sidebar.close}
-          />
+            className={
+              isMobile
+                ? `fixed inset-y-0 left-0 z-40 w-72 transition-transform duration-200 ease-in-out ${
+                    sidebar.isOpen ? "translate-x-0" : "-translate-x-full"
+                  }`
+                : `transition-all duration-200 ease-in-out ${
+                    sidebar.isOpen ? "w-72" : "w-0"
+                  } flex-shrink-0 overflow-hidden`
+            }
+          >
+            <SessionSidebar
+              onNewSession={handleNewSession}
+              onSearchSessions={handleSearchSessions}
+              onToggle={sidebar.toggle}
+              onSessionSelect={sidebar.close}
+            />
+          </div>
+          <main className="flex-1 overflow-hidden">{children}</main>
         </div>
-        <main className="flex-1 overflow-hidden">{children}</main>
-      </div>
-      <GlobalCommandMenu
-        open={isCommandMenuOpen}
-        onOpenChange={setIsCommandMenuOpen}
-        onNavigate={handleNavigate}
-        onNewSession={handleNewSession}
-        sessions={sessionsResponse?.sessions ?? []}
-      />
+        <GlobalCommandMenu
+          open={isCommandMenuOpen}
+          onOpenChange={setIsCommandMenuOpen}
+          onNavigate={handleNavigate}
+          onNewSession={handleNewSession}
+          sessions={sessionsResponse?.sessions ?? []}
+        />
+      </AppShellActionsContext.Provider>
     </SidebarContext.Provider>
   );
 }

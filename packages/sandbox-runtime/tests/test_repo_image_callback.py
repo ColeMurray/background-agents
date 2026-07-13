@@ -9,14 +9,15 @@ from sandbox_runtime.repo_image_callback import (
     CALLBACK_TOKEN_ENV,
     CALLBACK_URL_ENV,
     CALLBACK_USER_AGENT,
+    FAILURE_CALLBACK_URL_ENV,
     RepoImageBuildCallback,
-    build_failed_callback_url,
 )
 
 
 def test_from_env_returns_none_when_unconfigured(monkeypatch):
     monkeypatch.delenv(BUILD_ID_ENV, raising=False)
     monkeypatch.delenv(CALLBACK_URL_ENV, raising=False)
+    monkeypatch.delenv(FAILURE_CALLBACK_URL_ENV, raising=False)
     monkeypatch.delenv(CALLBACK_TOKEN_ENV, raising=False)
 
     assert RepoImageBuildCallback.from_env() is None
@@ -26,21 +27,34 @@ def test_from_env_rejects_partial_configuration(monkeypatch):
     logger = MagicMock()
     monkeypatch.setenv(BUILD_ID_ENV, "build-1")
     monkeypatch.delenv(CALLBACK_URL_ENV, raising=False)
+    monkeypatch.setenv(FAILURE_CALLBACK_URL_ENV, "https://cp.test/repo-images/build-failed")
     monkeypatch.setenv(CALLBACK_TOKEN_ENV, "callback-token")
 
     assert RepoImageBuildCallback.from_env(logger) is None
     logger.error.assert_called_once()
 
 
-def test_build_failed_callback_url():
-    assert (
-        build_failed_callback_url("https://cp.test/repo-images/build-complete")
-        == "https://cp.test/repo-images/build-failed"
-    )
-    assert (
-        build_failed_callback_url("https://cp.test/custom-callback")
-        == "https://cp.test/custom-callback"
-    )
+def test_from_env_rejects_missing_failure_callback_url(monkeypatch):
+    logger = MagicMock()
+    monkeypatch.setenv(BUILD_ID_ENV, "build-1")
+    monkeypatch.setenv(CALLBACK_URL_ENV, "https://cp.test/repo-images/build-complete")
+    monkeypatch.delenv(FAILURE_CALLBACK_URL_ENV, raising=False)
+    monkeypatch.setenv(CALLBACK_TOKEN_ENV, "callback-token")
+
+    assert RepoImageBuildCallback.from_env(logger) is None
+    logger.error.assert_called_once()
+
+
+def test_from_env_reads_both_callback_urls(monkeypatch):
+    monkeypatch.setenv(BUILD_ID_ENV, "build-1")
+    monkeypatch.setenv(CALLBACK_URL_ENV, "https://cp.test/repo-images/build-complete")
+    monkeypatch.setenv(FAILURE_CALLBACK_URL_ENV, "https://cp.test/repo-images/build-failed")
+    monkeypatch.setenv(CALLBACK_TOKEN_ENV, "callback-token")
+
+    reporter = RepoImageBuildCallback.from_env()
+    assert reporter is not None
+    assert reporter.callback_url == "https://cp.test/repo-images/build-complete"
+    assert reporter.failure_callback_url == "https://cp.test/repo-images/build-failed"
 
 
 @pytest.mark.asyncio
@@ -56,6 +70,7 @@ async def test_report_success_posts_authenticated_payload(monkeypatch):
     reporter = RepoImageBuildCallback(
         build_id="build-1",
         callback_url="https://cp.test/repo-images/build-complete",
+        failure_callback_url="https://cp.test/repo-images/build-failed",
         token="callback-token",
         provider_session_id="vercel-session-1",
         logger=MagicMock(),
@@ -89,6 +104,7 @@ async def test_report_failure_posts_to_failed_endpoint_and_truncates_error(monke
     reporter = RepoImageBuildCallback(
         build_id="build-1",
         callback_url="https://cp.test/repo-images/build-complete",
+        failure_callback_url="https://cp.test/repo-images/build-failed",
         token="callback-token",
         provider_session_id="vercel-session-1",
         logger=MagicMock(),
@@ -120,6 +136,7 @@ async def test_retries_transient_callback_failures(monkeypatch):
     reporter = RepoImageBuildCallback(
         build_id="build-1",
         callback_url="https://cp.test/repo-images/build-complete",
+        failure_callback_url="https://cp.test/repo-images/build-failed",
         token="callback-token",
         logger=MagicMock(),
     )

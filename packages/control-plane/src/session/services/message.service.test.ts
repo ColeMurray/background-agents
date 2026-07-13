@@ -105,6 +105,7 @@ describe("MessageService", () => {
         url: "https://example.com/pr/1",
         metadata: '{"key":"value"}',
         created_at: 1000,
+        updated_at: 1500,
       },
     ];
     vi.mocked(repository.listArtifacts).mockReturnValue(artifacts);
@@ -120,6 +121,7 @@ describe("MessageService", () => {
           url: "https://example.com/pr/1",
           metadata: { key: "value" },
           createdAt: 1000,
+          updatedAt: 1500,
         },
       ],
     });
@@ -134,6 +136,7 @@ describe("MessageService", () => {
       url: "sessions/session-1/media/artifact-1.png",
       metadata: '{"mimeType":"image/png"}',
       created_at: 1000,
+      updated_at: 1500,
     };
     vi.mocked(repository.getArtifactById).mockReturnValue(artifact);
     vi.mocked(parseArtifactMetadata).mockReturnValue({ mimeType: "image/png" });
@@ -147,6 +150,7 @@ describe("MessageService", () => {
         url: "sessions/session-1/media/artifact-1.png",
         metadata: { mimeType: "image/png" },
         createdAt: 1000,
+        updatedAt: 1500,
       },
     });
     expect(repository.getArtifactById).toHaveBeenCalledWith("artifact-1");

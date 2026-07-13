@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ENABLED_MODELS,
   DEFAULT_MODEL,
+  MODEL_CATALOG,
   MODEL_OPTIONS,
+  MODEL_REASONING_CONFIG,
+  VALID_MODELS,
   extractProviderAndModel,
   getDefaultReasoningEffort,
   getReasoningConfig,
@@ -47,6 +50,42 @@ const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro
 const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2"] as const;
 
 describe("model utilities", () => {
+  it("derives every public model view from the authoritative catalog", () => {
+    const catalogModels = MODEL_CATALOG.flatMap((group) => group.models);
+
+    expect(VALID_MODELS).toEqual(catalogModels.map((model) => model.id));
+    expect(MODEL_OPTIONS).toEqual(
+      MODEL_CATALOG.map((group) => ({
+        category: group.category,
+        models: group.models.map(({ id, name, description }) => ({ id, name, description })),
+      }))
+    );
+    expect(DEFAULT_ENABLED_MODELS).toEqual(
+      MODEL_CATALOG.filter((group) => group.enabledByDefault).flatMap((group) =>
+        group.models.map((model) => model.id)
+      )
+    );
+
+    const defaultModels = catalogModels.filter((model) => "default" in model && model.default);
+    expect(defaultModels).toHaveLength(1);
+    expect(DEFAULT_MODEL).toBe(defaultModels[0]?.id);
+
+    expect(MODEL_REASONING_CONFIG).toEqual(
+      Object.fromEntries(
+        catalogModels.flatMap((model) =>
+          "reasoning" in model
+            ? [
+                [
+                  model.id,
+                  { efforts: [...model.reasoning.efforts], default: model.reasoning.default },
+                ],
+              ]
+            : []
+        )
+      )
+    );
+  });
+
   it("keeps DEFAULT_MODEL valid", () => {
     expect(isValidModel(DEFAULT_MODEL)).toBe(true);
   });

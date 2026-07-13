@@ -5,6 +5,10 @@ import {
   type AnalyticsDays,
 } from "@open-inspect/shared";
 import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
+import {
+  type PullRequestAnalyticsFilters,
+  PullRequestAnalyticsStore,
+} from "../db/pull-request-analytics-store";
 import type { Env } from "../types";
 import { type RequestContext, type Route, error, json, parsePattern } from "./shared";
 
@@ -26,6 +30,16 @@ function getFilters(days: AnalyticsDays): AnalyticsFilters {
   const endAt = Date.now();
   const startAt = endAt - days * 24 * 60 * 60 * 1000;
   return { startAt, endAt, spawnSources: HUMAN_SPAWN_SOURCES };
+}
+
+/**
+ * PR analytics is scoped to the PR population itself, so unlike the session
+ * analytics it applies no spawn-source filter — automation-produced PRs are
+ * output too, surfaced via the source dimension instead.
+ */
+function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters {
+  const now = Date.now();
+  return { startAt: now - days * 24 * 60 * 60 * 1000, endAt: now, now };
 }
 
 async function handleSummary(
@@ -82,6 +96,22 @@ async function handleBreakdown(
   return json(await store.getBreakdown(getFilters(days), by));
 }
 
+async function handlePullRequests(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const url = new URL(request.url);
+  const days = parseDaysParam(url.searchParams.get("days"));
+  if (!days) {
+    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
+  }
+
+  const store = new PullRequestAnalyticsStore(env.DB);
+  return json(await store.get(getPullRequestFilters(days)));
+}
+
 export const analyticsRoutes: Route[] = [
   {
     method: "GET",
@@ -97,5 +127,10 @@ export const analyticsRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/analytics/breakdown"),
     handler: handleBreakdown,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/analytics/pull-requests"),
+    handler: handlePullRequests,
   },
 ];

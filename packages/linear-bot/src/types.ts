@@ -6,7 +6,7 @@
  * Cloudflare Worker environment bindings.
  */
 export interface Env {
-  // KV namespace for config, OAuth tokens, and issue-to-session mapping
+  // KV namespace for config, runtime-token cache, and issue-to-session mapping
   LINEAR_KV: KVNamespace;
 
   // Service binding to control plane
@@ -32,22 +32,6 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
   INTERNAL_CALLBACK_SECRET?: string;
   LOG_LEVEL?: string;
-}
-
-// ─── OAuth Types ─────────────────────────────────────────────────────────────
-
-export interface OAuthTokenResponse {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  refresh_token: string;
-  scope?: string;
-}
-
-export interface StoredTokenData {
-  access_token: string;
-  refresh_token: string;
-  expires_at: number;
 }
 
 // ─── Repo / Config Types ─────────────────────────────────────────────────────
@@ -219,14 +203,16 @@ export interface AgentSessionWebhook {
   action: string;
   organizationId: string;
   webhookId: string;
-  appUserId?: string;
+  appUserId: string;
   agentSession: {
     id: string;
+    creatorId?: string;
     issue?: AgentSessionWebhookIssue;
-    comment?: { body: string };
+    comment?: { body: string; userId?: string };
     promptContext?: string;
   };
   agentActivity?: {
+    userId?: string;
     content?: {
       type?: string;
       body?: string;

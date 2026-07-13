@@ -9,9 +9,9 @@ import { EnvironmentSecretsStore } from "../db/environment-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { SecretsValidationError, normalizeKey, validateKey } from "../db/secrets-validation";
 import {
-  scheduleEnvironmentImageBuildOnSave,
-  supersedeEnvironmentImagesForSecretsChange,
-} from "../environment-images/save-hooks";
+  scheduleImageBuildOnSave,
+  supersedeImageBuildsForSecretsChange,
+} from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -40,7 +40,11 @@ async function invalidateImagesAfterSecretsChange(
   ctx: RequestContext
 ): Promise<Response | null> {
   try {
-    await supersedeEnvironmentImagesForSecretsChange(env, environment.id, ctx);
+    await supersedeImageBuildsForSecretsChange(
+      env,
+      { kind: "environment", id: environment.id },
+      ctx
+    );
   } catch (e) {
     logger.error("environment.secrets_image_invalidation_failed", {
       environment_id: environment.id,
@@ -54,7 +58,7 @@ async function invalidateImagesAfterSecretsChange(
     );
   }
   if (environment.prebuild_enabled === 1) {
-    scheduleEnvironmentImageBuildOnSave(env, environment.id, ctx);
+    scheduleImageBuildOnSave(env, { kind: "environment", id: environment.id }, ctx);
   }
   return null;
 }

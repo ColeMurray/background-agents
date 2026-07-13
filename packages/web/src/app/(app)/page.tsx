@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { useSidebarContext } from "@/components/sidebar-layout";
-import { Button } from "@/components/ui/button";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
@@ -15,25 +14,25 @@ import { APP_NAME } from "@/lib/site-config";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
-  isValidReasoningEffort,
   type Attachment,
   type ModelCategory,
 } from "@open-inspect/shared";
+import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import {
-  usePromptAttachments,
   ATTACHMENT_ACCEPT,
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+  usePromptAttachments,
 } from "@/hooks/use-prompt-attachments";
+import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import {
   useSessionTargetPicker,
   type SessionTargetSelection,
 } from "@/hooks/use-session-target-picker";
-import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { SessionTargetPicker } from "@/components/session-target-picker";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import { SidebarIcon, ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
+import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
@@ -44,60 +43,47 @@ export default function Home() {
   const router = useRouter();
   const picker = useSessionTargetPicker();
   const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
-  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
-  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort(DEFAULT_MODEL)
-  );
+  const [storedPreference, setStoredPreference] = useState<ModelPreference>({
+    model: DEFAULT_MODEL,
+    reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
+  });
+  const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
   const promptAttachments = usePromptAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
-  // Synchronous re-entry guard: React state doesn't commit fast enough to
-  // stop a double-click or repeated Cmd+Enter from submitting twice while the
-  // session create and attachment uploads are awaited.
-  const submitInFlightRef = useRef(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const submitInFlightRef = useRef(false);
   // Keyed by the picker's configKey so environment/ad-hoc selections
   // invalidate a warmed session exactly like repo/branch changes do.
-  const pendingConfigRef = useRef<{ target: string; model: string; branch: string } | null>(null);
+  const pendingConfigRef = useRef<{
+    target: string;
+    model: string;
+    reasoningEffort?: string;
+    branch: string;
+  } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
-  const { enabledModels, enabledModelOptions } = useEnabledModels();
+  const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
 
   useEffect(() => {
-    if (enabledModels.length === 0 || hasHydratedModelPreferences) return;
+    if (hasHydratedModelPreferences) return;
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
-    const selectedModelFromStorage =
-      storedModel && enabledModels.includes(storedModel)
-        ? storedModel
-        : (enabledModels[0] ?? DEFAULT_MODEL);
-
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
-    const reasoningEffortFromStorage =
-      storedReasoningEffort &&
-      isValidReasoningEffort(selectedModelFromStorage, storedReasoningEffort)
-        ? storedReasoningEffort
-        : getDefaultReasoningEffort(selectedModelFromStorage);
-
-    setSelectedModel(selectedModelFromStorage);
-    setReasoningEffort(reasoningEffortFromStorage);
+    setStoredPreference({
+      model: storedModel ?? DEFAULT_MODEL,
+      reasoningEffort: storedReasoningEffort ?? undefined,
+    });
     setHasHydratedModelPreferences(true);
-  }, [enabledModels, hasHydratedModelPreferences]);
+  }, [hasHydratedModelPreferences]);
 
-  useEffect(() => {
-    if (!hasHydratedModelPreferences) return;
-    localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, selectedModel);
-
-    if (reasoningEffort) {
-      localStorage.setItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY, reasoningEffort);
-      return;
-    }
-
-    localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
-  }, [hasHydratedModelPreferences, selectedModel, reasoningEffort]);
+  const { model: selectedModel, reasoningEffort } = resolveModelPreference(
+    modelPreferenceDraft ?? storedPreference,
+    loadingEnabledModels ? undefined : enabledModels
+  );
 
   useEffect(() => {
     if (abortControllerRef.current) {
@@ -108,9 +94,10 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [sessionTarget, selectedModel, selectedBranch]);
+  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch]);
 
   const createSessionForWarming = useCallback(async () => {
+    if (loadingEnabledModels) return null;
     if (pendingSessionId) return pendingSessionId;
     if (sessionCreationPromise.current) return sessionCreationPromise.current;
     const targetRequestFields = buildRequestFields();
@@ -120,6 +107,7 @@ export default function Home() {
     const currentConfig = {
       target: configKey,
       model: selectedModel,
+      reasoningEffort,
       branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
     };
     pendingConfigRef.current = currentConfig;
@@ -145,6 +133,7 @@ export default function Home() {
           if (
             pendingConfigRef.current?.target === currentConfig.target &&
             pendingConfigRef.current?.model === currentConfig.model &&
+            pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
             pendingConfigRef.current?.branch === currentConfig.branch
           ) {
             setPendingSessionId(data.sessionId);
@@ -178,40 +167,50 @@ export default function Home() {
     selectedModel,
     reasoningEffort,
     pendingSessionId,
+    loadingEnabledModels,
   ]);
 
-  // Reset selections when model preferences change (only after hydration)
-  useEffect(() => {
-    if (!hasHydratedModelPreferences) return;
-
-    if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
-      const fallback = enabledModels[0] ?? DEFAULT_MODEL;
-      setSelectedModel(fallback);
-      setReasoningEffort(getDefaultReasoningEffort(fallback));
-      return;
+  const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
+    setModelPreferenceDraft(preference);
+    localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, preference.model);
+    if (preference.reasoningEffort) {
+      localStorage.setItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY, preference.reasoningEffort);
+    } else {
+      localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
     }
-
-    if (reasoningEffort && !isValidReasoningEffort(selectedModel, reasoningEffort)) {
-      setReasoningEffort(getDefaultReasoningEffort(selectedModel));
-    }
-  }, [hasHydratedModelPreferences, enabledModels, selectedModel, reasoningEffort]);
-
-  const handleModelChange = useCallback((model: string) => {
-    setSelectedModel(model);
-    setReasoningEffort(getDefaultReasoningEffort(model));
   }, []);
+
+  const handleModelChange = useCallback(
+    (model: string) => {
+      saveModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
+    },
+    [saveModelPreferenceDraft]
+  );
+
+  const handleReasoningEffortChange = useCallback(
+    (nextReasoningEffort: string | undefined) => {
+      saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
+    },
+    [saveModelPreferenceDraft, selectedModel]
+  );
 
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
-    if (wasEmpty && value.length > 0 && !pendingSessionId && !isCreatingSession && isLaunchable) {
+    if (
+      wasEmpty &&
+      value.length > 0 &&
+      !pendingSessionId &&
+      !isCreatingSession &&
+      !loadingEnabledModels &&
+      isLaunchable
+    ) {
       createSessionForWarming();
     }
   };
 
   const handleAddFiles = (files: Iterable<File>) => {
     promptAttachments.addFiles(files);
-    // Attaching a file signals intent to send just like typing does.
     if (!pendingSessionId && !isCreatingSession && isLaunchable) {
       createSessionForWarming();
     }
@@ -219,7 +218,7 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitInFlightRef.current || promptAttachments.isUploading) return;
+    if (submitInFlightRef.current || promptAttachments.isUploading || loadingEnabledModels) return;
     const hasAttachments = promptAttachments.attachments.length > 0;
     if (!prompt.trim() && !hasAttachments) return;
     if (!isLaunchable) {
@@ -243,7 +242,6 @@ export default function Home() {
 
       if (!sessionId) {
         setError("Failed to create session");
-        setCreating(false);
         return;
       }
 
@@ -252,25 +250,15 @@ export default function Home() {
         try {
           attachments = await promptAttachments.uploadAll(sessionId);
         } catch {
-          // uploadAll surfaces the error in the composer; keep the draft intact.
-          setCreating(false);
           return;
         }
-      }
-
-      const trimmed = prompt.trim();
-      // Nothing survived to send (e.g. the only attachment failed to upload).
-      // Don't post the attachment-only fallback message with no attachments.
-      if (!trimmed && (!attachments || attachments.length === 0)) {
-        setCreating(false);
-        return;
       }
 
       const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: trimmed || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+          content: prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
           model: selectedModel,
           reasoningEffort,
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
@@ -288,9 +276,9 @@ export default function Home() {
       }
     } catch (_error) {
       setError("Failed to create session");
-      setCreating(false);
     } finally {
       submitInFlightRef.current = false;
+      setCreating(false);
     }
   };
 
@@ -301,7 +289,7 @@ export default function Home() {
       selectedModel={selectedModel}
       setSelectedModel={handleModelChange}
       reasoningEffort={reasoningEffort}
-      setReasoningEffort={setReasoningEffort}
+      setReasoningEffort={handleReasoningEffortChange}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
       attachments={{
@@ -357,11 +345,9 @@ function HomeContent({
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
 }) {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Freeze the draft while a session-create/upload/submit is in flight so the
-  // set that gets uploaded and sent can't diverge from what the user submitted.
   const attachmentsLocked = creating || attachments.isUploading;
   const {
     isDraggingOver,
@@ -388,15 +374,7 @@ function HomeContent({
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
+            <CollapsedSidebarControls />
           </div>
         </header>
       )}
@@ -421,19 +399,26 @@ function HomeContent({
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
               <div
-                className={`border bg-input ${isDraggingOver ? "border-accent" : "border-border"}`}
+                className={`border border-border bg-input ${isDraggingOver ? "ring-2 ring-accent" : ""}`}
+                onPaste={handlePaste}
+                onDrop={handleDrop}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
               >
-                {/* Pending attachment previews */}
                 <AttachmentPreviewStrip
                   items={attachments.items}
                   error={attachments.error}
                   onRemove={attachments.onRemove}
                   disabled={attachmentsLocked}
                 />
-
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ATTACHMENT_ACCEPT}
+                  multiple
+                  className="hidden"
+                  onChange={handleFileInputChange}
+                />
                 {/* Text input area */}
                 <div className="relative">
                   <textarea
@@ -441,7 +426,6 @@ function HomeContent({
                     value={prompt}
                     onChange={(e) => handlePromptChange(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    onPaste={handlePaste}
                     placeholder="What do you want to build?"
                     disabled={creating}
                     className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
@@ -449,20 +433,6 @@ function HomeContent({
                   />
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                    {attachments.isUploading && (
-                      <span className="text-xs text-muted-foreground">Uploading...</span>
-                    )}
-                    {isCreatingSession && (
-                      <span className="text-xs text-accent">Warming sandbox...</span>
-                    )}
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept={ATTACHMENT_ACCEPT}
-                      multiple
-                      className="hidden"
-                      onChange={handleFileInputChange}
-                    />
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
@@ -473,12 +443,14 @@ function HomeContent({
                     >
                       <PaperclipIcon className="w-5 h-5" />
                     </button>
+                    {isCreatingSession && (
+                      <span className="text-xs text-accent">Warming sandbox...</span>
+                    )}
                     <button
                       type="submit"
                       disabled={
                         (!prompt.trim() && attachments.items.length === 0) ||
-                        creating ||
-                        attachments.isUploading ||
+                        attachmentsLocked ||
                         !isLaunchable
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"

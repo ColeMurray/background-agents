@@ -11,6 +11,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: null,
     scm_name: "Octo Cat",
+    auth_name: null,
     role: "member",
     scm_access_token_encrypted: null,
     scm_refresh_token_encrypted: null,
@@ -111,6 +112,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
 
   const callbackService = {
     notifyComplete: vi.fn(async () => {}),
+    notifyStarted: vi.fn(async () => {}),
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
@@ -155,6 +157,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     setSessionStatus,
     reconcileSessionStatusAfterExecution,
     waitUntil,
+    callbackService,
   };
 }
 
@@ -181,6 +184,7 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_spawning" });
     expect(h.spawnSandbox).toHaveBeenCalledTimes(1);
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
+    expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
   });
 
   it("marks session active when a prompt is enqueued", async () => {
@@ -283,6 +287,26 @@ describe("SessionMessageQueue", () => {
     );
   });
 
+  it("uses the provider-agnostic auth name for user messages without SCM identity", () => {
+    const h = buildQueue();
+    const participant = createParticipant({
+      scm_name: null,
+      scm_login: null,
+      auth_name: "Pat PM",
+    });
+
+    h.queue.writeUserMessageEvent(participant, "hello", "msg-1", 1000);
+
+    expect(h.broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "sandbox_event",
+        event: expect.objectContaining({
+          author: expect.objectContaining({ name: "Pat PM" }),
+        }),
+      })
+    );
+  });
+
   it("dispatches prompt command when sandbox socket exists", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
@@ -300,6 +324,30 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ type: "prompt", messageId: "msg-42" })
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
+  });
+
+  it("notifies the integration after a prompt is dispatched to the sandbox", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-linear" }));
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.callbackService.notifyStarted).toHaveBeenCalledWith("msg-linear");
+    expect(h.waitUntil).toHaveBeenCalledOnce();
+  });
+
+  it("does not notify the integration when sandbox dispatch fails", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-failed" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.wsManager.send.mockReturnValue(false);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
+    expect(h.waitUntil).not.toHaveBeenCalled();
   });
 
   it("marks processing message failed and broadcasts synthetic completion on stop", async () => {

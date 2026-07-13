@@ -15,7 +15,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     return NextResponse.json(
       {
         error:
-          "Environment images are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
+          "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
       },
       { status: 501 }
     );
@@ -25,7 +25,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
 
   try {
     const response = await controlPlaneFetch(
-      `/environment-images/trigger/${encodeURIComponent(id)}`,
+      `/image-builds/trigger/environment/${encodeURIComponent(id)}`,
       { method: "POST" }
     );
     const data = await response.json();

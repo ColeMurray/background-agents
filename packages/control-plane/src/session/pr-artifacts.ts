@@ -7,9 +7,9 @@ import type { ArtifactRow } from "./types";
  * no identity — artifacts written before multi-repo support, which by
  * construction belong to the session's primary repository. The canonical
  * home of that convention: both the duplicate-PR guard and the per-repo
- * prUrl projection go through here.
+ * artifact find go through here.
  */
-export function parsePrArtifactRepo(metadata: string | null): RepoIdentity | null {
+function parsePrArtifactRepo(metadata: string | null): RepoIdentity | null {
   if (!metadata) return null;
   try {
     const parsed: unknown = JSON.parse(metadata);
@@ -23,10 +23,10 @@ export function parsePrArtifactRepo(metadata: string | null): RepoIdentity | nul
 }
 
 /**
- * Find a PR artifact belonging to the target repo. Identity-less metadata
- * matches only when the target is the primary — the ownership convention lives
- * in shared {@link prArtifactBelongsToRepo}; this only supplies the parsed
- * identity from ArtifactRow metadata.
+ * Find a PR artifact belonging to the target repo. The ownership convention
+ * is the shared prArtifactBelongsToRepo (the same rule the web sidebar and
+ * action bar apply); this find works on ArtifactRow's native JSON-string
+ * metadata directly.
  */
 export function findPrArtifactForRepo(
   artifacts: ArtifactRow[],

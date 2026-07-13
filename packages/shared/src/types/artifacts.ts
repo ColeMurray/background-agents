@@ -11,6 +11,11 @@ export interface SessionArtifact {
   url: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: number;
+  /**
+   * Last content change (epoch ms). Optional for rolling deploys — producers
+   * predating PR lifecycle tracking omit it; consumers fall back to createdAt.
+   */
+  updatedAt?: number;
 }
 
 export const sessionArtifactSchema = z.object({
@@ -19,7 +24,56 @@ export const sessionArtifactSchema = z.object({
   url: z.string().nullable(),
   metadata: recordSchema.nullable(),
   createdAt: z.number(),
+  updatedAt: z.number().optional(),
 });
+
+// ─── Pull request lifecycle ───────────────────────────────────────────────────
+
+/** Base lifecycle of a pull request as stored (merged is terminal). */
+export type PullRequestLifecycleState = "open" | "closed" | "merged";
+
+/**
+ * Stored PR state: lifecycle and draft readiness are independent facts.
+ * Invariant (enforced at write boundaries): isDraft is true only while
+ * lifecycleState === "open".
+ */
+export interface PullRequestStatus {
+  lifecycleState: PullRequestLifecycleState;
+  isDraft: boolean;
+}
+
+/** UI-facing status derived from PullRequestStatus. Never persisted. */
+export type PullRequestDisplayStatus = "draft" | "open" | "merged" | "closed";
+
+export function toDisplayStatus(status: PullRequestStatus): PullRequestDisplayStatus {
+  if (status.lifecycleState === "merged") return "merged";
+  if (status.lifecycleState === "closed") return "closed";
+  return status.isDraft ? "draft" : "open";
+}
+
+/**
+ * Typed metadata stored on `pr` artifacts. Mirrors the D1
+ * session_pull_requests record's provider-derived fields; the DO artifact is a
+ * live view of that record. Spread-compatible with the untyped
+ * Record<string, unknown> metadata boundary.
+ */
+export interface PullRequestArtifactMetadata {
+  number: number;
+  lifecycleState: PullRequestLifecycleState;
+  isDraft: boolean;
+  /** Head (source) branch name. */
+  head: string;
+  /** Base (target) branch name. */
+  base: string;
+  headSha?: string;
+  repoOwner: string;
+  repoName: string;
+  /** Stable provider repo id (canonical identity); absent on legacy rows. */
+  repositoryExternalId?: string;
+  /** Provider's updated_at (epoch ms) — the monotonic write guard source. */
+  providerUpdatedAt?: number;
+  // No `provider` field: provider is deployment state (ADR-0001).
+}
 
 /**
  * Metadata stored on branch artifacts when PR creation falls back to manual flow.

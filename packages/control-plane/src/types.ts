@@ -165,6 +165,7 @@ export interface ArtifactResponse {
   url: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: number;
+  updatedAt: number;
 }
 
 export interface ParticipantResponse {

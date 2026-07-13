@@ -2,37 +2,22 @@
 
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
+import type { ImageBuildRecordView } from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
+import { IMAGE_BUILDS_KEY, parsePrimaryBuildSha, type ImageBuildsFeed } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
-
-interface RepoImage {
-  repo_owner: string;
-  repo_name: string;
-  status: "building" | "ready" | "failed";
-  base_sha: string;
-  build_duration_seconds: number;
-  error_message?: string;
-  created_at: number;
-}
-
-interface ImageRegistryData {
-  enabledRepos: string[];
-  images: RepoImage[];
-}
-
-const REPO_IMAGES_KEY = "/api/repo-images";
 
 export function ImagesSettings() {
   const repoImagesSupported = supportsRepoImages();
   const { repos, loading: reposLoading } = useRepos();
-  const { data, isLoading: imagesLoading } = useSWR<ImageRegistryData>(
-    repoImagesSupported ? REPO_IMAGES_KEY : null
+  const { data, isLoading: imagesLoading } = useSWR<ImageBuildsFeed>(
+    repoImagesSupported ? IMAGE_BUILDS_KEY : null
   );
   const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
   const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
@@ -52,11 +37,16 @@ export function ImagesSettings() {
 
   const loading = reposLoading || imagesLoading;
 
-  const enabledRepos = new Set(data?.enabledRepos ?? []);
+  // Toggle state reads the persisted flags, not `units` — the units feed
+  // resolves scopes through source control and can transiently drop a repo.
+  const enabledRepos = new Set(
+    (data?.enabledRepos ?? []).map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
+  );
 
-  const getLatestImage = (owner: string, name: string): RepoImage | undefined => {
+  // Repo scope_ids are lowercase `owner/name` pairs.
+  const getLatestImage = (owner: string, name: string): ImageBuildRecordView | undefined => {
     const key = `${owner}/${name}`.toLowerCase();
-    return data?.images.find((img) => `${img.repo_owner}/${img.repo_name}`.toLowerCase() === key);
+    return data?.images.find((img) => img.scope_kind === "repo" && img.scope_id === key);
   };
 
   const handleToggle = async (owner: string, name: string, enabled: boolean) => {
@@ -66,7 +56,7 @@ export function ImagesSettings() {
 
     try {
       const res = await fetch(
-        `/api/repo-images/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/toggle`,
+        `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/toggle`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -78,7 +68,7 @@ export function ImagesSettings() {
         const errBody = await res.json();
         setError(errBody.error || "Failed to toggle image build");
       } else {
-        mutate(REPO_IMAGES_KEY);
+        mutate(IMAGE_BUILDS_KEY);
       }
     } catch {
       setError("Failed to toggle image build");
@@ -98,7 +88,7 @@ export function ImagesSettings() {
 
     try {
       const res = await fetch(
-        `/api/repo-images/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/trigger`,
+        `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/trigger`,
         { method: "POST" }
       );
 
@@ -106,7 +96,7 @@ export function ImagesSettings() {
         const errBody = await res.json();
         setError(errBody.error || "Failed to trigger build");
       } else {
-        mutate(REPO_IMAGES_KEY);
+        mutate(IMAGE_BUILDS_KEY);
       }
     } catch {
       setError("Failed to trigger build");
@@ -172,7 +162,7 @@ export function ImagesSettings() {
                         status: image.status,
                         createdAt: image.created_at,
                         readyDetails: formatReadyDetails(
-                          image.base_sha,
+                          parsePrimaryBuildSha(image.repository_shas),
                           image.build_duration_seconds
                         ),
                         errorMessage: image.error_message,

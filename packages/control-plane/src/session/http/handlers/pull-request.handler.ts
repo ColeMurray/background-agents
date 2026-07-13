@@ -1,11 +1,17 @@
+import type { SessionArtifact } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
+import {
+  preparePullRequestArtifactUpdate,
+  pullRequestSnapshotSchema,
+} from "../../pull-request-snapshot";
 import {
   mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
   type SessionRepositoryEntry,
 } from "../../repository-target";
-import type { ParticipantRow, SessionRow } from "../../types";
+import type { UpdateArtifactData } from "../../repository";
+import type { ArtifactRow, ParticipantRow, SessionRow } from "../../types";
 import { z } from "zod";
 
 const createPrRequestSchema = z.object({
@@ -34,10 +40,18 @@ export interface PullRequestHandlerDeps {
   resolveAuthForPR: (participant: ParticipantRow) => Promise<ResolveAuthForPrResult>;
   getSessionUrl: (session: SessionRow) => string;
   createPullRequest: (input: CreatePullRequestInput) => Promise<CreatePullRequestResult>;
+  getArtifactById: (artifactId: string) => ArtifactRow | null;
+  updateArtifact: (artifactId: string, data: UpdateArtifactData) => void;
+  broadcastArtifactUpdated: (artifact: SessionArtifact) => void;
+  now: () => number;
+  /** Kicks off a background read-through refresh. */
+  triggerPullRequestRefresh: () => void;
 }
 
 export interface PullRequestHandler {
   createPr: (request: Request) => Promise<Response>;
+  pullRequestArtifactSnapshot: (request: Request, url: URL) => Promise<Response>;
+  refreshPullRequests: () => Response;
 }
 
 export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequestHandler {
@@ -120,6 +134,56 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         prUrl: result.prUrl,
         state: result.state,
       });
+    },
+
+    /**
+     * Transport shell for snapshot application (design §6): parse the
+     * request, resolve the artifact, compute the update via the canonical
+     * preparePullRequestArtifactUpdate, and perform the write + broadcast it
+     * prescribes. Stale and materially identical snapshots answer
+     * `{ applied: false }` — no write, no broadcast.
+     */
+    async pullRequestArtifactSnapshot(request: Request, url: URL): Promise<Response> {
+      const artifactId = url.searchParams.get("artifactId");
+      if (!artifactId) {
+        return Response.json({ error: "artifactId query parameter is required" }, { status: 400 });
+      }
+
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const parsed = pullRequestSnapshotSchema.safeParse(raw);
+      if (!parsed.success) {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const artifact = deps.getArtifactById(artifactId);
+      if (!artifact || artifact.type !== "pr") {
+        return Response.json({ error: "Pull request artifact not found" }, { status: 404 });
+      }
+
+      const artifactUpdate = preparePullRequestArtifactUpdate(artifact, parsed.data, deps.now());
+      if (!artifactUpdate) {
+        return Response.json({ applied: false });
+      }
+
+      deps.updateArtifact(artifact.id, artifactUpdate.update);
+      deps.broadcastArtifactUpdated(artifactUpdate.artifact);
+      return Response.json({ applied: true });
+    },
+
+    /**
+     * Manual sync (design §5.3): fire the read-through refresh in the
+     * background and return immediately — the endpoint never blocks on a
+     * provider read.
+     */
+    refreshPullRequests(): Response {
+      deps.triggerPullRequestRefresh();
+      return Response.json({ status: "refreshing" }, { status: 202 });
     },
   };
 }

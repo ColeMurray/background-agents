@@ -6,6 +6,7 @@ import {
   type SessionArtifact,
 } from "@open-inspect/shared";
 import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
+import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionRepository } from "../../repository";
@@ -107,6 +108,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         url: body.objectKey,
         metadata: body.metadata ?? null,
         createdAt: now,
+        updatedAt: now,
       };
 
       deps.repository.createArtifact({
@@ -182,11 +184,14 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ valid: false, error: "No sandbox" }, { status: 404 });
       }
 
-      if (sandbox.status === "stopped" || sandbox.status === "stale") {
-        deps.getLog().warn("Sandbox token verification failed: sandbox is stopped/stale", {
+      // Boot-time states (spawning/connecting) must authenticate — the git
+      // credential broker is already called during the initial clone, before
+      // the WebSocket connect flips the status to ready.
+      if (isDeadSandboxStatus(sandbox.status)) {
+        deps.getLog().warn("Sandbox token verification failed: sandbox is dead", {
           status: sandbox.status,
         });
-        return Response.json({ valid: false, error: "Sandbox stopped" }, { status: 410 });
+        return Response.json({ valid: false, error: "Sandbox not active" }, { status: 410 });
       }
 
       const isTokenValid = await deps.isValidSandboxToken(token, sandbox);

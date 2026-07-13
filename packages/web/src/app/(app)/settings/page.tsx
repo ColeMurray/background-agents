@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
 import { EnvironmentsSettings } from "@/components/settings/environments-settings";
@@ -159,14 +159,7 @@ export default function SettingsPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+            <CollapsedSidebarControls />
           </div>
         </header>
       )}

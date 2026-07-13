@@ -835,5 +835,147 @@ describe("useSessionSocket", () => {
         },
       ]);
     });
+
+    // A new PR changes the sidebar summary, so creation revalidates the
+    // session list just like artifact_updated.
+    expect(mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
+  });
+
+  it("applies artifact_updated in place and revalidates the session list", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(
+        createSubscribedMessage([
+          {
+            id: "artifact-pr-2",
+            type: "pr",
+            url: "https://github.com/acme/web-app/pull/2",
+            metadata: { number: 2, state: "open" },
+            createdAt: 200,
+          },
+          {
+            id: "artifact-pr-1",
+            type: "pr",
+            url: "https://github.com/acme/web-app/pull/1",
+            metadata: { number: 1, state: "open" },
+            createdAt: 100,
+          },
+        ])
+      );
+    });
+    mutateMock.mockClear();
+
+    act(() => {
+      socket.receive({
+        type: "artifact_updated",
+        artifact: {
+          id: "artifact-pr-1",
+          type: "pr",
+          url: "https://github.com/acme/web-app/pull/1",
+          metadata: {
+            number: 1,
+            state: "merged",
+            lifecycleState: "merged",
+            isDraft: false,
+          },
+          createdAt: 100,
+          updatedAt: 500,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      // Updated in place — the list order is stable, no reshuffle.
+      expect(
+        result.current.artifacts.map((artifact) => [artifact.id, artifact.metadata?.prState])
+      ).toEqual([
+        ["artifact-pr-2", "open"],
+        ["artifact-pr-1", "merged"],
+      ]);
+      expect(result.current.artifacts[1].updatedAt).toBe(500);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
+  });
+
+  it("does not revalidate the session list for non-PR artifacts", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage([]));
+    });
+    mutateMock.mockClear();
+
+    act(() => {
+      socket.receive({
+        type: "artifact_created",
+        artifact: {
+          id: "artifact-shot-1",
+          type: "screenshot",
+          url: "https://example.com/shot.png",
+          metadata: null,
+          createdAt: 100,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      // The artifact still upserts into the session view; only the sidebar
+      // revalidation is PR-gated (media events arrive at high frequency).
+      expect(result.current.artifacts.map((artifact) => artifact.id)).toEqual(["artifact-shot-1"]);
+    });
+    expect(mutateMock).not.toHaveBeenCalledWith(isUnarchivedSessionListKey);
+  });
+
+  it("derives prState from tracked lifecycle metadata over the legacy state key", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(
+        createSubscribedMessage([
+          {
+            id: "artifact-pr-draft",
+            type: "pr",
+            url: "https://github.com/acme/web-app/pull/3",
+            // Stale legacy display key vs. tracked lifecycle: lifecycle wins.
+            metadata: { number: 3, state: "open", lifecycleState: "open", isDraft: true },
+            createdAt: 100,
+          },
+          {
+            id: "artifact-pr-legacy",
+            type: "pr",
+            url: "https://github.com/acme/web-app/pull/4",
+            metadata: { number: 4, state: "closed" },
+            createdAt: 50,
+          },
+        ])
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.artifacts.map((artifact) => artifact.metadata?.prState)).toEqual([
+        "draft",
+        "closed",
+      ]);
+    });
   });
 });

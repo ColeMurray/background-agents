@@ -469,6 +469,7 @@ describe("SessionRepository", () => {
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
+        authName: "Authenticated User",
         scmEmail: "test@example.com",
         scmAccessTokenEncrypted: "encrypted-token",
         scmTokenExpiresAt: 9000,
@@ -484,6 +485,7 @@ describe("SessionRepository", () => {
         "gh-123",
         "testuser",
         "Test User",
+        "Authenticated User",
         "test@example.com",
         "encrypted-token",
         null,
@@ -511,6 +513,7 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
+        null,
         "member",
         1000,
       ]);
@@ -522,13 +525,15 @@ describe("SessionRepository", () => {
       repo.updateParticipantCoalesce("p-1", {
         scmLogin: "newlogin",
         scmName: null,
+        authName: "Authenticated User",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
       expect(mock.calls[0].params[0]).toBe(null); // scmUserId
       expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[3]).toBe("Authenticated User");
+      expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
     });
   });
 
@@ -949,7 +954,7 @@ describe("SessionRepository", () => {
   // === ARTIFACTS ===
 
   describe("createArtifact", () => {
-    it("stores artifact", () => {
+    it("stores artifact with updated_at starting at created_at", () => {
       repo.createArtifact({
         id: "art-1",
         type: "pr",
@@ -960,12 +965,35 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO artifacts");
+      expect(mock.calls[0].query).toContain("updated_at");
       expect(mock.calls[0].params).toEqual([
         "art-1",
         "pr",
         "https://github.com/owner/repo/pull/1",
         '{"number":1}',
         1000,
+        1000,
+      ]);
+    });
+  });
+
+  describe("updateArtifact", () => {
+    it("updates url, metadata, and updated_at in place", () => {
+      repo.updateArtifact("art-1", {
+        url: "https://github.com/owner/renamed/pull/1",
+        metadata: '{"number":1}',
+        updatedAt: 3000,
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain(
+        "UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?"
+      );
+      expect(mock.calls[0].params).toEqual([
+        "https://github.com/owner/renamed/pull/1",
+        '{"number":1}',
+        3000,
+        "art-1",
       ]);
     });
   });

@@ -3,6 +3,7 @@ import type { JWT } from "next-auth/jwt";
 import GitHubProvider from "next-auth/providers/github";
 import type { GithubProfile } from "next-auth/providers/github";
 import GoogleProvider from "next-auth/providers/google";
+import { z } from "zod";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared";
 import {
   type AccessAllowReason,
@@ -27,7 +28,36 @@ interface GitHubEmailFetchParams {
   timeoutMs?: number;
 }
 
-type GitHubProfileWithEmails = GithubProfile & { verifiedEmails?: GitHubEmail[] };
+const githubUserInfoProfileSchema = z
+  .object({
+    id: z.union([z.number(), z.string()]),
+    login: z.string(),
+    email: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+type GitHubUserInfoProfile = z.infer<typeof githubUserInfoProfileSchema> & {
+  email: string | null;
+  verifiedEmails: GitHubEmail[];
+};
+
+type ProfileWithVerifiedEmails = Profile & { verifiedEmails?: GitHubEmail[] };
+
+export function normalizeGitHubUserInfoProfile(
+  profile: unknown,
+  verifiedEmails: GitHubEmail[]
+): GitHubUserInfoProfile | null {
+  const result = githubUserInfoProfileSchema.safeParse(profile);
+  if (!result.success) {
+    return null;
+  }
+
+  return {
+    ...result.data,
+    email: verifiedEmails.find((e) => e.primary)?.email ?? null,
+    verifiedEmails,
+  };
+}
 
 /**
  * Fetch verified email addresses from GitHub's API.
@@ -319,11 +349,17 @@ const providers: NextAuthOptions["providers"] = [
     userinfo: {
       url: "https://api.github.com/user",
       async request({ client, tokens }) {
-        const profile = (await client.userinfo(tokens.access_token!)) as GitHubProfileWithEmails;
         const verifiedEmails = await getVerifiedGitHubEmails({ accessToken: tokens.access_token! });
-        profile.email = verifiedEmails.find((e) => e.primary)?.email ?? null;
-        profile.verifiedEmails = verifiedEmails;
-        return profile as unknown as Profile;
+        const profile = normalizeGitHubUserInfoProfile(
+          await client.userinfo(tokens.access_token!),
+          verifiedEmails
+        );
+        if (!profile) {
+          throw new Error("Invalid GitHub userinfo response");
+        }
+        // SAFETY: NextAuth's Profile type is narrower than GitHub's numeric `id`,
+        // but this object has just been validated against the GitHub userinfo shape.
+        return profile as Profile;
       },
     },
   }),
@@ -368,7 +404,7 @@ export const authOptions: NextAuthOptions = {
 
       let emails: string[] | undefined = undefined;
       if (isGitHubProvider && hasAllowLists) {
-        const verifiedEmails = (profile as GitHubProfileWithEmails | undefined)?.verifiedEmails;
+        const verifiedEmails = (profile as ProfileWithVerifiedEmails | undefined)?.verifiedEmails;
         emails = verifiedEmails?.map((e) => e.email);
       } else {
         emails = user.email ? [user.email] : undefined;

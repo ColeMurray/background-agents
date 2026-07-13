@@ -1,4 +1,5 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
+import type { SandboxStatus } from "../../src/types";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 
@@ -274,39 +275,48 @@ export async function openSandboxWs(
 }
 
 /**
- * Seed auth_token and modal_sandbox_id on the sandbox row so sandbox
- * WebSocket auth can pass.
+ * Seed a sandbox with auth_token and modal_sandbox_id so sandbox auth can
+ * pass, in the given lifecycle status (default: the "ready" steady state).
+ * Waits out the (always-failing) test spawn first so its status write can't
+ * clobber the seeded status.
  */
 export async function seedSandboxAuth(
   stub: DurableObjectStub,
-  opts: { authToken: string; sandboxId: string }
+  opts: { authToken: string; sandboxId: string; status?: SandboxStatus }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
       tokenHash,
-      opts.sandboxId
+      opts.sandboxId,
+      opts.status ?? "ready"
     );
   });
 }
 
 /**
- * Seed auth_token_hash and modal_sandbox_id on the sandbox row.
+ * Seed a sandbox with auth_token_hash and modal_sandbox_id, in the given
+ * lifecycle status (default: the "ready" steady state). Waits out the
+ * (always-failing) test spawn first so its status write can't clobber the
+ * seeded status.
  */
 export async function seedSandboxAuthHash(
   stub: DurableObjectStub,
-  opts: { authToken: string; sandboxId: string }
+  opts: { authToken: string; sandboxId: string; status?: SandboxStatus }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,
-      opts.sandboxId
+      opts.sandboxId,
+      opts.status ?? "ready"
     );
   });
 }

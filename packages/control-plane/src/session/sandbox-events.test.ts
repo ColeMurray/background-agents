@@ -189,6 +189,7 @@ describe("SessionSandboxEventProcessor", () => {
           sizeBytes: 512,
         },
         createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
       },
     });
     expect(h.broadcast).toHaveBeenNthCalledWith(2, {

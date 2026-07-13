@@ -21,22 +21,16 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { DEFAULT_MODEL, getDefaultReasoningEffort, type Attachment } from "@open-inspect/shared";
+import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
+import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
   usePromptAttachments,
 } from "@/hooks/use-prompt-attachments";
-import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
-import type { Attachment } from "@open-inspect/shared";
-import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { ComboboxGroup } from "@/components/ui/combobox";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
-
-type FallbackSessionInfo = {
-  repoOwner: string | null;
-  repoName: string | null;
-  title: string | null;
-};
 
 export default function SessionPage() {
   return (
@@ -48,7 +42,6 @@ export default function SessionPage() {
 
 function SessionPageContent() {
   const params = useParams();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = params.id as string;
 
@@ -81,318 +74,28 @@ function SessionPageContent() {
     [searchParams]
   );
 
-  const { trigger: triggerRename } = useSWRMutation(
-    `/api/sessions/${sessionId}/title`,
-    (url: string, { arg }: { arg: { title: string } }) =>
-      fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: arg.title }),
-      }).then((r) => {
-        if (r.ok) return true;
-        console.error("Failed to update session title");
-        return false;
-      }),
-    { throwOnError: false }
-  );
+  const { handleArchive, handleUnarchive, renameSession } = useSessionListActions(sessionId);
+  const {
+    selectedModel,
+    reasoningEffort,
+    setReasoningEffort,
+    handleModelChange,
+    modelItems,
+    loadingEnabledModels,
+  } = useModelSelection(sessionState);
+  const { prompt, promptAttachments, inputRef, handleSubmit, handleInputChange, handleKeyDown } =
+    usePromptInput(
+      sessionId,
+      isProcessing,
+      sendPrompt,
+      sendTyping,
+      selectedModel,
+      reasoningEffort,
+      loadingEnabledModels
+    );
 
-  const handleArchive = useCallback(async () => {
-    const didArchive = await archiveSession(sessionId);
-    if (didArchive) {
-      await mutate<SessionListResponse>(
-        isUnarchivedSessionListKey,
-        (current) =>
-          current
-            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
-            : current,
-        { revalidate: false, populateCache: true }
-      );
-      router.push("/");
-    }
-  }, [router, sessionId]);
-
-  const renameSession = useCallback(
-    async (title: string) => {
-      const updatedAt = Date.now();
-      const updateSessionsTitle = (data?: SessionListResponse): SessionListResponse | undefined => {
-        if (!data?.sessions) return data;
-        return {
-          ...data,
-          sessions: data.sessions.map((session) =>
-            session.id === sessionId ? { ...session, title, updatedAt } : session
-          ),
-        };
-      };
-
-      try {
-        const success = await triggerRename({ title });
-        if (!success) {
-          throw new Error("Failed to update session title");
-        }
-        await mutate<SessionListResponse>(isUnarchivedSessionListKey, updateSessionsTitle, {
-          populateCache: true,
-          revalidate: true,
-        });
-        await mutate<SessionListResponse>(isArchivedSessionListKey, updateSessionsTitle, {
-          populateCache: true,
-          revalidate: false,
-        });
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    [sessionId, triggerRename]
-  );
-
-  const { trigger: handleUnarchive } = useSWRMutation(
-    `/api/sessions/${sessionId}/unarchive`,
-    (url: string) =>
-      fetch(url, { method: "POST" }).then(async (r) => {
-        if (r.ok) {
-          await mutate<SessionListResponse>(
-            isArchivedSessionListKey,
-            (current) =>
-              current
-                ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
-                : current,
-            { revalidate: false, populateCache: true }
-          );
-          mutate(isUnarchivedSessionListKey);
-        } else {
-          console.error("Failed to unarchive session");
-        }
-      }),
-    { throwOnError: false }
-  );
-
-  const [prompt, setPrompt] = useState("");
-  const promptAttachments = usePromptAttachments();
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
-  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort(DEFAULT_MODEL)
-  );
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // Synchronous re-entry guard: React state (isUploading) doesn't commit fast
-  // enough to stop a double-click or repeated Cmd+Enter from submitting twice
-  // while uploadAll() is awaited.
-  const submitInFlightRef = useRef(false);
 
-  const { enabledModels, enabledModelOptions } = useEnabledModels();
-  const modelItems = useMemo<ComboboxGroup[]>(
-    () =>
-      enabledModelOptions.map((group) => ({
-        category: group.category,
-        options: group.models.map((model) => ({
-          value: model.id,
-          label: model.name,
-          description: model.description,
-        })),
-      })),
-    [enabledModelOptions]
-  );
-
-  const handleModelChange = useCallback((model: string) => {
-    setSelectedModel(model);
-    setReasoningEffort(getDefaultReasoningEffort(model));
-  }, []);
-
-  // Reset to default if the selected model is no longer enabled
-  useEffect(() => {
-    if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
-      const fallback = enabledModels[0] ?? DEFAULT_MODEL;
-      setSelectedModel(fallback);
-      setReasoningEffort(getDefaultReasoningEffort(fallback));
-    }
-  }, [enabledModels, selectedModel]);
-
-  // Sync selectedModel and reasoningEffort with session state when it loads
-  useEffect(() => {
-    if (sessionState?.model) {
-      setSelectedModel(sessionState.model);
-      setReasoningEffort(
-        sessionState.reasoningEffort ?? getDefaultReasoningEffort(sessionState.model)
-      );
-    }
-  }, [sessionState?.model, sessionState?.reasoningEffort]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const hasAttachments = promptAttachments.attachments.length > 0;
-    if (
-      submitInFlightRef.current ||
-      (!prompt.trim() && !hasAttachments) ||
-      isProcessing ||
-      promptAttachments.isUploading
-    ) {
-      return;
-    }
-
-    submitInFlightRef.current = true;
-    try {
-      let attachments: Attachment[] | undefined;
-      if (hasAttachments) {
-        try {
-          attachments = await promptAttachments.uploadAll(sessionId);
-        } catch {
-          // uploadAll surfaces the error in the composer; keep the draft intact.
-          return;
-        }
-      }
-
-      const trimmed = prompt.trim();
-      // Nothing survived to send (e.g. the only attachment failed to upload).
-      // Don't post the attachment-only fallback message with no attachments.
-      if (!trimmed && (!attachments || attachments.length === 0)) {
-        return;
-      }
-
-      sendPrompt(
-        trimmed || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
-        selectedModel,
-        reasoningEffort,
-        attachments
-      );
-      setPrompt("");
-      promptAttachments.clearAttachments();
-      // Revalidate sidebar so this session bubbles to the top
-      mutate(isUnarchivedSessionListKey);
-    } finally {
-      submitInFlightRef.current = false;
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.nativeEvent.isComposing) return;
-
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
-      e.preventDefault();
-      handleSubmit(e);
-    }
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setPrompt(e.target.value);
-
-    // Send typing indicator (debounced)
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-    typingTimeoutRef.current = setTimeout(() => {
-      sendTyping();
-    }, 300);
-  };
-
-  return (
-    <SessionContent
-      sessionState={sessionState}
-      connected={connected}
-      connecting={connecting}
-      replaying={replaying}
-      authError={authError}
-      connectionError={connectionError}
-      reconnect={reconnect}
-      participants={participants}
-      events={events}
-      artifacts={artifacts}
-      currentParticipantId={currentParticipantId}
-      prompt={prompt}
-      promptAttachments={promptAttachments}
-      isProcessing={isProcessing}
-      selectedModel={selectedModel}
-      reasoningEffort={reasoningEffort}
-      inputRef={inputRef}
-      handleSubmit={handleSubmit}
-      handleInputChange={handleInputChange}
-      handleKeyDown={handleKeyDown}
-      setSelectedModel={handleModelChange}
-      setReasoningEffort={setReasoningEffort}
-      stopExecution={stopExecution}
-      handleArchive={handleArchive}
-      handleUnarchive={handleUnarchive}
-      renameSession={renameSession}
-      loadingHistory={loadingHistory}
-      loadOlderEvents={loadOlderEvents}
-      modelItems={modelItems}
-      fallbackSessionInfo={fallbackSessionInfo}
-      sessionId={sessionId}
-      selectedMediaArtifactId={selectedMediaArtifactId}
-      setSelectedMediaArtifactId={setSelectedMediaArtifactId}
-    />
-  );
-}
-
-function SessionContent({
-  sessionState,
-  connected,
-  connecting,
-  replaying,
-  authError,
-  connectionError,
-  reconnect,
-  participants,
-  events,
-  artifacts,
-  currentParticipantId,
-  prompt,
-  promptAttachments,
-  isProcessing,
-  selectedModel,
-  reasoningEffort,
-  inputRef,
-  handleSubmit,
-  handleInputChange,
-  handleKeyDown,
-  setSelectedModel,
-  setReasoningEffort,
-  stopExecution,
-  handleArchive,
-  handleUnarchive,
-  renameSession,
-  loadingHistory,
-  loadOlderEvents,
-  modelItems,
-  fallbackSessionInfo,
-  sessionId,
-  selectedMediaArtifactId,
-  setSelectedMediaArtifactId,
-}: {
-  sessionState: SessionState;
-  connected: boolean;
-  connecting: boolean;
-  replaying: boolean;
-  authError: string | null;
-  connectionError: string | null;
-  reconnect: () => void;
-  participants: ReturnType<typeof useSessionSocket>["participants"];
-  events: ReturnType<typeof useSessionSocket>["events"];
-  artifacts: ReturnType<typeof useSessionSocket>["artifacts"];
-  currentParticipantId: string | null;
-  prompt: string;
-  promptAttachments: ReturnType<typeof usePromptAttachments>;
-  isProcessing: boolean;
-  selectedModel: string;
-  reasoningEffort: string | undefined;
-  inputRef: React.RefObject<HTMLTextAreaElement | null>;
-  handleSubmit: (e: React.FormEvent) => void;
-  handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-  handleKeyDown: (e: React.KeyboardEvent) => void;
-  setSelectedModel: (model: string) => void;
-  setReasoningEffort: (value: string | undefined) => void;
-  stopExecution: () => void;
-  handleArchive: () => void | Promise<void>;
-  handleUnarchive: () => void | Promise<void>;
-  renameSession: (title: string) => Promise<boolean | undefined>;
-  loadingHistory: boolean;
-  loadOlderEvents: () => void;
-  modelItems: ComboboxGroup[];
-  fallbackSessionInfo: FallbackSessionInfo;
-  sessionId: string;
-  selectedMediaArtifactId: string | null;
-  setSelectedMediaArtifactId: (artifactId: string | null) => void;
-}) {
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
 
@@ -543,6 +246,11 @@ function SessionContent({
           id: sessionId,
           status: sessionState?.status || "",
           artifacts,
+          primaryRepo:
+            sessionState?.repositories?.[0] ??
+            (sessionState?.repoOwner && sessionState?.repoName
+              ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
+              : null),
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
         }}
@@ -566,10 +274,249 @@ function SessionContent({
           selectedModel,
           reasoningEffort,
           items: modelItems,
-          onModelChange: setSelectedModel,
+          onModelChange: handleModelChange,
           onReasoningEffortChange: setReasoningEffort,
         }}
       />
     </div>
   );
+}
+
+/**
+ * Archive, unarchive, and rename actions for the current session, each keeping
+ * the SWR session-list caches in sync.
+ */
+function useSessionListActions(sessionId: string) {
+  const router = useRouter();
+
+  const { trigger: triggerRename } = useSWRMutation(
+    `/api/sessions/${sessionId}/title`,
+    (url: string, { arg }: { arg: { title: string } }) =>
+      fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: arg.title }),
+      }).then((r) => {
+        if (r.ok) return true;
+        console.error("Failed to update session title");
+        return false;
+      }),
+    { throwOnError: false }
+  );
+
+  const handleArchive = useCallback(async () => {
+    const didArchive = await archiveSession(sessionId);
+    if (didArchive) {
+      await mutate<SessionListResponse>(
+        isUnarchivedSessionListKey,
+        (current) =>
+          current
+            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+            : current,
+        { revalidate: false, populateCache: true }
+      );
+      router.push("/");
+    }
+  }, [router, sessionId]);
+
+  const renameSession = useCallback(
+    async (title: string) => {
+      const updatedAt = Date.now();
+      const updateSessionsTitle = (data?: SessionListResponse): SessionListResponse | undefined => {
+        if (!data?.sessions) return data;
+        return {
+          ...data,
+          sessions: data.sessions.map((session) =>
+            session.id === sessionId ? { ...session, title, updatedAt } : session
+          ),
+        };
+      };
+
+      try {
+        const success = await triggerRename({ title });
+        if (!success) {
+          throw new Error("Failed to update session title");
+        }
+        await Promise.all([
+          mutate<SessionListResponse>(isUnarchivedSessionListKey, updateSessionsTitle, {
+            populateCache: true,
+            revalidate: true,
+          }),
+          mutate<SessionListResponse>(isArchivedSessionListKey, updateSessionsTitle, {
+            populateCache: true,
+            revalidate: false,
+          }),
+        ]);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [sessionId, triggerRename]
+  );
+
+  const { trigger: handleUnarchive } = useSWRMutation(
+    `/api/sessions/${sessionId}/unarchive`,
+    (url: string) =>
+      fetch(url, { method: "POST" }).then(async (r) => {
+        if (r.ok) {
+          await mutate<SessionListResponse>(
+            isArchivedSessionListKey,
+            (current) =>
+              current
+                ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+                : current,
+            { revalidate: false, populateCache: true }
+          );
+          mutate(isUnarchivedSessionListKey);
+        } else {
+          console.error("Failed to unarchive session");
+        }
+      }),
+    { throwOnError: false }
+  );
+
+  return { handleArchive, handleUnarchive, renameSession };
+}
+
+/**
+ * Model and reasoning-effort selection derived from session state until the
+ * user takes ownership of an explicit draft.
+ */
+function useModelSelection(sessionState: SessionState) {
+  const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
+
+  const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
+  const { model: selectedModel, reasoningEffort } = resolveModelPreference(
+    modelPreferenceDraft ?? {
+      model: sessionState?.model ?? DEFAULT_MODEL,
+      reasoningEffort:
+        sessionState?.reasoningEffort ??
+        getDefaultReasoningEffort(sessionState?.model ?? DEFAULT_MODEL),
+    },
+    loadingEnabledModels ? undefined : enabledModels
+  );
+  const modelItems = useMemo<ComboboxGroup[]>(
+    () =>
+      enabledModelOptions.map((group) => ({
+        category: group.category,
+        options: group.models.map((model) => ({
+          value: model.id,
+          label: model.name,
+          description: model.description,
+        })),
+      })),
+    [enabledModelOptions]
+  );
+
+  const handleModelChange = useCallback((model: string) => {
+    setModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
+  }, []);
+
+  const setReasoningEffort = useCallback(
+    (nextReasoningEffort: string | undefined) => {
+      setModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
+    },
+    [selectedModel]
+  );
+
+  return {
+    selectedModel,
+    reasoningEffort,
+    setReasoningEffort,
+    handleModelChange,
+    modelItems,
+    loadingEnabledModels,
+  };
+}
+
+/**
+ * Prompt textarea state and handlers: submit, Cmd/Ctrl+Enter, and the
+ * debounced typing indicator.
+ */
+function usePromptInput(
+  sessionId: string,
+  isProcessing: boolean,
+  sendPrompt: ReturnType<typeof useSessionSocket>["sendPrompt"],
+  sendTyping: ReturnType<typeof useSessionSocket>["sendTyping"],
+  selectedModel: string,
+  reasoningEffort: string | undefined,
+  loadingEnabledModels: boolean
+) {
+  const [prompt, setPrompt] = useState("");
+  const promptAttachments = usePromptAttachments();
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const submitInFlightRef = useRef(false);
+
+  const clearTypingTimeout = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearTypingTimeout, [clearTypingTimeout]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const hasAttachments = promptAttachments.attachments.length > 0;
+    if (
+      submitInFlightRef.current ||
+      (!prompt.trim() && !hasAttachments) ||
+      isProcessing ||
+      loadingEnabledModels ||
+      promptAttachments.isUploading
+    ) {
+      return;
+    }
+
+    submitInFlightRef.current = true;
+    try {
+      let attachments: Attachment[] | undefined;
+      if (hasAttachments) {
+        try {
+          attachments = await promptAttachments.uploadAll(sessionId);
+        } catch {
+          return;
+        }
+      }
+
+      // Drop any queued typing indicator — the prompt supersedes it
+      clearTypingTimeout();
+      sendPrompt(
+        prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+        selectedModel,
+        reasoningEffort,
+        attachments
+      );
+      setPrompt("");
+      promptAttachments.clearAttachments();
+      // Revalidate sidebar so this session bubbles to the top
+      mutate(isUnarchivedSessionListKey);
+    } finally {
+      submitInFlightRef.current = false;
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setPrompt(e.target.value);
+
+    // Send typing indicator (debounced)
+    clearTypingTimeout();
+    typingTimeoutRef.current = setTimeout(() => {
+      sendTyping();
+    }, 300);
+  };
+
+  return { prompt, promptAttachments, inputRef, handleSubmit, handleInputChange, handleKeyDown };
 }

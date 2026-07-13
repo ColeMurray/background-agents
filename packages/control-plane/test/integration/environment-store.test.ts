@@ -138,10 +138,10 @@ describe("EnvironmentStore", () => {
       .run();
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO environment_images (id, environment_id, repositories_fingerprint, repository_shas, runtime_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'ready', ?)"
+        "INSERT INTO image_builds (id, scope_kind, scope_id, repositories_fingerprint, repository_shas, runtime_version, status, created_at) VALUES (?, 'environment', ?, ?, ?, ?, 'ready', ?)"
       ).bind("img_ready", row.id, "fp", "[]", "v3", now),
       env.DB.prepare(
-        "INSERT INTO environment_images (id, environment_id, repositories_fingerprint, repository_shas, runtime_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'failed', ?)"
+        "INSERT INTO image_builds (id, scope_kind, scope_id, repositories_fingerprint, repository_shas, runtime_version, status, created_at) VALUES (?, 'environment', ?, ?, ?, ?, 'failed', ?)"
       ).bind("img_failed", row.id, "fp", "[]", "v3", now),
     ]);
 
@@ -156,11 +156,11 @@ describe("EnvironmentStore", () => {
       .first<{ c: number }>();
     expect(secretCount?.c).toBe(0);
     const ready = await env.DB.prepare(
-      "SELECT status FROM environment_images WHERE id = 'img_ready'"
+      "SELECT status FROM image_builds WHERE id = 'img_ready'"
     ).first<{ status: string }>();
     expect(ready?.status).toBe("superseded");
     const failed = await env.DB.prepare(
-      "SELECT status FROM environment_images WHERE id = 'img_failed'"
+      "SELECT status FROM image_builds WHERE id = 'img_failed'"
     ).first<{ status: string }>();
     expect(failed?.status).toBe("failed"); // pre-existing terminal status untouched
   });

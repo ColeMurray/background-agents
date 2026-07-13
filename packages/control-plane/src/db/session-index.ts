@@ -1,4 +1,10 @@
-import type { SessionListRepository, SessionStatus, SpawnSource } from "@open-inspect/shared";
+import type {
+  PullRequestSummary,
+  SessionListRepository,
+  SessionStatus,
+  SpawnSource,
+} from "@open-inspect/shared";
+import { SessionPullRequestStore } from "./session-pull-request-store";
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -41,6 +47,11 @@ export interface SessionEntry {
    * repo-launched/ad-hoc sessions. PR-12 renders it on the session list.
    */
   environmentId?: string | null;
+  /**
+   * Per-status PR counts from session_pull_requests; absent when the session
+   * has no tracked PRs. Attached by list() for the global sidebar.
+   */
+  pullRequestSummary?: PullRequestSummary;
 }
 
 interface SessionRepositoryRow {
@@ -213,6 +224,39 @@ export class SessionIndexStore {
     return result ? toEntry(result) : null;
   }
 
+  /**
+   * Whether the session exists and the repository is in its repository set
+   * (the scalar primary mirror or a session_repositories row). This is the
+   * webhook branch-fallback gate (design §5.2): a branch-derived insert may
+   * only attach to a session already associated with the event's repository.
+   * Case-insensitive — provider repo identifiers are case-insensitive while
+   * stored casing is display-canonical.
+   */
+  async isRepositoryAssociated(
+    sessionId: string,
+    repoOwner: string,
+    repoName: string
+  ): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        `SELECT 1 AS ok FROM sessions
+         WHERE id = ?1
+           AND (
+             (LOWER(repo_owner) = LOWER(?2) AND LOWER(repo_name) = LOWER(?3))
+             OR EXISTS (
+               SELECT 1 FROM session_repositories sr
+               WHERE sr.session_id = sessions.id
+                 AND LOWER(sr.repo_owner) = LOWER(?2)
+                 AND LOWER(sr.repo_name) = LOWER(?3)
+             )
+           )`
+      )
+      .bind(sessionId, repoOwner, repoName)
+      .first<{ ok: number }>();
+
+    return row !== null;
+  }
+
   async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
     const {
       status,
@@ -276,7 +320,7 @@ export class SessionIndexStore {
       .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = await this.withRepositories(rows.slice(0, limit).map(toEntry));
+    const sessions = await this.decorateEntries(rows.slice(0, limit).map(toEntry));
 
     return {
       sessions,
@@ -285,22 +329,45 @@ export class SessionIndexStore {
   }
 
   /**
-   * Return copies of the given entries with member repository lists attached,
-   * resolved in one query. The input entries are not mutated. Sessions
-   * without rows (pre-feature) are returned as-is, without the field, so
-   * consumers fall back to the scalar columns.
+   * Attach repository lists and PR status summaries to the paged
+   * entries. The two lookups are independent — each is one grouped query
+   * keyed by the same session ids — so they run in parallel and merge onto
+   * the entries in a single pass. Sessions without rows are returned without
+   * the field: consumers fall back to the scalar repo columns, and PR state
+   * never influences session ordering (this only decorates paged rows).
    */
-  private async withRepositories(sessions: SessionEntry[]): Promise<SessionEntry[]> {
+  private async decorateEntries(sessions: SessionEntry[]): Promise<SessionEntry[]> {
     if (sessions.length === 0) return sessions;
+    const sessionIds = sessions.map((session) => session.id);
 
-    const placeholders = sessions.map(() => "?").join(", ");
+    const [repositoriesBySession, summariesBySession] = await Promise.all([
+      this.repositoriesForSessions(sessionIds),
+      new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
+    ]);
+
+    return sessions.map((session) => {
+      const repositories = repositoriesBySession.get(session.id);
+      const pullRequestSummary = summariesBySession.get(session.id);
+      return {
+        ...session,
+        ...(repositories ? { repositories } : {}),
+        ...(pullRequestSummary ? { pullRequestSummary } : {}),
+      };
+    });
+  }
+
+  /** Repository lists for the given sessions, in one query. */
+  private async repositoriesForSessions(
+    sessionIds: readonly string[]
+  ): Promise<Map<string, SessionIndexRepository[]>> {
+    const placeholders = sessionIds.map(() => "?").join(", ");
     const result = await this.db
       .prepare(
         `SELECT * FROM session_repositories
          WHERE session_id IN (${placeholders})
          ORDER BY session_id, position`
       )
-      .bind(...sessions.map((s) => s.id))
+      .bind(...sessionIds)
       .all<SessionRepositoryRow>();
 
     const bySession = new Map<string, SessionIndexRepository[]>();
@@ -314,11 +381,7 @@ export class SessionIndexStore {
       });
       bySession.set(row.session_id, list);
     }
-
-    return sessions.map((session) => {
-      const repositories = bySession.get(session.id);
-      return repositories ? { ...session, repositories } : session;
-    });
+    return bySession;
   }
 
   async updateTitle(id: string, title: string): Promise<boolean> {

@@ -142,11 +142,12 @@ describe("DO internal sub-session routes", () => {
       // Seed an artifact
       await queryDO(
         stub,
-        "INSERT INTO artifacts (id, type, url, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         "art-1",
         "branch",
         "https://github.com/acme/web-app/tree/fix-branch",
         JSON.stringify({ branchName: "fix-branch" }),
+        Date.now(),
         Date.now()
       );
 

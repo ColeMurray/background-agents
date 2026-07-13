@@ -25,11 +25,10 @@ import {
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
-import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { environmentRoutes } from "./routes/environments";
 import { environmentSecretsRoutes } from "./routes/environment-secrets";
-import { environmentImageRoutes } from "./routes/environment-images";
+import { imageBuildRoutes } from "./routes/image-builds";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
@@ -59,12 +58,10 @@ const PUBLIC_ROUTES: RegExp[] = [
   /^\/health$/,
   /^\/webhooks\/sentry\/[^/]+$/,
   /^\/webhooks\/automation\/[^/]+$/,
-  /^\/repo-images\/build-complete$/,
-  /^\/repo-images\/build-failed$/,
-  // Environment-image callbacks authenticate inside the workflow (internal
-  // HMAC for provider_image mode), same as the repo-image callbacks above.
-  /^\/environment-images\/build-complete$/,
-  /^\/environment-images\/build-failed$/,
+  // Image-build callbacks authenticate inside the workflow (internal HMAC
+  // for provider_image mode, per-build bearer token for provider_session).
+  /^\/image-builds\/build-complete$/,
+  /^\/image-builds\/build-failed$/,
 ];
 
 /**
@@ -141,7 +138,7 @@ function isSandboxAuthRoute(path: string): boolean {
 
 function isScmAgnosticRoute(path: string): boolean {
   return (
-    /^\/analytics\/(summary|timeseries|breakdown)$/.test(path) ||
+    /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     // Identity upserts are independent of the SCM provider. Only the known auth
     // providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
     /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
@@ -255,14 +252,12 @@ async function verifySandboxAuth(
  *
  * @param request - The incoming request
  * @param env - Environment bindings
- * @param path - Request path for logging
  * @param ctx - Request correlation context
  * @returns null if authentication passes, or an error Response to return immediately
  */
 async function requireInternalAuth(
   request: Request,
   env: Env,
-  path: string,
   ctx: RequestContext
 ): Promise<Response | null> {
   if (!env.INTERNAL_CALLBACK_SECRET) {
@@ -280,14 +275,6 @@ async function requireInternalAuth(
   );
 
   if (!isValid) {
-    const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    logger.warn("Auth failed: HMAC", {
-      event: "auth.hmac_failed",
-      http_path: path,
-      client_ip: clientIP,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
     return error("Unauthorized", 401);
   }
 
@@ -323,16 +310,15 @@ const routes: Route[] = [
   // Environments (Phase-2 session target; internal-HMAC only, web BFF proxied)
   ...environmentRoutes,
   ...environmentSecretsRoutes,
-  ...environmentImageRoutes,
+
+  // Image builds (scope-generic)
+  ...imageBuildRoutes,
 
   // Model preferences
   ...modelPreferencesRoutes,
 
   // Integration settings
   ...integrationSettingsRoutes,
-
-  // Repo image builds
-  ...repoImageRoutes,
 
   // Automations
   ...automationRoutes,
@@ -391,28 +377,40 @@ export async function handleRequest(
 
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
+    const acceptsSandboxAuth = isSandboxAuthRoute(path);
     // First try HMAC auth (for web app, slack bot, etc.)
-    const hmacAuthError = await requireInternalAuth(request, env, path, ctx);
+    const hmacAuthError = await requireInternalAuth(request, env, ctx);
+    let authError = hmacAuthError;
 
     if (hmacAuthError) {
       // HMAC auth failed - check if this route accepts sandbox auth
-      if (isSandboxAuthRoute(path)) {
+      if (acceptsSandboxAuth) {
         // Extract session ID from path (e.g., /sessions/abc123/pr -> abc123)
         const sessionIdMatch = path.match(/^\/sessions\/([^/]+)\//);
         if (sessionIdMatch) {
           const sessionId = sessionIdMatch[1];
           const sandboxAuthError = await verifySandboxAuth(request, env, sessionId, ctx);
           if (!sandboxAuthError) {
-            // Sandbox auth passed, continue to route handler
+            authError = null;
           } else {
-            // Both HMAC and sandbox auth failed
-            return withCorsAndTraceHeaders(sandboxAuthError, ctx);
+            authError = sandboxAuthError;
           }
         }
-      } else {
-        // Not a sandbox auth route, return HMAC auth error
-        return withCorsAndTraceHeaders(hmacAuthError, ctx);
       }
+    }
+
+    if (authError) {
+      if (hmacAuthError?.status === 401) {
+        const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
+        logger.warn("Auth failed: HMAC", {
+          event: "auth.hmac_failed",
+          http_path: path,
+          client_ip: clientIP,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+      }
+      return withCorsAndTraceHeaders(authError, ctx);
     }
   }
 

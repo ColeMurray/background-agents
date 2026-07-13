@@ -26,8 +26,10 @@ function createMockRepository(): CallbackRepository {
   };
 }
 
-function createMockFetcher(): Fetcher {
-  return { fetch: vi.fn() } as unknown as Fetcher;
+type MockFetcher = Fetcher & { fetch: ReturnType<typeof vi.fn> };
+
+function createMockFetcher(): MockFetcher {
+  return { fetch: vi.fn() } as unknown as MockFetcher;
 }
 
 function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
@@ -36,6 +38,7 @@ function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
 
   const slackBot = createMockFetcher();
   const linearBot = createMockFetcher();
+  const sleep = vi.fn(async () => {});
 
   const env: CallbackServiceEnv = {
     INTERNAL_CALLBACK_SECRET: "test-secret",
@@ -49,6 +52,7 @@ function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
     env,
     log,
     getSessionId: () => "session-123",
+    sleep,
   };
 
   return {
@@ -58,6 +62,7 @@ function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
     env,
     slackBot,
     linearBot,
+    sleep,
   };
 }
 
@@ -191,6 +196,29 @@ describe("CallbackNotificationService", () => {
       );
     });
 
+    it("safely bounds failed response bodies in logs", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C123" }),
+        source: "slack",
+      });
+      const unreadableResponse = new Response("unreadable", { status: 503 });
+      vi.spyOn(unreadableResponse, "text").mockRejectedValue(new Error("body unavailable"));
+      harness.slackBot.fetch
+        .mockResolvedValueOnce(unreadableResponse)
+        .mockResolvedValueOnce(new Response("x".repeat(600), { status: 503 }));
+
+      await harness.service.notifyComplete("msg-1", false);
+
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "Callback failed",
+        expect.objectContaining({ response_text: "" })
+      );
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "Callback failed",
+        expect.objectContaining({ response_text: "x".repeat(500) })
+      );
+    });
+
     it("routes to LINEAR_BOT for linear source", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ issueId: "LIN-123" }),
@@ -211,6 +239,139 @@ describe("CallbackNotificationService", () => {
       const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(slackFetch).not.toHaveBeenCalled();
     });
+  });
+
+  describe("notifyStarted", () => {
+    it("sends an authenticated start callback for a Linear message", async () => {
+      const context = {
+        source: "linear",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+        issueUrl: "https://linear.app/acme/issue/ENG-1",
+        model: "anthropic/claude-haiku-4-5",
+        organizationId: "org-1",
+        appUserId: "app-user-1",
+        transitionIssueOnStart: true,
+      };
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(context),
+        source: "linear",
+      });
+      const fetchMock = harness.linearBot.fetch;
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyStarted("msg-1");
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://internal/callbacks/start",
+        expect.objectContaining({ method: "POST" })
+      );
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+      expect(body).toMatchObject({
+        sessionId: "session-123",
+        messageId: "msg-1",
+        context,
+        timestamp: expect.any(Number),
+        signature: expect.any(String),
+      });
+      expect(body).not.toHaveProperty("success");
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("retries a failed start callback once", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "linear",
+          issueId: "issue-1",
+          transitionIssueOnStart: true,
+        }),
+        source: "linear",
+      });
+      const fetchMock = harness.linearBot.fetch;
+      fetchMock
+        .mockResolvedValueOnce(new Response("retry", { status: 503 }))
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyStarted("msg-1");
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(harness.sleep).toHaveBeenCalledWith(1000);
+    });
+
+    it("retries when failure logging throws", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "linear", issueId: "issue-1" }),
+        source: "linear",
+      });
+      harness.linearBot.fetch
+        .mockResolvedValueOnce(new Response("retry", { status: 503 }))
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+      vi.mocked(harness.log.warn).mockImplementationOnce(() => {
+        throw new Error("log sink unavailable");
+      });
+
+      await harness.service.notifyStarted("msg-1");
+
+      expect(harness.linearBot.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("contains start callback failure after the bounded retry", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "linear",
+          issueId: "issue-1",
+          transitionIssueOnStart: true,
+        }),
+        source: "linear",
+      });
+      const fetchMock = harness.linearBot.fetch;
+      fetchMock.mockRejectedValue(new Error("network unavailable"));
+
+      await expect(harness.service.notifyStarted("msg-1")).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "callback.started",
+        expect.objectContaining({ message_id: "msg-1", outcome: "failed" })
+      );
+    });
+
+    it("forwards opaque Linear context without interpreting transition policy", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "linear",
+          issueId: "issue-1",
+          transitionIssueOnStart: false,
+        }),
+        source: "linear",
+      });
+      const fetchMock = harness.linearBot.fetch;
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyStarted("msg-1");
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+      expect(body.context).toEqual({
+        source: "linear",
+        issueId: "issue-1",
+        transitionIssueOnStart: false,
+      });
+    });
+
+    it.each(["{not-json", "null"])(
+      "ignores invalid stored callback context: %s",
+      async (context) => {
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: context,
+          source: "linear",
+        });
+
+        await expect(harness.service.notifyStarted("msg-1")).resolves.toBeUndefined();
+        expect(harness.linearBot.fetch).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe("notifyToolCall", () => {

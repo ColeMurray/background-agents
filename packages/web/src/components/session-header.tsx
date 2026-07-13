@@ -1,11 +1,8 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
-import { useSidebarContext } from "@/components/sidebar-layout";
-import { Button } from "@/components/ui/button";
-import { SidebarIcon } from "@/components/ui/icons";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
@@ -37,7 +34,7 @@ export function SessionHeader({
   onToggleDetails,
   renameSession,
 }: SessionHeaderProps) {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const hasFallbackSessionInfo =
     fallbackSessionInfo.repoOwner !== null ||
     fallbackSessionInfo.repoName !== null ||
@@ -101,17 +98,7 @@ export function SessionHeader({
     <header className="border-b border-border-muted flex-shrink-0">
       <div className="px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {!isOpen && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
-          )}
+          {!isOpen && <CollapsedSidebarControls />}
           <div>
             {isRenaming ? (
               <input

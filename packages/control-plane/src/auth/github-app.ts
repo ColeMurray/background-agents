@@ -109,6 +109,28 @@ const installationTokenResponseSchema = z
 /** GitHub installation token response. */
 type InstallationTokenResponse = z.infer<typeof installationTokenResponseSchema>;
 
+const installationRepositorySchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  full_name: z.string(),
+  description: z.string().nullable(),
+  private: z.boolean(),
+  archived: z.boolean(),
+  default_branch: z.string(),
+  language: z.string().nullable().optional(),
+  topics: z.array(z.string()).optional(),
+  owner: z.object({ login: z.string() }),
+});
+
+const listInstallationReposResponseSchema = z.object({
+  total_count: z.number(),
+  repositories: z.array(installationRepositorySchema),
+});
+
+type ListInstallationReposResponse = z.infer<typeof listInstallationReposResponseSchema>;
+
+const repositoryBranchesResponseSchema = z.array(z.object({ name: z.string() }));
+
 /**
  * Base64URL encode a Uint8Array or string.
  */
@@ -433,28 +455,6 @@ export async function getCachedInstallationTokenWithExpiry(
 export type { InstallationRepository } from "@open-inspect/shared";
 
 /**
- * GitHub API response for installation repositories.
- */
-interface ListInstallationReposResponse {
-  total_count: number;
-  repository_selection: "all" | "selected";
-  repositories: Array<{
-    id: number;
-    name: string;
-    full_name: string;
-    description: string | null;
-    private: boolean;
-    archived: boolean;
-    default_branch: string;
-    language: string | null;
-    topics?: string[];
-    owner: {
-      login: string;
-    };
-  }>;
-}
-
-/**
  * List all repositories accessible to the GitHub App installation.
  *
  * Fetches page 1 sequentially to learn total_count, then fetches any
@@ -495,7 +495,12 @@ export async function listInstallationRepositories(
       );
     }
 
-    const data = (await response.json()) as ListInstallationReposResponse;
+    const raw = await response.json();
+    const parsed = listInstallationReposResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`Failed to list installation repositories (page ${page}): invalid response`);
+    }
+    const data = parsed.data;
     const fetchMs = Math.round((performance.now() - pageStart) * 100) / 100;
 
     return { data, timing: { page, fetchMs, repoCount: data.repositories.length } };
@@ -602,16 +607,12 @@ export async function getInstallationRepository(
     throw new Error(`Failed to fetch repository: ${response.status} ${error}`);
   }
 
-  const data = (await response.json()) as {
-    id: number;
-    name: string;
-    full_name: string;
-    description: string | null;
-    private: boolean;
-    archived: boolean;
-    default_branch: string;
-    owner: { login: string };
-  };
+  const raw = await response.json();
+  const parsed = installationRepositorySchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Failed to fetch repository: invalid response");
+  }
+  const data = parsed.data;
 
   return {
     id: data.id,
@@ -657,7 +658,12 @@ export async function listRepositoryBranches(
       throw new Error(`Failed to list branches: ${response.status} ${error}`);
     }
 
-    const data = (await response.json()) as { name: string }[];
+    const raw = await response.json();
+    const parsed = repositoryBranchesResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("Failed to list branches: invalid response");
+    }
+    const data = parsed.data;
     branches.push(...data.map((b) => ({ name: b.name })));
 
     if (data.length < 100) break;

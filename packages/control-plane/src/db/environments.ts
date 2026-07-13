@@ -207,8 +207,8 @@ export class EnvironmentStore {
       this.db.prepare("DELETE FROM environment_secrets WHERE environment_id = ?").bind(id),
       this.db
         .prepare(
-          `UPDATE environment_images SET status = 'superseded'
-           WHERE environment_id = ? AND status IN ('building', 'ready')`
+          `UPDATE image_builds SET status = 'superseded'
+           WHERE scope_kind = 'environment' AND scope_id = ? AND status IN ('building', 'ready')`
         )
         .bind(id),
       this.db.prepare("DELETE FROM environments WHERE id = ?").bind(id),

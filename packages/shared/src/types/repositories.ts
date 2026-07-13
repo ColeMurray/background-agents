@@ -60,8 +60,8 @@ export interface SessionListRepository {
  * before multi-repo support carry no repo identity (`artifactRepo === null`)
  * and by construction belong to the session's primary. Identity is compared
  * case-insensitively, matching repo-identity comparison elsewhere. This is the
- * single home of that convention — the control-plane per-repo prUrl projection
- * (findPrArtifactForRepo) and the web per-repo PR chips both go through here.
+ * single home of that convention — the control-plane and web PR-artifact
+ * lookups (each a native find over its own artifact shape) go through here.
  */
 export function prArtifactBelongsToRepo(
   artifactRepo: { repoOwner: string; repoName: string } | null,
