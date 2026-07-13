@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared";
-import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import {
+  CollapsedSidebarControls,
+  SidebarToggleButton,
+  useSidebarContext,
+} from "@/components/sidebar-layout";
+import { BackIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { integrationSettingsComponents } from "@/components/settings/integrations/integration-settings-registry";
 
@@ -15,7 +18,7 @@ function getIntegration(id: string) {
 
 export default function IntegrationDetailPage() {
   const params = useParams<{ id: string }>();
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const isMobile = useIsMobile();
 
   const integration = getIntegration(params.id);
@@ -34,16 +37,7 @@ export default function IntegrationDetailPage() {
       <header className="border-b border-border-muted flex-shrink-0">
         <div className="px-4 py-3 flex items-center gap-2">
           {!isOpen && <CollapsedSidebarControls />}
-          {isOpen && isMobile && (
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
-          )}
+          {isOpen && isMobile && <SidebarToggleButton label="Toggle sidebar" />}
           <Link
             href="/settings?tab=integrations"
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
