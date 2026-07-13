@@ -62,6 +62,8 @@ export class E2BSandboxProvider implements SandboxProvider {
    * we fall back to the provider default (no worse than before).
    */
   private readonly effectiveTimeoutSeconds = new Map<string, number>();
+  /** Provider object ids with a TTL refresh in flight, to coalesce concurrent activity. */
+  private readonly refreshInFlight = new Set<string>();
 
   constructor(
     private readonly client: E2BRestClient,
@@ -236,6 +238,11 @@ export class E2BSandboxProvider implements SandboxProvider {
     );
     const lastMs = this.lastActivityRefreshMs.get(config.providerObjectId) ?? 0;
     if (nowMs - lastMs < throttleMs) return;
+    // Coalesce concurrent activity: a second call that arrives before the first
+    // refresh resolves would otherwise fire a duplicate (both saw the stale
+    // lastActivityRefreshMs). Skip while one is already in flight.
+    if (this.refreshInFlight.has(config.providerObjectId)) return;
+    this.refreshInFlight.add(config.providerObjectId);
 
     try {
       if (effectiveTimeoutSeconds > E2B_MAX_TTL_SECONDS) {
@@ -253,6 +260,8 @@ export class E2BSandboxProvider implements SandboxProvider {
         session_id: config.sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      this.refreshInFlight.delete(config.providerObjectId);
     }
   }
 
@@ -276,6 +285,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   private clearSandboxState(providerObjectId: string): void {
     this.lastActivityRefreshMs.delete(providerObjectId);
     this.effectiveTimeoutSeconds.delete(providerObjectId);
+    this.refreshInFlight.delete(providerObjectId);
   }
 
   private buildMetadata(config: CreateSandboxConfig): Record<string, string> {

@@ -174,6 +174,21 @@ describe("E2BSandboxProvider", () => {
     expect(client.refreshKeepalive).toHaveBeenCalledTimes(1);
   });
 
+  it("onUserActivity coalesces concurrent calls into one refresh", async () => {
+    // Both calls see the stale lastActivityRefreshMs; the in-flight guard must
+    // stop the second from firing a duplicate refresh before the first resolves.
+    let release: () => void = () => {};
+    const client = mockClient({
+      refreshKeepalive: vi.fn(() => new Promise<void>((r) => (release = r))),
+    });
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    const a = provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
+    const b = provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
+    release();
+    await Promise.all([a, b]);
+    expect(client.refreshKeepalive).toHaveBeenCalledTimes(1);
+  });
+
   it("honors config.timeoutSeconds on create and resume (child sandboxes)", async () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);
