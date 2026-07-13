@@ -237,7 +237,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       OPENINSPECT_BIN_INSTALL_DIR: USER_BIN,
       NO_PROXY: LOCAL_NO_PROXY,
       no_proxy: LOCAL_NO_PROXY,
-      SANDBOX_VERSION: "opencomputer-v3-opencode-1-17-18",
+      SANDBOX_VERSION: "v54-opencode-1-17-18",
     })
     .workdir(`${SANDBOX_HOME}/workspace`)
     .builderMemory(options.builderMemoryMb);
