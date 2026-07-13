@@ -46,6 +46,11 @@ export default defineConfig({
         },
         miniflare: {
           bindings: {
+            // Pin explicitly: the workers pool also loads `.dev.vars` (used for
+            // local e2e against other providers), and bindings defined here take
+            // precedence — keeping the suite deterministic regardless of local
+            // dev configuration.
+            SANDBOX_PROVIDER: "modal",
             INTERNAL_CALLBACK_SECRET: "test-hmac-secret-for-integration-tests",
             TOKEN_ENCRYPTION_KEY: "test-encryption-key-32chars-long!",
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),

@@ -44,6 +44,7 @@ Create accounts on these services before continuing:
 | [Daytona](https://app.daytona.io) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
+| [E2B](https://e2b.dev) _(optional)_                       | Sandbox infrastructure when `sandbox_provider = "e2b"`          |
 | [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
 | [Anthropic](https://console.anthropic.com)                | Claude API                                                      |
 | [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
@@ -225,6 +226,35 @@ for the full runtime, snapshot, and resource configuration model.
 
 For the full template build and runtime details, see
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md).
+
+### E2B
+
+> Only required when `sandbox_provider = "e2b"`.
+
+E2B needs a single credential — the **API key** (`e2b_api_key`). The control plane uses it at
+runtime for the E2B REST API, and the `e2b-infra` module uses it to build the sandbox template (via
+the E2B Template SDK). Create it at the [E2B dashboard](https://e2b.dev) → API Keys.
+
+1. Set `sandbox_provider = "e2b"` in `terraform.tfvars`.
+2. Set `e2b_api_key` and `e2b_template_id` (e.g. `open-inspect-sandbox`).
+3. Terraform's `e2b-infra` module builds the template automatically on `terraform apply`, and
+   rebuilds it when `packages/e2b-infra` or `packages/sandbox-runtime` change. To build manually:
+   ```bash
+   cd packages/e2b-infra && npm install
+   E2B_API_KEY=e2b_… E2B_TEMPLATE_ID=open-inspect-sandbox node build-template.py
+   ```
+
+The control plane calls the E2B REST API directly — no shim service to deploy. E2B uses pause/resume
+(like Daytona). The runtime/TTL limits are **plan limits** the API cannot report, so configure them
+per plan: on **Hobby** (~1h caps) keep the `e2b_sandbox_timeout_seconds` / `e2b_runtime_cap_seconds`
+defaults (3300) — sessions longer than the cap are pause/resume-cycled transparently. On paid plans
+with longer runtime limits, raise `e2b_sandbox_timeout_seconds` and set
+`e2b_runtime_cap_seconds = 0` to disable the cycling. See
+[Sandbox Provider Models](SANDBOX_PROVIDER_MODELS.md) for the architecture.
+
+> **Important**: Like Daytona, the E2B provider does not auto-inject LLM API keys. Add
+> `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets after deploying. See
+> [Secrets Management](SECRETS.md).
 
 ### Anthropic
 
@@ -457,6 +487,10 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # vercel_base_snapshot_id   = "snapshot_xxxxx" # Optional manual override; skips managed snapshot builds
 # vercel_sandbox_runtime    = "node24"
 # vercel_snapshot_expiration_ms = 0
+
+# E2B (only required when sandbox_provider = "e2b")
+# e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
+# e2b_template_id           = "open-inspect-sandbox"
 
 # GitHub App (used for both OAuth and repository access)
 github_client_id     = "Iv1.abc123..."           # From GitHub App settings

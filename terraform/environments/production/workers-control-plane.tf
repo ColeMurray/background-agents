@@ -108,6 +108,12 @@ module "control_plane_worker" {
     ] : [],
     local.use_vercel_backend && var.vercel_base_snapshot_id == "" ? [
       { name = "VERCEL_BASE_SNAPSHOT_NAME", value = module.vercel_sandbox_infra[0].snapshot_name },
+    ] : [],
+    local.use_e2b_backend ? [
+      { name = "E2B_API_URL", value = var.e2b_api_url },
+      { name = "E2B_TEMPLATE_ID", value = var.e2b_template_id },
+      { name = "E2B_SANDBOX_TIMEOUT_SECONDS", value = tostring(var.e2b_sandbox_timeout_seconds) },
+      { name = "E2B_RUNTIME_CAP_SECONDS", value = tostring(var.e2b_runtime_cap_seconds) },
     ] : []
   )
 
@@ -136,6 +142,9 @@ module "control_plane_worker" {
     ] : [],
     local.use_vercel_backend ? [
       { name = "VERCEL_TOKEN", value = var.vercel_sandbox_token },
+    ] : [],
+    local.use_e2b_backend ? [
+      { name = "E2B_API_KEY", value = var.e2b_api_key },
     ] : [],
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.
     # Shares the variable with the slack-bot worker; bound here so the same
@@ -168,5 +177,6 @@ module "control_plane_worker" {
     module.daytona_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
+    module.e2b_infra,
   ]
 }

@@ -18,6 +18,10 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("modal")).toBe("modal");
   });
 
+  it('returns "e2b" for "e2b"', () => {
+    expect(resolveSandboxBackendName("e2b")).toBe("e2b");
+  });
+
   it('returns "daytona" for "daytona"', () => {
     expect(resolveSandboxBackendName("daytona")).toBe("daytona");
   });
@@ -33,6 +37,7 @@ describe("resolveSandboxBackendName", () => {
   it("is case-insensitive", () => {
     expect(resolveSandboxBackendName("MODAL")).toBe("modal");
     expect(resolveSandboxBackendName("Daytona")).toBe("daytona");
+    expect(resolveSandboxBackendName("E2B")).toBe("e2b");
     expect(resolveSandboxBackendName("DAYTONA")).toBe("daytona");
     expect(resolveSandboxBackendName("VERCEL")).toBe("vercel");
     expect(resolveSandboxBackendName("OPENCOMPUTER")).toBe("opencomputer");
@@ -43,6 +48,7 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("  daytona  ")).toBe("daytona");
     expect(resolveSandboxBackendName("  vercel  ")).toBe("vercel");
     expect(resolveSandboxBackendName("  opencomputer  ")).toBe("opencomputer");
+    expect(resolveSandboxBackendName("  e2b  ")).toBe("e2b");
   });
 
   it("throws for unsupported provider", () => {
@@ -58,6 +64,10 @@ describe("isModalSandboxBackend", () => {
 
   it("returns true for undefined (default)", () => {
     expect(isModalSandboxBackend(undefined)).toBe(true);
+  });
+
+  it("returns false for e2b", () => {
+    expect(isModalSandboxBackend("e2b")).toBe(false);
   });
 
   it("returns false for daytona", () => {

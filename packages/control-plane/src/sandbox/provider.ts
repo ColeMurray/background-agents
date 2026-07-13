@@ -439,4 +439,31 @@ export interface SandboxProvider {
    * Only available if `capabilities.supportsExplicitStop` is true.
    */
   stopSandbox?(config: StopConfig): Promise<StopResult>;
+
+  /**
+   * Pause a sandbox so it can be resumed later (state preserved).
+   *
+   * Preferred over {@link stopSandbox} on idle/heartbeat-stale paths when the
+   * provider supports it, so the user can resume rather than spawn fresh.
+   * Providers that don't implement this fall through to {@link stopSandbox}.
+   */
+  pauseSandbox?(config: StopConfig): Promise<StopResult>;
+
+  /**
+   * Best-effort hint that the user is active; the provider may refresh sandbox
+   * TTLs. Called from the activity path; failures must be non-fatal. Providers
+   * that don't implement it leave the activity path unchanged.
+   */
+  onUserActivity?(config: { providerObjectId: string; sessionId: string }): Promise<void>;
+
+  /**
+   * Whether the sandbox is approaching a provider-imposed continuous-runtime
+   * cap and should be pause/resume-cycled to reset it. Called from the alarm
+   * handler. Providers without a runtime cap omit this (treated as no reset).
+   */
+  shouldResetRuntime?(config: {
+    providerObjectId: string;
+    startedAtMs: number;
+    nowMs: number;
+  }): Promise<{ shouldReset: boolean }>;
 }

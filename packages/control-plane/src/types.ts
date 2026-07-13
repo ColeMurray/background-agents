@@ -86,7 +86,7 @@ export interface Env {
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", or "opencomputer"
+  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -104,6 +104,12 @@ export interface Env {
   VERCEL_RUNTIME?: string; // Vercel sandbox runtime (default: node24)
   VERCEL_SANDBOX_API_BASE_URL?: string; // Override for tests or non-default Vercel API base URL
   VERCEL_SNAPSHOT_EXPIRATION_MS?: string; // Snapshot expiration in ms; 0 means no expiration
+
+  E2B_API_KEY?: string; // E2B REST API key (X-API-Key header + HMAC derivation)
+  E2B_API_URL?: string; // E2B REST API base URL (default https://api.e2b.app)
+  E2B_TEMPLATE_ID?: string; // Pre-built E2B template ID
+  E2B_SANDBOX_TIMEOUT_SECONDS?: string; // Sandbox TTL in seconds; Hobby plans must set 3300
+  E2B_RUNTIME_CAP_SECONDS?: string; // Continuous-runtime cap before a pause/resume reset; 0 disables (paid default), Hobby must set 3300
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

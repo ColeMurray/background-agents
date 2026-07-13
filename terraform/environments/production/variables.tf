@@ -446,6 +446,51 @@ variable "vercel_snapshot_expiration_ms" {
   default     = 0
 }
 
+# -----------------------------------------------------------------------------
+# E2B (only required when sandbox_provider = "e2b")
+# -----------------------------------------------------------------------------
+
+variable "e2b_api_key" {
+  description = "E2B REST API key — runtime (control-plane → E2B API + code-server HMAC)"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "e2b" || length(var.e2b_api_key) > 0
+    error_message = "e2b_api_key must be set when sandbox_provider = 'e2b'."
+  }
+}
+
+variable "e2b_api_url" {
+  description = "E2B REST API base URL"
+  type        = string
+  default     = "https://api.e2b.app"
+}
+
+variable "e2b_template_id" {
+  description = "E2B template name built by the e2b-infra module and used for fresh sandboxes"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "e2b" || length(var.e2b_template_id) > 0
+    error_message = "e2b_template_id must be set when sandbox_provider = 'e2b'."
+  }
+}
+
+variable "e2b_sandbox_timeout_seconds" {
+  description = "Sandbox TTL in seconds. Default assumes a paid E2B plan. Hobby caps TTL at 3600 — set 3300."
+  type        = number
+  default     = 7200
+}
+
+variable "e2b_runtime_cap_seconds" {
+  description = "Continuous-runtime cap in seconds before a transparent pause/resume reset. The cap is an E2B plan limit (~1h on Hobby) the API cannot report, so set it per plan. Default 0 = cycling disabled (paid plans). Hobby must set 3300 (just under the 1h cap)."
+  type        = number
+  default     = 0
+}
+
 variable "nextauth_secret" {
   description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
   type        = string
@@ -457,13 +502,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', or 'opencomputer'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel", "opencomputer"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', or 'opencomputer'."
+    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
   }
 }
 
