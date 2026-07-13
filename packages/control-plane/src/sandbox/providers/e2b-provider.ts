@@ -6,7 +6,8 @@
 
 import type { SandboxSettings } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
-import { buildSandboxEnvVars, deriveCodeServerPassword, resolveTunnelPorts } from "./helpers";
+import { buildSandboxEnvVars, deriveCodeServerPassword } from "./helpers";
+import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxDetail } from "../e2b-rest-client";
 import { E2BApiError, E2BConflictError, E2BNotFoundError } from "../e2b-rest-client";
@@ -24,7 +25,6 @@ import {
 } from "../provider";
 
 const log = createLogger("e2b-provider");
-const CODE_SERVER_PORT = 8080;
 
 // Defaults assume a PAID E2B plan (long runtime limits): the system-wide
 // sandbox TTL and runtime-cap cycling disabled. Hobby (~1h TTL + continuous-
@@ -55,6 +55,14 @@ export class E2BSandboxProvider implements SandboxProvider {
   };
 
   private readonly lastActivityRefreshMs = new Map<string, number>();
+  /**
+   * Effective TTL (seconds) each sandbox was created/resumed with, keyed by
+   * provider object id. Activity refreshes must reuse this — not the provider
+   * default — so a child sandbox created with a shorter timeout isn't silently
+   * extended to the default on the next keepalive. Lost on DO eviction, where
+   * we fall back to the provider default (no worse than before).
+   */
+  private readonly effectiveTimeoutSeconds = new Map<string, number>();
 
   constructor(
     private readonly client: E2BRestClient,
@@ -74,10 +82,12 @@ export class E2BSandboxProvider implements SandboxProvider {
         codeServerPassword,
       });
       const metadata = this.buildMetadata(config);
+      const effectiveTimeoutSeconds =
+        config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
       const sandbox = await this.client.createSandbox({
         templateID: this.client.config.templateId,
         metadata,
-        timeout: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
+        timeout: effectiveTimeoutSeconds,
         autoPause: false,
       });
 
@@ -103,6 +113,8 @@ export class E2BSandboxProvider implements SandboxProvider {
         throw error;
       }
 
+      this.effectiveTimeoutSeconds.set(sandbox.sandboxID, effectiveTimeoutSeconds);
+
       const { codeServerUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
         config.codeServerEnabled,
@@ -125,6 +137,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   async pauseSandbox(config: StopConfig): Promise<StopResult> {
+    this.clearSandboxState(config.providerObjectId);
     try {
       try {
         await this.client.pauseSandbox(config.providerObjectId);
@@ -169,6 +182,8 @@ export class E2BSandboxProvider implements SandboxProvider {
         };
       }
 
+      this.effectiveTimeoutSeconds.set(config.providerObjectId, timeoutSeconds);
+
       const codeServerPassword = config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
@@ -195,7 +210,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    this.lastActivityRefreshMs.delete(config.providerObjectId);
+    this.clearSandboxState(config.providerObjectId);
     try {
       try {
         await this.client.killSandbox(config.providerObjectId);
@@ -211,23 +226,25 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async onUserActivity(config: { providerObjectId: string; sessionId: string }): Promise<void> {
     const nowMs = Date.now();
+    // Reuse the TTL this sandbox was created/resumed with — not the provider
+    // default — so a short-lived (e.g. agent-child) sandbox isn't extended.
+    const effectiveTimeoutSeconds =
+      this.effectiveTimeoutSeconds.get(config.providerObjectId) ??
+      this.providerConfig.sandboxTimeoutSeconds;
     const throttleMs = Math.min(
-      (this.providerConfig.sandboxTimeoutSeconds * 1000) / 4,
+      (effectiveTimeoutSeconds * 1000) / 4,
       MAX_ACTIVITY_REFRESH_INTERVAL_MS
     );
     const lastMs = this.lastActivityRefreshMs.get(config.providerObjectId) ?? 0;
     if (nowMs - lastMs < throttleMs) return;
 
     try {
-      if (this.providerConfig.sandboxTimeoutSeconds > E2B_MAX_TTL_SECONDS) {
-        await this.client.setTimeout(
-          config.providerObjectId,
-          this.providerConfig.sandboxTimeoutSeconds
-        );
+      if (effectiveTimeoutSeconds > E2B_MAX_TTL_SECONDS) {
+        await this.client.setTimeout(config.providerObjectId, effectiveTimeoutSeconds);
       } else {
         await this.client.refreshKeepalive(
           config.providerObjectId,
-          Math.min(this.providerConfig.sandboxTimeoutSeconds, E2B_MAX_TTL_SECONDS)
+          Math.min(effectiveTimeoutSeconds, E2B_MAX_TTL_SECONDS)
         );
       }
       this.lastActivityRefreshMs.set(config.providerObjectId, nowMs);
@@ -256,6 +273,12 @@ export class E2BSandboxProvider implements SandboxProvider {
     return { shouldReset: elapsedSeconds >= this.providerConfig.runtimeCapSeconds };
   }
 
+  /** Drop per-sandbox in-memory state once a sandbox is paused or stopped. */
+  private clearSandboxState(providerObjectId: string): void {
+    this.lastActivityRefreshMs.delete(providerObjectId);
+    this.effectiveTimeoutSeconds.delete(providerObjectId);
+  }
+
   private buildMetadata(config: CreateSandboxConfig): Record<string, string> {
     return {
       openinspect_framework: "open-inspect",
@@ -275,8 +298,9 @@ export class E2BSandboxProvider implements SandboxProvider {
     let codeServerUrl: string | undefined;
 
     if (codeServerEnabled) {
-      codeServerUrl = this.client.getHostnameForPort(e2bSandboxId, CODE_SERVER_PORT, domain);
-      tunnelPorts = tunnelPorts.filter((p) => p !== CODE_SERVER_PORT);
+      const { codeServerPort } = resolveServicePorts(sandboxSettings);
+      codeServerUrl = this.client.getHostnameForPort(e2bSandboxId, codeServerPort, domain);
+      tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
     }
 
     const tunnelUrls =

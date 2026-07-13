@@ -341,7 +341,18 @@ export class E2BRestClient {
       };
       if (body !== undefined) init.body = JSON.stringify(body);
 
-      const response = await fetch(url, init);
+      let response: Response;
+      try {
+        response = await fetch(url, init);
+      } catch (error) {
+        // A timeout fires controller.abort(), which rejects the fetch with an
+        // AbortError. Surface it as a transient timeout so it doesn't count
+        // toward the sandbox circuit breaker as a permanent failure.
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new Error(`E2B request timeout after ${timeoutMs}ms (${method} ${path})`);
+        }
+        throw error;
+      }
 
       if (response.status === 404) {
         throw new E2BNotFoundError((await response.text()) || `Not found: ${path}`);

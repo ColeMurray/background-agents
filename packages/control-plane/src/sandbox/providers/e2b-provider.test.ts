@@ -269,4 +269,53 @@ describe("E2BSandboxProvider", () => {
       message: expect.stringContaining("rate-limited"),
     } satisfies Partial<SandboxProviderError>);
   });
+
+  it("SESSION_CONFIG carries mcp_servers and the multi-repo repositories list", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      mcpServers: [{ id: "m1", name: "linear", type: "remote", url: "https://mcp", enabled: true }],
+      repositories: [
+        { repoOwner: "o", repoName: "r", baseBranch: "main" },
+        { repoOwner: "o2", repoName: "r2", baseBranch: "dev" },
+      ],
+    });
+    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    const sessionConfig = JSON.parse(env.SESSION_CONFIG);
+    expect(sessionConfig.mcp_servers).toHaveLength(1);
+    expect(sessionConfig.repositories).toEqual([
+      { repo_owner: "o", repo_name: "r", branch: "main" },
+      { repo_owner: "o2", repo_name: "r2", branch: "dev" },
+    ]);
+  });
+
+  it("emits CODE_SERVER_PORT (default, and a custom configured port)", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+
+    await provider.createSandbox(baseCreateConfig);
+    expect(vi.mocked(client.writeSessionEnv).mock.calls[0][1].CODE_SERVER_PORT).toBe("8080");
+
+    vi.clearAllMocks();
+    const result = await provider.createSandbox({
+      ...baseCreateConfig,
+      sandboxSettings: { codeServerPort: 9999 } as never,
+    });
+    expect(vi.mocked(client.writeSessionEnv).mock.calls[0][1].CODE_SERVER_PORT).toBe("9999");
+    // The configured port must drive the code-server URL too, not a hardcoded 8080.
+    expect(result.codeServerUrl).toBe("https://9999-e2b-id.e2b.app");
+  });
+
+  it("onUserActivity refreshes with the sandbox's effective timeout, not the provider default", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    // Child sandbox created with a longer TTL (> E2B's 1h single-refresh cap).
+    await provider.createSandbox({ ...baseCreateConfig, timeoutSeconds: 7200 });
+
+    await provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
+    // Uses setTimeout(7200) — the effective TTL — not refreshKeepalive at the 1800 default.
+    expect(client.setTimeout).toHaveBeenCalledWith("e2b-id", 7200);
+    expect(client.refreshKeepalive).not.toHaveBeenCalled();
+  });
 });

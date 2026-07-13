@@ -5,9 +5,11 @@
  * so the wire format stays in one place rather than inlined into the provider.
  */
 
-import { computeHmacHex, MAX_TUNNEL_PORTS } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared";
 import type { SourceControlProviderName } from "../../source-control";
+import { buildSessionConfig } from "../sandbox-env";
 import type { CreateSandboxConfig } from "../provider";
+import { resolveServicePorts } from "./port-resolution";
 
 /**
  * Build the per-session env map delivered to the sandbox supervisor.
@@ -25,16 +27,19 @@ export function buildSandboxEnvVars(
 ): Record<string, string> {
   const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
 
-  const sessionConfig: Record<string, string> = {
-    session_id: config.sessionId,
-    repo_owner: config.repoOwner ?? "",
-    repo_name: config.repoName ?? "",
+  // Canonical SESSION_CONFIG shared with every provider (sandbox-env.ts) so the
+  // wire shape can't silently drift — this carries mcp_servers and the
+  // multi-repo `repositories[]` list that a hand-rolled object used to drop.
+  const sessionConfig = buildSessionConfig({
+    sessionId: config.sessionId,
+    repoOwner: config.repoOwner,
+    repoName: config.repoName,
     provider: config.provider,
     model: config.model,
-  };
-  if (config.branch) {
-    sessionConfig.branch = config.branch;
-  }
+    mcpServers: config.mcpServers,
+    branch: config.branch,
+    repositories: config.repositories,
+  });
 
   Object.assign(envVars, {
     PYTHONUNBUFFERED: "1",
@@ -49,6 +54,10 @@ export function buildSandboxEnvVars(
     // and fails before brokering a token. Point it at a user-writable path.
     OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
   });
+
+  if (config.codeServerEnabled) {
+    envVars.CODE_SERVER_PORT = String(resolveServicePorts(config.sandboxSettings).codeServerPort);
+  }
 
   if (opts.codeServerPassword) {
     envVars.CODE_SERVER_PASSWORD = opts.codeServerPassword;
@@ -84,17 +93,4 @@ export function buildSandboxEnvVars(
 export async function deriveCodeServerPassword(sandboxId: string, secret: string): Promise<string> {
   const digest = await computeHmacHex(`code-server:${sandboxId}`, secret);
   return digest.slice(0, 32);
-}
-
-/** Validate and cap user-configured tunnel ports (ported from config.py). */
-export function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
-  if (!rawPorts) return [];
-  const ports: number[] = [];
-  for (const value of rawPorts) {
-    if (Number.isInteger(value) && value >= 1 && value <= 65535) {
-      ports.push(value);
-    }
-    if (ports.length >= MAX_TUNNEL_PORTS) break;
-  }
-  return ports;
 }

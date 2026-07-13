@@ -54,6 +54,18 @@ RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
   # /tmp/opencode, so make them world-writable (sticky).
   && chmod 1777 /workspace /tmp/opencode
 
+# Bake the git credential-helper shim system-wide, matching the Vercel/Daytona
+# base images and the runtime's _ensure_credential_helper_configured fallback.
+# E2B runs as a non-root user that cannot write /usr/local/bin at runtime, so
+# the shim must exist at build time — otherwise private-repo clone/fetch/push
+# get no brokered credentials. The shim execs the runtime's Python helper, found
+# on PYTHONPATH=/app where build-template.py stages sandbox_runtime.
+RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"' \
+     > /usr/local/bin/oi-git-credentials \
+  && chmod 0755 /usr/local/bin/oi-git-credentials \
+  && git config --system credential.helper /usr/local/bin/oi-git-credentials \
+  && git config --system credential.useHttpPath true
+
 # Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
 # so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
 # control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.

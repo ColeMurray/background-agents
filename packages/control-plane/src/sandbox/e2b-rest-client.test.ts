@@ -98,6 +98,16 @@ describe("E2BRestClient", () => {
     await expect(client.getSandbox("x")).rejects.toThrow(E2BApiError);
   });
 
+  it("surfaces a request-timeout abort as a transient-classifiable timeout error", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    const abort = new Error("The operation was aborted");
+    abort.name = "AbortError";
+    fetchSpy.mockRejectedValue(abort);
+    // Must contain "timeout" so SandboxProviderError classifies it transient
+    // (isTransientNetworkError), not permanent — otherwise it trips the breaker.
+    await expect(client.getSandbox("x")).rejects.toThrow(/timeout/i);
+  });
+
   it("getHostnameForPort is deterministic", () => {
     const client = new E2BRestClient(defaultConfig);
     expect(client.getHostnameForPort("abc", 8080)).toBe("https://8080-abc.e2b.app");
