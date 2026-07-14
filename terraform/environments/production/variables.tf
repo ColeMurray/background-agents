@@ -486,13 +486,7 @@ variable "e2b_sandbox_timeout_seconds" {
 }
 
 variable "e2b_auto_pause" {
-  description = "Pause (not kill) the sandbox when its TTL expires, so it stays resumable. Default true."
-  type        = bool
-  default     = true
-}
-
-variable "e2b_auto_resume" {
-  description = "Wake a paused sandbox on inbound activity. Only meaningful with e2b_auto_pause. Default true."
+  description = "Pause (not kill) the sandbox when its TTL expires, so it stays resumable and auto-resumes on activity. Default true."
   type        = bool
   default     = true
 }

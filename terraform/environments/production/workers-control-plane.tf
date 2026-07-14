@@ -114,7 +114,6 @@ module "control_plane_worker" {
       { name = "E2B_TEMPLATE_ID", value = var.e2b_template_id },
       { name = "E2B_SANDBOX_TIMEOUT_SECONDS", value = tostring(var.e2b_sandbox_timeout_seconds) },
       { name = "E2B_AUTO_PAUSE", value = tostring(var.e2b_auto_pause) },
-      { name = "E2B_AUTO_RESUME", value = tostring(var.e2b_auto_resume) },
     ] : []
   )
 

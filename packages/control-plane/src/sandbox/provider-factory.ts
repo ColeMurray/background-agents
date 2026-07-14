@@ -8,7 +8,6 @@ import { createDaytonaProvider, type DaytonaSandboxProvider } from "./providers/
 import {
   createE2BProvider,
   DEFAULT_E2B_AUTO_PAUSE,
-  DEFAULT_E2B_AUTO_RESUME,
   DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS,
   type E2BSandboxProvider,
 } from "./providers/e2b-provider";
@@ -140,7 +139,6 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
       DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS
     ),
     autoPause: parseBooleanEnv(env.E2B_AUTO_PAUSE, DEFAULT_E2B_AUTO_PAUSE),
-    autoResume: parseBooleanEnv(env.E2B_AUTO_RESUME, DEFAULT_E2B_AUTO_RESUME),
   });
 }
 

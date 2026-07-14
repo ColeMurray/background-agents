@@ -15,7 +15,6 @@ const providerConfig: E2BProviderConfig = {
   codeServerPasswordSecret: "secret",
   sandboxTimeoutSeconds: 1800,
   autoPause: true,
-  autoResume: true,
 };
 
 function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {

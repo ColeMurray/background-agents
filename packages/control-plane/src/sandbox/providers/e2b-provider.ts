@@ -33,19 +33,19 @@ const log = createLogger("e2b-provider");
 
 /** Sandbox TTL default. Hobby plans (~1h cap) should lower this via config. */
 export const DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS = DEFAULT_SANDBOX_TIMEOUT_SECONDS;
-/** Default to a recoverable stop: pause on timeout instead of kill. */
+/** Default to a recoverable stop: pause (and auto-resume) on timeout, not kill. */
 export const DEFAULT_E2B_AUTO_PAUSE = true;
-/** Default to waking a paused sandbox on inbound activity. */
-export const DEFAULT_E2B_AUTO_RESUME = true;
 
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;
   codeServerPasswordSecret: string;
   sandboxTimeoutSeconds: number;
-  /** Pause (not kill) when the sandbox TTL expires, so it stays resumable. */
+  /**
+   * Pause (not kill) when the sandbox TTL expires, so it stays resumable, and
+   * auto-resume it on inbound activity. Auto-resume tracks this flag — there's
+   * no reason to pause without it.
+   */
   autoPause: boolean;
-  /** Wake a paused sandbox on inbound activity (only meaningful with autoPause). */
-  autoResume: boolean;
 }
 
 export class E2BSandboxProvider implements SandboxProvider {
@@ -82,7 +82,9 @@ export class E2BSandboxProvider implements SandboxProvider {
         metadata,
         timeout: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
         autoPause: this.providerConfig.autoPause,
-        autoResume: this.providerConfig.autoResume,
+        // Auto-resume tracks auto-pause: a recoverable pause you can't auto-wake
+        // would be pointless.
+        autoResume: this.providerConfig.autoPause,
       });
 
       try {
