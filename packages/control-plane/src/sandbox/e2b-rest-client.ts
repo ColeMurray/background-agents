@@ -66,10 +66,8 @@ export interface E2BCreateSandboxParams {
 // Template builds (repo-image prebuilds)
 //
 // Per-repo prebuilt environments are E2B *templates* built on top of the base
-// template (`fromTemplate`), per E2B's guidance: template creates are much
-// faster than snapshot-forks and ~10x smaller on disk. The whole build flow is
-// REST-drivable with the runtime API key (verified live against /v3/templates
-// and /v2/templates/{id}/builds/{id} on 2026-06-04).
+// template (`fromTemplate`). The build flow is REST-drivable with the runtime
+// API key.
 // ---------------------------------------------------------------------------
 
 export interface E2BTemplateCreated {
