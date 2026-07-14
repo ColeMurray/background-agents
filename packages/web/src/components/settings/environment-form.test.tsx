@@ -78,6 +78,29 @@ function environment(
 }
 
 describe("EnvironmentForm", () => {
+  it("preserves a nested owner namespace when saving", async () => {
+    mocks.reposValue = [repo("group/subgroup", "web", 1)];
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <EnvironmentForm
+        mode="edit"
+        initialValues={environment([{ repoOwner: "group/subgroup", repoName: "web" }])}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        submitting={false}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /save environment/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositories: [{ repoOwner: "group/subgroup", repoName: "web", baseBranch: "main" }],
+      })
+    );
+  });
+
   it("marks the first repository as primary and reordering changes the submitted order", async () => {
     mocks.reposValue = [repo("acme", "backend", 1), repo("acme", "frontend", 2)];
     const onSubmit = vi.fn();
@@ -143,12 +166,12 @@ describe("EnvironmentForm", () => {
   });
 
   it("blocks selecting a repository whose name collides with a selected one", async () => {
-    mocks.reposValue = [repo("acme", "web", 1), repo("beta", "web", 2)];
+    mocks.reposValue = [repo("group/subgroup", "web", 1), repo("beta", "web", 2)];
     const user = userEvent.setup();
     render(
       <EnvironmentForm
         mode="edit"
-        initialValues={environment([{ repoOwner: "acme", repoName: "web" }])}
+        initialValues={environment([{ repoOwner: "group/subgroup", repoName: "web" }])}
         onSubmit={vi.fn()}
         onCancel={vi.fn()}
         submitting={false}
@@ -157,7 +180,7 @@ describe("EnvironmentForm", () => {
 
     await user.click(screen.getByRole("button", { name: "Repository selection" }));
     expect(screen.getByRole("checkbox", { name: /beta\/web/i })).toBeDisabled();
-    expect(screen.getByRole("checkbox", { name: /acme\/web/i })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: /group\/subgroup\/web/i })).toBeEnabled();
   });
 
   it("requires a name and at least one repository to submit", () => {

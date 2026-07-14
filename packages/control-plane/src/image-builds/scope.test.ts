@@ -187,6 +187,28 @@ describe("resolveScopeTarget", () => {
     expect(target).toMatchObject({ kind: "repo", repoId: 123 });
   });
 
+  it("resolves a repo scope with a nested owner namespace", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue({
+      repoId: 456,
+      repoOwner: "group/subgroup",
+      repoName: "web",
+      defaultBranch: "main",
+    });
+
+    const target = await resolveScopeTarget(
+      envWith(fakeDb({})),
+      repoImageBuildScope("group/subgroup", "web")
+    );
+
+    expect(scmProvider.checkRepositoryAccess).toHaveBeenCalledWith({
+      owner: "group/subgroup",
+      name: "web",
+    });
+    expect(target.repositories).toEqual([
+      { repoOwner: "group/subgroup", repoName: "web", baseBranch: "main" },
+    ]);
+  });
+
   it("throws scope-not-found when the repository is not installed", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(null);
 

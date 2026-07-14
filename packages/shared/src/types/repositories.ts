@@ -149,6 +149,28 @@ export interface RepositoryPair {
   repoName: string;
 }
 
+/** Format a structured repository identity for display or opaque selection keys. */
+export function formatRepositoryFullName(repository: RepositoryPair): string {
+  return `${repository.repoOwner}/${repository.repoName}`;
+}
+
+/** Encode a repository identity as the two path segments used by repository APIs. */
+export function encodeRepositoryPathSegments(repository: RepositoryPair): string {
+  return `${encodeURIComponent(repository.repoOwner)}/${encodeURIComponent(repository.repoName)}`;
+}
+
+/** Parse an owner/name string, preserving any nested namespace in the owner. */
+export function parseRepositoryFullName(fullName: string): RepositoryPair | null {
+  const separator = fullName.lastIndexOf("/");
+  if (separator <= 0 || separator === fullName.length - 1) return null;
+
+  const repoOwner = fullName.slice(0, separator);
+  const repoName = fullName.slice(separator + 1);
+  if (repoOwner.split("/").some((segment) => !segment)) return null;
+
+  return { repoOwner, repoName };
+}
+
 export class RepositoryPairValidationError extends Error {
   constructor(message: string) {
     super(message);

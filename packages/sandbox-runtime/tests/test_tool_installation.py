@@ -37,6 +37,10 @@ def _patch_paths(
         MockPath.side_effect = lambda p: Path(
             str(p)
             .replace("/app/sandbox_runtime/plugins/inspect-plugin.js", str(legacy))
+            .replace(
+                "/app/sandbox_runtime/plugins/repository-target.js",
+                str(Path(legacy).with_name("repository-target.js")),
+            )
             .replace("/app/sandbox_runtime/tools", str(tools))
             .replace("/app/sandbox_runtime/skills", str(skills))
             .replace("/app/sandbox_runtime/bin", str(bin_src))
@@ -66,6 +70,23 @@ class TestInstallTools:
         dest = workdir / ".opencode" / "tool" / "create-pull-request.js"
         assert dest.exists()
         assert dest.read_text() == "// legacy tool"
+
+    def test_repository_target_helper_copied_with_legacy_tool(self, tmp_path):
+        """The PR tool's repository target helper should be installed beside it."""
+        sup = _make_supervisor()
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+
+        legacy_tool = tmp_path / "app" / "sandbox" / "inspect-plugin.js"
+        legacy_tool.parent.mkdir(parents=True)
+        legacy_tool.write_text("// legacy tool")
+        legacy_tool.with_name("repository-target.js").write_text("// target helper")
+
+        with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools"):
+            sup._install_tools(workdir)
+
+        helper = workdir / ".opencode" / "tool" / "repository-target.js"
+        assert helper.read_text() == "// target helper"
 
     def test_tools_dir_files_copied(self, tmp_path):
         """All .js files from tools/ directory should be copied."""

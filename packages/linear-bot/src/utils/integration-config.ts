@@ -1,3 +1,4 @@
+import { encodeRepositoryPathSegments, parseRepositoryFullName } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { buildInternalAuthHeaders } from "./internal";
 
@@ -26,8 +27,8 @@ export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedL
     return DEFAULT_CONFIG;
   }
 
-  const [owner, name] = repo.split("/");
-  if (!owner || !name) {
+  const repository = parseRepositoryFullName(repo);
+  if (!repository) {
     return DEFAULT_CONFIG;
   }
 
@@ -36,7 +37,7 @@ export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedL
   let response: Response;
   try {
     response = await env.CONTROL_PLANE.fetch(
-      `https://internal/integration-settings/linear/resolved/${owner}/${name}`,
+      `https://internal/integration-settings/linear/resolved/${encodeRepositoryPathSegments(repository)}`,
       { headers }
     );
   } catch {

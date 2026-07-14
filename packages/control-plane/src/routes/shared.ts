@@ -145,12 +145,16 @@ export async function parseJsonBody<T>(request: Request): Promise<T | Response> 
 export function extractRepoParams(
   match: RegExpMatchArray
 ): { owner: string; name: string } | Response {
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
+  const encodedOwner = match.groups?.owner;
+  const encodedName = match.groups?.name;
+  if (!encodedOwner || !encodedName) {
     return error("Owner and name are required", 400);
   }
-  return { owner, name };
+  try {
+    return { owner: decodeURIComponent(encodedOwner), name: decodeURIComponent(encodedName) };
+  } catch {
+    return error("Owner and name must be valid URL path segments", 400);
+  }
 }
 
 /**

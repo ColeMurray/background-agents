@@ -1145,7 +1145,7 @@ describe("IntegrationSettingsStore", () => {
       await store.setGlobal("slack", {
         defaults: {
           routingRules: [
-            { keyword: "  FrontEnd ", target: "Acme/Web-App" },
+            { keyword: "  FrontEnd ", target: "Acme/Platform/Web-App" },
             { keyword: "api", target: "acme/api" },
           ],
         },
@@ -1153,7 +1153,7 @@ describe("IntegrationSettingsStore", () => {
 
       const result = await store.getGlobal("slack");
       expect(result?.defaults?.routingRules).toEqual([
-        { keyword: "frontend", target: "acme/web-app" },
+        { keyword: "frontend", target: "acme/platform/web-app" },
         { keyword: "api", target: "acme/api" },
       ]);
     });

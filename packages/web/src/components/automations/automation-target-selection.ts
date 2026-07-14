@@ -1,4 +1,8 @@
-import type { AutomationRepositoryInput } from "@open-inspect/shared";
+import {
+  formatRepositoryFullName,
+  parseRepositoryFullName,
+  type AutomationRepositoryInput,
+} from "@open-inspect/shared";
 import type { SessionTarget } from "@/lib/session-target";
 
 /**
@@ -16,7 +20,7 @@ export type SelectionMode = "single" | "multiple";
 
 /** Selection key for a repository: the lowercase full name, as the API stores it. */
 function repositoryKey(repoOwner: string, repoName: string): string {
-  return `${repoOwner}/${repoName}`.toLowerCase();
+  return formatRepositoryFullName({ repoOwner, repoName }).toLowerCase();
 }
 
 /**
@@ -145,8 +149,10 @@ export function buildRepositoriesPayload(
   initialRepositories: AutomationRepositoryInput[]
 ): AutomationRepositoryInput[] {
   return selectedRepoNames.map((key) => {
-    const [entryOwner = "", entryName = ""] = key.split("/");
-    const entry: AutomationRepositoryInput = { repoOwner: entryOwner, repoName: entryName };
+    const entry: AutomationRepositoryInput = parseRepositoryFullName(key) ?? {
+      repoOwner: "",
+      repoName: "",
+    };
     if (usesSingleRepository) {
       if (baseBranch.trim()) entry.baseBranch = baseBranch.trim();
     } else {

@@ -8,6 +8,7 @@ import {
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
   normalizeRoutingRules,
+  parseRepositoryFullName,
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
@@ -503,10 +504,18 @@ export class IntegrationSettingsStore {
         }
         // The owner segment excludes ":" (GitHub forbids it) so a repository
         // target can never collide with the bots' "env:<id>" value encoding.
-      } else if (typeof target !== "string" || !/^[^/\s:]+\/[^/\s]+$/.test(target.trim())) {
-        throw new IntegrationSettingsValidationError(
-          "routing rule target must be a repository in owner/name form"
-        );
+      } else {
+        const repository =
+          typeof target === "string" ? parseRepositoryFullName(target.trim()) : null;
+        if (
+          !repository ||
+          /[\s:]/.test(repository.repoOwner) ||
+          /[\s/]/.test(repository.repoName)
+        ) {
+          throw new IntegrationSettingsValidationError(
+            "routing rule target must be a repository in owner/name form"
+          );
+        }
       }
     }
     return normalizeRoutingRules(rules as SlackRoutingRule[]);

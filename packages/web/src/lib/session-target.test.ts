@@ -21,6 +21,12 @@ describe("parseEnvironmentOptionValue", () => {
 });
 
 describe("buildSessionTargetRequestFields", () => {
+  it("preserves a nested owner namespace in a repository target", () => {
+    expect(
+      buildSessionTargetRequestFields({ kind: "repo", repoFullName: "group/subgroup/web" }, "main")
+    ).toEqual({ repoOwner: "group/subgroup", repoName: "web", branch: "main" });
+  });
+
   it("emits exactly one target mode per kind (createSessionRequestSchema exclusivity)", () => {
     const branch = "develop";
 

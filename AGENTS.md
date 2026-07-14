@@ -139,10 +139,11 @@ under 72 characters. Use the PR body for details, not the commit message.
 - **Repo owners can be nested namespaces**: a `repo_owner` is not always a single segment. GitHub
   owners are (`octocat`), but GitLab subgroups nest (`group/subgroup`), so an owner may contain `/`.
   Only `repo_name` is a single path segment (it's the checkout directory under `/workspace`); the
-  owner is used solely in the clone URL. Don't validate or split owners as single segments —
-  `repo_config.parse_repositories` accepts `/`-joined owners (see `is_safe_repo_owner`), and any
-  `owner/name` splitting must split on the **last** `/`, not the first, or nested-namespace repos
-  break (a recurring bug class for non-GitHub providers).
+  owner remains part of the repository identity in clone URLs, API routes, manifests, and storage
+  keys. Don't validate or split owners as single segments. Use the shared repository identity
+  helpers in TypeScript; where a full `owner/name` string is unavoidable, split on the **last** `/`
+  and encode the owner as one API route segment. `repo_config.parse_repositories` accepts `/`-joined
+  owners (see `is_safe_repo_owner`).
 
 ## CI/CD
 

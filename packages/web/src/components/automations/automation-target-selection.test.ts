@@ -168,6 +168,12 @@ describe("nextBaseBranch", () => {
 });
 
 describe("buildRepositoriesPayload", () => {
+  it("preserves a nested owner namespace", () => {
+    expect(buildRepositoriesPayload(["group/subgroup/web"], true, "main", [])).toEqual([
+      { repoOwner: "group/subgroup", repoName: "web", baseBranch: "main" },
+    ]);
+  });
+
   it("includes the trimmed branch for a single-repository selection", () => {
     expect(buildRepositoriesPayload(["acme/web-app"], true, " release ", [])).toEqual([
       { repoOwner: "acme", repoName: "web-app", baseBranch: "release" },

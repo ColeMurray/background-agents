@@ -185,8 +185,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   });
   // Branch options for the sole selected repository (the only branch-pickable shape).
   const { branches, loading: loadingBranches } = useBranches(
-    selectedRepository?.owner ?? "",
-    selectedRepository?.name ?? ""
+    selectedRepository?.repoOwner ?? "",
+    selectedRepository?.repoName ?? ""
   );
 
   const isSlack = triggerType === "slack_event";

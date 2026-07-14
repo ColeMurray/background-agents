@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import type { Environment, ImageBuildStatus } from "@open-inspect/shared";
+import {
+  parseRepositoryFullName,
+  type Environment,
+  type ImageBuildStatus,
+} from "@open-inspect/shared";
 import type { ComboboxGroup, ComboboxOption } from "@/components/ui/combobox";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnvironments } from "@/hooks/use-environments";
@@ -27,7 +31,6 @@ import {
   getTargetConfigKey,
   getTargetSelectValue,
   isSessionTargetLaunchable,
-  parseRepoFullName,
   parseTargetSelectValue,
 } from "@/lib/session-target";
 
@@ -142,10 +145,10 @@ export function useSessionTargetPicker(): SessionTargetSelection {
   const [selectedBranch, setSelectedBranch] = useState<string>("");
 
   const selectedRepository =
-    sessionTarget?.kind === "repo" ? parseRepoFullName(sessionTarget.repoFullName) : null;
+    sessionTarget?.kind === "repo" ? parseRepositoryFullName(sessionTarget.repoFullName) : null;
   const { branches, loading: loadingBranches } = useBranches(
-    selectedRepository?.owner ?? "",
-    selectedRepository?.name ?? ""
+    selectedRepository?.repoOwner ?? "",
+    selectedRepository?.repoName ?? ""
   );
 
   // Prebuild status for the repository and environment options: the unified

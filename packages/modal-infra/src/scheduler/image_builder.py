@@ -31,6 +31,7 @@ import subprocess
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 import httpx
 import modal
@@ -638,10 +639,12 @@ def _unit_trigger_path(unit: dict) -> str | None:
     scope_kind = unit.get("scopeKind", "")
     scope_id = unit.get("scopeId", "")
     if scope_kind == "repo":
-        repo_owner, _, repo_name = scope_id.partition("/")
-        if not repo_owner or not repo_name:
+        repo_owner, separator, repo_name = scope_id.rpartition("/")
+        if not separator or not repo_owner or not repo_name:
             return None
-        return f"/image-builds/trigger/repo/{repo_owner}/{repo_name}"
+        return (
+            f"/image-builds/trigger/repo/{quote(repo_owner, safe='')}/{quote(repo_name, safe='')}"
+        )
     if scope_kind == "environment" and scope_id:
         return f"/image-builds/trigger/environment/{scope_id}"
     return None

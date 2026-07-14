@@ -5,7 +5,7 @@ The supervisor derives the repository list once from SESSION_CONFIG
 writes it to REPO_MANIFEST_FILE_PATH. Every other consumer — the bridge's
 push targeting and the JS create-pull-request tool — reads that manifest
 instead of re-deriving the ``/workspace/<repo_name>`` convention, so the
-checkout layout has exactly one owner.
+checkout layout has exactly one authority.
 """
 
 import json
@@ -81,11 +81,12 @@ def parse_repositories(
 ) -> list[RepoEntry]:
     """Build the ordered repository list from SESSION_CONFIG or the scalar env.
 
-    Checkout paths derive from repo_name, so owners/names must be safe single
-    path segments and names must be unique (case-insensitive — checkout paths
-    would collide). The control plane enforces both at create time, so a
-    violation here means a corrupt or tampered config: RepoConfigError, and
-    the boot must not proceed. Entries missing owner or name are skipped.
+    Checkout paths derive from repo_name, so owners must be safe namespace
+    paths, names must be safe single path segments, and names must be unique
+    (case-insensitive — checkout paths would collide). The control plane
+    enforces these constraints at create time, so a violation here means a
+    corrupt or tampered config: RepoConfigError, and the boot must not proceed.
+    Entries missing owner or name are skipped.
     """
     raw = session_config.get("repositories")
     entries: list[RepoEntry] = []
@@ -125,9 +126,9 @@ def parse_repositories(
 def find_repo_entry(entries: Iterable[RepoEntry], owner: str, name: str) -> RepoEntry | None:
     """Find a repository by identity, case-insensitively.
 
-    GitHub owner/name identifiers are case-insensitive, but the returned
-    entry carries the canonical casing (and checkout path) — callers must
-    use the entry's fields, never the lookup arguments.
+    Repository identities are matched case-insensitively, but the returned
+    entry carries the canonical casing (and checkout path) — callers must use
+    the entry's fields, never the lookup arguments.
     """
     owner_key = owner.lower()
     name_key = name.lower()

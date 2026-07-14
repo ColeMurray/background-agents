@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { MAX_TARGET_REPOSITORIES } from "@open-inspect/shared";
+import { MAX_TARGET_REPOSITORIES, parseRepositoryFullName } from "@open-inspect/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -58,7 +58,7 @@ export function RepositoryMultiSelect({
   const selectedNamesByKey = useMemo(() => {
     const names = new Map<string, string>();
     for (const key of selected) {
-      const name = key.split("/")[1];
+      const name = parseRepositoryFullName(key)?.repoName;
       if (name) names.set(name, key);
     }
     return names;

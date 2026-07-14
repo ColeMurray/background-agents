@@ -273,18 +273,18 @@ describe("SlackIntegrationSettings", () => {
     setupSWR({
       global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
       repos: [],
-      availableRepos: [repo("acme/web")],
+      availableRepos: [repo("group/subgroup/web")],
     });
     fetchMock.mockResolvedValue(okJson({}));
 
     render(<SlackIntegrationSettings />);
 
     await user.click(screen.getByRole("combobox", { name: /select a repository/i }));
-    await user.click(await screen.findByRole("option", { name: "acme/web" }));
+    await user.click(await screen.findByRole("option", { name: "group/subgroup/web" }));
     await user.click(screen.getByRole("button", { name: /add override/i }));
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/integration-settings/slack/repos/acme/web",
+      "/api/integration-settings/slack/repos/group%2Fsubgroup/web",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ settings: {} }),
