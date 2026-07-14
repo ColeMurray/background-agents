@@ -83,11 +83,14 @@ export async function clearThreadSession(
 }
 
 /**
- * Advance the thread mapping's lastPromptTs checkpoint. The write is
- * monotonic: concurrent follow-ups can complete out of order, and an older
- * one must not move the checkpoint backwards or later prompts would
- * re-include already-forwarded context. No-op when the mapping is gone
- * (e.g. concurrently cleared) so a dead session is never resurrected.
+ * Advance the thread mapping's lastPromptTs checkpoint. Concurrent follow-ups
+ * can complete out of order, and an older one must not move the checkpoint
+ * backwards or later prompts would re-include already-forwarded context, so
+ * the mapping is re-read and only written when the new ts is strictly newer.
+ * KV has no compare-and-swap, so truly simultaneous writes can still race in
+ * a narrow window; a lost race only re-includes a few already-forwarded
+ * thread messages in a later prompt. No-op when the mapping is gone (e.g.
+ * concurrently cleared) so a dead session is never resurrected.
  */
 export async function advanceLastPromptTs(
   env: Env,
