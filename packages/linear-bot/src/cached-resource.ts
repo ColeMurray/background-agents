@@ -8,7 +8,11 @@
  * classifier/cached-resource.ts.
  */
 
-import { createKvCacheStore } from "@open-inspect/shared";
+import {
+  createKvCacheStore,
+  createReadThroughCache,
+  type ReadThroughCache,
+} from "@open-inspect/shared";
 import type { Env } from "./types";
 import {
   ControlPlaneRequestError,
@@ -34,74 +38,36 @@ export interface CachedResourceOptions<T> {
   fallback: T;
 }
 
-export interface CachedResource<T> {
-  get(env: Env, traceId?: string): Promise<T>;
-  /**
-   * Drop the in-memory copy so the next get() reloads. The KV copy is
-   * deliberately kept — it is fallback data, not authority.
-   */
-  invalidate(): void;
-}
+export type CachedResource<T> = ReadThroughCache<T, Env>;
 
 export function createCachedResource<T>(options: CachedResourceOptions<T>): CachedResource<T> {
   const log = createLogger(options.name);
   const loadFailureEvent = `control_plane.fetch_${options.name}`;
   const kvLogKeyPrefix = `${options.name}_cache`;
-  let memory: { value: T; timestamp: number } | null = null;
 
-  async function readKvFallback(env: Env): Promise<T> {
-    try {
-      const cached = await createKvCacheStore(env.LINEAR_KV).get(options.kvKey, "json");
-      const value = cached === null ? null : options.deserialize(cached);
-      if (value !== null) return value;
-    } catch (e) {
-      log.warn("kv.get", {
-        key_prefix: kvLogKeyPrefix,
-        error: e instanceof Error ? e : new Error(String(e)),
-      });
-    }
-    return options.fallback;
-  }
-
-  async function get(env: Env, traceId?: string): Promise<T> {
-    if (memory && Date.now() - memory.timestamp < LOCAL_CACHE_TTL_MS) {
-      return memory.value;
-    }
-
-    const startTime = Date.now();
-    try {
-      const value = await options.load(env, traceId);
-      memory = { value, timestamp: Date.now() };
-
-      try {
-        await createKvCacheStore(env.LINEAR_KV).put(options.kvKey, JSON.stringify(value), {
-          expirationTtl: KV_CACHE_TTL_SECONDS,
-        });
-      } catch (e) {
-        log.warn("kv.put", {
-          trace_id: traceId,
-          key_prefix: kvLogKeyPrefix,
-          error: e instanceof Error ? e : new Error(String(e)),
-        });
-      }
-
-      return value;
-    } catch (e) {
+  return createReadThroughCache<T, Env>({
+    cacheKey: options.kvKey,
+    cacheTtlSeconds: KV_CACHE_TTL_SECONDS,
+    localTtlMs: LOCAL_CACHE_TTL_MS,
+    load: options.load,
+    getCacheStore: (env) => createKvCacheStore(env.LINEAR_KV),
+    deserialize: options.deserialize,
+    fallback: options.fallback,
+    onLoadError: (error, { traceId, durationMs }) => {
       log.warn(loadFailureEvent, {
         trace_id: traceId,
         outcome: "error",
-        http_status: e instanceof ControlPlaneRequestError ? e.status : undefined,
-        error: e instanceof Error ? e : new Error(String(e)),
-        duration_ms: Date.now() - startTime,
+        http_status: error instanceof ControlPlaneRequestError ? error.status : undefined,
+        error: error instanceof Error ? error : new Error(String(error)),
+        duration_ms: durationMs,
       });
-      return readKvFallback(env);
-    }
-  }
-
-  return {
-    get,
-    invalidate() {
-      memory = null;
     },
-  };
+    onCacheError: (operation, error, traceId) => {
+      log.warn(`kv.${operation}`, {
+        trace_id: traceId,
+        key_prefix: kvLogKeyPrefix,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    },
+  });
 }
