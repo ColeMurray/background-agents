@@ -251,6 +251,9 @@ sandbox is **paused** rather than killed (`e2b_auto_pause`, default true) and au
 next activity, so sessions survive idle gaps. On the **Hobby** tier (~1h runtime cap) lower
 `e2b_sandbox_timeout_seconds` to 3300. Set `e2b_auto_pause = false` to kill on timeout instead.
 
+For the full runtime, lifecycle, and configuration model, see
+[E2B Sandbox Provider](E2B_SANDBOX_PROVIDER.md).
+
 > **Important**: The E2B provider does not automatically inject LLM API keys into sandboxes. If you
 > plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets
 > after deploying. See [Secrets Management](SECRETS.md) for details.
