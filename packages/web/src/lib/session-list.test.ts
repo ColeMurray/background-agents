@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  applySidebarTitleUpdate,
   applyTitleUpdate,
+  buildSidebarSessionsPageKey,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
   isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
+  removeSessionFromSidebar,
   type SessionListResponse,
 } from "./session-list";
 import type { Session } from "@open-inspect/shared";
@@ -49,6 +52,12 @@ describe("buildSessionsPageKey", () => {
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
   });
+
+  it("builds cursor-based sidebar page keys", () => {
+    expect(buildSidebarSessionsPageKey({ cursor: "500:root-a" })).toBe(
+      "/api/sessions?limit=50&offset=0&view=sidebar&cursor=500%3Aroot-a"
+    );
+  });
 });
 
 describe("buildSessionSearchValue", () => {
@@ -82,6 +91,7 @@ describe("isSessionListKey", () => {
   it("matches all session list cache keys", () => {
     expect(isSessionListKey("/api/sessions")).toBe(true);
     expect(isSessionListKey("/api/sessions?limit=50&offset=0")).toBe(true);
+    expect(isSessionListKey("$inf$/api/sessions?limit=50&offset=0&view=sidebar")).toBe(true);
   });
 
   it("ignores other cache keys", () => {
@@ -167,5 +177,38 @@ describe("applyTitleUpdate", () => {
     applyTitleUpdate(before, "a", "Mutated", 9999);
 
     expect(before).toEqual(beforeSnapshot);
+  });
+});
+
+describe("sidebar cache updates", () => {
+  const pages = [
+    {
+      trees: [
+        {
+          rootSessionId: "root",
+          activityAt: 2000,
+          sessions: [session("root"), session("child", { parentSessionId: "root" })],
+        },
+      ],
+      nextCursor: null,
+    },
+  ];
+
+  it("updates nested session titles and tree activity", () => {
+    const updated = applySidebarTitleUpdate(pages, "child", "Renamed", 9999);
+
+    expect(updated?.[0]?.trees[0]?.activityAt).toBe(9999);
+    expect(updated?.[0]?.trees[0]?.sessions[1]).toMatchObject({
+      id: "child",
+      title: "Renamed",
+      updatedAt: 9999,
+    });
+    expect(pages[0]?.trees[0]?.sessions[1]?.title).toBe("CHILD");
+  });
+
+  it("removes a session without dropping the rest of its tree", () => {
+    const updated = removeSessionFromSidebar(pages, "child");
+
+    expect(updated?.[0]?.trees[0]?.sessions.map((item) => item.id)).toEqual(["root"]);
   });
 });

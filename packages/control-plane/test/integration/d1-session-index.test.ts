@@ -7,6 +7,126 @@ import { cleanD1Tables } from "./cleanup";
 describe("D1 SessionIndexStore", () => {
   beforeEach(cleanD1Tables);
 
+  describe("sidebar trees", () => {
+    it("paginates complete trees by activity from any descendant", async () => {
+      const store = new SessionIndexStore(env.DB);
+      const create = (id: string, updatedAt: number, parentSessionId: string | null = null) =>
+        store.create({
+          id,
+          title: id,
+          repoOwner: "acme",
+          repoName: "web-app",
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: null,
+          baseBranch: "main",
+          status: "active",
+          parentSessionId,
+          spawnSource: parentSessionId ? "agent" : "user",
+          spawnDepth: parentSessionId ? 1 : 0,
+          createdAt: updatedAt,
+          updatedAt,
+        });
+
+      await create("tree-a", 100);
+      await create("tree-a-child", 500, "tree-a");
+      await create("tree-a-grandchild", 300, "tree-a-child");
+      await create("tree-b", 400);
+
+      const firstPage = await store.listSidebar({ limit: 1 });
+      expect(firstPage.trees).toHaveLength(1);
+      expect(firstPage.trees[0]?.rootSessionId).toBe("tree-a");
+      expect(firstPage.trees[0]?.activityAt).toBe(500);
+      expect(firstPage.trees[0]?.sessions.map((session) => session.id).sort()).toEqual([
+        "tree-a",
+        "tree-a-child",
+        "tree-a-grandchild",
+      ]);
+      expect(firstPage.nextCursor).toEqual({ activityAt: 500, rootSessionId: "tree-a" });
+
+      const secondPage = await store.listSidebar({ limit: 1, cursor: firstPage.nextCursor! });
+      expect(secondPage.trees.map((tree) => tree.rootSessionId)).toEqual(["tree-b"]);
+      expect(secondPage.nextCursor).toBeNull();
+    });
+
+    it("filters by root owner without dropping descendants", async () => {
+      const store = new SessionIndexStore(env.DB);
+      await store.create({
+        id: "owned-root",
+        title: null,
+        repoOwner: null,
+        repoName: null,
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        userId: "owner-1",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      await store.create({
+        id: "owned-child",
+        title: null,
+        repoOwner: null,
+        repoName: null,
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        userId: null,
+        parentSessionId: "owned-root",
+        spawnSource: "agent",
+        spawnDepth: 1,
+        createdAt: 200,
+        updatedAt: 200,
+      });
+
+      const result = await store.listSidebar({ createdByUserIds: ["owner-1"] });
+      expect(result.trees).toHaveLength(1);
+      expect(result.trees[0]?.sessions.map((session) => session.id).sort()).toEqual([
+        "owned-child",
+        "owned-root",
+      ]);
+    });
+
+    it("decorates trees larger than the D1 bound-parameter limit in batches", async () => {
+      const store = new SessionIndexStore(env.DB);
+      await store.create({
+        id: "large-root",
+        title: null,
+        repoOwner: null,
+        repoName: null,
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      for (let index = 0; index < 105; index += 1) {
+        await store.create({
+          id: `large-child-${index}`,
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: null,
+          baseBranch: null,
+          status: "active",
+          parentSessionId: "large-root",
+          spawnSource: "agent",
+          spawnDepth: 1,
+          createdAt: 200 + index,
+          updatedAt: 200 + index,
+        });
+      }
+
+      const result = await store.listSidebar({ limit: 1 });
+      expect(result.trees).toHaveLength(1);
+      expect(result.trees[0]?.sessions).toHaveLength(106);
+    });
+  });
+
   it("creates and retrieves a session", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();

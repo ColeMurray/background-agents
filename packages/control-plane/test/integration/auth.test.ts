@@ -54,6 +54,26 @@ describe("HMAC authentication", () => {
     expect(body.hasMore).toBe(false);
   });
 
+  it("returns cursor-paginated sidebar trees", async () => {
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
+    const response = await SELF.fetch("https://test.local/sessions?view=sidebar", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ trees: [], nextCursor: null });
+  });
+
+  it("rejects malformed sidebar cursors", async () => {
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
+    const response = await SELF.fetch("https://test.local/sessions?view=sidebar&cursor=invalid", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid cursor" });
+  });
+
   it("filters the session list by creator user id", async () => {
     const aliceId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const bobId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

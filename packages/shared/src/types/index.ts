@@ -77,6 +77,8 @@ export type {
   Session,
   SessionMessage,
   SessionState,
+  SidebarSessionTree,
+  SidebarSessionsResponse,
   ParticipantPresence,
   PullRequestSummary,
 } from "./sessions";

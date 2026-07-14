@@ -12,6 +12,7 @@ type SessionRow = {
   base_branch: string | null;
   status: string;
   parent_session_id: string | null;
+  root_session_id: string | null;
   spawn_source: "user" | "agent" | "automation";
   spawn_depth: number;
   automation_id: string | null;
@@ -169,6 +170,7 @@ class FakeD1Database {
         baseBranch,
         status,
         parentSessionId,
+        rootSessionId,
         spawnSource,
         spawnDepth,
         automationId,
@@ -188,6 +190,7 @@ class FakeD1Database {
         string | null,
         string,
         string | null,
+        string,
         "user" | "agent" | "automation",
         number,
         string | null,
@@ -211,6 +214,7 @@ class FakeD1Database {
           base_branch: baseBranch,
           status,
           parent_session_id: parentSessionId,
+          root_session_id: rootSessionId,
           spawn_source: spawnSource,
           spawn_depth: spawnDepth,
           automation_id: automationId,
@@ -455,6 +459,7 @@ describe("SessionIndexStore", () => {
         ...session,
         // Defaults applied for missing optional fields
         parentSessionId: null,
+        rootSessionId: "test-id",
         spawnSource: "user",
         spawnDepth: 0,
         automationId: null,
@@ -517,6 +522,7 @@ describe("SessionIndexStore", () => {
 
       const result = await store.get("child-1");
       expect(result?.parentSessionId).toBe("parent-1");
+      expect(result?.rootSessionId).toBe("child-1");
       expect(result?.spawnSource).toBe("agent");
       expect(result?.spawnDepth).toBe(1);
     });

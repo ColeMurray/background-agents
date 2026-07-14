@@ -4,6 +4,8 @@ export const SESSION_CONTROL_PLANE_QUERY_PARAMS = [
   ...DEFAULT_CONTROL_PLANE_QUERY_PARAMS,
   "excludeStatus",
   "createdBy",
+  "view",
+  "cursor",
 ] as const;
 
 export function buildControlPlanePath(

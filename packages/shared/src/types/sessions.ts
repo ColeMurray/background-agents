@@ -50,6 +50,7 @@ export interface Session {
   opencodeSessionId: string | null;
   status: SessionStatus;
   parentSessionId: string | null;
+  rootSessionId?: string;
   spawnSource: SpawnSource;
   spawnDepth: number;
   createdAt: number;
@@ -72,6 +73,17 @@ export interface Session {
    * overlap or when the session has no tracked PRs.
    */
   pullRequestSummary?: PullRequestSummary;
+}
+
+export interface SidebarSessionTree {
+  rootSessionId: string;
+  activityAt: number;
+  sessions: Session[];
+}
+
+export interface SidebarSessionsResponse {
+  trees: SidebarSessionTree[];
+  nextCursor: string | null;
 }
 
 export interface SessionMessage {

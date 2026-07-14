@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
+import type { Session } from "@open-inspect/shared";
 import { MOBILE_LONG_PRESS_MS, SessionSidebar } from "./session-sidebar";
 import {
   buildSessionsPageKey,
@@ -68,12 +69,17 @@ afterEach(() => {
   mockUseEnvironments.mockReturnValue({ environments: [], loading: false });
 });
 
-function createSession(index: number, overrides: Record<string, unknown> = {}) {
+function createSession(index: number, overrides: Partial<Session> = {}): Session {
   return {
     id: `session-${index}`,
     title: `Session ${index}`,
     repoOwner: "open-inspect",
     repoName: "background-agents",
+    baseBranch: "main",
+    branchName: null,
+    baseSha: null,
+    currentSha: null,
+    opencodeSessionId: null,
     parentSessionId: null,
     spawnSource: "user",
     spawnDepth: 0,
@@ -91,18 +97,63 @@ function jsonResponse(body: unknown) {
   });
 }
 
+function sidebarPage(sessions: Session[], nextCursor: string | null = null) {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const trees = new Map<string, Session[]>();
+
+  for (const session of sessions) {
+    let root = session;
+    const visited = new Set([session.id]);
+    while (root.parentSessionId && byId.has(root.parentSessionId)) {
+      if (visited.has(root.parentSessionId)) break;
+      visited.add(root.parentSessionId);
+      root = byId.get(root.parentSessionId)!;
+    }
+    const members = trees.get(root.id) ?? [];
+    members.push({ ...session, rootSessionId: root.id });
+    trees.set(root.id, members);
+  }
+
+  return {
+    trees: [...trees].map(([rootSessionId, members]) => ({
+      rootSessionId,
+      activityAt: Math.max(...members.map((session) => session.updatedAt)),
+      sessions: members,
+    })),
+    nextCursor,
+  };
+}
+
+function SidebarTestConfig({
+  page,
+  children,
+}: {
+  page: ReturnType<typeof sidebarPage>;
+  children: React.ReactNode;
+}) {
+  return (
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        revalidateOnFocus: false,
+        fetcher: async (url: string) => {
+          if (url !== SIDEBAR_SESSIONS_KEY) throw new Error(`Unexpected fetch for ${url}`);
+          return page;
+        },
+      }}
+    >
+      {children}
+    </SWRConfig>
+  );
+}
+
 describe("SessionSidebar", () => {
   it("shows the user profile at the bottom of the sidebar", async () => {
     const { container } = render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([])}>
         <SessionSidebar />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     const profileButton = await screen.findByRole("button", { name: "Signed in as Test User" });
@@ -122,20 +173,9 @@ describe("SessionSidebar", () => {
     const none = createSession(3, { updatedAt: 2000 });
 
     render(
-      <SWRConfig
-        value={{
-          fallback: {
-            [SIDEBAR_SESSIONS_KEY]: {
-              sessions: [single, multi, none],
-              hasMore: false,
-            },
-          },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([single, multi, none])}>
         <SessionSidebar />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     // GitHub-style state icon next to the title: merged for the single-PR
@@ -175,40 +215,28 @@ describe("SessionSidebar", () => {
     });
 
     render(
-      <SWRConfig
-        value={{
-          fallback: {
-            [SIDEBAR_SESSIONS_KEY]: {
-              sessions: [parent, child, grandchild],
-              hasMore: false,
-            },
-          },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([parent, child, grandchild])}>
         <SessionSidebar />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
     expect(screen.getByText("Child session")).toBeInTheDocument();
     expect(screen.getByText("Grandchild session")).toBeInTheDocument();
+    expect(screen.queryByText("sub-task")).not.toBeInTheDocument();
+    expect(screen.getByText("Child session").closest("a")).toHaveStyle({ paddingLeft: "1.75rem" });
+    expect(screen.getByText("Grandchild session").closest("a")).toHaveStyle({
+      paddingLeft: "2.75rem",
+    });
   });
 
   it("opens session search from the header", async () => {
     const onSearchSessions = vi.fn();
 
     render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([createSession(1)])}>
         <SessionSidebar onSearchSessions={onSearchSessions} />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
@@ -224,11 +252,11 @@ describe("SessionSidebar", () => {
       const url = String(input);
 
       if (url === SIDEBAR_SESSIONS_KEY) {
-        return jsonResponse({ sessions: firstPage, hasMore: true });
+        return jsonResponse(sidebarPage(firstPage, "next-page"));
       }
 
-      if (url === buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })) {
-        return jsonResponse({ sessions: secondPage, hasMore: false });
+      if (url === buildSessionsPageKey({ view: "sidebar", cursor: "next-page" })) {
+        return jsonResponse(sidebarPage(secondPage));
       }
 
       throw new Error(`Unexpected fetch for ${url}`);
@@ -279,14 +307,14 @@ describe("SessionSidebar", () => {
     expect(await screen.findByText("Session 55")).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })
+        buildSessionsPageKey({ view: "sidebar", cursor: "next-page" })
       );
     });
   });
 
   it("filters sessions to the current user when Mine is selected", async () => {
     const mineKey = buildSessionsPageKey({
-      excludeStatus: "archived",
+      view: "sidebar",
       createdBy: [CURRENT_USER_CREATED_BY],
     });
 
@@ -294,14 +322,11 @@ describe("SessionSidebar", () => {
       const url = String(input);
 
       if (url === SIDEBAR_SESSIONS_KEY) {
-        return jsonResponse({ sessions: [createSession(1)], hasMore: false });
+        return jsonResponse(sidebarPage([createSession(1)]));
       }
 
       if (url === mineKey) {
-        return jsonResponse({
-          sessions: [createSession(2, { title: "Mine only" })],
-          hasMore: false,
-        });
+        return jsonResponse(sidebarPage([createSession(2, { title: "Mine only" })]));
       }
 
       throw new Error(`Unexpected fetch for ${url}`);
@@ -349,15 +374,9 @@ describe("SessionSidebar", () => {
     ];
 
     render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions, hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage(sessions)}>
         <SessionSidebar />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
@@ -367,9 +386,9 @@ describe("SessionSidebar", () => {
 
   it("ignores stale load-more results after the creator filter changes", async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
-    const allNextPageKey = buildSessionsPageKey({ excludeStatus: "archived", offset: 50 });
+    const allNextPageKey = buildSessionsPageKey({ view: "sidebar", cursor: "next-page" });
     const mineKey = buildSessionsPageKey({
-      excludeStatus: "archived",
+      view: "sidebar",
       createdBy: [CURRENT_USER_CREATED_BY],
     });
     let resolveAllNextPage!: (response: Response) => void;
@@ -381,7 +400,7 @@ describe("SessionSidebar", () => {
       const url = String(input);
 
       if (url === SIDEBAR_SESSIONS_KEY) {
-        return jsonResponse({ sessions: firstPage, hasMore: true });
+        return jsonResponse(sidebarPage(firstPage, "next-page"));
       }
 
       if (url === allNextPageKey) {
@@ -389,10 +408,7 @@ describe("SessionSidebar", () => {
       }
 
       if (url === mineKey) {
-        return jsonResponse({
-          sessions: [createSession(99, { title: "Mine only" })],
-          hasMore: false,
-        });
+        return jsonResponse(sidebarPage([createSession(99, { title: "Mine only" })]));
       }
 
       throw new Error(`Unexpected fetch for ${url}`);
@@ -441,12 +457,7 @@ describe("SessionSidebar", () => {
     expect(await screen.findByText("Mine only")).toBeInTheDocument();
 
     await act(async () => {
-      resolveAllNextPage(
-        jsonResponse({
-          sessions: [createSession(51, { title: "Stale page" })],
-          hasMore: false,
-        })
-      );
+      resolveAllNextPage(jsonResponse(sidebarPage([createSession(51, { title: "Stale page" })])));
       await allNextPage;
     });
 
@@ -459,15 +470,9 @@ describe("SessionSidebar", () => {
     const onSessionSelect = vi.fn();
 
     render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([createSession(1)])}>
         <SessionSidebar onSessionSelect={onSessionSelect} />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     const link = await screen.findByRole("link", { name: /session 1/i });
@@ -482,15 +487,9 @@ describe("SessionSidebar", () => {
     const onSessionSelect = vi.fn();
 
     render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([createSession(1)])}>
         <SessionSidebar onSessionSelect={onSessionSelect} />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     fireEvent.click(screen.getByTitle("Settings"));
@@ -504,15 +503,9 @@ describe("SessionSidebar", () => {
     mockUseIsMobile.mockReturnValue(true);
 
     render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([createSession(1)])}>
         <SessionSidebar />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     const link = await screen.findByRole("link", { name: /session 1/i });
@@ -540,15 +533,9 @@ describe("SessionSidebar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([createSession(1)])}>
         <SessionSidebar />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     const link = await screen.findByRole("link", { name: /session 1/i });
@@ -581,15 +568,9 @@ describe("SessionSidebar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
+      <SidebarTestConfig page={sidebarPage([createSession(1)])}>
         <SessionSidebar />
-      </SWRConfig>
+      </SidebarTestConfig>
     );
 
     const link = await screen.findByRole("link", { name: /session 1/i });

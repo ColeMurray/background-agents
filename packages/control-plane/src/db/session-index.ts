@@ -14,6 +14,7 @@ import { SessionPullRequestStore } from "./session-pull-request-store";
  * the shared wire type so Session.repositories and this share one shape.
  */
 export type SessionIndexRepository = SessionListRepository;
+const SESSION_DECORATION_BATCH_SIZE = 90;
 
 export interface SessionEntry {
   id: string;
@@ -25,6 +26,7 @@ export interface SessionEntry {
   baseBranch: string | null;
   status: SessionStatus;
   parentSessionId?: string | null;
+  rootSessionId?: string;
   spawnSource?: SpawnSource;
   spawnDepth?: number;
   automationId?: string | null;
@@ -73,6 +75,7 @@ interface SessionRow {
   base_branch: string | null;
   status: SessionStatus;
   parent_session_id: string | null;
+  root_session_id: string | null;
   spawn_source: SpawnSource;
   spawn_depth: number;
   automation_id: string | null;
@@ -103,6 +106,26 @@ export interface ListSessionsResult {
   hasMore: boolean;
 }
 
+export interface SidebarSessionCursor {
+  activityAt: number;
+  rootSessionId: string;
+}
+
+export interface ListSidebarSessionsOptions {
+  createdByUserIds?: readonly string[];
+  limit?: number;
+  cursor?: SidebarSessionCursor;
+}
+
+export interface ListSidebarSessionsResult {
+  trees: Array<{
+    rootSessionId: string;
+    activityAt: number;
+    sessions: SessionEntry[];
+  }>;
+  nextCursor: SidebarSessionCursor | null;
+}
+
 function toEntry(row: SessionRow): SessionEntry {
   return {
     id: row.id,
@@ -114,6 +137,7 @@ function toEntry(row: SessionRow): SessionEntry {
     baseBranch: row.base_branch,
     status: row.status,
     parentSessionId: row.parent_session_id,
+    rootSessionId: row.root_session_id ?? row.id,
     spawnSource: row.spawn_source,
     spawnDepth: row.spawn_depth,
     automationId: row.automation_id,
@@ -159,11 +183,16 @@ export class SessionIndexStore {
 
   async create(session: SessionEntry): Promise<void> {
     const repository = normalizeSessionRepository(session);
+    let rootSessionId = session.rootSessionId ?? session.id;
+    if (session.parentSessionId && !session.rootSessionId) {
+      const parent = await this.get(session.parentSessionId);
+      rootSessionId = parent?.rootSessionId ?? parent?.id ?? session.id;
+    }
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -175,6 +204,7 @@ export class SessionIndexStore {
         repository.baseBranch,
         session.status,
         session.parentSessionId ?? null,
+        rootSessionId,
         session.spawnSource ?? "user",
         session.spawnDepth ?? 0,
         session.automationId ?? null,
@@ -328,6 +358,80 @@ export class SessionIndexStore {
     };
   }
 
+  async listSidebar(options: ListSidebarSessionsOptions = {}): Promise<ListSidebarSessionsResult> {
+    const { createdByUserIds, limit = 25, cursor } = options;
+    const conditions = ["status != 'archived'", "root_session_id IS NOT NULL"];
+    const params: unknown[] = [];
+
+    if (createdByUserIds?.length) {
+      conditions.push(
+        `EXISTS (
+          SELECT 1 FROM sessions root
+          WHERE root.id = sessions.root_session_id
+            AND root.user_id IN (${createdByUserIds.map(() => "?").join(", ")})
+        )`
+      );
+      params.push(...createdByUserIds);
+    }
+
+    const having = cursor
+      ? "HAVING MAX(updated_at) < ? OR (MAX(updated_at) = ? AND root_session_id < ?)"
+      : "";
+    if (cursor) {
+      params.push(cursor.activityAt, cursor.activityAt, cursor.rootSessionId);
+    }
+
+    const result = await this.db
+      .prepare(
+        `SELECT root_session_id, MAX(updated_at) AS activity_at
+         FROM sessions
+         WHERE ${conditions.join(" AND ")}
+         GROUP BY root_session_id
+         ${having}
+         ORDER BY activity_at DESC, root_session_id DESC
+         LIMIT ?`
+      )
+      .bind(...params, limit + 1)
+      .all<{ root_session_id: string; activity_at: number }>();
+
+    const pageRoots = (result.results ?? []).slice(0, limit);
+    if (pageRoots.length === 0) {
+      return { trees: [], nextCursor: null };
+    }
+
+    const rootIds = pageRoots.map((row) => row.root_session_id);
+    const sessionResult = await this.db
+      .prepare(
+        `SELECT * FROM sessions
+         WHERE root_session_id IN (${rootIds.map(() => "?").join(", ")})
+           AND status != 'archived'
+         ORDER BY updated_at DESC, id DESC`
+      )
+      .bind(...rootIds)
+      .all<SessionRow>();
+    const sessions = await this.decorateEntriesBatched((sessionResult.results ?? []).map(toEntry));
+    const sessionsByRoot = new Map<string, SessionEntry[]>();
+    for (const session of sessions) {
+      const rootId = session.rootSessionId ?? session.id;
+      const treeSessions = sessionsByRoot.get(rootId) ?? [];
+      treeSessions.push(session);
+      sessionsByRoot.set(rootId, treeSessions);
+    }
+
+    const lastRoot = pageRoots.at(-1);
+    return {
+      trees: pageRoots.map((root) => ({
+        rootSessionId: root.root_session_id,
+        activityAt: root.activity_at,
+        sessions: sessionsByRoot.get(root.root_session_id) ?? [],
+      })),
+      nextCursor:
+        (result.results?.length ?? 0) > limit && lastRoot
+          ? { activityAt: lastRoot.activity_at, rootSessionId: lastRoot.root_session_id }
+          : null,
+    };
+  }
+
   /**
    * Attach repository lists and PR status summaries to the paged
    * entries. The two lookups are independent — each is one grouped query
@@ -354,6 +458,15 @@ export class SessionIndexStore {
         ...(pullRequestSummary ? { pullRequestSummary } : {}),
       };
     });
+  }
+
+  private async decorateEntriesBatched(sessions: SessionEntry[]): Promise<SessionEntry[]> {
+    const decorated: SessionEntry[] = [];
+    for (let index = 0; index < sessions.length; index += SESSION_DECORATION_BATCH_SIZE) {
+      const batch = sessions.slice(index, index + SESSION_DECORATION_BATCH_SIZE);
+      decorated.push(...(await this.decorateEntries(batch)));
+    }
+    return decorated;
   }
 
   /** Repository lists for the given sessions, in one query. */

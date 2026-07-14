@@ -5,9 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import useSWR, { SWRConfig, mutate as globalMutate } from "swr";
+import { SWRConfig, mutate as globalMutate } from "swr";
+import useSWRInfinite from "swr/infinite";
 import { DataControlsSettings } from "./data-controls-settings";
-import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import { SIDEBAR_INFINITE_KEYS, SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
 expect.extend(matchers);
 
@@ -100,7 +101,7 @@ function installFetch(handlers: FetchHandlers) {
           total: archived.length,
         });
       }
-      if (params.get("excludeStatus") === "archived") {
+      if (params.get("view") === "sidebar") {
         return handlers.onListSidebar
           ? handlers.onListSidebar()
           : jsonResponse({ sessions: [], hasMore: false });
@@ -297,13 +298,13 @@ describe("DataControlsSettings — unarchive flow", () => {
 function SidebarProbe() {
   // Mounting this subscribes to SIDEBAR_SESSIONS_KEY so that mutate(key)
   // from the component-under-test triggers a real refetch we can observe.
-  useSWR<{ sessions: unknown[]; hasMore: boolean }>(SIDEBAR_SESSIONS_KEY);
+  useSWRInfinite(() => SIDEBAR_SESSIONS_KEY);
   return null;
 }
 
 describe("DataControlsSettings — sidebar invalidation", () => {
   it("refetches the sidebar session list after a successful unarchive", async () => {
-    const sidebarHandler = vi.fn(() => jsonResponse({ sessions: [], hasMore: false }));
+    const sidebarHandler = vi.fn(() => jsonResponse({ trees: [], nextCursor: null }));
     const fetchMock = installFetch({
       archivedSessions: [createArchivedSession(1)],
       onUnarchive: () => jsonResponse({ status: "active" }),
@@ -330,5 +331,6 @@ describe("DataControlsSettings — sidebar invalidation", () => {
       expect(sidebarHandler).toHaveBeenCalledTimes(2);
     });
     expect(fetchMock).toHaveBeenCalledWith(SIDEBAR_SESSIONS_KEY);
+    expect(SIDEBAR_INFINITE_KEYS[0]).toContain(SIDEBAR_SESSIONS_KEY);
   });
 });

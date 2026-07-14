@@ -11,6 +11,7 @@ import {
   buildSessionsPageKey,
   isUnarchivedSessionListKey,
   removeSessionFromList,
+  SIDEBAR_INFINITE_KEYS,
   type SessionListResponse,
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
@@ -86,6 +87,7 @@ export function DataControlsSettings() {
       // this row's slot.
       setOffset((prev) => prev - 1);
       mutate(isUnarchivedSessionListKey);
+      for (const key of SIDEBAR_INFINITE_KEYS) mutate(key);
     } catch {
       toast.error("Failed to unarchive session");
     }

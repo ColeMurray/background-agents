@@ -48,6 +48,23 @@ function parsePaginationOffset(value: string | null): number {
   return Math.max(parsed, 0);
 }
 
+function parseSidebarCursor(
+  value: string | null
+): { activityAt: number; rootSessionId: string } | null | Response {
+  if (!value) return null;
+  const separator = value.indexOf(":");
+  const activityAt = Number(value.slice(0, separator));
+  const rootSessionId = value.slice(separator + 1);
+  if (separator < 1 || !Number.isSafeInteger(activityAt) || activityAt < 0 || !rootSessionId) {
+    return error("Invalid cursor", 400);
+  }
+  return { activityAt, rootSessionId };
+}
+
+function encodeSidebarCursor(cursor: { activityAt: number; rootSessionId: string } | null) {
+  return cursor ? `${cursor.activityAt}:${cursor.rootSessionId}` : null;
+}
+
 async function handleListSessions(
   request: Request,
   env: Env,
@@ -62,6 +79,7 @@ async function handleListSessions(
   const status = parseSessionStatus(statusParam);
   const excludeStatus = parseSessionStatus(excludeStatusParam);
   const createdByUserIds = parseCreatedByFilters(url.searchParams);
+  const view = url.searchParams.get("view");
 
   if (statusParam && !status) {
     return error("Invalid status", 400);
@@ -76,6 +94,21 @@ async function handleListSessions(
   }
 
   const store = new SessionIndexStore(env.DB);
+  if (view === "sidebar") {
+    const cursor = parseSidebarCursor(url.searchParams.get("cursor"));
+    if (cursor instanceof Response) return cursor;
+    const result = await store.listSidebar({
+      createdByUserIds,
+      limit,
+      cursor: cursor ?? undefined,
+    });
+    return json({
+      trees: result.trees,
+      nextCursor: encodeSidebarCursor(result.nextCursor),
+    });
+  }
+  if (view) return error("Invalid view", 400);
+
   const result = await store.list({ status, excludeStatus, createdByUserIds, limit, offset });
 
   return json({

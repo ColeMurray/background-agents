@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import { isUnarchivedSessionListKey, SIDEBAR_INFINITE_KEYS } from "@/lib/session-list";
 import type { SessionArtifact } from "@open-inspect/shared";
 import { swrKeysToRevalidate } from "./swr-revalidation";
 
@@ -16,13 +16,14 @@ function artifact(type: SessionArtifact["type"]): SessionArtifact {
 }
 
 describe("swrKeysToRevalidate", () => {
+  const listKeys = [isUnarchivedSessionListKey, ...SIDEBAR_INFINITE_KEYS];
   it("revalidates the session list for PR artifact creates and updates", () => {
     expect(
       swrKeysToRevalidate({ type: "artifact_created", artifact: artifact("pr") }, SESSION_ID)
-    ).toEqual([isUnarchivedSessionListKey]);
+    ).toEqual(listKeys);
     expect(
       swrKeysToRevalidate({ type: "artifact_updated", artifact: artifact("pr") }, SESSION_ID)
-    ).toEqual([isUnarchivedSessionListKey]);
+    ).toEqual(listKeys);
   });
 
   it("does not revalidate for non-PR artifacts", () => {
@@ -35,16 +36,16 @@ describe("swrKeysToRevalidate", () => {
   });
 
   it("revalidates the session list on a non-empty title", () => {
-    expect(swrKeysToRevalidate({ type: "session_title", title: "New title" }, SESSION_ID)).toEqual([
-      isUnarchivedSessionListKey,
-    ]);
+    expect(swrKeysToRevalidate({ type: "session_title", title: "New title" }, SESSION_ID)).toEqual(
+      listKeys
+    );
     expect(swrKeysToRevalidate({ type: "session_title", title: "" }, SESSION_ID)).toEqual([]);
   });
 
   it("revalidates the session list on status changes", () => {
     expect(
       swrKeysToRevalidate({ type: "session_status", status: "completed" }, SESSION_ID)
-    ).toEqual([isUnarchivedSessionListKey]);
+    ).toEqual(listKeys);
   });
 
   it("revalidates the child list and the session list on child session updates", () => {
@@ -58,7 +59,7 @@ describe("swrKeysToRevalidate", () => {
         },
         SESSION_ID
       )
-    ).toEqual([`/api/sessions/${SESSION_ID}/children`, isUnarchivedSessionListKey]);
+    ).toEqual([`/api/sessions/${SESSION_ID}/children`, ...listKeys]);
   });
 
   it("returns nothing for view-only messages", () => {

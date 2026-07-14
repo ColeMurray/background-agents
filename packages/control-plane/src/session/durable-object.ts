@@ -1521,23 +1521,23 @@ export class SessionDO extends DurableObject<Env> {
     return resolved?.session_name || resolved?.id || this.ctx.id.toString();
   }
 
-  private syncSessionIndexStatus(
+  private async syncSessionIndexStatus(
     sessionId: string,
     status: SessionStatus,
     updatedAt: number
-  ): void {
+  ): Promise<void> {
     if (!this.env.DB) return;
     const sessionStore = new SessionIndexStore(this.env.DB);
-    this.ctx.waitUntil(
-      sessionStore.updateStatus(sessionId, status, updatedAt).catch((error) => {
-        this.log.error("session_index.update_status.background_error", {
-          session_id: sessionId,
-          status,
-          updated_at: updatedAt,
-          error,
-        });
-      })
-    );
+    try {
+      await sessionStore.updateStatus(sessionId, status, updatedAt);
+    } catch (error) {
+      this.log.error("session_index.update_status.error", {
+        session_id: sessionId,
+        status,
+        updated_at: updatedAt,
+        error,
+      });
+    }
   }
 
   private syncSessionMetrics(sessionId: string): void {
@@ -1590,7 +1590,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const publicSessionId = this.getPublicSessionId(session);
     if (session.status === status) {
-      this.syncSessionIndexStatus(publicSessionId, status, session.updated_at);
+      await this.syncSessionIndexStatus(publicSessionId, status, session.updated_at);
       if (TERMINAL_STATUSES.includes(status)) {
         this.syncSessionMetrics(publicSessionId);
       }
@@ -1599,7 +1599,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
-    this.syncSessionIndexStatus(publicSessionId, status, updatedAt);
+    await this.syncSessionIndexStatus(publicSessionId, status, updatedAt);
 
     this.broadcast({ type: "session_status", status });
 

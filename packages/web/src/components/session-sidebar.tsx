@@ -12,20 +12,20 @@ import {
   type TouchEvent,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import useSWR, { mutate } from "swr";
+import { mutate } from "swr";
+import useSWRInfinite from "swr/infinite";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
 import { archiveSession } from "@/lib/archive-session";
 import { pullRequestSummaryDisplay } from "@/lib/pr-summary";
 import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
-  applyTitleUpdate,
-  buildSessionsPageKey,
+  applySidebarTitleUpdate,
+  buildSidebarSessionsPageKey,
   CURRENT_USER_CREATED_BY,
   isUnarchivedSessionListKey,
-  mergeUniqueSessions,
-  removeSessionFromList,
-  type SessionListResponse,
+  removeSessionFromSidebar,
+  type SidebarSessionListResponse,
 } from "@/lib/session-list";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -126,21 +126,13 @@ export function SessionSidebar({
   const pathname = usePathname();
   const router = useRouter();
   const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
-  const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
-  const [hasMorePages, setHasMorePages] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(false);
-  const loadingMoreRef = useRef(false);
-  const sessionListVersionRef = useRef(0);
   const isMobile = useIsMobile();
 
   const sidebarSessionsKey = useMemo(() => {
     if (!authSession) return null;
 
-    return buildSessionsPageKey({
-      excludeStatus: "archived",
+    return buildSidebarSessionsPageKey({
       createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
     });
   }, [authSession, sessionCreatorFilter]);
@@ -149,75 +141,28 @@ export function SessionSidebar({
     data,
     error: sessionsError,
     isLoading: sessionsLoading,
-  } = useSWR<SessionListResponse>(sidebarSessionsKey);
+    isValidating,
+    size,
+    setSize,
+    mutate: mutateSidebar,
+  } = useSWRInfinite<SidebarSessionListResponse>(
+    (pageIndex, previousPage) => {
+      if (!sidebarSessionsKey) return null;
+      if (pageIndex > 0 && !previousPage?.nextCursor) return null;
+      return buildSidebarSessionsPageKey({
+        createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
+        cursor: pageIndex > 0 ? (previousPage?.nextCursor ?? undefined) : undefined,
+      });
+    },
+    { revalidateAll: true }
+  );
   const loading = sessionsLoading;
-  const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
-
-  // Track data reference to clear extraSessions synchronously during render,
-  // preventing one frame of stale extra sessions after SWR revalidation.
-  const prevDataRef = useRef(data);
-  let effectiveExtraSessions = extraSessions;
-  if (prevDataRef.current !== data) {
-    prevDataRef.current = data;
-    effectiveExtraSessions = [];
-  }
-
-  useEffect(() => {
-    sessionListVersionRef.current += 1;
-    setExtraSessions([]);
-    setLoadingMore(false);
-    loadingMoreRef.current = false;
-
-    const nextHasMore = data?.hasMore ?? false;
-    const nextOffset = data ? firstPageSessions.length : 0;
-
-    setHasMorePages(nextHasMore);
-    offsetRef.current = nextOffset;
-    hasMoreRef.current = nextHasMore;
-  }, [sidebarSessionsKey, data, firstPageSessions.length]);
-
-  const loadMoreSessions = useCallback(async () => {
-    if (!authSession || !sidebarSessionsKey || loadingMoreRef.current || !hasMoreRef.current) {
-      return;
-    }
-
-    loadingMoreRef.current = true;
-    setLoadingMore(true);
-    const sessionListVersion = sessionListVersionRef.current;
-
-    try {
-      const response = await fetch(
-        buildSessionsPageKey({
-          excludeStatus: "archived",
-          createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-          offset: offsetRef.current,
-        })
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch additional sessions: ${response.status}`);
-      }
-
-      const page: SessionListResponse = await response.json();
-      const fetched = page.sessions ?? [];
-
-      if (sessionListVersion !== sessionListVersionRef.current) {
-        return;
-      }
-
-      setExtraSessions((prev) => mergeUniqueSessions(prev, fetched));
-      setHasMorePages(page.hasMore);
-      offsetRef.current += fetched.length;
-      hasMoreRef.current = page.hasMore;
-    } catch (error) {
-      console.error("Failed to fetch additional sessions:", error);
-    } finally {
-      if (sessionListVersion === sessionListVersionRef.current) {
-        loadingMoreRef.current = false;
-        setLoadingMore(false);
-      }
-    }
-  }, [authSession, sessionCreatorFilter, sidebarSessionsKey]);
+  const hasMorePages = Boolean(data?.at(-1)?.nextCursor);
+  const loadingMore = isValidating && size > (data?.length ?? 0);
+  const loadMoreSessions = useCallback(() => {
+    if (!hasMorePages || loadingMore) return;
+    void setSize((currentSize) => currentSize + 1);
+  }, [hasMorePages, loadingMore, setSize]);
 
   const maybeLoadMoreSessions = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -236,19 +181,19 @@ export function SessionSidebar({
     if (container.clientHeight > 0 && container.scrollHeight <= container.clientHeight) {
       void loadMoreSessions();
     }
-  }, [
-    hasMorePages,
-    loading,
-    loadingMore,
-    loadMoreSessions,
-    firstPageSessions.length,
-    extraSessions.length,
-  ]);
+  }, [hasMorePages, loading, loadingMore, loadMoreSessions, data]);
 
-  const sessions = useMemo(
-    () => mergeUniqueSessions(firstPageSessions, effectiveExtraSessions),
-    [firstPageSessions, effectiveExtraSessions]
-  );
+  const trees = useMemo(() => {
+    const seen = new Set<string>();
+    return (data ?? []).flatMap((page) =>
+      (page?.trees ?? []).filter((tree) => {
+        if (seen.has(tree.rootSessionId)) return false;
+        seen.add(tree.rootSessionId);
+        return true;
+      })
+    );
+  }, [data]);
+  const sessions = useMemo(() => trees.flatMap((tree) => tree.sessions), [trees]);
 
   // Sort sessions by updatedAt (most recent first) and group children under their parent sessions.
   const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
@@ -261,7 +206,8 @@ export function SessionSidebar({
       return bTime - aTime;
     });
 
-    // Build set of visible session IDs for orphan detection
+    // Complete trees normally contain every ancestor. Missing or archived
+    // ancestors promote their nearest visible descendants to top-level rows.
     const visibleIds = new Set(sorted.map((s) => s.id));
 
     // Group children by parent ID
@@ -284,9 +230,16 @@ export function SessionSidebar({
     const active: SessionItem[] = [];
     const inactive: SessionItem[] = [];
     const now = Date.now();
+    const activityByRoot = new Map(trees.map((tree) => [tree.rootSessionId, tree.activityAt]));
+    topLevel.sort((a, b) => {
+      const aActivity = activityByRoot.get(a.rootSessionId ?? a.id) ?? a.updatedAt;
+      const bActivity = activityByRoot.get(b.rootSessionId ?? b.id) ?? b.updatedAt;
+      return bActivity - aActivity || b.id.localeCompare(a.id);
+    });
 
     for (const session of topLevel) {
-      const timestamp = session.updatedAt || session.createdAt;
+      const timestamp =
+        activityByRoot.get(session.rootSessionId ?? session.id) ?? session.updatedAt;
       if (isInactiveSession(timestamp, now)) {
         inactive.push(session);
       } else {
@@ -299,7 +252,7 @@ export function SessionSidebar({
       inactiveSessions: inactive,
       childrenMap: children,
     };
-  }, [sessions]);
+  }, [sessions, trees]);
 
   // Environment provenance for the cards, resolved once for the whole list.
   // Names are looked up so a deleted environment (or one still loading)
@@ -322,21 +275,16 @@ export function SessionSidebar({
     async (sessionId: string) => {
       if (!sidebarSessionsKey) return;
 
-      await mutate<SessionListResponse>(
-        isUnarchivedSessionListKey,
-        (current) =>
-          current
-            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
-            : current,
-        { revalidate: false, populateCache: true }
-      );
-      setExtraSessions((prev) => prev.filter((session) => session.id !== sessionId));
+      await mutateSidebar((current) => removeSessionFromSidebar(current, sessionId), {
+        revalidate: true,
+      });
+      void mutate(isUnarchivedSessionListKey);
 
       if (currentSessionId === sessionId) {
         router.push("/");
       }
     },
-    [currentSessionId, router, sidebarSessionsKey]
+    [currentSessionId, mutateSidebar, router, sidebarSessionsKey]
   );
 
   const handleNavigationSelect = useCallback(() => {
@@ -348,20 +296,15 @@ export function SessionSidebar({
   const handleSessionRenamed = useCallback(
     (sessionId: string, title: string) => {
       const updatedAt = Date.now();
-      setExtraSessions((prev) =>
-        prev.map((session) =>
-          session.id === sessionId ? { ...session, title, updatedAt } : session
-        )
-      );
       if (!sidebarSessionsKey) return;
 
-      void mutate<SessionListResponse>(
-        isUnarchivedSessionListKey,
-        (currentData) => applyTitleUpdate(currentData, sessionId, title, updatedAt),
+      void mutateSidebar(
+        (currentData) => applySidebarTitleUpdate(currentData, sessionId, title, updatedAt),
         { revalidate: false }
       );
+      void mutate(isUnarchivedSessionListKey);
     },
-    [sidebarSessionsKey]
+    [mutateSidebar, sidebarSessionsKey]
   );
 
   return (
@@ -693,8 +636,6 @@ function SessionListItem({
   );
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
   const displayTitle = session.title || repoInfo;
-  // Orphan child (parent filtered out) — show a subtle badge
-  const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
@@ -905,12 +846,6 @@ function SessionListItem({
                   <span>·</span>
                   <BoxIcon className="w-3 h-3 flex-shrink-0" />
                   <span className="truncate">{environmentName}</span>
-                </>
-              )}
-              {isOrphanChild && (
-                <>
-                  <span>·</span>
-                  <span className="text-accent">sub-task</span>
                 </>
               )}
               {session.baseBranch && session.baseBranch !== "main" && (
