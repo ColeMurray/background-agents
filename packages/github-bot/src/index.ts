@@ -253,12 +253,6 @@ function dispatchHandler(
         if (!parsed.success) throw new Error("Malformed pull_request review_requested payload");
         return handleReviewRequested(env, log, parsed.data, traceId);
       }
-      if (p.action === "closed" || p.action === "synchronize") {
-        return Promise.resolve({
-          outcome: "skipped",
-          skip_reason: "automation_event_only",
-        });
-      }
       return Promise.resolve({
         outcome: "skipped",
         skip_reason: "unsupported_action",
