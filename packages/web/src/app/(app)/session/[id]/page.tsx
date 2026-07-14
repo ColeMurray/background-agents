@@ -144,7 +144,6 @@ function SessionPageContent() {
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected}
         connecting={connecting}
-        participants={participants}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
         onToggleDetails={toggleDetails}

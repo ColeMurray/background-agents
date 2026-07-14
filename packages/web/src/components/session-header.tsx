@@ -16,7 +16,6 @@ export type SessionHeaderProps = {
   };
   connected: boolean;
   connecting: boolean;
-  participants: SessionSocketState["participants"];
   isDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
@@ -28,7 +27,6 @@ export function SessionHeader({
   fallbackSessionInfo,
   connected,
   connecting,
-  participants,
   isDetailsOpen,
   detailsButtonRef,
   onToggleDetails,
@@ -163,7 +161,6 @@ export function SessionHeader({
               status={sessionState?.sandboxStatus}
               dashboardUrl={sessionState?.sandboxDashboardUrl}
             />
-            <ParticipantsList participants={participants} />
           </div>
         </div>
       </div>
@@ -283,34 +280,5 @@ export function CombinedStatusDot({
     <span title={label} className="flex items-center">
       <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
     </span>
-  );
-}
-
-export function ParticipantsList({
-  participants,
-}: {
-  participants: SessionSocketState["participants"];
-}) {
-  if (participants.length === 0) return null;
-
-  const uniqueParticipants = Array.from(new Map(participants.map((p) => [p.userId, p])).values());
-
-  return (
-    <div className="flex -space-x-2">
-      {uniqueParticipants.slice(0, 3).map((p) => (
-        <div
-          key={p.userId}
-          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-white"
-          title={p.name}
-        >
-          {p.name.charAt(0).toUpperCase()}
-        </div>
-      ))}
-      {uniqueParticipants.length > 3 && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-white">
-          +{uniqueParticipants.length - 3}
-        </div>
-      )}
-    </div>
   );
 }

@@ -24,7 +24,6 @@ describe("SessionHeader", () => {
         fallbackSessionInfo={{ repoOwner: null, repoName: null, title: "Incident sweep" }}
         connected={false}
         connecting={true}
-        participants={[]}
         isDetailsOpen={false}
         detailsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
