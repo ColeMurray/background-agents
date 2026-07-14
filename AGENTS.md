@@ -136,6 +136,13 @@ under 72 characters. Use the PR body for details, not the commit message.
   web app to Cloudflare Workers via OpenNext instead of Vercel. When using Cloudflare, Vercel
   credentials are not required (dummy defaults are used). `NEXT_PUBLIC_WS_URL` must be available at
   build time since Next.js inlines `NEXT_PUBLIC_*` vars into the client bundle.
+- **Repo owners can be nested namespaces**: a `repo_owner` is not always a single segment. GitHub
+  owners are (`octocat`), but GitLab subgroups nest (`group/subgroup`), so an owner may contain `/`.
+  Only `repo_name` is a single path segment (it's the checkout directory under `/workspace`); the
+  owner is used solely in the clone URL. Don't validate or split owners as single segments —
+  `repo_config.parse_repositories` accepts `/`-joined owners (see `is_safe_repo_owner`), and any
+  `owner/name` splitting must split on the **last** `/`, not the first, or nested-namespace repos
+  break (a recurring bug class for non-GitHub providers).
 
 ## CI/CD
 
