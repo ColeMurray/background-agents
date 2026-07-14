@@ -149,6 +149,26 @@ describe("buildAgentResponseFromEvents", () => {
 });
 
 describe("extractAgentResponse", () => {
+  it("returns a failed empty response for malformed event responses", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch(input) {
+        const url = String(input);
+        if (url.includes("/events")) {
+          return Response.json({ events: [{ id: "event-1", type: "token" }], hasMore: false });
+        }
+
+        return Response.json({}, { status: 404 });
+      },
+    };
+
+    await expect(extractAgentResponse({ fetcher }, "session-1", "msg-1")).resolves.toEqual({
+      textContent: "",
+      toolCalls: [],
+      artifacts: [],
+      success: false,
+    });
+  });
+
   it("filters fetched session artifacts to the message event window", async () => {
     const fetcher: ControlPlaneFetcher = {
       async fetch(input) {
@@ -210,5 +230,46 @@ describe("extractAgentResponse", () => {
         metadata: { head: "current" },
       },
     ]);
+  });
+
+  it("ignores malformed artifact responses", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch(input) {
+        const url = String(input);
+        if (url.includes("/events")) {
+          return Response.json({
+            events: [
+              {
+                id: "token:msg-1",
+                type: "token",
+                data: { content: "done" },
+                messageId: "msg-1",
+                createdAt: 100,
+              },
+              {
+                id: "complete:msg-1",
+                type: "execution_complete",
+                data: { success: true },
+                messageId: "msg-1",
+                createdAt: 200,
+              },
+            ],
+            hasMore: false,
+          });
+        }
+
+        if (url.includes("/artifacts")) {
+          return Response.json({ artifacts: [{ id: "artifact-1", type: "branch" }] });
+        }
+
+        return Response.json({}, { status: 404 });
+      },
+    };
+
+    await expect(extractAgentResponse({ fetcher }, "session-1", "msg-1")).resolves.toMatchObject({
+      textContent: "done",
+      artifacts: [],
+      success: true,
+    });
   });
 });

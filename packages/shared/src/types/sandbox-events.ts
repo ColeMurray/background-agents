@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { recordSchema } from "./artifacts";
-import { gitSyncStatusSchema, type EventType } from "./statuses";
+import { eventTypeSchema, gitSyncStatusSchema, type EventType } from "./statuses";
 
 export interface AgentEvent {
   id: string;
@@ -185,16 +185,20 @@ export const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((event
   })
 );
 
-export interface EventResponse {
-  id: string;
-  type: EventType;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
+export const eventResponseSchema = z.object({
+  id: z.string(),
+  type: eventTypeSchema,
+  data: recordSchema,
+  messageId: z.string().nullable(),
+  createdAt: z.number(),
+});
 
-export interface ListEventsResponse {
-  events: EventResponse[];
-  cursor?: string;
-  hasMore: boolean;
-}
+export type EventResponse = z.infer<typeof eventResponseSchema>;
+
+export const listEventsResponseSchema = z.object({
+  events: z.array(eventResponseSchema),
+  cursor: z.string().optional(),
+  hasMore: z.boolean(),
+});
+
+export type ListEventsResponse = z.infer<typeof listEventsResponseSchema>;

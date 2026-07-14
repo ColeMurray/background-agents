@@ -153,17 +153,21 @@ export interface PullRequest {
   updatedAt: string;
 }
 
-export interface ArtifactResponse {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-}
+export const artifactResponseSchema = z.object({
+  id: z.string(),
+  type: artifactTypeSchema,
+  url: z.string().nullable(),
+  metadata: recordSchema.nullable(),
+  createdAt: z.number(),
+});
 
-export interface ListArtifactsResponse {
-  artifacts: ArtifactResponse[];
-}
+export type ArtifactResponse = z.infer<typeof artifactResponseSchema>;
+
+export const listArtifactsResponseSchema = z.object({
+  artifacts: z.array(artifactResponseSchema),
+});
+
+export type ListArtifactsResponse = z.infer<typeof listArtifactsResponseSchema>;
 
 export interface ToolCallSummary {
   tool: string;

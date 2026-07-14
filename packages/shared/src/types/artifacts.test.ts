@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  listArtifactsResponseSchema,
   sessionArtifactSchema,
   toDisplayStatus,
   type PullRequestArtifactMetadata,
@@ -52,6 +53,48 @@ describe("sessionArtifactSchema.updatedAt", () => {
 
   it("rejects a non-numeric updatedAt", () => {
     expect(sessionArtifactSchema.safeParse({ ...base, updatedAt: "later" }).success).toBe(false);
+  });
+});
+
+describe("listArtifactsResponseSchema", () => {
+  it("parses a valid artifacts response", () => {
+    const result = listArtifactsResponseSchema.safeParse({
+      artifacts: [
+        {
+          id: "artifact-1",
+          type: "branch",
+          url: "https://example.com/tree/main",
+          metadata: { head: "main" },
+          createdAt: 1_700_000_000_000,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a malformed partial artifacts response", () => {
+    const result = listArtifactsResponseSchema.safeParse({
+      artifacts: [{ id: "artifact-1", type: "branch" }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("parses nullable artifact URL and metadata fields", () => {
+    const result = listArtifactsResponseSchema.safeParse({
+      artifacts: [
+        {
+          id: "artifact-1",
+          type: "pr",
+          url: null,
+          metadata: null,
+          createdAt: 1_700_000_000_000,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
   });
 });
 
