@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ConfidenceLevel } from "./statuses";
 
 // Repository types for GitHub App installation
@@ -14,18 +15,20 @@ export interface InstallationRepository {
   topics?: string[];
 }
 
-export interface RepoMetadata {
-  description?: string;
-  aliases?: string[];
-  channelAssociations?: string[];
-  keywords?: string[];
+export const repoMetadataSchema = z.object({
+  description: z.string().optional(),
+  aliases: z.array(z.string()).optional(),
+  channelAssociations: z.array(z.string()).optional(),
+  keywords: z.array(z.string()).optional(),
   /**
    * Environment opened by GitHub-bot sessions triggered from this repo
    * (design §13.2). The bot falls back to a repo-bound session when the
    * environment no longer exists or no longer contains this repository.
    */
-  defaultEnvironmentId?: string;
-}
+  defaultEnvironmentId: z.string().optional(),
+});
+
+export type RepoMetadata = z.infer<typeof repoMetadataSchema>;
 
 export interface EnrichedRepository extends InstallationRepository {
   metadata?: RepoMetadata;

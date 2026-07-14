@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";
@@ -5,29 +6,39 @@ import type { BackgroundTaskScheduler } from "../messages/blocks";
 import type { Env } from "../types";
 import { handleAppMention, handleDirectMessage } from "./message-handler";
 
-export interface SlackEventPayload {
-  type: string;
-  event?: {
-    type: string;
-    text?: string;
-    user?: string;
-    channel?: string;
-    ts?: string;
-    thread_ts?: string;
-    bot_id?: string;
-    tab?: string;
-    channel_type?: string;
-    subtype?: string;
-    attachments?: Array<{
-      text?: string;
-      pretext?: string;
-      author_name?: string;
-      from_url?: string;
-      channel_name?: string;
-      footer?: string;
-    }>;
-  };
-}
+export const slackEventPayloadSchema = z.object({
+  type: z.string(),
+  challenge: z.string().optional(),
+  event_id: z.string().optional(),
+  event: z
+    .object({
+      type: z.string(),
+      text: z.string().optional(),
+      user: z.string().optional(),
+      channel: z.string().optional(),
+      ts: z.string().optional(),
+      thread_ts: z.string().optional(),
+      bot_id: z.string().optional(),
+      tab: z.string().optional(),
+      channel_type: z.string().optional(),
+      subtype: z.string().optional(),
+      attachments: z
+        .array(
+          z.object({
+            text: z.string().optional(),
+            pretext: z.string().optional(),
+            author_name: z.string().optional(),
+            from_url: z.string().optional(),
+            channel_name: z.string().optional(),
+            footer: z.string().optional(),
+          })
+        )
+        .optional(),
+    })
+    .optional(),
+});
+
+export type SlackEventPayload = z.infer<typeof slackEventPayloadSchema>;
 
 export async function handleSlackEvent(
   payload: SlackEventPayload,

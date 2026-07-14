@@ -54,6 +54,7 @@ export type {
   ControlPlaneReposResponse,
   ClassificationResult,
 } from "./repository-catalog";
+export { repoMetadataSchema } from "./repository-catalog";
 
 export { toDisplayStatus } from "./artifacts";
 export type {
