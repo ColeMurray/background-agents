@@ -91,7 +91,6 @@ describe("isSessionListKey", () => {
   it("matches all session list cache keys", () => {
     expect(isSessionListKey("/api/sessions")).toBe(true);
     expect(isSessionListKey("/api/sessions?limit=50&offset=0")).toBe(true);
-    expect(isSessionListKey("$inf$/api/sessions?limit=50&offset=0&view=sidebar")).toBe(true);
   });
 
   it("ignores other cache keys", () => {

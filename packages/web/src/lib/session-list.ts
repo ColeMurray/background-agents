@@ -1,22 +1,14 @@
 import type { Session, SidebarSessionsResponse } from "@open-inspect/shared";
+import { unstable_serialize } from "swr/infinite";
 import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = 50;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
 export const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = "me";
-const SWR_INFINITE_PREFIX = "$inf$";
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   view: "sidebar",
 });
-export const SIDEBAR_MINE_SESSIONS_KEY = buildSessionsPageKey({
-  view: "sidebar",
-  createdBy: [CURRENT_USER_CREATED_BY],
-});
-export const SIDEBAR_INFINITE_KEYS = [
-  `${SWR_INFINITE_PREFIX}${SIDEBAR_SESSIONS_KEY}`,
-  `${SWR_INFINITE_PREFIX}${SIDEBAR_MINE_SESSIONS_KEY}`,
-] as const;
 
 export function buildSidebarSessionsPageKey({
   createdBy,
@@ -38,6 +30,23 @@ export interface SessionListResponse {
 }
 
 export type SidebarSessionListResponse = SidebarSessionsResponse;
+
+export function createSidebarSessionsKeyLoader(createdBy?: readonly string[]) {
+  return (pageIndex: number, previousPage: SidebarSessionsResponse | null) => {
+    if (pageIndex > 0 && !previousPage?.nextCursor) return null;
+    return buildSidebarSessionsPageKey({
+      createdBy,
+      cursor: pageIndex > 0 ? (previousPage?.nextCursor ?? undefined) : undefined,
+    });
+  };
+}
+
+function sidebarSessionsRevalidationKeys(): string[] {
+  return [
+    unstable_serialize(createSidebarSessionsKeyLoader()),
+    unstable_serialize(createSidebarSessionsKeyLoader([CURRENT_USER_CREATED_BY])),
+  ];
+}
 
 export function buildSessionsPageKey({
   limit = SESSIONS_PAGE_SIZE,
@@ -85,32 +94,30 @@ export function buildSessionsPageKey({
 }
 
 export function isSessionListKey(key: unknown): key is string {
-  const normalizedKey =
-    typeof key === "string" && key.startsWith(SWR_INFINITE_PREFIX)
-      ? key.slice(SWR_INFINITE_PREFIX.length)
-      : key;
   return (
-    typeof normalizedKey === "string" &&
-    (normalizedKey === SESSIONS_API_PATH || normalizedKey.startsWith(`${SESSIONS_API_PATH}?`))
+    typeof key === "string" &&
+    (key === SESSIONS_API_PATH || key.startsWith(`${SESSIONS_API_PATH}?`))
   );
-}
-
-function normalizeSessionListKey(key: string): string {
-  return key.startsWith(SWR_INFINITE_PREFIX) ? key.slice(SWR_INFINITE_PREFIX.length) : key;
 }
 
 export function isUnarchivedSessionListKey(key: unknown): key is string {
   if (!isSessionListKey(key)) return false;
 
-  const url = new URL(normalizeSessionListKey(key), "http://localhost");
+  const url = new URL(key, "http://localhost");
   return url.searchParams.get("status") !== "archived";
 }
 
 export function isArchivedSessionListKey(key: unknown): key is string {
   if (!isSessionListKey(key)) return false;
 
-  const url = new URL(normalizeSessionListKey(key), "http://localhost");
+  const url = new URL(key, "http://localhost");
   return url.searchParams.get("status") === "archived";
+}
+
+export type SessionListRevalidationKey = string | ((key: unknown) => boolean);
+
+export function unarchivedSessionListRevalidationKeys(): SessionListRevalidationKey[] {
+  return [isUnarchivedSessionListKey, ...sidebarSessionsRevalidationKeys()];
 }
 
 // Extracted from session-sidebar so the cache-shape transformation can be unit

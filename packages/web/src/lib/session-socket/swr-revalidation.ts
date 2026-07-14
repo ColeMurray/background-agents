@@ -1,12 +1,9 @@
-import { isUnarchivedSessionListKey, SIDEBAR_INFINITE_KEYS } from "@/lib/session-list";
+import { unarchivedSessionListRevalidationKeys } from "@/lib/session-list";
 import type { ServerMessage } from "@open-inspect/shared";
 
 /** An SWR cache key or key matcher to pass to `mutate`. */
 export type SwrRevalidationKey = string | ((key: unknown) => boolean);
-const SESSION_LIST_REVALIDATION_KEYS: SwrRevalidationKey[] = [
-  isUnarchivedSessionListKey,
-  ...SIDEBAR_INFINITE_KEYS,
-];
+const SESSION_LIST_REVALIDATION_KEYS = unarchivedSessionListRevalidationKeys();
 
 /**
  * Which SWR caches a server message invalidates. Session-socket messages can

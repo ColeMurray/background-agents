@@ -512,6 +512,7 @@ describe("SessionIndexStore", () => {
     });
 
     it("stores parent fields when provided", async () => {
+      await store.create(makeSession({ id: "parent-1" }));
       const session = makeSession({
         id: "child-1",
         parentSessionId: "parent-1",
@@ -522,9 +523,17 @@ describe("SessionIndexStore", () => {
 
       const result = await store.get("child-1");
       expect(result?.parentSessionId).toBe("parent-1");
-      expect(result?.rootSessionId).toBe("child-1");
+      expect(result?.rootSessionId).toBe("parent-1");
       expect(result?.spawnSource).toBe("agent");
       expect(result?.spawnDepth).toBe(1);
+    });
+
+    it("uses the child as root when its parent is missing", async () => {
+      await store.create(
+        makeSession({ id: "orphan-1", parentSessionId: "missing-parent", spawnSource: "agent" })
+      );
+
+      expect((await store.get("orphan-1"))?.rootSessionId).toBe("orphan-1");
     });
 
     it("stores userId when provided", async () => {

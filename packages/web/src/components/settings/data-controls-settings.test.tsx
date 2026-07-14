@@ -8,7 +8,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig, mutate as globalMutate } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { DataControlsSettings } from "./data-controls-settings";
-import { SIDEBAR_INFINITE_KEYS, SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import { createSidebarSessionsKeyLoader, SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
 expect.extend(matchers);
 
@@ -104,7 +104,7 @@ function installFetch(handlers: FetchHandlers) {
       if (params.get("view") === "sidebar") {
         return handlers.onListSidebar
           ? handlers.onListSidebar()
-          : jsonResponse({ sessions: [], hasMore: false });
+          : jsonResponse({ trees: [], nextCursor: null });
       }
     }
 
@@ -298,7 +298,7 @@ describe("DataControlsSettings — unarchive flow", () => {
 function SidebarProbe() {
   // Mounting this subscribes to SIDEBAR_SESSIONS_KEY so that mutate(key)
   // from the component-under-test triggers a real refetch we can observe.
-  useSWRInfinite(() => SIDEBAR_SESSIONS_KEY);
+  useSWRInfinite(createSidebarSessionsKeyLoader());
   return null;
 }
 
@@ -331,6 +331,5 @@ describe("DataControlsSettings — sidebar invalidation", () => {
       expect(sidebarHandler).toHaveBeenCalledTimes(2);
     });
     expect(fetchMock).toHaveBeenCalledWith(SIDEBAR_SESSIONS_KEY);
-    expect(SIDEBAR_INFINITE_KEYS[0]).toContain(SIDEBAR_SESSIONS_KEY);
   });
 });

@@ -9,9 +9,8 @@ import { buildSessionHref, type SessionItem } from "@/components/session-sidebar
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
   buildSessionsPageKey,
-  isUnarchivedSessionListKey,
   removeSessionFromList,
-  SIDEBAR_INFINITE_KEYS,
+  unarchivedSessionListRevalidationKeys,
   type SessionListResponse,
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
@@ -86,8 +85,7 @@ export function DataControlsSettings() {
       // start one offset earlier to avoid skipping the session that took
       // this row's slot.
       setOffset((prev) => prev - 1);
-      mutate(isUnarchivedSessionListKey);
-      for (const key of SIDEBAR_INFINITE_KEYS) mutate(key);
+      for (const key of unarchivedSessionListRevalidationKeys()) mutate(key);
     } catch {
       toast.error("Failed to unarchive session");
     }

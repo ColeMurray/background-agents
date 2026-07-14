@@ -15,6 +15,7 @@ import { SessionPullRequestStore } from "./session-pull-request-store";
  */
 export type SessionIndexRepository = SessionListRepository;
 const SESSION_DECORATION_BATCH_SIZE = 90;
+const DEFAULT_SIDEBAR_LIMIT = 25;
 
 export interface SessionEntry {
   id: string;
@@ -359,7 +360,7 @@ export class SessionIndexStore {
   }
 
   async listSidebar(options: ListSidebarSessionsOptions = {}): Promise<ListSidebarSessionsResult> {
-    const { createdByUserIds, limit = 25, cursor } = options;
+    const { createdByUserIds, limit = DEFAULT_SIDEBAR_LIMIT, cursor } = options;
     const conditions = ["status != 'archived'", "root_session_id IS NOT NULL"];
     const params: unknown[] = [];
 

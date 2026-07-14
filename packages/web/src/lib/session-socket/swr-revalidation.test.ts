@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isUnarchivedSessionListKey, SIDEBAR_INFINITE_KEYS } from "@/lib/session-list";
+import { unarchivedSessionListRevalidationKeys } from "@/lib/session-list";
 import type { SessionArtifact } from "@open-inspect/shared";
 import { swrKeysToRevalidate } from "./swr-revalidation";
 
@@ -16,7 +16,7 @@ function artifact(type: SessionArtifact["type"]): SessionArtifact {
 }
 
 describe("swrKeysToRevalidate", () => {
-  const listKeys = [isUnarchivedSessionListKey, ...SIDEBAR_INFINITE_KEYS];
+  const listKeys = unarchivedSessionListRevalidationKeys();
   it("revalidates the session list for PR artifact creates and updates", () => {
     expect(
       swrKeysToRevalidate({ type: "artifact_created", artifact: artifact("pr") }, SESSION_ID)

@@ -21,7 +21,7 @@ import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   applySidebarTitleUpdate,
-  buildSidebarSessionsPageKey,
+  createSidebarSessionsKeyLoader,
   CURRENT_USER_CREATED_BY,
   isUnarchivedSessionListKey,
   removeSessionFromSidebar,
@@ -129,12 +129,11 @@ export function SessionSidebar({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
 
-  const sidebarSessionsKey = useMemo(() => {
-    if (!authSession) return null;
-
-    return buildSidebarSessionsPageKey({
-      createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-    });
+  const sidebarSessionsKeyLoader = useMemo(() => {
+    if (!authSession) return () => null;
+    return createSidebarSessionsKeyLoader(
+      sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined
+    );
   }, [authSession, sessionCreatorFilter]);
 
   const {
@@ -145,17 +144,9 @@ export function SessionSidebar({
     size,
     setSize,
     mutate: mutateSidebar,
-  } = useSWRInfinite<SidebarSessionListResponse>(
-    (pageIndex, previousPage) => {
-      if (!sidebarSessionsKey) return null;
-      if (pageIndex > 0 && !previousPage?.nextCursor) return null;
-      return buildSidebarSessionsPageKey({
-        createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-        cursor: pageIndex > 0 ? (previousPage?.nextCursor ?? undefined) : undefined,
-      });
-    },
-    { revalidateAll: true }
-  );
+  } = useSWRInfinite<SidebarSessionListResponse>(sidebarSessionsKeyLoader, {
+    revalidateAll: true,
+  });
   const loading = sessionsLoading;
   const hasMorePages = Boolean(data?.at(-1)?.nextCursor);
   const loadingMore = isValidating && size > (data?.length ?? 0);
@@ -273,7 +264,7 @@ export function SessionSidebar({
 
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
-      if (!sidebarSessionsKey) return;
+      if (!authSession) return;
 
       await mutateSidebar((current) => removeSessionFromSidebar(current, sessionId), {
         revalidate: true,
@@ -284,7 +275,7 @@ export function SessionSidebar({
         router.push("/");
       }
     },
-    [currentSessionId, mutateSidebar, router, sidebarSessionsKey]
+    [authSession, currentSessionId, mutateSidebar, router]
   );
 
   const handleNavigationSelect = useCallback(() => {
@@ -296,7 +287,7 @@ export function SessionSidebar({
   const handleSessionRenamed = useCallback(
     (sessionId: string, title: string) => {
       const updatedAt = Date.now();
-      if (!sidebarSessionsKey) return;
+      if (!authSession) return;
 
       void mutateSidebar(
         (currentData) => applySidebarTitleUpdate(currentData, sessionId, title, updatedAt),
@@ -304,7 +295,7 @@ export function SessionSidebar({
       );
       void mutate(isUnarchivedSessionListKey);
     },
-    [mutateSidebar, sidebarSessionsKey]
+    [authSession, mutateSidebar]
   );
 
   return (
