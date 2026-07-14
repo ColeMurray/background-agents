@@ -87,6 +87,41 @@ describe("normalizeRoutingRules", () => {
     ]);
   });
 
+  it("preserves environment rules with targetType, trimming but not lowercasing the id", () => {
+    expect(
+      normalizeRoutingRules([
+        { keyword: "  FullStack ", target: " env_ABC123 ", targetType: "environment" },
+      ])
+    ).toEqual([{ keyword: "fullstack", target: "env_ABC123", targetType: "environment" }]);
+  });
+
+  it("normalizes repository rules to the bare shape even when targetType is set explicitly", () => {
+    expect(
+      normalizeRoutingRules([{ keyword: "api", target: "Acme/API", targetType: "repository" }])
+    ).toEqual([{ keyword: "api", target: "acme/api" }]);
+  });
+
+  it("keeps the same keyword pointing at a repository and an environment as distinct rules", () => {
+    expect(
+      normalizeRoutingRules([
+        { keyword: "frontend", target: "acme/web" },
+        { keyword: "frontend", target: "env_abc123", targetType: "environment" },
+      ])
+    ).toEqual([
+      { keyword: "frontend", target: "acme/web" },
+      { keyword: "frontend", target: "env_abc123", targetType: "environment" },
+    ]);
+  });
+
+  it("de-dupes identical environment rules", () => {
+    expect(
+      normalizeRoutingRules([
+        { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
+        { keyword: "FullStack", target: "env_abc123", targetType: "environment" },
+      ])
+    ).toEqual([{ keyword: "fullstack", target: "env_abc123", targetType: "environment" }]);
+  });
+
   it("caps the number of rules at MAX_SLACK_ROUTING_RULES", () => {
     const many: SlackRoutingRule[] = Array.from(
       { length: MAX_SLACK_ROUTING_RULES + 25 },

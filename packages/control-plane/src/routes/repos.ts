@@ -242,6 +242,8 @@ async function handleUpdateRepoMetadata(
         ? body.channelAssociations
         : undefined,
       keywords: Array.isArray(body.keywords) ? body.keywords : undefined,
+      defaultEnvironmentId:
+        typeof body.defaultEnvironmentId === "string" ? body.defaultEnvironmentId : undefined,
     }).filter(([, v]) => v !== undefined)
   ) as RepoMetadata;
 

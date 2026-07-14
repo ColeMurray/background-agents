@@ -11,7 +11,7 @@ import {
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
-import { SandboxSettingsPage } from "./sandbox-settings";
+import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
 
 expect.extend(matchers);
 
@@ -508,7 +508,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({
-            settings: { tunnelPorts: [3000], terminalEnabled: false },
+            settings: { tunnelPorts: [3000] },
           }),
         })
       );
@@ -740,7 +740,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({
-            settings: { tunnelPorts: [3000], terminalEnabled: false },
+            settings: { tunnelPorts: [3000] },
           }),
         })
       );
@@ -804,7 +804,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({
-            settings: { tunnelPorts: [], terminalEnabled: false, cpuCores: 4 },
+            settings: { cpuCores: 4 },
           }),
         })
       );
@@ -868,8 +868,6 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
           method: "PUT",
           body: JSON.stringify({
             settings: {
-              tunnelPorts: [],
-              terminalEnabled: false,
               cpuCores: null,
               memoryMib: null,
             },
@@ -944,10 +942,163 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
           body: JSON.stringify({
             settings: {
               tunnelPorts: [3000],
-              terminalEnabled: false,
               cpuCores: null,
               memoryMib: null,
             },
+          }),
+        })
+      );
+    });
+  });
+});
+
+describe("SandboxSettingsEditor — environment scope", () => {
+  const user = userEvent.setup();
+
+  const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+  const environmentSettingsKey = "/api/integration-settings/sandbox/environments/env_1";
+
+  function renderEnvironmentEditor(fallback: Record<string, unknown>) {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback,
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsEditor scope="environment" environmentId="env_1" owner="acme" name="app" />
+      </SWRConfig>
+    );
+    return { fetchMock };
+  }
+
+  it("shows the primary repo's override over the global default as the inherited value", () => {
+    renderEnvironmentEditor({
+      [SETTINGS_KEY]: {
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: [], cpuCores: 2, memoryMib: 4096 } },
+      },
+      [repoSettingsKey]: {
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: { cpuCores: 4 },
+      },
+      [environmentSettingsKey]: {
+        integrationId: "sandbox",
+        environmentId: "env_1",
+        settings: null,
+      },
+    });
+
+    // The inherited layer is global + primary-repo merged: cpu from the repo
+    // override, memory from the global default.
+    expect(screen.getByLabelText("CPU cores")).toHaveValue("4");
+    expect(screen.getByLabelText("Memory (MiB)")).toHaveValue(4096);
+  });
+
+  it("shows the environment's own override above the inherited layers", () => {
+    renderEnvironmentEditor({
+      [SETTINGS_KEY]: {
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: [], cpuCores: 2 } },
+      },
+      [repoSettingsKey]: {
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: { cpuCores: 4 },
+      },
+      [environmentSettingsKey]: {
+        integrationId: "sandbox",
+        environmentId: "env_1",
+        settings: { cpuCores: 8 },
+      },
+    });
+
+    expect(screen.getByLabelText("CPU cores")).toHaveValue("8");
+  });
+
+  it("saves only edited fields to the environment endpoint", async () => {
+    const { fetchMock } = renderEnvironmentEditor({
+      [SETTINGS_KEY]: {
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: [], cpuCores: 2, buildTimeoutSeconds: 600 } },
+      },
+      [repoSettingsKey]: { integrationId: "sandbox", repo: "acme/app", settings: null },
+      [environmentSettingsKey]: {
+        integrationId: "sandbox",
+        environmentId: "env_1",
+        settings: null,
+      },
+    });
+
+    await user.clear(screen.getByLabelText("Image Build Timeout"));
+    await user.type(screen.getByLabelText("Image Build Timeout"), "2400");
+    await user.click(screen.getByText("Save Settings"));
+
+    // Only the edited field is pinned — inherited cpu and the inherited
+    // build-timeout base stay inherited.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        environmentSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              buildTimeoutSeconds: 2400,
+            },
+          }),
+        })
+      );
+    });
+  });
+
+  it("displays inherited ports and terminal state without pinning them on save", async () => {
+    const { fetchMock } = renderEnvironmentEditor({
+      [SETTINGS_KEY]: {
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: [3000], terminalEnabled: true } },
+      },
+      [repoSettingsKey]: {
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: { buildTimeoutSeconds: 1200 },
+      },
+      [environmentSettingsKey]: {
+        integrationId: "sandbox",
+        environmentId: "env_1",
+        settings: null,
+      },
+    });
+
+    // Inherited values render instead of blanks/false…
+    expect(screen.getByPlaceholderText("e.g. 3000")).toHaveValue("3000");
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Image Build Timeout")).toHaveValue(1200);
+
+    // …and saving an unrelated edit writes only that edit, never the
+    // inherited ports/toggle/timeout.
+    await user.type(screen.getByLabelText("CPU cores"), "2");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        environmentSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: { cpuCores: 2 },
           }),
         })
       );

@@ -158,6 +158,7 @@ describe("createMessagesHandler", () => {
           url: "https://example.com",
           metadata: null,
           createdAt: 1,
+          updatedAt: 1,
         },
       ],
     });
@@ -172,6 +173,7 @@ describe("createMessagesHandler", () => {
           url: "https://example.com",
           metadata: null,
           createdAt: 1,
+          updatedAt: 1,
         },
       ],
     });
@@ -186,6 +188,7 @@ describe("createMessagesHandler", () => {
         url: "sessions/session-1/media/artifact-1.png",
         metadata: { mimeType: "image/png" },
         createdAt: 1000,
+        updatedAt: 1000,
       },
     });
 
@@ -201,6 +204,7 @@ describe("createMessagesHandler", () => {
         url: "sessions/session-1/media/artifact-1.png",
         metadata: { mimeType: "image/png" },
         createdAt: 1000,
+        updatedAt: 1000,
       },
     });
     expect(messageService.getArtifact).toHaveBeenCalledWith("artifact-1");

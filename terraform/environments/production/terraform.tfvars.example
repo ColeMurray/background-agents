@@ -181,9 +181,12 @@ slack_signing_secret = ""
 # - Set Callback URL to: https://<linear-bot-worker-url>/oauth/callback
 # - Set Webhook URL to: https://<linear-bot-worker-url>/webhook
 # - Enable scopes: read, write, app:assignable, app:mentionable
+# - Enable "Client credentials tokens" before installing or upgrading the agent
 # After creation, note the Client ID, Client Secret, and Webhook Signing Secret.
 # Then visit https://<linear-bot-worker-url>/oauth/authorize to install the agent
 # in your workspace (requires admin permissions).
+# Existing eligible installations do not need to be reinstalled. After enabling client
+# credentials, the first request mints and verifies a runtime token automatically.
 # Leave empty to disable Linear integration.
 
 enable_linear_bot = false

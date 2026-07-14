@@ -5,6 +5,7 @@
  * enabling unit testing and future provider abstraction.
  */
 
+import type { ImageBuildScopeKind } from "@open-inspect/shared";
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
@@ -23,12 +24,16 @@ import {
 
 const MS_PER_SECOND = 1000;
 
-export interface TriggerModalRepoImageBuildConfig {
+export interface TriggerModalImageBuildConfig {
   buildId: string;
-  repoOwner: string;
-  repoName: string;
-  defaultBranch: string;
+  /** Scope kind ("repo" | "environment") — Modal accepts it for logging only. */
+  scopeKind: ImageBuildScopeKind;
+  /** Scope id (lowercase owner/name or environment id) — logging only. */
+  scopeId: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   callbackUrl: string;
+  failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
   /**
    * Build sandbox lifetime, in milliseconds. Already capped by the trigger.
@@ -38,15 +43,13 @@ export interface TriggerModalRepoImageBuildConfig {
   correlation?: CorrelationContext;
 }
 
-export interface TriggerModalRepoImageBuildResult {
+export interface TriggerModalImageBuildResult {
   buildId: string;
   status: string;
 }
 
-export interface ModalRepoImageBuildProvider {
-  triggerRepoImageBuild(
-    config: TriggerModalRepoImageBuildConfig
-  ): Promise<TriggerModalRepoImageBuildResult>;
+export interface ModalImageBuildProvider {
+  triggerImageBuild(config: TriggerModalImageBuildConfig): Promise<TriggerModalImageBuildResult>;
   deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
 }
 
@@ -70,7 +73,7 @@ export interface ModalRepoImageBuildProvider {
  * }
  * ```
  */
-export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuildProvider {
+export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildProvider {
   readonly name = "modal";
 
   readonly capabilities: SandboxProviderCapabilities = {
@@ -99,14 +102,15 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
-          repoImageId: config.repoImageId,
-          repoImageSha: config.repoImageSha,
+          prebuiltImageId: config.prebuiltImageId,
+          prebuiltImageSha: config.prebuiltImageSha,
           timeoutSeconds: config.timeoutSeconds,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          repositories: config.repositories,
         },
         config.correlation
       );
@@ -149,6 +153,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          repositories: config.repositories,
         },
         config.correlation
       );
@@ -223,19 +228,20 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
   }
 
   /**
-   * Trigger a Modal repo-image build.
+   * Trigger a Modal scope-image build (design §4).
    */
-  async triggerRepoImageBuild(
-    config: TriggerModalRepoImageBuildConfig
-  ): Promise<TriggerModalRepoImageBuildResult> {
+  async triggerImageBuild(
+    config: TriggerModalImageBuildConfig
+  ): Promise<TriggerModalImageBuildResult> {
     try {
-      const result = await this.client.buildRepoImage(
+      const result = await this.client.buildImage(
         {
-          repoOwner: config.repoOwner,
-          repoName: config.repoName,
-          defaultBranch: config.defaultBranch,
+          scopeKind: config.scopeKind,
+          scopeId: config.scopeId,
           buildId: config.buildId,
           callbackUrl: config.callbackUrl,
+          failureCallbackUrl: config.failureCallbackUrl,
+          repositories: config.repositories,
           userEnvVars: config.userEnvVars,
           buildTimeoutSeconds:
             config.buildTimeoutMs === undefined
@@ -252,7 +258,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
     } catch (error) {
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(
-          `Repo image build failed with HTTP ${error.status}: ${error.message}`,
+          `Image build failed with HTTP ${error.status}: ${error.message}`,
           error.status,
           error
         );
@@ -260,7 +266,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
       if (error instanceof SandboxProviderError) {
         throw error;
       }
-      throw this.classifyError("Failed to trigger Modal repo image build", error);
+      throw this.classifyError("Failed to trigger Modal image build", error);
     }
   }
 

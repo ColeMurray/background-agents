@@ -39,6 +39,7 @@ export interface SessionRow {
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at: number;
   updated_at: number;
 }
@@ -59,6 +60,7 @@ export interface ParticipantRow {
   scm_login: string | null;
   scm_email: string | null;
   scm_name: string | null;
+  auth_name: string | null;
   role: ParticipantRole;
   scm_access_token_encrypted: string | null;
   scm_refresh_token_encrypted: string | null;
@@ -98,6 +100,8 @@ export interface ArtifactRow {
   url: string | null;
   metadata: string | null; // JSON
   created_at: number;
+  /** Last content change; migration 34 backfills it to created_at. */
+  updated_at: number;
 }
 
 export interface SandboxRow {

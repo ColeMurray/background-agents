@@ -158,9 +158,14 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
 
 function makeSessionEnv(
   order: string[] = [],
-  responses: { session?: unknown; prompt?: unknown } = {}
+  responses: {
+    session?: unknown;
+    prompt?: unknown | unknown[];
+    promptStatus?: number | number[];
+  } = {}
 ): Env {
   const env = makeEnv();
+  let promptResponseIndex = 0;
   (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
     async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -199,8 +204,14 @@ function makeSessionEnv(
 
       if (url.includes("/prompt")) {
         order.push("prompt");
-        return new Response(JSON.stringify(responses.prompt ?? { messageId: "msg-1" }), {
-          status: 200,
+        const promptResponse = Array.isArray(responses.prompt)
+          ? responses.prompt[promptResponseIndex++]
+          : responses.prompt;
+        const promptStatus = Array.isArray(responses.promptStatus)
+          ? responses.promptStatus[promptResponseIndex - 1]
+          : responses.promptStatus;
+        return new Response(JSON.stringify(promptResponse ?? { messageId: "msg-1" }), {
+          status: promptStatus ?? 200,
           headers: { "Content-Type": "application/json" },
         });
       }
@@ -216,7 +227,11 @@ function makeSessionEnv(
 
 function mockSlackFetch(
   order: string[] = [],
-  options: { statusResponse?: Response | Promise<Response>; threadMessages?: unknown[] } = {}
+  options: {
+    statusResponse?: Response | Promise<Response>;
+    threadMessages?: unknown[];
+    threadRepliesError?: string;
+  } = {}
 ) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -243,7 +258,10 @@ function mockSlackFetch(
     }
 
     if (url.includes("conversations.replies")) {
-      return new Response(JSON.stringify({ ok: true, messages: options.threadMessages ?? [] }), {
+      const payload = options.threadRepliesError
+        ? { ok: false, error: options.threadRepliesError }
+        : { ok: true, messages: options.threadMessages ?? [] };
+      return new Response(JSON.stringify(payload), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -397,6 +415,37 @@ describe("POST /events", () => {
         ]),
       })
     );
+  });
+
+  it("does not dispatch app mentions without a user", async () => {
+    const slackFetch = mockSlackFetch([]);
+    const env = makeSessionEnv([]);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+    expect(mockGetUserInfo).not.toHaveBeenCalled();
+    expect(slackFetch).not.toHaveBeenCalled();
+    expect((env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put).toHaveBeenCalledWith(
+      expect.stringMatching(/^event:/),
+      "1",
+      { expirationTtl: 3600 }
+    );
+
+    slackFetch.mockRestore();
   });
 
   it("sets Starting status for a new app mention before session creation", async () => {
@@ -621,6 +670,10 @@ describe("POST /events", () => {
         }),
       ])
     );
+    const threadMappingWrite = (
+      env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }
+    ).put.mock.calls.find(([key]) => key === "thread:C123:111.222");
+    expect(threadMappingWrite).toBeUndefined();
 
     slackFetch.mockRestore();
   });
@@ -718,6 +771,247 @@ describe("POST /events", () => {
     expect(promptBodies[0].content).toContain("Slack channel context");
     expect(promptBodies[0].content).not.toContain("Context from the Slack thread");
     expect(promptBodies[0].content).not.toContain("The latest commit is");
+    expect(
+      slackFetch.mock.calls.some(([input]) => String(input).includes("conversations.replies"))
+    ).toBe(false);
+    // Legacy mappings without lastPromptTs get stamped so the next follow-up
+    // can scope interim thread context.
+    await expect(
+      (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
+        "thread:C123:111.222",
+        "json"
+      )
+    ).resolves.toEqual(expect.objectContaining({ lastPromptTs: "333.444" }));
+
+    slackFetch.mockRestore();
+  });
+
+  it("preserves an existing session mapping after a transient prompt failure", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order, { prompt: {} });
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+      delete: ReturnType<typeof vi.fn>;
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+    const mapping = {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
+      createdAt: Date.now(),
+    };
+    await kv.put("thread:C123:111.222", JSON.stringify(mapping));
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(order).not.toContain("session");
+    expect(kv.delete).not.toHaveBeenCalledWith("thread:C123:111.222");
+    await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(mapping);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({ text: "Sorry, I couldn't send your follow-up. Please try again." })
+    );
+    expect(
+      slackFetch.mock.calls.some(([input]) => String(input).includes("conversations.replies"))
+    ).toBe(false);
+
+    slackFetch.mockRestore();
+  });
+
+  it("fetches thread history after an existing session proves stale", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      threadMessages: [{ type: "message", text: "Earlier request", user: "U456", ts: "111.222" }],
+    });
+    const env = makeSessionEnv(order, {
+      prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
+      promptStatus: [404, 200],
+    });
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "stale-session",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(
+      slackFetch.mock.calls.filter(([input]) => String(input).includes("conversations.replies"))
+    ).toHaveLength(1);
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(2);
+    expect(promptBodies[1].content).toContain("Context from the Slack thread");
+    expect(promptBodies[1].content).toContain("Earlier request");
+    const storedMapping = (
+      env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }
+    ).get("thread:C123:111.222", "json");
+    await expect(storedMapping).resolves.toEqual(
+      expect.objectContaining({ sessionId: "session-1" })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("forwards interim human messages on follow-ups to an existing session", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      threadMessages: [
+        { type: "message", text: "<@B123> do this action", user: "U123", ts: "111.222" },
+        { type: "message", text: "what do you think?", user: "U456", ts: "222.000" },
+        { type: "message", text: "i think we should do x", user: "U789", ts: "225.000" },
+        { type: "message", text: "Working on acme/app...", bot_id: "B123", ts: "230.000" },
+        { type: "message", text: "<@B123> see the above chat", user: "U123", ts: "333.444" },
+      ],
+    });
+    const env = makeSessionEnv(order);
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+    await kv.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+        lastPromptTs: "111.222",
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> see the above chat",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(order).not.toContain("session");
+    const repliesCalls = slackFetch.mock.calls.filter(([input]) =>
+      String(input).includes("conversations.replies")
+    );
+    expect(repliesCalls).toHaveLength(1);
+    expect(String(repliesCalls[0][0])).toContain("oldest=111.222");
+
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(1);
+    const content = String(promptBodies[0].content);
+    expect(content).toContain("New messages in the Slack thread since your last task");
+    expect(content).toContain("what do you think?");
+    expect(content).toContain("i think we should do x");
+    // Bot replies and messages already forwarded stay out of the follow-up.
+    expect(content).not.toContain("Working on acme/app");
+    expect(content).not.toContain("do this action");
+    expect(content).toContain("see the above chat");
+    // The triggering message itself is the prompt, not interim context.
+    expect(content).not.toContain("<@B123>");
+    await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(
+      expect.objectContaining({ sessionId: "session-1", lastPromptTs: "333.444" })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("keeps the interim checkpoint when the thread fetch fails", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, { threadRepliesError: "ratelimited" });
+    const env = makeSessionEnv(order);
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+    await kv.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+        lastPromptTs: "111.222",
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> see the above chat",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    // The prompt is still sent — thread context stays best effort — but the
+    // checkpoint is not advanced past messages that were never considered.
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(1);
+    expect(String(promptBodies[0].content)).not.toContain(
+      "New messages in the Slack thread since your last task"
+    );
+    await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(
+      expect.objectContaining({ sessionId: "session-1", lastPromptTs: "111.222" })
+    );
 
     slackFetch.mockRestore();
   });
@@ -851,7 +1145,7 @@ describe("POST /interactions", () => {
 
     await flushWaitUntil(ctx);
     await flushWaitUntil(ctx, 1);
-    expect(ctx.waitUntil).toHaveBeenCalledTimes(4);
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(3);
 
     expect(statusFetchBodies(slackFetch)).toContainEqual({
       channel_id: "C123",
@@ -859,7 +1153,7 @@ describe("POST /interactions", () => {
       status: "Starting...",
       loading_messages: ["Starting..."],
     });
-    expect(startingStatusBodies(slackFetch)).toHaveLength(3);
+    expect(startingStatusBodies(slackFetch)).toHaveLength(2);
     expect(order.indexOf("repos")).toBeLessThan(order.indexOf("status"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
 
@@ -1359,7 +1653,7 @@ describe("POST /interactions", () => {
 
     await flushWaitUntil(ctx);
     await flushWaitUntil(ctx, 1);
-    expect(ctx.waitUntil).toHaveBeenCalledTimes(4);
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(3);
 
     const sessionCall = (
       env.CONTROL_PLANE.fetch as unknown as { mock: { calls: unknown[][] } }

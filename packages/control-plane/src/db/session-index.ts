@@ -1,4 +1,19 @@
-import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
+import type {
+  PullRequestSummary,
+  SessionListRepository,
+  SessionStatus,
+  SpawnSource,
+} from "@open-inspect/shared";
+import { SessionPullRequestStore } from "./session-pull-request-store";
+
+/**
+ * One member of a session's repository set — the identity subset of the
+ * shared SessionRepositoryState (no git state; D1 doesn't store it).
+ * Ordered — array position is the persisted `position` column ([0] =
+ * primary, mirrored into the scalar repo_owner/repo_name columns). Aliases
+ * the shared wire type so Session.repositories and this share one shape.
+ */
+export type SessionIndexRepository = SessionListRepository;
 
 export interface SessionEntry {
   id: string;
@@ -22,6 +37,30 @@ export interface SessionEntry {
   prCount?: number;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Ordered member list; [0] = primary. Absent on pre-feature sessions —
+   * consumers synthesize from repoOwner/repoName.
+   */
+  repositories?: SessionIndexRepository[];
+  /**
+   * The environment this session was launched from (provenance), or null for
+   * repo-launched/ad-hoc sessions. PR-12 renders it on the session list.
+   */
+  environmentId?: string | null;
+  /**
+   * Per-status PR counts from session_pull_requests; absent when the session
+   * has no tracked PRs. Attached by list() for the global sidebar.
+   */
+  pullRequestSummary?: PullRequestSummary;
+}
+
+interface SessionRepositoryRow {
+  session_id: string;
+  position: number;
+  repo_owner: string;
+  repo_name: string;
+  repo_id: number | null;
+  base_branch: string;
 }
 
 interface SessionRow {
@@ -44,6 +83,7 @@ interface SessionRow {
   active_duration_ms: number;
   message_count: number;
   pr_count: number;
+  environment_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -84,6 +124,7 @@ function toEntry(row: SessionRow): SessionEntry {
     activeDurationMs: row.active_duration_ms,
     messageCount: row.message_count,
     prCount: row.pr_count,
+    environmentId: row.environment_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -119,10 +160,10 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     const repository = normalizeSessionRepository(session);
 
-    const result = await this.db
+    const sessionStmt = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -140,16 +181,34 @@ export class SessionIndexStore {
         session.automationRunId ?? null,
         session.scmLogin ?? null,
         session.userId ?? null,
+        session.environmentId ?? null,
         session.createdAt,
         session.updatedAt
-      )
-      .run();
+      );
+
+    const repositoryStmts = (session.repositories ?? []).map((repo, position) =>
+      this.db
+        .prepare(
+          `INSERT INTO session_repositories (session_id, position, repo_owner, repo_name, repo_id, base_branch)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          session.id,
+          position,
+          normalizeRepoIdentifier(repo.repoOwner),
+          normalizeRepoIdentifier(repo.repoName),
+          repo.repoId,
+          repo.baseBranch
+        )
+    );
+
+    const results = await this.db.batch([sessionStmt, ...repositoryStmts]);
 
     // INSERT OR IGNORE swallows every constraint violation, which would leave
     // the session invisible to dashboards while the DO proceeds. Session ids
     // are always freshly generated, so a skipped insert is a bug — surface it;
     // initialize.ts relies on D1 failures being caught before sandbox spawn.
-    if ((result.meta?.changes ?? 0) === 0) {
+    if ((results[0]?.meta?.changes ?? 0) === 0) {
       throw new Error(
         `Session index insert was skipped for session ${session.id} (duplicate id or constraint violation)`
       );
@@ -163,6 +222,39 @@ export class SessionIndexStore {
       .first<SessionRow>();
 
     return result ? toEntry(result) : null;
+  }
+
+  /**
+   * Whether the session exists and the repository is in its repository set
+   * (the scalar primary mirror or a session_repositories row). This is the
+   * webhook branch-fallback gate (design §5.2): a branch-derived insert may
+   * only attach to a session already associated with the event's repository.
+   * Case-insensitive — provider repo identifiers are case-insensitive while
+   * stored casing is display-canonical.
+   */
+  async isRepositoryAssociated(
+    sessionId: string,
+    repoOwner: string,
+    repoName: string
+  ): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        `SELECT 1 AS ok FROM sessions
+         WHERE id = ?1
+           AND (
+             (LOWER(repo_owner) = LOWER(?2) AND LOWER(repo_name) = LOWER(?3))
+             OR EXISTS (
+               SELECT 1 FROM session_repositories sr
+               WHERE sr.session_id = sessions.id
+                 AND LOWER(sr.repo_owner) = LOWER(?2)
+                 AND LOWER(sr.repo_name) = LOWER(?3)
+             )
+           )`
+      )
+      .bind(sessionId, repoOwner, repoName)
+      .first<{ ok: number }>();
+
+    return row !== null;
   }
 
   async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
@@ -189,16 +281,29 @@ export class SessionIndexStore {
       params.push(excludeStatus);
     }
 
+    // Repo filters match against the membership table so a session is found
+    // through ANY member, not just the scalar primary mirror. The scalar arm
+    // is the fallback for pre-feature sessions without member rows.
     const normalizedRepoOwner = normalizeRepoIdentifier(repoOwner);
-    if (normalizedRepoOwner) {
-      conditions.push("repo_owner = ?");
-      params.push(normalizedRepoOwner);
-    }
-
     const normalizedRepoName = normalizeRepoIdentifier(repoName);
-    if (normalizedRepoName) {
-      conditions.push("repo_name = ?");
-      params.push(normalizedRepoName);
+    if (normalizedRepoOwner || normalizedRepoName) {
+      const memberConditions: string[] = [];
+      const scalarConditions: string[] = [];
+      const repoFilterParams: unknown[] = [];
+      if (normalizedRepoOwner) {
+        memberConditions.push("sr.repo_owner = ?");
+        scalarConditions.push("repo_owner = ?");
+        repoFilterParams.push(normalizedRepoOwner);
+      }
+      if (normalizedRepoName) {
+        memberConditions.push("sr.repo_name = ?");
+        scalarConditions.push("repo_name = ?");
+        repoFilterParams.push(normalizedRepoName);
+      }
+      conditions.push(
+        `(EXISTS (SELECT 1 FROM session_repositories sr WHERE sr.session_id = sessions.id AND ${memberConditions.join(" AND ")}) OR (${scalarConditions.join(" AND ")}))`
+      );
+      params.push(...repoFilterParams, ...repoFilterParams);
     }
 
     if (createdByUserIds?.length) {
@@ -215,12 +320,68 @@ export class SessionIndexStore {
       .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = rows.slice(0, limit).map(toEntry);
+    const sessions = await this.decorateEntries(rows.slice(0, limit).map(toEntry));
 
     return {
       sessions,
       hasMore: rows.length > limit,
     };
+  }
+
+  /**
+   * Attach repository lists and PR status summaries to the paged
+   * entries. The two lookups are independent — each is one grouped query
+   * keyed by the same session ids — so they run in parallel and merge onto
+   * the entries in a single pass. Sessions without rows are returned without
+   * the field: consumers fall back to the scalar repo columns, and PR state
+   * never influences session ordering (this only decorates paged rows).
+   */
+  private async decorateEntries(sessions: SessionEntry[]): Promise<SessionEntry[]> {
+    if (sessions.length === 0) return sessions;
+    const sessionIds = sessions.map((session) => session.id);
+
+    const [repositoriesBySession, summariesBySession] = await Promise.all([
+      this.repositoriesForSessions(sessionIds),
+      new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
+    ]);
+
+    return sessions.map((session) => {
+      const repositories = repositoriesBySession.get(session.id);
+      const pullRequestSummary = summariesBySession.get(session.id);
+      return {
+        ...session,
+        ...(repositories ? { repositories } : {}),
+        ...(pullRequestSummary ? { pullRequestSummary } : {}),
+      };
+    });
+  }
+
+  /** Repository lists for the given sessions, in one query. */
+  private async repositoriesForSessions(
+    sessionIds: readonly string[]
+  ): Promise<Map<string, SessionIndexRepository[]>> {
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM session_repositories
+         WHERE session_id IN (${placeholders})
+         ORDER BY session_id, position`
+      )
+      .bind(...sessionIds)
+      .all<SessionRepositoryRow>();
+
+    const bySession = new Map<string, SessionIndexRepository[]>();
+    for (const row of result.results || []) {
+      const list = bySession.get(row.session_id) ?? [];
+      list.push({
+        repoOwner: row.repo_owner,
+        repoName: row.repo_name,
+        repoId: row.repo_id,
+        baseBranch: row.base_branch,
+      });
+      bySession.set(row.session_id, list);
+    }
+    return bySession;
   }
 
   async updateTitle(id: string, title: string): Promise<boolean> {
@@ -279,7 +440,12 @@ export class SessionIndexStore {
   }
 
   async delete(id: string): Promise<boolean> {
-    const result = await this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id).run();
+    // Member rows are removed explicitly for clarity; the FK's ON DELETE
+    // CASCADE also covers callers that delete the session row directly.
+    const [, result] = await this.db.batch([
+      this.db.prepare("DELETE FROM session_repositories WHERE session_id = ?").bind(id),
+      this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id),
+    ]);
 
     return (result.meta?.changes ?? 0) > 0;
   }

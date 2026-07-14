@@ -57,6 +57,102 @@ export function makeExecutionContext() {
   } as unknown as ExecutionContext & { waitUntil: ReturnType<typeof vi.fn> };
 }
 
+interface LinearFetchRequest {
+  accessToken?: string;
+  body: Record<string, unknown>;
+  operationName?: string;
+  params?: URLSearchParams;
+  signal?: AbortSignal | null;
+}
+
+interface LinearFetchHandlers {
+  authorizationCode?: (request: LinearFetchRequest) => Response | Promise<Response>;
+  clientCredentials?: (request: LinearFetchRequest) => Response | Promise<Response>;
+  identity?: (request: LinearFetchRequest) => Response | Promise<Response>;
+  graphql?: (request: LinearFetchRequest) => Response | Promise<Response>;
+}
+
+function readBearerToken(headers?: HeadersInit): string | undefined {
+  const authorization = new Headers(headers).get("Authorization");
+  return authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+}
+
+function readGraphQLOperationName(query: unknown): string | undefined {
+  if (typeof query !== "string") return undefined;
+  return /\b(?:query|mutation)\s+(\w+)/.exec(query)?.[1];
+}
+
+export function createLinearFetchMock(handlers: LinearFetchHandlers) {
+  return vi.fn<typeof fetch>(async (input, init) => {
+    const url = String(input);
+    if (url === "https://api.linear.app/oauth/token") {
+      const params = init?.body as URLSearchParams;
+      const grantType = params.get("grant_type");
+      const handler =
+        grantType === "authorization_code"
+          ? handlers.authorizationCode
+          : grantType === "client_credentials"
+            ? handlers.clientCredentials
+            : undefined;
+      if (!handler) throw new Error(`Unexpected Linear OAuth grant: ${String(grantType)}`);
+      return handler({ body: {}, params, signal: init?.signal });
+    }
+
+    if (url === "https://api.linear.app/graphql") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const operationName = readGraphQLOperationName(body.query);
+      const handler =
+        operationName === "LinearViewerIdentity" ? handlers.identity : handlers.graphql;
+      if (!handler)
+        throw new Error(`Unexpected Linear GraphQL operation: ${String(operationName)}`);
+      return handler({
+        accessToken: readBearerToken(init?.headers),
+        body,
+        operationName,
+        signal: init?.signal,
+      });
+    }
+
+    throw new Error(`Unexpected fetch to ${url}`);
+  });
+}
+
+export function linearClientCredentialsResponse(
+  accessToken = "runtime-access-token",
+  overrides: Record<string, unknown> = {}
+): Response {
+  return Response.json({
+    access_token: accessToken,
+    token_type: "Bearer",
+    expires_in: 2_592_000,
+    ...overrides,
+  });
+}
+
+export function linearAuthorizationCodeResponse(): Response {
+  return Response.json({
+    access_token: "installation-access-token",
+    refresh_token: "installation-refresh-token",
+    token_type: "Bearer",
+    expires_in: 86_399,
+    scope: "read write app:assignable app:mentionable",
+  });
+}
+
+export function linearIdentityResponse(
+  organizationId = "org-1",
+  appUserId = "app-user-1"
+): Response {
+  return Response.json({
+    data: {
+      viewer: {
+        id: appUserId,
+        organization: { id: organizationId, name: "Acme" },
+      },
+    },
+  });
+}
+
 export async function signLinearWebhookRequest(body: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(

@@ -87,6 +87,30 @@ def _normalize_optional_repository_context(
     return normalized_owner, normalized_name
 
 
+def _session_config_from_create_request(
+    request: dict, *, repo_owner: str | None, repo_name: str | None
+):
+    """Build the create-path SessionConfig from the flat wire request.
+
+    Create is a lossy reconstruction — the manager re-serializes this typed
+    model into SESSION_CONFIG — while restore forwards its session_config
+    dict verbatim. Wire fields share their names with SessionConfig fields,
+    so the model's own field list drives the pickup: a new field only needs
+    the SessionConfig change, not another line here. repo_owner/repo_name
+    are set from the normalized pair, never the raw request.
+    """
+    from .sandbox import SessionConfig
+
+    fields = {
+        name: request[name]
+        for name in SessionConfig.model_fields
+        if name in request and request[name] is not None
+    }
+    fields["repo_owner"] = repo_owner
+    fields["repo_name"] = repo_name
+    return SessionConfig(**fields)
+
+
 @app.function(
     image=function_image,
     secrets=[github_app_secrets, internal_api_secret],
@@ -128,8 +152,6 @@ async def api_create_sandbox(
     require_valid_control_plane_url(control_plane_url)
 
     try:
-        # Import types and manager directly
-        from .sandbox import SessionConfig
         from .sandbox.manager import SandboxConfig, SandboxManager
 
         manager = SandboxManager()
@@ -144,15 +166,8 @@ async def api_create_sandbox(
             resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
 
-        session_config = SessionConfig(
-            session_id=request.get("session_id"),
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            branch=request.get("branch"),
-            opencode_session_id=request.get("opencode_session_id"),
-            provider=request.get("provider", "anthropic"),
-            model=request.get("model", "claude-sonnet-4-6"),
-            mcp_servers=request.get("mcp_servers"),
+        session_config = _session_config_from_create_request(
+            request, repo_owner=repo_owner, repo_name=repo_name
         )
 
         config = SandboxConfig(
@@ -458,29 +473,29 @@ async def api_restore_sandbox(
     secrets=[internal_api_secret, github_app_secrets],
 )
 @fastapi_endpoint(method="POST")
-async def api_build_repo_image(
+async def api_build_image(
     request: dict,
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
 ) -> dict:
     """
-    Kick off an async image build. Returns immediately.
+    Kick off an async scope image build (design §4). Returns immediately.
 
-    Spawns a build_repo_image async worker that will:
-    1. Create a build sandbox
-    2. Wait for it to finish (git clone + setup)
-    3. Snapshot the filesystem
-    4. POST the result to callback_url
+    Spawns a build_image worker that clones every repository in the set, runs
+    their setup hooks sequentially, snapshots the filesystem, and POSTs the
+    result (repository_shas + runtime_version) to callback_url.
 
     POST body:
     {
-        "repo_owner": "...",
-        "repo_name": "...",
-        "default_branch": "main",
+        "scope_kind": "repo" | "environment",  // logging only
+        "scope_id": "...",                      // logging only
         "build_id": "...",
         "callback_url": "...",
-        "build_timeout_seconds": 1800  // optional
+        "failure_callback_url": "...",
+        "repositories": [{"repo_owner": "...", "repo_name": "...", "branch": "..."}],
+        "user_env_vars": {...},          // optional
+        "build_timeout_seconds": 1800    // optional
     }
     """
     start_time = time.time()
@@ -494,36 +509,52 @@ async def api_build_repo_image(
             DEFAULT_BUILD_TIMEOUT_SECONDS,
             build_function_timeout_seconds,
         )
-        from .scheduler.image_builder import build_repo_image
+        from .scheduler.image_builder import build_image
 
-        repo_owner = request.get("repo_owner")
-        repo_name = request.get("repo_name")
-        default_branch = request.get("default_branch")
+        scope_kind = request.get("scope_kind", "")
+        scope_id = request.get("scope_id", "")
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
+        failure_callback_url = request.get("failure_callback_url", "")
+        repositories = request.get("repositories")
         user_env_vars = request.get("user_env_vars") or None
         # Already capped by the control plane; default when absent/null.
         build_timeout_seconds = int(
             request.get("build_timeout_seconds") or DEFAULT_BUILD_TIMEOUT_SECONDS
         )
 
-        if not repo_owner or not repo_name:
-            raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
-
         if not build_id:
             raise HTTPException(status_code=400, detail="build_id is required")
 
-        if not default_branch:
-            raise HTTPException(status_code=400, detail="default_branch is required")
+        if not callback_url:
+            raise HTTPException(status_code=400, detail="callback_url is required")
+
+        if not failure_callback_url:
+            raise HTTPException(status_code=400, detail="failure_callback_url is required")
+
+        if not isinstance(repositories, list) or not repositories:
+            raise HTTPException(status_code=400, detail="repositories must be a non-empty list")
+        for entry in repositories:
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("repo_owner")
+                or not entry.get("repo_name")
+                or not entry.get("branch")
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="repositories entries require repo_owner, repo_name, and branch",
+                )
 
         function_timeout = build_function_timeout_seconds(build_timeout_seconds)
 
         # Spawn the async builder — returns immediately
-        await build_repo_image.with_options(timeout=function_timeout).spawn.aio(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            default_branch=default_branch,
+        await build_image.with_options(timeout=function_timeout).spawn.aio(
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            repositories=repositories,
             callback_url=callback_url,
+            failure_callback_url=failure_callback_url,
             build_id=build_id,
             user_env_vars=user_env_vars,
             build_timeout_seconds=build_timeout_seconds,
@@ -543,18 +574,18 @@ async def api_build_repo_image(
     except Exception as e:
         outcome = "error"
         http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_build_repo_image")
+        log.error("api.error", exc=e, endpoint_name="api_build_image")
         return {"success": False, "error": str(e)}
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
             "modal.http_request",
             http_method="POST",
-            http_path="/api_build_repo_image",
+            http_path="/api_build_image",
             http_status=http_status,
             duration_ms=duration_ms,
             outcome=outcome,
-            endpoint_name="api_build_repo_image",
+            endpoint_name="api_build_image",
             trace_id=x_trace_id,
             request_id=x_request_id,
         )

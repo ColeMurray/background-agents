@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent, ServerMessage } from "../types";
+
+function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
+  return {
+    remoteUrl: `https://token@example.com/${repoOwner}/${repoName}.git`,
+    redactedRemoteUrl: `https://***@example.com/${repoOwner}/${repoName}.git`,
+    refspec: `HEAD:refs/heads/${targetBranch}`,
+    targetBranch,
+    repoOwner,
+    repoName,
+    force: false,
+  };
+}
 
 function createProcessor() {
   const repository = {
@@ -176,6 +189,7 @@ describe("SessionSandboxEventProcessor", () => {
           sizeBytes: 512,
         },
         createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
       },
     });
     expect(h.broadcast).toHaveBeenNthCalledWith(2, {
@@ -296,17 +310,15 @@ describe("SessionSandboxEventProcessor", () => {
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    const pushPromise = h.processor.pushBranchToRemote("feature/test", {
-      remoteUrl: "https://token@example.com/repo.git",
-      redactedRemoteUrl: "https://***@example.com/repo.git",
-      refspec: "feature/test:feature/test",
-      targetBranch: "feature/test",
-      force: false,
-    });
+    const pushPromise = h.processor.pushBranchToRemote(
+      createPushSpec("acme", "web", "feature/test")
+    );
 
     await h.processor.processSandboxEvent({
       type: "push_complete",
       branchName: "feature/test",
+      repoOwner: "acme",
+      repoName: "web",
       timestamp: 1000,
     });
 
@@ -315,6 +327,154 @@ describe("SessionSandboxEventProcessor", () => {
       sandboxWs,
       expect.objectContaining({ type: "push" })
     );
+  });
+
+  describe("push resolver keying", () => {
+    function connectSandbox(h: ReturnType<typeof createProcessor>) {
+      const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+      return sandboxWs;
+    }
+
+    it("settles the matching push when two repos push the same branch name", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const webPush = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "open-inspect/session-1")
+      );
+      const backendPush = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "backend", "open-inspect/session-1")
+      );
+
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        branchName: "open-inspect/session-1",
+        repoOwner: "acme",
+        repoName: "backend",
+        error: "remote rejected",
+        timestamp: 1000,
+      });
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "open-inspect/session-1",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1001,
+      });
+
+      await expect(webPush).resolves.toEqual({ success: true });
+      await expect(backendPush).resolves.toEqual({
+        success: false,
+        error: expect.stringContaining("remote rejected"),
+      });
+    });
+
+    it("settles the sole pending push on a terminal event without repo identity", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const pushPromise = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/test")
+      );
+
+      // Legacy single-repo runtimes echo no repo identity.
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/test",
+        timestamp: 1000,
+      });
+
+      await expect(pushPromise).resolves.toEqual({ success: true });
+    });
+
+    it("rejects the sole pending push on a branch-less push_error", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const pushPromise = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/test")
+      );
+
+      // The bridge's "no repository found" path emits push_error with no
+      // branchName at all; it must reject the pending push instead of
+      // leaking it to the 360 s timeout.
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        error: "No repository found for push",
+        timestamp: 1000,
+      });
+
+      await expect(pushPromise).resolves.toEqual({
+        success: false,
+        error: expect.stringContaining("No repository found for push"),
+      });
+    });
+
+    it("drops a fully identified event that mismatches the sole pending push", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const pushPromise = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/test")
+      );
+
+      // A stale event for a different repo must not settle the pending push
+      // just because it is the only one in flight.
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        branchName: "feature/test",
+        repoOwner: "acme",
+        repoName: "backend",
+        error: "remote rejected",
+        timestamp: 1000,
+      });
+
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/test",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1001,
+      });
+
+      await expect(pushPromise).resolves.toEqual({ success: true });
+    });
+
+    it("drops an identity-less terminal event when several pushes are pending", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const webPush = h.processor.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
+      const backendPush = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "backend", "feature/b")
+      );
+
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        error: "ambiguous",
+        timestamp: 1000,
+      });
+
+      // Neither push settles from the ambiguous event; identified events do.
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/a",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1001,
+      });
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/b",
+        repoOwner: "acme",
+        repoName: "backend",
+        timestamp: 1002,
+      });
+
+      await expect(webPush).resolves.toEqual({ success: true });
+      await expect(backendPush).resolves.toEqual({ success: true });
+    });
   });
 
   describe("activity tracking for intermediate events", () => {

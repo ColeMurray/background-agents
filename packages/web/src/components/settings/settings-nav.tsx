@@ -5,6 +5,7 @@ import {
   KeyIcon,
   ModelIcon,
   BoxIcon,
+  FolderIcon,
   KeyboardIcon,
   DataControlsIcon,
   IntegrationsIcon,
@@ -19,6 +20,11 @@ const NAV_ITEMS = [
     id: "secrets",
     label: "Secrets",
     icon: KeyIcon,
+  },
+  {
+    id: "environments",
+    label: "Environments",
+    icon: FolderIcon,
   },
   {
     id: "models",

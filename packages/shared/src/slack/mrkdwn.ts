@@ -28,6 +28,16 @@ export function stripBroadcastMentions(text: string): string {
   return text.replace(BROADCAST_MENTION_RE, "");
 }
 
+/**
+ * Escape text for literal display inside Slack `mrkdwn`: `&`, `<`, and `>`
+ * become entities, which neutralizes every control sequence (broadcast and
+ * user mentions, links). For untrusted display *labels* — unlike
+ * {@link sanitizeAgentText}, which preserves intentional formatting in prose.
+ */
+export function escapeMrkdwnText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export function sanitizeLinks(text: string): string {
   return text.replace(URL_LINK_RE, "$1");
 }

@@ -55,6 +55,7 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     repo_name: null,
     repo_id: null,
     base_branch: null,
+    environment_id: null,
     ...overrides,
   };
 }
@@ -118,6 +119,19 @@ describe("AutomationStore (D1 integration)", () => {
       const result = await store.getById("auto-uid-null");
       expect(result).not.toBeNull();
       expect(result!.user_id).toBeNull();
+    });
+
+    it("round-trips the environment selection, including clearing it", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-env" }));
+
+      const now = Date.now();
+      await env.DB.batch(store.bindReplaceEnvironments("auto-env", ["env_abc", "env_def"], now));
+      const selected = await store.getEnvironmentsForAutomation("auto-env");
+      expect(selected.map((row) => row.environment_id)).toEqual(["env_abc", "env_def"]);
+
+      await env.DB.batch(store.bindReplaceEnvironments("auto-env", [], now));
+      expect(await store.getEnvironmentsForAutomation("auto-env")).toEqual([]);
     });
 
     it("returns null for nonexistent automation", async () => {

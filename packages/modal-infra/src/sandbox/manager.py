@@ -25,9 +25,10 @@ from sandbox_runtime.constants import (
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from sandbox_runtime.log_config import get_logger
-from sandbox_runtime.types import SandboxStatus, SessionConfig
+from sandbox_runtime.types import SandboxStatus, SessionConfig, SessionRepositoryConfig
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
@@ -45,7 +46,7 @@ MAX_TUNNEL_PORTS = 10
 
 
 def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
-    """Modal function timeout for the build worker (build_repo_image).
+    """Modal function timeout for the build worker (build_image).
 
     The worker idles until the build sandbox finishes, then snapshots it
     (SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS) and reports back, so its timeout must
@@ -288,17 +289,18 @@ class SandboxManager:
     ) -> None:
         """Write tunnel URLs to TUNNEL_ENV_FILE_PATH as a dotenv file.
 
+        The first line tags the file with this sandbox's ID so the supervisor's
+        stale-file cleanup can tell a fresh write (this write can land before
+        the entrypoint runs) from a snapshot/image leftover.
+
         Failures are logged but do not block sandbox creation; URLs are also
         returned to the control plane via the SandboxHandle.
         """
-        lines = [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
+        lines = [f"{TUNNEL_ENV_SANDBOX_ID_KEY}={sandbox_id}"]
+        lines += [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
         content = "\n".join(lines) + "\n"
         try:
-            f = await sandbox.open.aio(TUNNEL_ENV_FILE_PATH, "w")
-            try:
-                await f.write.aio(content)
-            finally:
-                await f.close.aio()
+            await sandbox.filesystem.write_text.aio(content, TUNNEL_ENV_FILE_PATH)
             log.info(
                 "tunnel.urls_written",
                 sandbox_id=sandbox_id,
@@ -520,6 +522,7 @@ class SandboxManager:
         clone_token: str = "",
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
+        repositories: list[SessionRepositoryConfig] | None = None,
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.
@@ -550,7 +553,13 @@ class SandboxManager:
                 "REPO_OWNER": repo_owner,
                 "REPO_NAME": repo_name,
                 "IMAGE_BUILD_MODE": "true",
-                "SESSION_CONFIG": json.dumps({"branch": default_branch}),
+                # Multi-repo builds (environment images) pass the member list;
+                # the list-native runtime clones and sets up every member.
+                "SESSION_CONFIG": json.dumps(
+                    {"branch": default_branch, "repositories": repositories}
+                    if repositories
+                    else {"branch": default_branch}
+                ),
             }
         )
 

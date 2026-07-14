@@ -11,10 +11,10 @@ Three tiers connected by WebSockets:
 1. **Web Client** (Next.js on Vercel or Cloudflare Workers via OpenNext) — UI with GitHub OAuth,
    session dashboard, real-time streaming
 2. **Control Plane** (Cloudflare Workers + Durable Objects) — session lifecycle, WebSocket hub,
-   GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for
-   session index, repo metadata, and encrypted repo secrets.
+   GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for the
+   session index, repo metadata, environments, and encrypted secrets.
 3. **Data Plane** (Modal, Python) — sandboxed environments running coding agents. Manages sandbox
-   creation, snapshots, and repo image builds.
+   creation, snapshots, and repository/environment image builds.
 
 **Bot integrations** — all Cloudflare Workers using Hono:
 
@@ -136,6 +136,14 @@ under 72 characters. Use the PR body for details, not the commit message.
   web app to Cloudflare Workers via OpenNext instead of Vercel. When using Cloudflare, Vercel
   credentials are not required (dummy defaults are used). `NEXT_PUBLIC_WS_URL` must be available at
   build time since Next.js inlines `NEXT_PUBLIC_*` vars into the client bundle.
+- **Repo owners can be nested namespaces**: a `repo_owner` is not always a single segment. GitHub
+  owners are (`octocat`), but GitLab subgroups nest (`group/subgroup`), so an owner may contain `/`.
+  Only `repo_name` is a single path segment (it's the checkout directory under `/workspace`); the
+  owner remains part of the repository identity in clone URLs, API routes, manifests, and storage
+  keys. Don't validate or split owners as single segments. Use the shared repository identity
+  helpers in TypeScript; where a full `owner/name` string is unavoidable, split on the **last** `/`
+  and encode the owner as one API route segment. `repo_config.parse_repositories` accepts `/`-joined
+  owners (see `is_safe_repo_owner`).
 
 ## CI/CD
 

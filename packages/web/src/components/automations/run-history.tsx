@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, ChevronRightIcon } from "@/components/ui/icons";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { useEnvironments } from "@/hooks/use-environments";
 
 // The UI keeps "run" vocabulary while the API speaks invocations: each history
 // row is one invocation (a single firing). A firing with one repository renders
@@ -125,10 +126,18 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
   );
 }
 
-/** One repository's outcome inside an expanded fan-out firing. */
-function RepositoryRunRow({ run }: { run: AutomationRun }) {
+/** One target's outcome inside an expanded fan-out firing. */
+function TargetRunRow({
+  run,
+  environmentName,
+}: {
+  run: AutomationRun;
+  environmentName: (environmentId: string) => string;
+}) {
   const duration = formatDuration(run.startedAt, run.completedAt);
-  const repoLabel = formatRepoLabel(run.repoOwner, run.repoName);
+  const repoLabel = run.environmentId
+    ? environmentName(run.environmentId)
+    : formatRepoLabel(run.repoOwner, run.repoName);
   return (
     <div className="flex items-start justify-between gap-4 rounded-sm px-2 py-2 transition-colors hover:bg-muted">
       <div className="min-w-0">
@@ -169,10 +178,12 @@ function FanOutInvocationRow({
   invocation,
   expanded,
   onToggle,
+  environmentName,
 }: {
   invocation: AutomationInvocation;
   expanded: boolean;
   onToggle: () => void;
+  environmentName: (environmentId: string) => string;
 }) {
   const duration = formatDuration(invocationStartedAt(invocation), invocation.completedAt);
   return (
@@ -191,7 +202,9 @@ function FanOutInvocationRow({
           )}
           {statusBadge(invocation.status)}
           <span className="text-sm font-medium text-foreground">
-            {invocation.runs.length} repositories
+            {invocation.runs.some((run) => run.environmentId)
+              ? `${invocation.runs.length} targets`
+              : `${invocation.runs.length} repositories`}
           </span>
           <span className="text-xs text-muted-foreground">{formatRunCounts(invocation.runs)}</span>
           {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
@@ -203,7 +216,7 @@ function FanOutInvocationRow({
       {expanded && (
         <div className="mt-3 space-y-1 border-t border-border-muted pt-3">
           {invocation.runs.map((run) => (
-            <RepositoryRunRow key={run.id} run={run} />
+            <TargetRunRow key={run.id} run={run} environmentName={environmentName} />
           ))}
         </div>
       )}
@@ -221,6 +234,11 @@ interface RunHistoryProps {
 
 export function RunHistory({ invocations, total, loading, onLoadMore, hasMore }: RunHistoryProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const { environments } = useEnvironments();
+  // Falls back to the raw id when the environment was renamed away or deleted
+  // — history rows must stay identifiable.
+  const environmentName = (environmentId: string) =>
+    environments.find((environment) => environment.id === environmentId)?.name ?? environmentId;
 
   if (!loading && invocations.length === 0) {
     return (
@@ -240,6 +258,7 @@ export function RunHistory({ invocations, total, loading, onLoadMore, hasMore }:
                 key={invocation.id}
                 invocation={invocation}
                 expanded={expandedIds.has(invocation.id)}
+                environmentName={environmentName}
                 onToggle={() =>
                   setExpandedIds((prev) => {
                     const next = new Set(prev);

@@ -1,4 +1,5 @@
 import type { RepoMetadata } from "@open-inspect/shared";
+import { parseJsonStringArray } from "./json-columns";
 
 /** D1 batch() supports at most 100 statements per call. */
 const D1_BATCH_LIMIT = 100;
@@ -10,6 +11,7 @@ interface RepoMetadataRow {
   aliases: string | null;
   channel_associations: string | null;
   keywords: string | null;
+  default_environment_id: string | null;
   image_build_enabled: number;
   created_at: number;
   updated_at: number;
@@ -20,25 +22,17 @@ export interface ImageBuildEnabledRepo {
   repoName: string;
 }
 
-function parseJsonArray(value: string | null): string[] | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function toMetadata(row: RepoMetadataRow): RepoMetadata {
   const metadata: RepoMetadata = {};
   if (row.description != null) metadata.description = row.description;
-  const aliases = parseJsonArray(row.aliases);
+  const aliases = parseJsonStringArray(row.aliases);
   if (aliases) metadata.aliases = aliases;
-  const channelAssociations = parseJsonArray(row.channel_associations);
+  const channelAssociations = parseJsonStringArray(row.channel_associations);
   if (channelAssociations) metadata.channelAssociations = channelAssociations;
-  const keywords = parseJsonArray(row.keywords);
+  const keywords = parseJsonStringArray(row.keywords);
   if (keywords) metadata.keywords = keywords;
+  if (row.default_environment_id != null)
+    metadata.defaultEnvironmentId = row.default_environment_id;
   return metadata;
 }
 
@@ -61,13 +55,14 @@ export class RepoMetadataStore {
 
     await this.db
       .prepare(
-        `INSERT INTO repo_metadata (repo_owner, repo_name, description, aliases, channel_associations, keywords, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO repo_metadata (repo_owner, repo_name, description, aliases, channel_associations, keywords, default_environment_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(repo_owner, repo_name) DO UPDATE SET
            description = excluded.description,
            aliases = excluded.aliases,
            channel_associations = excluded.channel_associations,
            keywords = excluded.keywords,
+           default_environment_id = excluded.default_environment_id,
            updated_at = excluded.updated_at`
       )
       .bind(
@@ -77,6 +72,7 @@ export class RepoMetadataStore {
         metadata.aliases ? JSON.stringify(metadata.aliases) : null,
         metadata.channelAssociations ? JSON.stringify(metadata.channelAssociations) : null,
         metadata.keywords ? JSON.stringify(metadata.keywords) : null,
+        metadata.defaultEnvironmentId ?? null,
         now,
         now
       )
@@ -112,6 +108,18 @@ export class RepoMetadataStore {
     }
 
     return map;
+  }
+
+  /** False when no repo_metadata row exists — an unknown repo is never prebuild-enabled. */
+  async getImageBuildEnabled(owner: string, name: string): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        "SELECT image_build_enabled FROM repo_metadata WHERE repo_owner = ? AND repo_name = ?"
+      )
+      .bind(owner.toLowerCase(), name.toLowerCase())
+      .first<{ image_build_enabled: number }>();
+
+    return row?.image_build_enabled === 1;
   }
 
   async getImageBuildEnabledRepos(): Promise<ImageBuildEnabledRepo[]> {

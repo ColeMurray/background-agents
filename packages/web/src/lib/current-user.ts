@@ -8,10 +8,6 @@ import { controlPlaneFetch } from "@/lib/control-plane";
 
 export type CurrentUserIdentityInput = AuthIdentityUser;
 
-type CurrentUserResponse = {
-  userId?: unknown;
-};
-
 type ResolveCurrentUserResult =
   | {
       ok: true;
@@ -26,6 +22,10 @@ type ResolveCurrentUserResult =
 const CURRENT_USER_ID_CACHE_TTL_MS = 5 * 60 * 1000;
 const currentUserIdCache = new Map<string, { userId: string; expiresAt: number }>();
 const pendingCurrentUserIdResolutions = new Map<string, Promise<ResolveCurrentUserResult>>();
+
+function getResponseUserId(data: unknown): unknown {
+  return data && typeof data === "object" ? (data as { userId?: unknown }).userId : undefined;
+}
 
 export function clearCurrentUserIdCacheForTests() {
   currentUserIdCache.clear();
@@ -89,7 +89,7 @@ async function resolveCurrentUserIdUncached(
     }
   );
 
-  const data = (await response.json()) as CurrentUserResponse;
+  const data = await response.json();
   if (!response.ok) {
     return {
       ok: false,
@@ -98,7 +98,8 @@ async function resolveCurrentUserIdUncached(
     };
   }
 
-  if (!isCanonicalUserId(data.userId)) {
+  const userId = getResponseUserId(data);
+  if (!isCanonicalUserId(userId)) {
     return {
       ok: false,
       status: 502,
@@ -107,12 +108,12 @@ async function resolveCurrentUserIdUncached(
   }
 
   currentUserIdCache.set(cacheKey, {
-    userId: data.userId,
+    userId,
     expiresAt: Date.now() + CURRENT_USER_ID_CACHE_TTL_MS,
   });
 
   return {
     ok: true,
-    userId: data.userId,
+    userId,
   };
 }

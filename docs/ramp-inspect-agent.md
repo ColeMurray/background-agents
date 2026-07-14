@@ -168,7 +168,7 @@ bot. They should just be able to chat with it, and it should figure it out.
 
 A critical piece is to build a classifier to determine what repository to work in. Take the user’s
 incoming message, any thread context (if sent in a thread), and the channel’s name. Give that to a
-fast model (we use GPT 5.2 with no reasoning), along with descriptions of every repository your
+fast model (we use GPT 5.4 with no reasoning), along with descriptions of every repository your
 coding agent can access. Be sure to give it hints on the most common repositories, and example
 classifications. Be sure to include an “unknown” option, so the AI can ask the user if unsure. You
 may need to tweak this at first, but this significantly lowers the barrier for entry.

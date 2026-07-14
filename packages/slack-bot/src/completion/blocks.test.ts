@@ -28,6 +28,21 @@ function getActionElements(
 }
 
 describe("buildCompletionBlocks", () => {
+  it("escapes the target label in the mrkdwn status footer", () => {
+    // Environment-launched sessions carry the raw environment name here.
+    const blocks = buildCompletionBlocks(
+      "session-123",
+      BASE_RESPONSE,
+      { ...BASE_CONTEXT, repoFullName: "<!channel> & co" },
+      "https://app.openinspect.dev"
+    );
+
+    const footer = blocks.find((block) => block.type === "context");
+    const footerText = (footer?.elements as Array<{ text: string }>)[0]?.text ?? "";
+    expect(footerText).toContain("&lt;!channel&gt; &amp; co");
+    expect(footerText).not.toContain("<!channel>");
+  });
+
   it("renders only View Session when there are no artifacts", () => {
     const blocks = buildCompletionBlocks(
       "session-123",

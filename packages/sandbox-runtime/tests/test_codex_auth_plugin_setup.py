@@ -30,6 +30,32 @@ def _auth_file(tmp_path: Path) -> Path:
 class TestCodexAuthPluginSetup:
     """Cases for codex auth proxy plugin deployment."""
 
+    def test_oauth_proxy_allows_gpt_5_6_models(self):
+        """The OAuth model filter should retain all GPT-5.6 variants."""
+        plugin_source = (
+            Path(__file__).parents[1]
+            / "src"
+            / "sandbox_runtime"
+            / "plugins"
+            / "codex-auth-plugin.js"
+        ).read_text()
+
+        for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+            assert f'"{model}"' in plugin_source
+
+    def test_oauth_proxy_excludes_unsupported_gpt_5_2_models(self):
+        """The OAuth model filter should remove unsupported GPT-5.2 variants."""
+        plugin_source = (
+            Path(__file__).parents[1]
+            / "src"
+            / "sandbox_runtime"
+            / "plugins"
+            / "codex-auth-plugin.js"
+        ).read_text()
+
+        for model in ("gpt-5.2", "gpt-5.2-codex"):
+            assert f'"{model}"' not in plugin_source
+
     def test_auth_json_uses_sentinel_token(self, tmp_path):
         """auth.json should contain the sentinel, not the real refresh token."""
         sup = _make_supervisor()

@@ -15,7 +15,8 @@
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
     "@open-inspect/shared": "file:../shared",
-    "hono": "^4.12.26"
+    "hono": "^4.12.26",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.0",

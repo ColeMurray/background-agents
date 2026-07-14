@@ -116,6 +116,7 @@ const sampleRunRow: AutomationRunRow = {
   repo_name: null,
   repo_id: null,
   base_branch: null,
+  environment_id: null,
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -146,6 +147,29 @@ describe("toAutomation", () => {
     expect(automation.triggerConfig).toBeNull();
     expect(automation.consecutiveFailures).toBe(0);
     expect(automation.createdBy).toBe("user-1");
+    expect(automation.environmentIds).toEqual([]);
+  });
+
+  it("maps environment rows to environmentIds", () => {
+    const automation = toAutomation(
+      sampleRow,
+      [],
+      [
+        {
+          automation_id: "auto_test1",
+          environment_id: "env_abc",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          automation_id: "auto_test1",
+          environment_id: "env_def",
+          created_at: now,
+          updated_at: now,
+        },
+      ]
+    );
+    expect(automation.environmentIds).toEqual(["env_abc", "env_def"]);
   });
 
   it("converts enabled=0 to false", () => {

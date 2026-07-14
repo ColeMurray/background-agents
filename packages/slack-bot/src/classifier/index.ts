@@ -1,35 +1,37 @@
 /**
- * Repository classifier for the Slack bot.
+ * Target classifier for the Slack bot.
  *
- * Uses an LLM to classify which repository a Slack message refers to,
- * based on message content, thread context, and channel information.
+ * Uses an LLM to classify which target — a repository or a saved environment —
+ * a Slack message refers to, based on message content, thread context, and
+ * channel information.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
-import {
-  getAvailableRepos,
-  buildRepoDescriptions,
-  getReposByChannel,
-  getRoutingRules,
-} from "./repos";
-import { matchRoutingRules, type ConfidenceLevel } from "@open-inspect/shared";
+import type { Env, ThreadContext, ClassificationResult } from "../types";
+import { buildRepoDescriptions } from "./repos";
+import { buildEnvironmentDescriptions } from "./environments";
+import { loadTargetCatalog, type TargetCatalog } from "./catalog";
+import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
+import { escapeMrkdwnText, type ConfidenceLevel } from "@open-inspect/shared";
+import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
-const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
+const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
 const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium", "low"];
 
-const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
-  name: CLASSIFY_REPO_TOOL_NAME,
+const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
+  name: CLASSIFY_TARGET_TOOL_NAME,
   description:
-    "Classify which repository a Slack message refers to. Use repoId as null when uncertain.",
+    "Classify which repository or environment a Slack message refers to. " +
+    "Use targetId as null when uncertain.",
   input_schema: {
     type: "object",
     properties: {
-      repoId: {
+      targetId: {
         type: ["string", "null"],
-        description: "Repository ID/fullName if confident enough to choose one, otherwise null.",
+        description:
+          'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
       },
       confidence: {
         type: "string",
@@ -42,24 +44,36 @@ const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
       alternatives: {
         type: "array",
         items: { type: "string" },
-        description: "Alternative repository IDs/fullNames when confidence is not high.",
+        description:
+          "Alternative repository fullNames / environment ids when confidence is not high.",
       },
     },
-    required: ["repoId", "confidence", "reasoning", "alternatives"],
+    required: ["targetId", "confidence", "reasoning", "alternatives"],
     additionalProperties: false,
   },
 };
 
 /**
- * Build the classification prompt for the LLM.
+ * Build the classification prompt for the LLM over the target catalog.
  */
-async function buildClassificationPrompt(
-  env: Env,
+function buildClassificationPrompt(
   message: string,
-  context?: ThreadContext,
-  traceId?: string
-): Promise<string> {
-  const repoDescriptions = await buildRepoDescriptions(env, traceId);
+  catalog: TargetCatalog,
+  context?: ThreadContext
+): string {
+  const repoDescriptions = buildRepoDescriptions(catalog.repos);
+
+  const environmentSection =
+    catalog.environments.length > 0
+      ? `
+## Available Environments
+
+Environments are saved multi-repository workspaces. Prefer an environment over a
+single repository when the message names it, or when the work spans several of
+its repositories.
+${buildEnvironmentDescriptions(catalog.environments)}
+`
+      : "";
 
   let contextSection = "";
 
@@ -78,11 +92,11 @@ ${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
 }`;
   }
 
-  return `You are a repository classifier for a coding agent. Your job is to determine which code repository a Slack message is referring to.
+  return `You are a target classifier for a coding agent. Your job is to determine which code repository or environment a Slack message is referring to.
 
 ## Available Repositories
 ${repoDescriptions}
-
+${environmentSection}
 ${contextSection}
 
 ## User's Message
@@ -90,10 +104,10 @@ ${message}
 
 ## Your Task
 
-Analyze the message and context to determine which repository the user is referring to.
+Analyze the message and context to determine which repository or environment the user is referring to.
 
 Consider:
-1. Explicit mentions of repository names or aliases
+1. Explicit mentions of repository or environment names or aliases
 2. Technical keywords that match repository technologies
 3. File paths or code patterns mentioned
 4. Channel associations (some channels are associated with specific repos)
@@ -101,18 +115,18 @@ Consider:
 
 ## Response Format
 
-Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool with:
-- repoId: "owner/name" or null if unclear
+Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
+- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
-- alternatives: other possible repos when confidence is not high`;
+- alternatives: other possible targets when confidence is not high`;
 }
 
 /**
  * Parse the LLM response into a structured result.
  */
 interface LLMResponse {
-  repoId: string | null;
+  targetId: string | null;
   confidence: ConfidenceLevel;
   reasoning: string;
   alternatives: string[];
@@ -124,12 +138,12 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
   }
 
   const input = raw as Record<string, unknown>;
-  const rawRepoId = input.repoId;
-  const repoId =
-    rawRepoId === null
+  const rawTargetId = input.targetId;
+  const targetId =
+    rawTargetId === null
       ? null
-      : typeof rawRepoId === "string" && rawRepoId.trim().length > 0
-        ? rawRepoId.trim()
+      : typeof rawTargetId === "string" && rawTargetId.trim().length > 0
+        ? rawTargetId.trim()
         : null;
 
   const rawConfidence = typeof input.confidence === "string" ? input.confidence.trim() : "";
@@ -156,7 +170,7 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
   }
 
   return {
-    repoId,
+    targetId,
     confidence: confidence as ClassificationResult["confidence"],
     reasoning: input.reasoning.trim(),
     alternatives: [...new Set(alternatives)],
@@ -166,7 +180,7 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
 function extractStructuredResponse(response: Anthropic.Messages.Message): LLMResponse {
   const toolUseBlock = response.content.find(
     (block): block is Anthropic.Messages.ToolUseBlock =>
-      block.type === "tool_use" && block.name === CLASSIFY_REPO_TOOL_NAME
+      block.type === "tool_use" && block.name === CLASSIFY_TARGET_TOOL_NAME
   );
 
   if (!toolUseBlock) {
@@ -191,121 +205,161 @@ export class RepoClassifier {
   }
 
   /**
-   * Match the message against the workspace's Slack routing rules.
+   * Match the message against the workspace's Slack routing rules (resolution
+   * lives in {@link resolveRoutingRuleTargets}).
    *
    * Returns a high-confidence result when exactly one accessible target matches,
    * a clarification result when several distinct targets match (so the user
    * picks rather than the bot guessing), or `null` when no rule applies — in
    * which case the caller falls through to channel association and the LLM.
-   *
-   * Rules whose target is not in the accessible repo list are skipped, so a
-   * stale rule never routes to an inaccessible repository.
    */
   private async classifyByRoutingRules(
     message: string,
-    repos: RepoConfig[],
+    catalog: TargetCatalog,
     traceId?: string
   ): Promise<ClassificationResult | null> {
-    const matched = matchRoutingRules(message, await getRoutingRules(this.env, traceId));
-    if (matched.length === 0) return null;
-
-    const targets = new Map<string, { repo: RepoConfig; keyword: string }>();
-    for (const rule of matched) {
-      const repo = repos.find(
-        (r) => r.fullName.toLowerCase() === rule.target || r.id.toLowerCase() === rule.target
-      );
-      if (repo && !targets.has(repo.id)) {
-        targets.set(repo.id, { repo, keyword: rule.keyword });
-      }
-    }
-
-    const resolved = [...targets.values()];
+    const resolved = await resolveRoutingRuleTargets(this.env, message, catalog, traceId);
     if (resolved.length === 0) return null;
 
     if (resolved.length === 1) {
-      const { repo, keyword } = resolved[0];
-      log.info("classifier.routing_rule_match", { trace_id: traceId, repo_id: repo.id, keyword });
+      const { target, keyword } = resolved[0];
+      log.info("classifier.routing_rule_match", {
+        trace_id: traceId,
+        target_id: targetId(target),
+        keyword,
+      });
       return {
-        repo,
+        target,
         confidence: "high",
-        reasoning: `Matched routing rule "${keyword}" → ${repo.fullName}`,
+        // Reasoning renders as mrkdwn; keyword and label are both user text.
+        reasoning: `Matched routing rule "${escapeMrkdwnText(keyword)}" → ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
       };
     }
 
     return {
-      repo: null,
+      target: null,
       confidence: "medium",
-      reasoning: "Multiple routing rules matched; asking which repository to use.",
-      alternatives: resolved.map((t) => t.repo),
+      reasoning: "Multiple routing rules matched; asking which one to use.",
+      alternatives: resolved.map((t) => t.target),
       needsClarification: true,
     };
   }
 
   /**
-   * Classify which repository a message refers to.
+   * Route on the channel's associated targets (resolution lives in
+   * {@link resolveChannelTargets}).
+   *
+   * Returns a high-confidence result when the channel is associated with
+   * exactly one target. Several associated repositories fall through (`null`)
+   * to the LLM, which is told to weigh channel context — but channel
+   * associations themselves aren't part of its prompt signal, so a
+   * multi-target set that includes an environment asks the user
+   * deterministically instead of letting the model drop the association.
+   */
+  private classifyByChannelAssociations(
+    channelId: string,
+    catalog: TargetCatalog,
+    traceId?: string
+  ): ClassificationResult | null {
+    const targets = resolveChannelTargets(catalog, channelId);
+
+    if (targets.length === 1) {
+      const target = targets[0];
+      log.info("classifier.channel_association_match", {
+        trace_id: traceId,
+        channel_id: channelId,
+        target_id: targetId(target),
+      });
+      return {
+        target,
+        confidence: "high",
+        // Reasoning renders as mrkdwn; the label is user text.
+        reasoning: `Channel is associated with ${target.kind} ${escapeMrkdwnText(targetLabel(target))}`,
+        needsClarification: false,
+      };
+    }
+
+    if (targets.length > 1 && targets.some((target) => target.kind === "environment")) {
+      return {
+        target: null,
+        confidence: "medium",
+        reasoning: "This channel is associated with several targets; asking which one to use.",
+        alternatives: targets,
+        needsClarification: true,
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Classify which target a message refers to.
    */
   async classify(
     message: string,
     context?: ThreadContext,
     traceId?: string
   ): Promise<ClassificationResult> {
-    // Fetch available repos dynamically
-    const repos = await getAvailableRepos(this.env, traceId);
+    // The target catalog every stage below works over. Environments fail open
+    // to []: an environments-fetch problem degrades the catalog — and with it
+    // classification — to repository-only.
+    const catalog = await loadTargetCatalog(this.env, traceId);
 
-    // If no repos available, return immediately
-    if (repos.length === 0) {
+    // Only a fully empty catalog is unclassifiable — environments launch by id
+    // without consulting the repo list, so they stay reachable when the repo
+    // fetch degrades to [].
+    if (catalog.repos.length === 0 && catalog.environments.length === 0) {
       return {
-        repo: null,
+        target: null,
         confidence: "low",
-        reasoning: "No repositories are currently available.",
+        reasoning: "No repositories or environments are currently available.",
         needsClarification: true,
       };
     }
 
-    // If only one repo, skip classification
-    if (repos.length === 1) {
+    // Deterministic routing rules (explicit keyword → repo or environment) take
+    // precedence over everything below — including the single-repo shortcut,
+    // which would otherwise make environment-targeted rules unreachable in
+    // one-repo workspaces — but never override an active thread (handled before
+    // classify is called).
+    const routed = await this.classifyByRoutingRules(message, catalog, traceId);
+    if (routed) {
+      return routed;
+    }
+
+    // Channel associations are the second deterministic stage. Like routing
+    // rules, they run before the single-repo shortcut so a channel associated
+    // with an environment stays reachable in one-repo workspaces.
+    const channelRouted = context?.channelId
+      ? this.classifyByChannelAssociations(context.channelId, catalog, traceId)
+      : null;
+    if (channelRouted) {
+      return channelRouted;
+    }
+
+    // With a single repository and no environments there is nothing to choose.
+    if (catalog.repos.length === 1 && catalog.environments.length === 0) {
       return {
-        repo: repos[0],
+        target: { kind: "repository", repo: catalog.repos[0] },
         confidence: "high",
         reasoning: "Only one repository is available.",
         needsClarification: false,
       };
     }
 
-    // Deterministic routing rules (explicit keyword → repo) take precedence over
-    // channel association and LLM inference, but never override an active thread
-    // (handled before classify is called).
-    const routed = await this.classifyByRoutingRules(message, repos, traceId);
-    if (routed) {
-      return routed;
-    }
-
-    // Check for channel-specific repos first
-    if (context?.channelId) {
-      const channelRepos = await getReposByChannel(this.env, context.channelId, traceId);
-      if (channelRepos.length === 1) {
-        return {
-          repo: channelRepos[0],
-          confidence: "high",
-          reasoning: `Channel is associated with repository ${channelRepos[0].fullName}`,
-          needsClarification: false,
-        };
-      }
-    }
-
     // Use LLM for classification
     try {
-      const prompt = await buildClassificationPrompt(this.env, message, context, traceId);
+      const prompt = buildClassificationPrompt(message, catalog, context);
 
       const response = await this.client.messages.create({
         model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
         max_tokens: 500,
         temperature: 0,
-        tools: [CLASSIFY_REPO_TOOL],
+        tools: [CLASSIFY_TARGET_TOOL],
         tool_choice: {
           type: "tool",
-          name: CLASSIFY_REPO_TOOL_NAME,
+          name: CLASSIFY_TARGET_TOOL_NAME,
           disable_parallel_tool_use: true,
         },
         messages: [
@@ -318,37 +372,30 @@ export class RepoClassifier {
 
       const llmResult = extractStructuredResponse(response);
 
-      // Find the matched repo
-      let matchedRepo: RepoConfig | null = null;
-      if (llmResult.repoId) {
-        matchedRepo =
-          repos.find(
-            (r) =>
-              r.id.toLowerCase() === llmResult.repoId!.toLowerCase() ||
-              r.fullName.toLowerCase() === llmResult.repoId!.toLowerCase()
-          ) || null;
-      }
+      const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 
-      // Find alternative repos
-      const alternatives: RepoConfig[] = [];
+      // Resolve alternatives, deduplicated and never repeating the match.
+      const alternatives: SlackSessionTarget[] = [];
       for (const altId of llmResult.alternatives) {
-        const altRepo = repos.find(
-          (r) =>
-            r.id.toLowerCase() === altId.toLowerCase() ||
-            r.fullName.toLowerCase() === altId.toLowerCase()
-        );
-        if (altRepo && altRepo.id !== matchedRepo?.id) {
-          alternatives.push(altRepo);
+        const target = matchTargetId(altId, catalog);
+        if (
+          target &&
+          (!matchedTarget || targetValue(target) !== targetValue(matchedTarget)) &&
+          !alternatives.some((existing) => targetValue(existing) === targetValue(target))
+        ) {
+          alternatives.push(target);
         }
       }
 
       return {
-        repo: matchedRepo,
+        target: matchedTarget,
         confidence: llmResult.confidence,
-        reasoning: llmResult.reasoning,
+        // Reasoning renders as mrkdwn and may quote target names or message
+        // text; escape it at composition like the deterministic stages do.
+        reasoning: escapeMrkdwnText(llmResult.reasoning),
         alternatives: alternatives.length > 0 ? alternatives : undefined,
         needsClarification:
-          !matchedRepo ||
+          !matchedTarget ||
           llmResult.confidence === "low" ||
           (llmResult.confidence === "medium" && alternatives.length > 0),
       };
@@ -362,12 +409,12 @@ export class RepoClassifier {
       });
 
       return {
-        repo: null,
+        target: null,
         confidence: "low",
         reasoning:
-          "Could not classify repository from structured model output. Please select a repository.",
-        // No basis to suggest specific repos on a classification failure; the
-        // picker lets the user search the full list.
+          "Could not classify a target from structured model output. Please pick one below.",
+        // No basis to suggest specific targets on a classification failure;
+        // the picker lets the user search the full list.
         alternatives: undefined,
         needsClarification: true,
       };

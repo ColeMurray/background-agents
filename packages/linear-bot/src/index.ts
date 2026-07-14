@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import type { Env, UserPreferences, AgentSessionWebhook } from "./types";
 import {
   buildOAuthAuthorizeUrl,
-  exchangeCodeForToken,
+  completeLinearOAuthInstallation,
   verifyLinearWebhook,
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
@@ -30,7 +30,7 @@ import {
 
 // Re-export pure functions for existing test imports
 export {
-  resolveStaticRepo,
+  resolveStaticTarget,
   extractModelFromLabels,
   resolveSessionModelSettings,
 } from "./model-resolution";
@@ -65,10 +65,18 @@ function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSession
   const type = readStringField(payload, "type");
   const action = readStringField(payload, "action");
   const organizationId = readStringField(payload, "organizationId");
+  const appUserId = readStringField(payload, "appUserId");
   const webhookId = readStringField(payload, "webhookId");
   const agentSession = payload.agentSession;
 
-  if (!type || !action || !organizationId || !isObjectRecord(agentSession) || !webhookId) {
+  if (
+    !type ||
+    !action ||
+    !organizationId ||
+    !appUserId ||
+    !isObjectRecord(agentSession) ||
+    !webhookId
+  ) {
     return false;
   }
 
@@ -97,12 +105,13 @@ app.get("/oauth/callback", async (c) => {
   if (!code) return c.text("Missing required OAuth parameters", 400);
 
   try {
-    const { orgName } = await exchangeCodeForToken(c.env, code);
+    const { orgName } = await completeLinearOAuthInstallation(c.env, code);
     return c.html(buildOAuthSuccessHtml(resolveAppName(c.env), orgName));
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error("oauth.callback_error", { error: err instanceof Error ? err : new Error(msg) });
-    return c.text(`Token exchange error: ${msg}`, 500);
+    log.error("oauth.callback_error", {
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    return c.text("Linear authentication setup failed", 500);
   }
 });
 

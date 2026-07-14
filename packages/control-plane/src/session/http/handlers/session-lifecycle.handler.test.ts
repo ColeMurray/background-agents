@@ -25,6 +25,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    environment_id: null,
     created_at: 1000,
     updated_at: 2000,
     ...overrides,
@@ -64,6 +65,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: "octocat@example.com",
     scm_name: "The Octocat",
+    auth_name: null,
     role: "member",
     scm_access_token_encrypted: null,
     scm_refresh_token_encrypted: null,
@@ -78,6 +80,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 function createHandler() {
   const repository = {
     upsertSession: vi.fn(),
+    replaceSessionRepositories: vi.fn(),
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
   };
@@ -243,6 +246,7 @@ describe("createSessionLifecycleHandler", () => {
       spawnDepth: 1,
       codeServerEnabled: false,
       sandboxSettings: null,
+      environmentId: null,
       createdAt: 1234,
       updatedAt: 1234,
     });
@@ -265,8 +269,147 @@ describe("createSessionLifecycleHandler", () => {
       role: "owner",
       joinedAt: 1234,
     });
+    // Scalar init synthesizes a one-entry member set.
+    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([
+      {
+        position: 0,
+        repoOwner: "acme",
+        repoName: "repo",
+        repoId: 123,
+        baseBranch: "feature/work",
+      },
+    ]);
     expect(scheduleWarmSandbox).toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
+  });
+
+  it("persists the repositories list in position order", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repoId: 1,
+          defaultBranch: "main",
+          repositories: [
+            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+            { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
+          ],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([
+      { position: 0, repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+      { position: 1, repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
+    ]);
+  });
+
+  it("persists an empty member set for repo-less sessions", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([]);
+  });
+
+  it("rejects a repositories list whose primary does not match the scalar mirror", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repoId: 1,
+          defaultBranch: "main",
+          repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" }],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "repositories[0] must match the scalar repository mirror",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.replaceSessionRepositories).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit empty repositories list alongside scalar context", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repoId: 1,
+          repositories: [],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "repositories must include the scalar repository",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects a repositories list on a repo-less session", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" }],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "repositories[0] must match the scalar repository mirror",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
   });
 
   it("falls back to pre-encrypted token when plain-token encryption fails", async () => {

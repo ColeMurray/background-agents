@@ -1,31 +1,37 @@
 """
-Async image builder and scheduler for repository pre-built images.
+Async image builder and scheduler for pre-built scope images.
 
-This module handles:
-- Building repository images asynchronously (triggered by control plane)
+An image build bakes a provider image for a *scope* — a single repository or
+an environment (an ordered repository set). This module handles:
+- Building scope images asynchronously (triggered by control plane)
 - Creating build sandboxes, awaiting exit, snapshotting filesystem
 - Reporting results back to control plane via authenticated callbacks
 - Scheduled rebuilds every 30 minutes (cron) with git ls-remote comparison
 
 The build flow:
-1. Control plane POSTs to api_build_repo_image with repo info + callback URL
-2. api_build_repo_image spawns build_repo_image.spawn() and returns immediately
-3. build_repo_image creates a build sandbox, waits for it to finish, snapshots
+1. Control plane POSTs to api_build_image with the repository set + callback URL
+2. api_build_image spawns build_image.spawn() and returns immediately
+3. build_image creates a build sandbox, waits for it to finish, snapshots
 4. On success/failure, POSTs result to the callback URL with HMAC auth
 
 The scheduler flow:
-1. Every 30 min, fetch enabled repos and current image status from control plane
-2. For each enabled repo, git ls-remote to get HEAD SHA
-3. If SHA differs from latest ready image, trigger a build
+1. Every 30 min, fetch enabled scope units and current image status from
+   control plane
+2. Evaluate the rebuild triggers per unit (fingerprint, runtime floor,
+   per-repository git ls-remote drift)
+3. Trigger builds for units that need one (capped per tick)
 4. Mark stale builds as failed, clean up old failed rows
 """
 
 import asyncio
 import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass, field
+from urllib.parse import quote
 
 import httpx
 import modal
@@ -95,11 +101,11 @@ async def _terminate_build_sandbox(handle, build_id: str, reason: str) -> bool:
     """Terminate a build sandbox, logging but not failing the build on cleanup errors."""
     try:
         await handle.modal_sandbox.terminate.aio()
-        log.info("build.sandbox_terminated", build_id=build_id, reason=reason)
+        log.info("image_build.sandbox_terminated", build_id=build_id, reason=reason)
         return True
     except Exception as e:
         log.warn(
-            "build.sandbox_terminate_failed",
+            "image_build.sandbox_terminate_failed",
             build_id=build_id,
             reason=reason,
             error=str(e),
@@ -174,24 +180,32 @@ async def _callback_with_retry(
     return False
 
 
-async def _stream_build_logs(
-    sandbox, redact_values: Iterable[str] = ()
-) -> tuple[str, bool, str | None]:
+@dataclass
+class BuildLogResult:
+    """What the build runtime reported through its structured log stream."""
+
+    head_sha: str = ""
+    repository_shas: list[dict] = field(default_factory=list)
+    runtime_version: str = ""
+    complete: bool = False
+    error: str | None = None
+
+
+async def _stream_build_logs(sandbox, redact_values: Iterable[str] = ()) -> BuildLogResult:
     """
     Stream sandbox stdout and extract build results.
 
     The entrypoint logs structured JSON lines. We look for:
-    - event="git.sync_complete" with "head_sha" field
-    - event="image_build.complete" to know the build finished
+    - event="git.sync_complete" with "head_sha" (single-repo) and "repository_shas"
+      (per-repository provenance, [{repoOwner, repoName, baseSha}])
+    - event="image_build.complete" with "runtime_version" to know the build
+      finished and which runtime it baked
     - setup/supervisor errors to preserve the actual build failure
 
     The sandbox stays alive after logging image_build.complete (it awaits
     shutdown_event), so we can snapshot_filesystem() while it's still running.
-
-    Returns:
-        (head_sha, build_complete, error_message) tuple. head_sha is empty string if not found.
     """
-    head_sha = ""
+    result = BuildLogResult()
     setup_error: str | None = None
     supervisor_error: str | None = None
     redact_values = tuple(redact_values)
@@ -204,10 +218,16 @@ async def _stream_build_logs(
                 event = entry.get("event")
                 if not isinstance(event, str):
                     continue
-                if event == "git.sync_complete" and entry.get("head_sha"):
-                    head_sha = entry["head_sha"]
+                if event == "git.sync_complete":
+                    if entry.get("head_sha"):
+                        result.head_sha = entry["head_sha"]
+                    if isinstance(entry.get("repository_shas"), list):
+                        result.repository_shas = entry["repository_shas"]
                 elif event == "image_build.complete":
-                    return head_sha, True, None
+                    if isinstance(entry.get("runtime_version"), str):
+                        result.runtime_version = entry["runtime_version"]
+                    result.complete = True
+                    return result
 
                 failure_message = _format_build_failure_event(entry, redact_values)
                 if failure_message and event in _SETUP_FAILURE_EVENTS and setup_error is None:
@@ -217,8 +237,9 @@ async def _stream_build_logs(
             except json.JSONDecodeError:
                 continue
     except Exception as e:
-        log.warn("build.stream_error", error=str(e))
-    return head_sha, False, setup_error or supervisor_error
+        log.warn("image_build.stream_error", error=str(e))
+    result.error = setup_error or supervisor_error
+    return result
 
 
 @app.function(
@@ -226,40 +247,57 @@ async def _stream_build_logs(
     secrets=[internal_api_secret, github_app_secrets],
     timeout=build_function_timeout_seconds(DEFAULT_BUILD_TIMEOUT_SECONDS),
 )
-async def build_repo_image(
-    repo_owner: str,
-    repo_name: str,
-    default_branch: str,
+async def build_image(
+    scope_kind: str,
+    scope_id: str,
+    repositories: list[dict],
     callback_url: str = "",
+    failure_callback_url: str = "",
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
     build_timeout_seconds: int | None = None,
 ) -> None:
     """
-    Async worker: create build sandbox, await exit, snapshot, callback.
+    Async worker: build a scope image (design §4).
 
-    This function is spawned by api_build_repo_image and runs asynchronously.
-    Results are reported back to the control plane via callback URLs.
+    One worker for every scope kind: the build sandbox gets
+    SESSION_CONFIG.repositories and the list-native runtime clones every
+    repository and runs each repo's setup.sh sequentially, fatally. Repo
+    scopes send their one-element repository set. The success callback
+    carries what only the build knows — per-repository clone provenance
+    (repository_shas) and the baked runtime_version — while the repositories
+    fingerprint stays control-plane-side on the registered row.
 
     Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-        default_branch: Branch to clone and build
+        scope_kind: "repo" | "environment" — logging only
+        scope_id: lowercase "owner/name" or environment id — logging only
+        repositories: SessionRepositoryConfig list ([{repo_owner, repo_name,
+            branch}], position order, [0] = primary)
         callback_url: URL to POST success result to
+        failure_callback_url: URL to POST failure result to. Sent explicitly by
+            the control plane (mirrors client.ts buildImage) so the failure
+            route is never derived from callback_url's path.
         build_id: Build identifier from the control plane
-        user_env_vars: User-defined environment variables (repo secrets) injected into the build sandbox
-        build_timeout_seconds: Build sandbox lifetime (already clamped by the control
-            plane). None → DEFAULT_BUILD_TIMEOUT_SECONDS. The caller sizes this
-            function's own timeout above it via build_function_timeout_seconds().
+        user_env_vars: Build secrets (merged by the control plane) injected
+            into the build sandbox
+        build_timeout_seconds: Build sandbox lifetime (already clamped by the
+            control plane). None → DEFAULT_BUILD_TIMEOUT_SECONDS.
     """
     from ..sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, SandboxManager
 
     sandbox_timeout_seconds = build_timeout_seconds or DEFAULT_BUILD_TIMEOUT_SECONDS
 
-    # Validate callback URL against allowed hosts to prevent SSRF
-    if callback_url and not validate_control_plane_url(callback_url):
-        log.error("build.invalid_callback_url", url=callback_url, build_id=build_id)
-        return
+    # Validate both callback URLs against allowed hosts to prevent SSRF.
+    for url in (callback_url, failure_callback_url):
+        if url and not validate_control_plane_url(url):
+            log.error(
+                "image_build.invalid_callback_url",
+                url=url,
+                build_id=build_id,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+            )
+            return
 
     start_time = time.time()
     manager = SandboxManager()
@@ -267,65 +305,83 @@ async def build_repo_image(
     sandbox_terminated = False
 
     try:
+        if not repositories:
+            raise BuildError("image build requires at least one repository")
+        primary = repositories[0]
+
         clone_token = resolve_clone_token() or ""
 
-        # Create build sandbox
         log.info(
-            "build.start",
+            "image_build.start",
             build_id=build_id,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            default_branch=default_branch,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            repository_count=len(repositories),
         )
 
         handle = await manager.create_build_sandbox(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            default_branch=default_branch,
+            repo_owner=primary.get("repo_owner", ""),
+            repo_name=primary.get("repo_name", ""),
+            # Validated non-empty by the api_build_image endpoint; no silent
+            # default — a missing branch must fail loudly, not build "main".
+            default_branch=primary["branch"],
             clone_token=clone_token,
             user_env_vars=user_env_vars,
             timeout_seconds=sandbox_timeout_seconds,
+            repositories=repositories,
         )
 
-        # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)
+        # Stream stdout until the build completes. Redaction covers the clone
+        # token and every build secret value so neither reaches the failure
+        # message, the callback payload, or D1.
         redact_values = (clone_token, *((user_env_vars or {}).values()))
-        base_sha, build_complete, build_error = await _stream_build_logs(
+        build_logs = await _stream_build_logs(
             handle.modal_sandbox,
             redact_values=redact_values,
         )
-        if not build_complete:
+        if not build_logs.complete:
             exit_code = handle.modal_sandbox.returncode
-            if build_error:
-                raise BuildError(f"Build sandbox exited without completing: {build_error}")
+            if build_logs.error:
+                raise BuildError(f"Build sandbox exited without completing: {build_logs.error}")
             raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
 
-        # 4. Snapshot the running sandbox's filesystem
+        # Registration fails closed on these — surface the real cause here
+        # instead of an opaque callback rejection. Missing fields mean the
+        # base image bakes a runtime too old for image builds.
+        if not build_logs.repository_shas or not build_logs.runtime_version:
+            raise BuildError(
+                "build completed without repository_shas/runtime_version — "
+                "base image runtime predates list-native image builds"
+            )
+
+        # Snapshot the running sandbox's filesystem
         image = await handle.modal_sandbox.snapshot_filesystem.aio(
             timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
         )
         provider_image_id = image.object_id
 
-        # 5. Terminate the sandbox (no longer needed after snapshot)
         sandbox_terminated = await _terminate_build_sandbox(handle, build_id, "snapshot_complete")
 
         build_duration = time.time() - start_time
 
         log.info(
-            "build.success",
+            "image_build.success",
             build_id=build_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
             provider_image_id=provider_image_id,
-            base_sha=base_sha,
+            runtime_version=build_logs.runtime_version,
             build_duration_s=round(build_duration, 1),
         )
 
-        # 6. Callback: success
         if callback_url:
             await _callback_with_retry(
                 callback_url,
                 {
                     "build_id": build_id,
                     "provider_image_id": provider_image_id,
-                    "base_sha": base_sha,
+                    "repository_shas": build_logs.repository_shas,
+                    "runtime_version": build_logs.runtime_version,
                     "build_duration_seconds": round(build_duration, 2),
                 },
             )
@@ -336,18 +392,17 @@ async def build_repo_image(
             sandbox_terminated = await _terminate_build_sandbox(handle, build_id, "build_failed")
 
         log.error(
-            "build.failed",
+            "image_build.failed",
             build_id=build_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
             error=str(e),
             build_duration_s=round(build_duration, 1),
         )
 
-        # Callback: failure
-        if callback_url:
-            base_url = callback_url.rsplit("/", 1)[0]
-            failure_url = f"{base_url}/build-failed"
+        if failure_callback_url:
             await _callback_with_retry(
-                failure_url,
+                failure_callback_url,
                 {
                     "build_id": build_id,
                     "error": str(e),
@@ -367,6 +422,12 @@ STALE_BUILD_THRESHOLD_SECONDS = build_function_timeout_seconds(MAX_BUILD_TIMEOUT
 
 # Cleanup threshold: failed builds older than this are deleted
 FAILED_BUILD_CLEANUP_SECONDS = 86400  # 24 hours
+
+# Builds triggered per tick across ALL units, at most — cheap storm insurance
+# since there is no global build-concurrency cap; the next tick picks up the
+# rest. Sized so a runtime-floor bump (which queues every enabled unit) drains
+# in bounded time while sessions fall back to base images (design §4).
+TRIGGER_CAP_PER_TICK = 8
 
 
 async def _api_get(
@@ -462,63 +523,199 @@ def _git_ls_remote_sha(
         return None
 
 
-def _should_rebuild(
-    repo_owner: str,
-    repo_name: str,
-    remote_sha: str,
+def _parse_runtime_version_number(runtime_version: str) -> int | None:
+    """Numeric prefix of a SANDBOX_VERSION ("v54-opencode" → 54), or None."""
+    match = re.match(r"^v(\d+)", runtime_version)
+    return int(match.group(1)) if match else None
+
+
+def _should_rebuild_unit(
+    unit: dict,
     all_images: list[dict],
+    min_runtime_version: int | None,
+    clone_token: str,
 ) -> bool:
     """
-    Determine if a repo needs a rebuild based on current image status.
+    Rebuild triggers for one enabled scope unit ({scopeKind, scopeId,
+    repositoriesFingerprint, repositories[]}, design §4), cheapest first:
 
-    Returns True if a build should be triggered.
+    1. no ready image matches the unit's current repositories fingerprint
+       (covers created/edited scopes and failed builds);
+    3. the matching ready image's runtime_version is below the compatibility
+       floor, or unparseable (fail closed);
+    2. any repository's remote branch tip drifted from the image's recorded
+       repository_shas (needs one ls-remote per repository, so it runs last).
+
+    Trigger 4 (provider-side snapshot expiry) is inert on modal 1.4.3 —
+    snapshots do not expire there; it activates with the snapshot-TTL
+    follow-up.
     """
-    owner_lower = repo_owner.lower()
-    name_lower = repo_name.lower()
+    scope_kind = unit.get("scopeKind", "")
+    scope_id = unit.get("scopeId", "")
+    fingerprint = unit.get("repositoriesFingerprint", "")
 
-    # Find images for this repo
-    repo_images = [
+    scope_images = [
         img
         for img in all_images
-        if img.get("repo_owner", "").lower() == owner_lower
-        and img.get("repo_name", "").lower() == name_lower
+        if img.get("scope_kind") == scope_kind and img.get("scope_id") == scope_id
     ]
 
-    # Check if there's already a build in progress
-    building = [img for img in repo_images if img.get("status") == "building"]
-    if building:
-        log.info(
-            "scheduler.skip_building",
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            building_count=len(building),
-        )
+    # Per-scope concurrency 1: skip while a build is in flight. The trigger
+    # route enforces this too; checking here saves the HTTP call.
+    if any(img.get("status") == "building" for img in scope_images):
+        log.info("scheduler.skip_building", scope_kind=scope_kind, scope_id=scope_id)
         return False
 
-    # Find latest ready image
-    ready = [img for img in repo_images if img.get("status") == "ready"]
-    if not ready:
-        # No ready image — always rebuild
+    matching_ready = [
+        img
+        for img in scope_images
+        if img.get("status") == "ready" and img.get("repositories_fingerprint") == fingerprint
+    ]
+    if not matching_ready:
+        log.info("scheduler.no_ready_image", scope_kind=scope_kind, scope_id=scope_id)
+        return True
+
+    latest_ready = matching_ready[0]  # status endpoint orders by created_at DESC
+
+    version = _parse_runtime_version_number(latest_ready.get("runtime_version") or "")
+    if min_runtime_version is not None and (version is None or version < min_runtime_version):
         log.info(
-            "scheduler.no_ready_image",
-            repo_owner=repo_owner,
-            repo_name=repo_name,
+            "scheduler.runtime_below_floor",
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            runtime_version=latest_ready.get("runtime_version"),
+            min_runtime_version=min_runtime_version,
         )
         return True
 
-    # Compare SHA
-    latest_ready = ready[0]  # getAllStatus returns ordered by created_at DESC
-    if latest_ready.get("base_sha") != remote_sha:
-        log.info(
-            "scheduler.sha_mismatch",
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            ready_sha=latest_ready.get("base_sha", "")[:12],
-            remote_sha=remote_sha[:12],
+    try:
+        recorded_shas = json.loads(latest_ready.get("repository_shas") or "[]")
+    except json.JSONDecodeError:
+        recorded_shas = None
+    if not isinstance(recorded_shas, list):
+        log.warn(
+            "scheduler.malformed_repository_shas",
+            scope_kind=scope_kind,
+            scope_id=scope_id,
         )
         return True
+    recorded_by_repo = {
+        (str(m.get("repoOwner", "")).lower(), str(m.get("repoName", "")).lower()): m.get(
+            "baseSha", ""
+        )
+        for m in recorded_shas
+        if isinstance(m, dict)
+    }
+
+    for repo in unit.get("repositories", []):
+        repo_owner = repo.get("repoOwner", "")
+        repo_name = repo.get("repoName", "")
+        base_branch = repo.get("baseBranch", "")
+        if not repo_owner or not repo_name or not base_branch:
+            continue
+        remote_sha = _git_ls_remote_sha(
+            repo_owner, repo_name, f"refs/heads/{base_branch}", clone_token
+        )
+        if not remote_sha:
+            # Lookup failure is not a drift signal — rebuilding on transient
+            # git errors would storm every tick.
+            continue
+        if recorded_by_repo.get((repo_owner.lower(), repo_name.lower())) != remote_sha:
+            log.info(
+                "scheduler.sha_mismatch",
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                remote_sha=remote_sha[:12],
+            )
+            return True
 
     return False
+
+
+def _unit_trigger_path(unit: dict) -> str | None:
+    """Control-plane trigger path for a unit, or None for a malformed unit."""
+    scope_kind = unit.get("scopeKind", "")
+    scope_id = unit.get("scopeId", "")
+    if scope_kind == "repo":
+        repo_owner, separator, repo_name = scope_id.rpartition("/")
+        if not separator or not repo_owner or not repo_name:
+            return None
+        return (
+            f"/image-builds/trigger/repo/{quote(repo_owner, safe='')}/{quote(repo_name, safe='')}"
+        )
+    if scope_kind == "environment" and scope_id:
+        return f"/image-builds/trigger/environment/{scope_id}"
+    return None
+
+
+async def _rebuild_images_pass(control_plane_url: str, clone_token: str) -> int:
+    """
+    The unified rebuild pass (design §4): GET enabled units + cross-scope
+    status, evaluate the rebuild triggers per unit, POST triggers (one cap
+    across all units per tick), then mark-stale and cleanup.
+    """
+    enabled_data = await _api_get(f"{control_plane_url}/image-builds/enabled")
+    units: list[dict] = enabled_data.get("units", [])
+    min_runtime_version = enabled_data.get("minRuntimeVersion")
+
+    builds_triggered = 0
+    if units:
+        status_data = await _api_get(f"{control_plane_url}/image-builds/status")
+        all_images: list[dict] = status_data.get("images", [])
+
+        for unit in units:
+            trigger_path = _unit_trigger_path(unit)
+            if trigger_path is None:
+                continue
+            if builds_triggered >= TRIGGER_CAP_PER_TICK:
+                log.info("scheduler.trigger_cap_reached", cap=TRIGGER_CAP_PER_TICK)
+                break
+
+            if not _should_rebuild_unit(unit, all_images, min_runtime_version, clone_token):
+                continue
+
+            try:
+                await _api_post(f"{control_plane_url}{trigger_path}")
+                builds_triggered += 1
+                log.info(
+                    "scheduler.build_triggered",
+                    scope_kind=unit.get("scopeKind", ""),
+                    scope_id=unit.get("scopeId", ""),
+                )
+            except Exception as e:
+                log.error(
+                    "scheduler.trigger_error",
+                    scope_kind=unit.get("scopeKind", ""),
+                    scope_id=unit.get("scopeId", ""),
+                    error=str(e),
+                )
+
+    try:
+        result = await _api_post(
+            f"{control_plane_url}/image-builds/mark-stale",
+            {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS},
+        )
+        stale_count = result.get("markedFailed", 0)
+        if stale_count:
+            log.info("scheduler.stale_marked", count=stale_count)
+    except Exception as e:
+        log.warn("scheduler.mark_stale_error", error=str(e))
+
+    try:
+        result = await _api_post(
+            f"{control_plane_url}/image-builds/cleanup",
+            {"max_age_seconds": FAILED_BUILD_CLEANUP_SECONDS},
+        )
+        deleted = result.get("deleted", 0)
+        reaped = result.get("reapedSuperseded", 0)
+        if deleted or reaped:
+            log.info("scheduler.cleanup", deleted=deleted, reaped_superseded=reaped)
+    except Exception as e:
+        log.warn("scheduler.cleanup_error", error=str(e))
+
+    return builds_triggered
 
 
 @app.function(
@@ -527,15 +724,14 @@ def _should_rebuild(
     secrets=[internal_api_secret, github_app_secrets],
     timeout=300,  # 5 min — scheduler itself is fast, builds run async
 )
-async def rebuild_repo_images():
+async def rebuild_images():
     """
-    Every 30 minutes:
-    1. Fetch list of repos with image building enabled from control plane
-    2. Fetch current image status for all repos
-    3. For each enabled repo, check remote HEAD SHA via git ls-remote
-    4. If SHA differs from latest ready image, trigger a build
-    5. Mark stale builds as failed
-    6. Clean up old failed D1 rows
+    Every 30 minutes, run the unified rebuild pass over every prebuild-enabled
+    scope unit (repos and environments alike).
+
+    (Renamed from rebuild_repo_images at the Modal cutover: a full
+    `modal deploy` replaces the app atomically, so the old scheduled function
+    is removed in the same deploy.)
     """
     control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
     if not control_plane_url:
@@ -547,80 +743,8 @@ async def rebuild_repo_images():
     builds_triggered = 0
 
     try:
-        # 1. Get enabled repos
-        enabled_data = await _api_get(f"{control_plane_url}/repo-images/enabled-repos")
-        enabled_repos: list[dict] = enabled_data.get("repos", [])
-
-        if not enabled_repos:
-            log.info("scheduler.no_enabled_repos")
-            return
-
-        # 2. Get current image status (all repos)
-        status_data = await _api_get(f"{control_plane_url}/repo-images/status")
-        all_images: list[dict] = status_data.get("images", [])
-
-        # 3. Generate GitHub App token for ls-remote
         clone_token = resolve_clone_token() or ""
-
-        # 4. Check each enabled repo
-        for repo in enabled_repos:
-            repo_owner = repo.get("repoOwner", "")
-            repo_name = repo.get("repoName", "")
-
-            if not repo_owner or not repo_name:
-                continue
-
-            # Detect changes on the repo's default branch via HEAD: ls-remote
-            # resolves HEAD to the default branch tip, so the scheduler never
-            # needs the branch name. The build path resolves the name when it
-            # tags the image (see handleTriggerBuild in repo-images.ts).
-            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "HEAD", clone_token)
-            if not remote_sha:
-                continue
-
-            if _should_rebuild(repo_owner, repo_name, remote_sha, all_images):
-                try:
-                    await _api_post(
-                        f"{control_plane_url}/repo-images/trigger/{repo_owner}/{repo_name}",
-                    )
-                    builds_triggered += 1
-                    log.info(
-                        "scheduler.build_triggered",
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                    )
-                except Exception as e:
-                    log.error(
-                        "scheduler.trigger_error",
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        error=str(e),
-                    )
-
-        # 5. Mark stale builds as failed
-        try:
-            result = await _api_post(
-                f"{control_plane_url}/repo-images/mark-stale",
-                {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS},
-            )
-            stale_count = result.get("markedFailed", 0)
-            if stale_count:
-                log.info("scheduler.stale_marked", count=stale_count)
-        except Exception as e:
-            log.warn("scheduler.mark_stale_error", error=str(e))
-
-        # 6. Clean up old failed builds
-        try:
-            result = await _api_post(
-                f"{control_plane_url}/repo-images/cleanup",
-                {"max_age_seconds": FAILED_BUILD_CLEANUP_SECONDS},
-            )
-            deleted = result.get("deleted", 0)
-            if deleted:
-                log.info("scheduler.cleanup", deleted=deleted)
-        except Exception as e:
-            log.warn("scheduler.cleanup_error", error=str(e))
-
+        builds_triggered = await _rebuild_images_pass(control_plane_url, clone_token)
     except Exception as e:
         log.error("scheduler.error", error=str(e))
 

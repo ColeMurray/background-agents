@@ -11,6 +11,25 @@
 
 import type { SandboxStatus } from "../../types";
 
+// ==================== Dead-Sandbox Policy ====================
+
+/**
+ * States in which no live sandbox can legitimately act on the session: spawn
+ * gave up (failed) or the sandbox was shut down (stopped/stale). Deny-list,
+ * not allowlist: an unknown future state is treated as live, so callers fall
+ * through to their own checks (e.g. token comparison) instead of locking out
+ * every sandbox.
+ */
+export const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set([
+  "stopped",
+  "stale",
+  "failed",
+]);
+
+export function isDeadSandboxStatus(status: SandboxStatus): boolean {
+  return DEAD_SANDBOX_STATUSES.has(status);
+}
+
 // ==================== Circuit Breaker ====================
 
 /**
@@ -346,7 +365,7 @@ export function evaluateInactivityTimeout(
   now: number
 ): InactivityAction {
   // Skip for terminal states - they don't need inactivity monitoring
-  if (state.status === "stopped" || state.status === "failed" || state.status === "stale") {
+  if (isDeadSandboxStatus(state.status)) {
     return { action: "schedule", nextCheckMs: config.minCheckIntervalMs };
   }
 

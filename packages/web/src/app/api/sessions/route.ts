@@ -87,6 +87,11 @@ export async function POST(request: NextRequest) {
       reasoningEffort: body.reasoningEffort,
       branch: body.branch,
       title: body.title,
+      // The picker's other two target modes (mutually exclusive with the
+      // scalar fields — enforced by createSessionRequestSchema control-plane
+      // side): a named environment or an ad-hoc repository list.
+      environmentId: body.environmentId,
+      repositories: body.repositories,
       spawnSource: "user" as const,
       userId,
       // Provider-agnostic auth identity (GitHub or Google) resolves the

@@ -9,6 +9,8 @@
 
 import { computeHmacHex } from "@open-inspect/shared";
 import type { Logger } from "../logger";
+import { deliverWithRetry } from "./callback-delivery";
+import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 
 /**
@@ -39,6 +41,7 @@ export interface CallbackServiceDeps {
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -54,6 +57,7 @@ export class CallbackNotificationService {
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
+  private readonly sleep: (ms: number) => Promise<void>;
   private _lastToolCallCallbackTs = 0;
   private readonly notifiedCallIds = new Set<string>();
 
@@ -62,6 +66,7 @@ export class CallbackNotificationService {
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
+    this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   private markCallIdNotified(callId: string): void {
@@ -95,6 +100,46 @@ export class CallbackNotificationService {
         // Default to SLACK_BOT for backward compatibility (web sources, etc.)
         return this.env.SLACK_BOT;
     }
+  }
+
+  /** Notify the Linear worker after a Linear message is dispatched to a live sandbox. */
+  async notifyStarted(messageId: string): Promise<void> {
+    const message = this.repository.getMessageCallbackContext(messageId);
+    if (!message?.callback_context || message.source !== "linear") {
+      this.log.debug("callback.started", {
+        message_id: messageId,
+        outcome: "skipped",
+        skip_reason: message?.callback_context ? "non_linear_source" : "no_callback_context",
+      });
+      return;
+    }
+
+    if (!this.env.INTERNAL_CALLBACK_SECRET) {
+      this.log.debug("callback.started", {
+        message_id: messageId,
+        outcome: "skipped",
+        skip_reason: "no_secret",
+      });
+      return;
+    }
+    if (!this.env.LINEAR_BOT) {
+      this.log.debug("callback.started", {
+        message_id: messageId,
+        outcome: "skipped",
+        skip_reason: "no_binding",
+      });
+      return;
+    }
+
+    await notifyLinearStarted({
+      messageId,
+      callbackContext: message.callback_context,
+      sessionId: this.getSessionId(),
+      secret: this.env.INTERNAL_CALLBACK_SECRET,
+      binding: this.env.LINEAR_BOT,
+      log: this.log,
+      sleep: this.sleep,
+    });
   }
 
   /**
@@ -152,40 +197,37 @@ export class CallbackNotificationService {
 
     const payload = { ...payloadData, signature };
 
-    // Try with retry (max 2 attempts)
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await binding.fetch("https://internal/callbacks/complete", {
+    const delivered = await deliverWithRetry(
+      (signal) =>
+        binding.fetch("https://internal/callbacks/complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-        });
-
-        if (response.ok) {
-          this.log.info("Callback succeeded", { message_id: messageId, source });
+          signal,
+        }),
+      this.sleep,
+      async ({ attempt, response, error: deliveryError }) => {
+        if (response) {
+          const responseText = await response.text().catch(() => "");
+          this.log.error("Callback failed", {
+            message_id: messageId,
+            source,
+            status: response.status,
+            response_text: responseText.slice(0, 500),
+          });
           return;
         }
-
-        const responseText = await response.text();
-        this.log.error("Callback failed", {
-          message_id: messageId,
-          source,
-          status: response.status,
-          response_text: responseText,
-        });
-      } catch (e) {
         this.log.error("Callback attempt failed", {
           message_id: messageId,
           source,
-          attempt: attempt + 1,
-          error: e instanceof Error ? e : String(e),
+          attempt,
+          error: deliveryError instanceof Error ? deliveryError : String(deliveryError),
         });
       }
-
-      // Wait before retry
-      if (attempt < 1) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
+    );
+    if (delivered) {
+      this.log.info("Callback succeeded", { message_id: messageId, source });
+      return;
     }
 
     this.log.error("Failed to notify callback client after retries", {
@@ -221,36 +263,40 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await binding.fetch("https://internal/internal/run-complete", {
+    const delivered = await deliverWithRetry(
+      (signal) =>
+        binding.fetch("https://internal/internal/run-complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-        });
-        if (response.ok) {
-          this.log.info("Automation callback succeeded", {
+          signal,
+        }),
+      this.sleep,
+      async ({ attempt, response, error: deliveryError }) => {
+        if (response) {
+          const responseText = await response.text().catch(() => "");
+          this.log.error("Automation callback failed", {
             automation_id: context.automationId,
             run_id: context.runId,
+            status: response.status,
+            response_text: responseText.slice(0, 500),
           });
           return;
         }
-        const text = await response.text().catch(() => "");
-        this.log.error("Automation callback failed", {
-          automation_id: context.automationId,
-          run_id: context.runId,
-          status: response.status,
-          response_text: text.slice(0, 500),
-        });
-      } catch (e) {
         this.log.error("Automation callback attempt failed", {
           automation_id: context.automationId,
           run_id: context.runId,
-          attempt: attempt + 1,
-          error: e instanceof Error ? e : String(e),
+          attempt,
+          error: deliveryError instanceof Error ? deliveryError : String(deliveryError),
         });
       }
-      if (attempt < 1) await new Promise((r) => setTimeout(r, 1000));
+    );
+    if (delivered) {
+      this.log.info("Automation callback succeeded", {
+        automation_id: context.automationId,
+        run_id: context.runId,
+      });
+      return;
     }
 
     this.log.error("Failed to notify scheduler after retries", {

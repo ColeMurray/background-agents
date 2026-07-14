@@ -28,6 +28,19 @@ export interface SandboxProviderCapabilities {
 }
 
 /**
+ * One member repository of a session, in position order (first = primary).
+ * Mirrors the runtime's SessionRepositoryConfig, whose snake_case wire form
+ * (with baseBranch renamed to `branch`) is produced by
+ * toRepositoryConfigPayload.
+ */
+export interface SessionRepositoryInfo {
+  repoOwner: string;
+  repoName: string;
+  /** Base branch to clone (resolved at session create; never null). */
+  baseBranch: string;
+}
+
+/**
  * Configuration for creating a new sandbox.
  */
 export interface CreateSandboxConfig {
@@ -53,10 +66,14 @@ export interface CreateSandboxConfig {
   opencodeSessionId?: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
-  /** Opaque provider image ID of a pre-built repo image */
-  repoImageId?: string | null;
-  /** Git SHA the repo image was built from */
-  repoImageSha?: string | null;
+  /**
+   * Opaque provider image ID of a pre-built image — a repo image for
+   * single-repo sessions, an environment image for environment sessions.
+   * Both boot through the same provider plumbing (FROM_REPO_IMAGE flags).
+   */
+  prebuiltImageId?: string | null;
+  /** Git SHA the image was built from (the primary repository's for environment images) */
+  prebuiltImageSha?: string | null;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS on Modal. */
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */
@@ -73,6 +90,15 @@ export interface CreateSandboxConfig {
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /**
+   * Ordered member list for multi-repo sessions. Only set when the session
+   * has more than one member — single-repo sessions keep the scalar
+   * repoOwner/repoName/branch wire form (the runtime synthesizes its
+   * one-entry list from them). Working-branch names are not part of this
+   * config: they are derived lazily at PR-creation time
+   * (pull-request-service) and travel in per-repo push specs.
+   */
+  repositories?: SessionRepositoryInfo[];
 }
 
 /**
@@ -135,6 +161,8 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** Multi-repo member list — see CreateSandboxConfig. */
+  repositories?: SessionRepositoryInfo[];
 }
 
 /**

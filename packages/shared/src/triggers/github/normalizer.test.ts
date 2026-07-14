@@ -462,3 +462,215 @@ describe("normalizeGitHubEvent", () => {
     });
   });
 });
+
+// ─── Typed pull-request facts (PR lifecycle tracking) ─────────────────────────
+
+describe("typed pullRequest facts on pull_request events", () => {
+  const sameRepo = { id: 9001 };
+  const forkRepo = { id: 4242 };
+
+  const trackedPR = {
+    ...basePR,
+    state: "open",
+    draft: false,
+    merged: false,
+    head: { ref: "open-inspect/session-1", sha: "abc1234def5678", repo: sameRepo },
+    base: { ref: "main", repo: sameRepo },
+  };
+
+  it("carries number, state, draft, and merged for an open ready PR", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: trackedPR,
+    });
+
+    expect(event?.pullRequest).toEqual({
+      number: 42,
+      state: "open",
+      draft: false,
+      merged: false,
+      headSha: "abc1234def5678",
+      isCrossRepository: false,
+      repositoryExternalId: "9001",
+    });
+  });
+
+  it("carries url, base-repo identity, and provider updated_at when present", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: {
+        ...trackedPR,
+        html_url: "https://github.com/acme-org/my-app/pull/42",
+        updated_at: "2026-07-10T12:00:00Z",
+      },
+    });
+
+    expect(event?.pullRequest?.url).toBe("https://github.com/acme-org/my-app/pull/42");
+    expect(event?.pullRequest?.repositoryExternalId).toBe("9001");
+    expect(event?.pullRequest?.providerUpdatedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
+  });
+
+  it("omits url, repo identity, and updated_at when the payload lacks them", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: basePR, // no html_url / updated_at / base.repo
+    });
+
+    expect(event?.pullRequest?.url).toBeUndefined();
+    expect(event?.pullRequest?.repositoryExternalId).toBeUndefined();
+    expect(event?.pullRequest?.providerUpdatedAt).toBeUndefined();
+  });
+
+  it("omits providerUpdatedAt for an unparseable updated_at", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: { ...trackedPR, updated_at: "not-a-date" },
+    });
+
+    expect(event?.pullRequest?.providerUpdatedAt).toBeUndefined();
+  });
+
+  it("carries outcome timestamps (created_at / merged_at / closed_at) when present", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "closed",
+      repository: repo,
+      sender,
+      pull_request: {
+        ...trackedPR,
+        state: "closed",
+        merged: true,
+        created_at: "2026-07-08T09:00:00Z",
+        merged_at: "2026-07-10T12:00:00Z",
+        closed_at: "2026-07-10T12:00:00Z",
+      },
+    });
+
+    expect(event?.pullRequest?.providerCreatedAt).toBe(Date.parse("2026-07-08T09:00:00Z"));
+    expect(event?.pullRequest?.mergedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
+    expect(event?.pullRequest?.closedAt).toBe(Date.parse("2026-07-10T12:00:00Z"));
+  });
+
+  it("omits outcome timestamps when the payload sends them as null (open PR)", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: {
+        ...trackedPR,
+        created_at: "2026-07-08T09:00:00Z",
+        merged_at: null,
+        closed_at: null,
+      },
+    });
+
+    expect(event?.pullRequest?.providerCreatedAt).toBe(Date.parse("2026-07-08T09:00:00Z"));
+    expect(event?.pullRequest?.mergedAt).toBeUndefined();
+    expect(event?.pullRequest?.closedAt).toBeUndefined();
+  });
+
+  it("carries draft readiness for a draft PR", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: { ...trackedPR, draft: true },
+    });
+
+    expect(event?.pullRequest?.draft).toBe(true);
+  });
+
+  it("distinguishes merged from closed via the merged flag", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "closed",
+      repository: repo,
+      sender,
+      pull_request: { ...trackedPR, state: "closed", merged: true },
+    });
+
+    expect(event?.pullRequest?.state).toBe("closed");
+    expect(event?.pullRequest?.merged).toBe(true);
+  });
+
+  it("flags a fork-head PR as cross-repository", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: {
+        ...trackedPR,
+        head: { ...trackedPR.head, repo: forkRepo },
+      },
+    });
+
+    expect(event?.pullRequest?.isCrossRepository).toBe(true);
+  });
+
+  it("treats a deleted head repository (null) as cross-repository", () => {
+    // A null head.repo means the fork was deleted; an agent PR's head lives in
+    // the base repository, so this can never be ours.
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "closed",
+      repository: repo,
+      sender,
+      pull_request: { ...trackedPR, head: { ...trackedPR.head, repo: null } },
+    });
+
+    expect(event?.pullRequest?.isCrossRepository).toBe(true);
+  });
+
+  it("leaves isCrossRepository unknown when repo identity is absent from the payload", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: basePR, // no head.repo / base.repo
+    });
+
+    expect(event?.pullRequest?.number).toBe(42);
+    expect(event?.pullRequest?.isCrossRepository).toBeUndefined();
+  });
+
+  it("omits state fields the payload does not carry instead of guessing", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: basePR,
+    });
+
+    expect(event?.pullRequest?.state).toBeUndefined();
+    expect(event?.pullRequest?.draft).toBeUndefined();
+    expect(event?.pullRequest?.merged).toBeUndefined();
+  });
+
+  it("does not attach pullRequest to non-pull_request events", () => {
+    const event = normalizeGitHubEvent("issue_comment", issueCommentPayload);
+
+    expect(event).not.toBeNull();
+    expect(event!.pullRequest).toBeUndefined();
+  });
+
+  it("round-trips pullRequest through the automation event schema boundary", async () => {
+    const { automationEventSchema } = await import("../types");
+    const event = normalizeGitHubEvent("pull_request", {
+      action: "opened",
+      repository: repo,
+      sender,
+      pull_request: trackedPR,
+    });
+
+    const parsed = automationEventSchema.parse(event);
+    expect(parsed.source).toBe("github");
+    if (parsed.source === "github") {
+      expect(parsed.pullRequest).toEqual(event!.pullRequest);
+    }
+  });
+});

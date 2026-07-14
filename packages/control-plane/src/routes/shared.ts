@@ -2,6 +2,7 @@
  * Shared route primitives used by all route modules.
  */
 
+import { decodeRepositoryPathSegments } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
@@ -62,6 +63,34 @@ export function error(message: string, status = 400): Response {
 }
 
 /**
+ * max_age_seconds for the image-maintenance routes (repo + environment
+ * mark-stale/cleanup). Rejecting non-numbers matters: a null that fell
+ * through to `null * 1000 = 0` would mark every building row stale or delete
+ * every failed row.
+ */
+export async function parseMaxAgeMs(
+  request: Request,
+  defaultMs: number
+): Promise<number | Response> {
+  let body: { max_age_seconds?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    body = {};
+  }
+
+  if (body.max_age_seconds === undefined) return defaultMs;
+  if (
+    typeof body.max_age_seconds !== "number" ||
+    !Number.isFinite(body.max_age_seconds) ||
+    body.max_age_seconds < 0
+  ) {
+    return error("max_age_seconds must be a non-negative number", 400);
+  }
+  return body.max_age_seconds * 1000;
+}
+
+/**
  * Raise from a route handler or helper to return an error response with a
  * specific status. Mapped centrally in router.ts's dispatch catch to
  * error(message, status), avoiding `| Response` plumbing in callers.
@@ -117,12 +146,16 @@ export async function parseJsonBody<T>(request: Request): Promise<T | Response> 
 export function extractRepoParams(
   match: RegExpMatchArray
 ): { owner: string; name: string } | Response {
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
+  const encodedOwner = match.groups?.owner;
+  const encodedName = match.groups?.name;
+  if (!encodedOwner || !encodedName) {
     return error("Owner and name are required", 400);
   }
-  return { owner, name };
+  const repository = decodeRepositoryPathSegments(encodedOwner, encodedName);
+  if (!repository) {
+    return error("Owner and name must be valid repository path segments", 400);
+  }
+  return { owner: repository.repoOwner, name: repository.repoName };
 }
 
 /**
