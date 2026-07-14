@@ -46,8 +46,6 @@ export default defineConfig({
         },
         miniflare: {
           bindings: {
-            // Pin so a local .dev.vars SANDBOX_PROVIDER can't leak into the suite.
-            SANDBOX_PROVIDER: "modal",
             INTERNAL_CALLBACK_SECRET: "test-hmac-secret-for-integration-tests",
             TOKEN_ENCRYPTION_KEY: "test-encryption-key-32chars-long!",
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
