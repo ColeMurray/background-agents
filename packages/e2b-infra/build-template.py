@@ -25,6 +25,7 @@ import json
 import atexit
 from pathlib import Path
 
+from e2b import default_build_logger
 from e2b.template_sync.main import Template
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -96,9 +97,9 @@ Template.build(
     api_key=API_KEY,
     cpu_count=CPU,
     memory_mb=MEM,
-    on_build_logs=lambda entry: print(
-        f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.level}: {entry.message}"
-    ),
+    # E2B's built-in logger: elapsed-time + level-aligned lines; degrades to
+    # plain text (no ANSI/animation) in the non-TTY Terraform/CI build context.
+    on_build_logs=default_build_logger(min_level="info"),
 )
 print(f"E2B template {TEMPLATE_ID} built successfully")
 
