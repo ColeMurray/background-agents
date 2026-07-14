@@ -1283,10 +1283,13 @@ export class SandboxLifecycleManager {
     // last_activity, so cycling an idle sandbox would keep it alive (and
     // billable) indefinitely. Also skipped while a message is executing so an
     // active run isn't frozen mid-stream; the next alarm retries.
+    // Fail-closed on the processing check: only cycle when we can positively
+    // confirm no message is executing. An absent/failed callback must NOT be
+    // read as "idle" — that would let cycling freeze an active run.
     if (
       this.provider.shouldResetRuntime &&
       sandbox.modal_object_id &&
-      !this.callbacks.getIsProcessing?.()
+      this.callbacks.getIsProcessing?.() === false
     ) {
       const { shouldReset } = await this.provider.shouldResetRuntime({
         providerObjectId: sandbox.modal_object_id,

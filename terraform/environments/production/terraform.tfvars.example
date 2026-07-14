@@ -105,13 +105,12 @@ opencomputer_template = ""
 #                (the e2b-infra module builds via the Template SDK). Dashboard → API Keys.
 # The e2b-infra Terraform module builds the template automatically; e2b_template_id
 # is the name it creates/rebuilds (also used at runtime for fresh sandboxes).
-# Hobby tier caps TTL + continuous runtime at ~3600s — keep the 3300 defaults.
 e2b_api_key = ""               # sensitive — runtime REST API key (also auths the build)
 e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # e2b_api_url = "https://api.e2b.app"
-# e2b_sandbox_timeout_seconds = 3300
-# Defaults assume a paid E2B plan (2h TTL, runtime-cap cycling disabled).
-# On the HOBBY plan both TTL and continuous runtime are capped at ~1h — set:
+# TTL and continuous-runtime caps are E2B plan limits the API can't report. The
+# defaults (7200s TTL, cap cycling disabled) assume a paid plan; on a plan with a
+# ~1h cap, set both to 3300:
 # e2b_sandbox_timeout_seconds = 3300
 # e2b_runtime_cap_seconds     = 3300
 
@@ -250,7 +249,7 @@ nextauth_secret = ""
 # - "daytona": direct Daytona REST API integration with stop/start resume
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
 # - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
-# - "e2b": direct E2B REST API integration with pause/resume (Hobby tier ok)
+# - "e2b": direct E2B REST API integration with pause/resume
 sandbox_provider = "modal"
 
 # Platform for the web app deployment

@@ -272,7 +272,7 @@ describe("E2BSandboxProvider", () => {
     expect(result.shouldReset).toBe(false);
   });
 
-  it("429 maps to permanent SandboxProviderError with rate-limited", async () => {
+  it("429 maps to a TRANSIENT SandboxProviderError (not counted toward the circuit breaker)", async () => {
     const client = mockClient({
       createSandbox: vi.fn(async () => {
         throw new E2BApiError("rate limited", 429);
@@ -280,7 +280,7 @@ describe("E2BSandboxProvider", () => {
     });
     const provider = new E2BSandboxProvider(client, providerConfig);
     await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
-      errorType: "permanent",
+      errorType: "transient",
       message: expect.stringContaining("rate-limited"),
     } satisfies Partial<SandboxProviderError>);
   });

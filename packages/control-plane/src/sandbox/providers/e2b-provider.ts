@@ -1,12 +1,15 @@
 /**
  * E2B sandbox provider — calls the E2B REST API directly.
  *
- * Mirrors the Daytona provider shape.
+ * Pause/resume map to E2B pause/connect; per-session env is delivered via an
+ * envd file write because the template's start command runs at build time. TTL
+ * is kept alive from user activity, with optional runtime-cap cycling for plans
+ * that impose a continuous-runtime limit.
  */
 
 import type { SandboxSettings } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
-import { buildSandboxEnvVars, deriveCodeServerPassword } from "./helpers";
+import { buildSandboxEnvVars, deriveCodeServerPassword } from "./e2b-helpers";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxDetail } from "../e2b-rest-client";
@@ -336,10 +339,13 @@ export class E2BSandboxProvider implements SandboxProvider {
   ): SandboxProviderError {
     if (error instanceof E2BApiError) {
       if (error.status === 429) {
-        return SandboxProviderError.fromFetchError(
-          `${message} (rate-limited or quota exceeded during ${operation})`,
-          error,
-          error.status
+        // Rate limiting is temporary — classify transient so it isn't counted
+        // toward the sandbox circuit breaker (which would block later spawns
+        // for minutes). Retried after backoff rather than tripped.
+        return new SandboxProviderError(
+          `${message} (rate-limited during ${operation})`,
+          "transient",
+          error
         );
       }
       return SandboxProviderError.fromFetchError(

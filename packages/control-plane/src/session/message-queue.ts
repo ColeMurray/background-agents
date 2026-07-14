@@ -150,11 +150,6 @@ export class SessionMessageQueue {
     await this.processMessageQueue();
   }
 
-  /** Whether a message is currently executing. */
-  hasProcessingMessage(): boolean {
-    return !!this.deps.repository.getProcessingMessage();
-  }
-
   async processMessageQueue(): Promise<void> {
     if (this.deps.repository.getProcessingMessage()) {
       this.deps.log.debug("processMessageQueue: already processing, returning");

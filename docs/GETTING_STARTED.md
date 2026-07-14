@@ -240,21 +240,21 @@ the E2B Template SDK). Create it at the [E2B dashboard](https://e2b.dev) → API
 3. Terraform's `e2b-infra` module builds the template automatically on `terraform apply`, and
    rebuilds it when `packages/e2b-infra` or `packages/sandbox-runtime` change. To build manually:
    ```bash
-   cd packages/e2b-infra && npm install
-   E2B_API_KEY=e2b_… E2B_TEMPLATE_ID=open-inspect-sandbox node build-template.py
+   cd packages/e2b-infra
+   uv sync --frozen
+   E2B_API_KEY=e2b_… E2B_TEMPLATE_ID=open-inspect-sandbox uv run python build-template.py
    ```
 
-The control plane calls the E2B REST API directly — no shim service to deploy. E2B uses pause/resume
-(like Daytona). The runtime/TTL limits are **plan limits** the API cannot report, so configure them
-per plan: on **Hobby** (~1h caps) keep the `e2b_sandbox_timeout_seconds` / `e2b_runtime_cap_seconds`
-defaults (3300) — sessions longer than the cap are pause/resume-cycled transparently. On paid plans
-with longer runtime limits, raise `e2b_sandbox_timeout_seconds` and set
-`e2b_runtime_cap_seconds = 0` to disable the cycling. See
-[Sandbox Provider Models](SANDBOX_PROVIDER_MODELS.md) for the architecture.
+The control plane calls the E2B REST API directly from Cloudflare Workers. Each session runs in a
+single long-lived sandbox that is paused when idle and resumed on activity. The runtime/TTL limits
+are **plan limits** the API cannot report, so configure them per plan: on **Hobby** (~1h caps) keep
+the `e2b_sandbox_timeout_seconds` / `e2b_runtime_cap_seconds` defaults (3300) — sessions longer than
+the cap are pause/resume-cycled transparently. On paid plans with longer runtime limits, raise
+`e2b_sandbox_timeout_seconds` and set `e2b_runtime_cap_seconds = 0` to disable the cycling.
 
-> **Important**: Like Daytona, the E2B provider does not auto-inject LLM API keys. Add
-> `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets after deploying. See
-> [Secrets Management](SECRETS.md).
+> **Important**: The E2B provider does not automatically inject LLM API keys into sandboxes. If you
+> plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets
+> after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Anthropic
 

@@ -11,11 +11,11 @@ data "external" "e2b_source_hash" {
     cd ${var.project_root}
     if command -v sha256sum &> /dev/null; then
       hash=$(find packages/e2b-infra packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "Dockerfile*" -o -name "*.toml" -o -name "*.js" -o -name "*.sh" \) \
+        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "Dockerfile*" -o -name "*.Dockerfile" -o -name "*.toml" -o -name "*.js" -o -name "*.sh" \) \
         -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
     else
       hash=$(find packages/e2b-infra packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "Dockerfile*" -o -name "*.toml" -o -name "*.js" -o -name "*.sh" \) \
+        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "Dockerfile*" -o -name "*.Dockerfile" -o -name "*.toml" -o -name "*.js" -o -name "*.sh" \) \
         -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"

@@ -792,6 +792,12 @@ export class SessionDO extends DurableObject<Env> {
       config,
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
+        // Gate disruptive maintenance (runtime-cap pause/resume cycling) on an
+        // executing message so we never sever the bridge mid-run.
+        getIsProcessing: () => this.getIsProcessing(),
+        // Tie detached best-effort work (provider TTL refresh) to the DO request
+        // lifetime so it isn't cancelled when the activity request returns.
+        waitUntil: (promise) => this.ctx.waitUntil(promise),
       },
       imageBuildLookup
     );

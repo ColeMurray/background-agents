@@ -2775,7 +2775,15 @@ describe("SandboxLifecycleManager — E2B pause/resume + runtime cap", () => {
       alarmScheduler,
       createMockIdGenerator(),
       createTestConfig(),
-      { ...callbacks, waitUntil: (p) => detached.push(p) }
+      {
+        // Default to "idle" so cycling tests exercise the happy path; the
+        // "defers while processing" test overrides this. Mirrors production,
+        // which always wires getIsProcessing (runtime-cap cycling is fail-closed:
+        // it only proceeds when getIsProcessing() === false).
+        getIsProcessing: () => false,
+        ...callbacks,
+        waitUntil: (p) => detached.push(p),
+      }
     );
     const flushDetached = () => Promise.all(detached);
     return { manager, storage, broadcaster, wsManager, alarmScheduler, flushDetached };

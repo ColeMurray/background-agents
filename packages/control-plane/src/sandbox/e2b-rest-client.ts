@@ -180,6 +180,8 @@ export class E2BRestClient {
     opts?: { domain?: string | null; envdAccessToken?: string | null }
   ): Promise<void> {
     const domain = opts?.domain || DEFAULT_SANDBOX_DOMAIN;
+    // envd requires the in-sandbox user to write the file as. "user" is E2B's
+    // fixed non-root runtime user — the launcher that reads this file runs as it.
     const url =
       `https://${ENVD_PORT}-${sandboxId}.${domain}/files` +
       `?path=${encodeURIComponent(SESSION_ENV_PATH)}&username=user`;

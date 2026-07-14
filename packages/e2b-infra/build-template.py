@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """
 Build (and pre-warm) the Open-Inspect E2B sandbox template — programmatically,
-via the E2B Python SDK. Authenticates with the runtime API key (E2B_API_KEY);
-the deprecated CLI access-token flow is no longer used.
+via the E2B Python SDK. Authenticates with the runtime API key (E2B_API_KEY).
 
-Mirrors the role of packages/daytona-infra (snapshot bootstrap) for E2B. The
-base image layers live in e2b.Dockerfile (FROM + apt/npm/pip); this script adds
-the context-dependent steps the SDK owns: copying the staged sandbox_runtime and
-the oi-launch launcher, the workdir, and the start/ready commands.
+The base image layers live in e2b.Dockerfile (FROM + apt/npm/pip); this script
+adds the context-dependent steps the SDK owns: copying the staged sandbox_runtime
+and the oi-launch launcher, the workdir, and the start/ready commands.
 
 Env:
   E2B_TEMPLATE_ID   (required) — template name to create/rebuild.
   E2B_API_KEY       (required) — runtime API key; authenticates the build AND
-                                 the post-build pre-warm. (Replaces the old
-                                 E2B_ACCESS_TOKEN CLI auth.)
+                                 the post-build pre-warm.
   E2B_API_URL       (optional) — REST API base URL (default https://api.e2b.app).
   E2B_TEMPLATE_CPU  (optional) — vCPU count (default 2).
   E2B_TEMPLATE_MEM  (optional) — memory MB, even number (default 1024).
@@ -55,8 +52,7 @@ if not TEMPLATE_ID:
     sys.exit(1)
 if not API_KEY:
     print(
-        "Error: E2B_API_KEY is not set "
-        "(template builds authenticate with the API key, not an access token)",
+        "Error: E2B_API_KEY is not set",
         file=sys.stderr,
     )
     sys.exit(1)
