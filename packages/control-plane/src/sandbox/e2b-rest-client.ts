@@ -23,7 +23,6 @@ const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_REFRESH_MS = 15_000;
 const TIMEOUT_SETTTL_MS = 15_000;
 const TIMEOUT_WRITE_FILE_MS = 30_000;
-const TIMEOUT_TEMPLATE_MS = 30_000;
 
 export interface E2BSandboxDetail {
   sandboxID: string;
@@ -60,54 +59,6 @@ export interface E2BCreateSandboxParams {
   metadata?: Record<string, string>;
   timeout?: number;
   autoPause?: boolean;
-}
-
-// ---------------------------------------------------------------------------
-// Template builds (repo-image prebuilds)
-//
-// Per-repo prebuilt environments are E2B *templates* built on top of the base
-// template (`fromTemplate`). The build flow is REST-drivable with the runtime
-// API key.
-// ---------------------------------------------------------------------------
-
-export interface E2BTemplateCreated {
-  templateID: string;
-  buildID: string;
-  /** Full names including team namespace (e.g. "team/oi-repo-acme-web:default"). */
-  names: string[];
-}
-
-/** One Dockerfile-style instruction executed by the remote template builder. */
-export interface E2BTemplateStep {
-  /** Instruction type, e.g. "RUN", "ENV", "WORKDIR". */
-  type: string;
-  args: string[];
-  /** Re-run this step even when the builder has it cached. */
-  force?: boolean;
-}
-
-export interface E2BStartTemplateBuildParams {
-  /** Existing template to layer on top of (base layer is cache-shared). */
-  fromTemplate: string;
-  steps: E2BTemplateStep[];
-  /**
-   * Start command, run once at build and memory-snapshotted — must be
-   * re-declared per build (not inherited from `fromTemplate`).
-   */
-  startCmd: string;
-  /** Health check the builder waits on before snapshotting the start command. */
-  readyCmd: string;
-}
-
-export type E2BTemplateBuildStatus = "building" | "ready" | "error" | "waiting" | string;
-
-export interface E2BTemplateBuildInfo {
-  templateID: string;
-  buildID: string;
-  status: E2BTemplateBuildStatus;
-  /** Builder log lines; RUN step args are echoed verbatim (avoid logging them on). */
-  logEntries?: Array<{ level?: string; message?: string }>;
-  reason?: string;
 }
 
 export class E2BNotFoundError extends Error {
@@ -257,63 +208,6 @@ export class E2BRestClient {
 
   getHostnameForPort(sandboxId: string, port: number, domain?: string | null): string {
     return `https://${port}-${sandboxId}.${domain || DEFAULT_SANDBOX_DOMAIN}`;
-  }
-
-  /**
-   * Register a template (or get a new buildID for an existing one — POSTing an
-   * existing `name` re-targets that template, which is what makes repo-image
-   * replacement atomic: sessions keep resolving the name while a new build runs).
-   */
-  async createTemplate(
-    name: string,
-    opts?: { cpuCount?: number; memoryMB?: number }
-  ): Promise<E2BTemplateCreated> {
-    return this.request<E2BTemplateCreated>("POST", "/v3/templates", TIMEOUT_TEMPLATE_MS, {
-      name,
-      cpuCount: opts?.cpuCount,
-      memoryMB: opts?.memoryMB,
-    });
-  }
-
-  /**
-   * Start a template build. The build runs on E2B's remote builder — nothing of
-   * ours executes in a sandbox, so no control-plane secrets enter the data plane.
-   * NOTE: RUN step args appear verbatim in build logs; any clone token in a step
-   * must be short-lived (GitHub App installation tokens expire in 1h).
-   */
-  async startTemplateBuild(
-    templateID: string,
-    buildID: string,
-    params: E2BStartTemplateBuildParams
-  ): Promise<void> {
-    await this.request<void>(
-      "POST",
-      `/v2/templates/${templateID}/builds/${buildID}`,
-      TIMEOUT_TEMPLATE_MS,
-      {
-        fromTemplate: params.fromTemplate,
-        steps: params.steps,
-        startCmd: params.startCmd,
-        readyCmd: params.readyCmd,
-      }
-    );
-  }
-
-  async getTemplateBuildStatus(templateID: string, buildID: string): Promise<E2BTemplateBuildInfo> {
-    return this.request<E2BTemplateBuildInfo>(
-      "GET",
-      `/templates/${templateID}/builds/${buildID}/status`,
-      TIMEOUT_TEMPLATE_MS
-    );
-  }
-
-  /** Delete a template by name (without the team namespace) or raw template ID. */
-  async deleteTemplate(nameOrId: string): Promise<void> {
-    await this.request<void>(
-      "DELETE",
-      `/templates/${encodeURIComponent(nameOrId)}`,
-      TIMEOUT_TEMPLATE_MS
-    );
   }
 
   private getHeaders(): Record<string, string> {
