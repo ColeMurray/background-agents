@@ -68,6 +68,6 @@ the App can clone.
 | Fresh session works         | Bridge connects; agent responds to a prompt                                     |
 | Pause → resume works        | Agent responds to a new prompt after resume; files from before the pause remain |
 | Idle pauses (not kills)     | Idle timeout triggers `POST /sandboxes/{id}/pause`; session is resumable        |
-| Runtime-cap cycling         | Session > cap continues transparently (`sandbox.runtime_cap_reset` in logs)     |
+| TTL lapse recovers          | Past the TTL the sandbox auto-pauses (not killed); the next prompt resumes it   |
 | code-server survives resume | Same URL and password work after resume                                         |
-| Stop kills                  | Operator/deployment stop issues `DELETE /sandboxes/{id}`                        |
+| Stop pauses (resumable)     | Idle/heartbeat stop pauses; only a never-connected sandbox is killed (`DELETE`) |

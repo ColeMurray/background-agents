@@ -25,8 +25,7 @@ import json
 import atexit
 from pathlib import Path
 
-from e2b import default_build_logger
-from e2b.template_sync.main import Template
+from e2b import Template, default_build_logger
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 

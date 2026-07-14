@@ -246,11 +246,10 @@ the E2B Template SDK). Create it at the [E2B dashboard](https://e2b.dev) → API
    ```
 
 The control plane calls the E2B REST API directly from Cloudflare Workers. Each session runs in a
-single long-lived sandbox that is paused when idle and resumed on activity. The runtime/TTL limits
-are **plan limits** the API cannot report, so configure them per plan: on **Hobby** (~1h caps) keep
-the `e2b_sandbox_timeout_seconds` / `e2b_runtime_cap_seconds` defaults (3300) — sessions longer than
-the cap are pause/resume-cycled transparently. On paid plans with longer runtime limits, raise
-`e2b_sandbox_timeout_seconds` and set `e2b_runtime_cap_seconds = 0` to disable the cycling.
+single long-lived sandbox: when its TTL (`e2b_sandbox_timeout_seconds`, default 7200) expires the
+sandbox is **paused** rather than killed (`e2b_auto_pause`, default true) and auto-resumes on the
+next activity, so sessions survive idle gaps. On the **Hobby** tier (~1h runtime cap) lower
+`e2b_sandbox_timeout_seconds` to 3300. Set `e2b_auto_pause = false` to kill on timeout instead.
 
 > **Important**: The E2B provider does not automatically inject LLM API keys into sandboxes. If you
 > plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets

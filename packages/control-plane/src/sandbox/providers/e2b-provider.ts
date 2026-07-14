@@ -51,6 +51,12 @@ export interface E2BProviderConfig {
 export class E2BSandboxProvider implements SandboxProvider {
   readonly name = "e2b";
 
+  /**
+   * Stop reasons that are terminal (the manager sets the session `failed` and
+   * never resumes it) — kill instead of pausing to avoid orphaning a sandbox.
+   */
+  private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout"]);
+
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSnapshots: false,
     supportsRestore: false,
@@ -147,16 +153,29 @@ export class E2BSandboxProvider implements SandboxProvider {
       }
 
       const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
-      if (sandbox.state === "paused") {
-        await this.client.connectSandbox(config.providerObjectId, timeoutSeconds);
-      } else if (sandbox.state === "running") {
-        await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
-      } else {
-        return {
-          success: false,
-          error: `Sandbox in non-resumable state: ${sandbox.state}`,
-          shouldSpawnFresh: true,
-        };
+      try {
+        if (sandbox.state === "paused") {
+          await this.client.connectSandbox(config.providerObjectId, timeoutSeconds);
+        } else if (sandbox.state === "running") {
+          await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
+        } else {
+          return {
+            success: false,
+            error: `Sandbox in non-resumable state: ${sandbox.state}`,
+            shouldSpawnFresh: true,
+          };
+        }
+      } catch (error) {
+        // The sandbox can disappear between the GET above and this call — treat a
+        // late 404 the same as an initial one so the manager spawns fresh.
+        if (error instanceof E2BNotFoundError) {
+          return {
+            success: false,
+            error: "Sandbox no longer exists in E2B",
+            shouldSpawnFresh: true,
+          };
+        }
+        throw error;
       }
 
       const codeServerPassword = config.codeServerEnabled
@@ -185,14 +204,21 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Stop is a resumable PAUSE — the sandbox keeps its filesystem + memory and is
-   * resumed in place by resumeSandbox. The manager routes idle/heartbeat stops
-   * here (supportsPersistentResume), so E2B needs no bespoke pause hook.
+   * Idle/heartbeat stops are a resumable PAUSE (the manager routes them here via
+   * supportsPersistentResume, and resumeSandbox brings the sandbox back).
+   * Terminal stops (a sandbox that never connected) instead KILL: the manager
+   * marks that session `failed` and won't resume it, so pausing would orphan a
+   * sandbox E2B retains indefinitely.
    */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    const terminal = E2BSandboxProvider.TERMINAL_STOP_REASONS.has(config.reason);
     try {
       try {
-        await this.client.pauseSandbox(config.providerObjectId);
+        if (terminal) {
+          await this.client.killSandbox(config.providerObjectId);
+        } else {
+          await this.client.pauseSandbox(config.providerObjectId);
+        }
       } catch (error) {
         // Already gone or already paused — nothing to do.
         if (error instanceof E2BNotFoundError || error instanceof E2BConflictError) {
@@ -202,7 +228,11 @@ export class E2BSandboxProvider implements SandboxProvider {
       }
       return { success: true };
     } catch (error) {
-      throw this.classifyError("Failed to stop (pause) E2B sandbox", error, "stop");
+      throw this.classifyError(
+        `Failed to stop (${terminal ? "kill" : "pause"}) E2B sandbox`,
+        error,
+        "stop"
+      );
     }
   }
 
@@ -255,8 +285,8 @@ export class E2BSandboxProvider implements SandboxProvider {
     if (error instanceof E2BApiError) {
       if (error.status === 429) {
         // Rate limiting is temporary — classify transient so it isn't counted
-        // toward the sandbox circuit breaker (which would block later spawns
-        // for minutes). Retried after backoff rather than tripped.
+        // toward the sandbox circuit breaker (a permanent error would open the
+        // breaker and block later spawns for minutes).
         return new SandboxProviderError(
           `${message} (rate-limited during ${operation})`,
           "transient",

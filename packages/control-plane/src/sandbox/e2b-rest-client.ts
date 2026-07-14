@@ -170,6 +170,12 @@ export class E2BRestClient {
           text
         );
       }
+    } catch (error) {
+      // Surface a write timeout as a transient error (see request()).
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`E2B writeSessionEnv timeout after ${TIMEOUT_WRITE_FILE_MS}ms`);
+      }
+      throw error;
     } finally {
       clearTimeout(timeoutId);
       log.info("e2b.write_session_env", {
@@ -232,18 +238,7 @@ export class E2BRestClient {
       };
       if (body !== undefined) init.body = JSON.stringify(body);
 
-      let response: Response;
-      try {
-        response = await fetch(url, init);
-      } catch (error) {
-        // A timeout fires controller.abort(), which rejects the fetch with an
-        // AbortError. Surface it as a transient timeout so it doesn't count
-        // toward the sandbox circuit breaker as a permanent failure.
-        if (error instanceof Error && error.name === "AbortError") {
-          throw new Error(`E2B request timeout after ${timeoutMs}ms (${method} ${path})`);
-        }
-        throw error;
-      }
+      const response = await fetch(url, init);
 
       if (response.status === 404) {
         throw new E2BNotFoundError((await response.text()) || `Not found: ${path}`);
@@ -270,6 +265,15 @@ export class E2BRestClient {
         return (await response.json()) as T;
       }
       return undefined as T;
+    } catch (error) {
+      // A timeout fires controller.abort(); the resulting AbortError — from
+      // fetch OR a body read — must surface as a transient timeout so it isn't
+      // classified permanent and trip the circuit breaker. Our typed API errors
+      // (E2B*Error) have distinct names and rethrow unchanged.
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`E2B request timeout after ${timeoutMs}ms (${method} ${path})`);
+      }
+      throw error;
     } finally {
       clearTimeout(timeoutId);
     }

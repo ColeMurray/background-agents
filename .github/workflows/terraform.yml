@@ -246,6 +246,11 @@ jobs:
           TF_VAR_opencomputer_template: ${{ secrets.OPENCOMPUTER_TEMPLATE }}
           TF_VAR_opencomputer_project_id: ${{ secrets.OPENCOMPUTER_PROJECT_ID }}
           TF_VAR_opencomputer_target: ${{ secrets.OPENCOMPUTER_TARGET }}
+          TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
+          TF_VAR_e2b_template_id: ${{ secrets.E2B_TEMPLATE_ID }}
+          TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
+          TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
+          TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
 
       - name: Post Plan Results
         uses: actions/github-script@v8
@@ -397,6 +402,11 @@ jobs:
           TF_VAR_opencomputer_template: ${{ secrets.OPENCOMPUTER_TEMPLATE }}
           TF_VAR_opencomputer_project_id: ${{ secrets.OPENCOMPUTER_PROJECT_ID }}
           TF_VAR_opencomputer_target: ${{ secrets.OPENCOMPUTER_TARGET }}
+          TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
+          TF_VAR_e2b_template_id: ${{ secrets.E2B_TEMPLATE_ID }}
+          TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
+          TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
+          TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

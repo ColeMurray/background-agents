@@ -162,6 +162,34 @@ describe("E2BSandboxProvider", () => {
     }
   });
 
+  it("stopSandbox KILLS on connecting_timeout (terminal, non-resumable)", async () => {
+    const client = mockClient();
+    const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
+      providerObjectId: "x",
+      sessionId: "s",
+      reason: "connecting_timeout",
+    });
+    expect(res.success).toBe(true);
+    expect(client.killSandbox).toHaveBeenCalledWith("x");
+    expect(client.pauseSandbox).not.toHaveBeenCalled();
+  });
+
+  it("resumeSandbox: 404 during connect (post-GET race) returns shouldSpawnFresh", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () => ({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" })),
+      connectSandbox: vi.fn(async () => {
+        throw new E2BNotFoundError("vanished mid-resume");
+      }),
+    });
+    const result = await new E2BSandboxProvider(client, providerConfig).resumeSandbox({
+      providerObjectId: "e2b-id",
+      sessionId: "sess",
+      sandboxId: "sandbox-logical",
+    });
+    expect(result.success).toBe(false);
+    expect(result.shouldSpawnFresh).toBe(true);
+  });
+
   it("honors config.timeoutSeconds on create and resume (child sandboxes)", async () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);
