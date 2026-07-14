@@ -38,7 +38,11 @@ function makeEnv() {
   const githubKv = createMockKV();
   return {
     GITHUB_KV: githubKv,
+    CONTROL_PLANE: {
+      fetch: vi.fn(async () => new Response(null, { status: 204 })),
+    },
     GITHUB_WEBHOOK_SECRET: SECRET,
+    INTERNAL_CALLBACK_SECRET: "test-internal-secret",
     GITHUB_BOT_USERNAME: "test-bot[bot]",
     DEPLOYMENT_NAME: "test",
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
@@ -229,13 +233,32 @@ describe("POST /webhooks/github", () => {
     await flushWaitUntil(ctx);
   });
 
-  it("returns 200 for handled event with non-matching action", async () => {
+  it("forwards closed pull request lifecycle fields to the control plane", async () => {
     const body = JSON.stringify({
       action: "closed",
       repository: { owner: { login: "test" }, name: "repo" },
+      sender: { login: "alice" },
+      pull_request: {
+        number: 42,
+        title: "Ship lifecycle updates",
+        body: null,
+        state: "closed",
+        draft: false,
+        merged: true,
+        html_url: "https://github.com/test/repo/pull/42",
+        created_at: "2026-07-10T10:00:00Z",
+        updated_at: "2026-07-14T11:00:00Z",
+        merged_at: "2026-07-14T10:59:00Z",
+        closed_at: "2026-07-14T11:00:00Z",
+        user: { login: "alice" },
+        labels: [{ name: "ready" }],
+        head: { ref: "feature/lifecycle", sha: "abc123", repo: { id: 99 } },
+        base: { ref: "main", repo: { id: 99 } },
+      },
     });
     const signature = await sign(SECRET, body);
     const ctx = makeCtx();
+    const env = makeEnv();
 
     const res = await app.fetch(
       new Request("http://localhost/webhooks/github", {
@@ -246,13 +269,42 @@ describe("POST /webhooks/github", () => {
           "X-GitHub-Event": "pull_request",
         },
       }),
-      makeEnv(),
+      env,
       ctx
     );
 
     expect(res.status).toBe(200);
     expect(ctx.waitUntil).toHaveBeenCalledOnce();
     await flushWaitUntil(ctx);
+
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    expect(controlPlaneFetch).toHaveBeenCalledOnce();
+    const [url, init] = controlPlaneFetch.mock.calls[0];
+    expect(url).toBe("https://internal/internal/github-event");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      eventType: "pull_request.closed",
+      repoOwner: "test",
+      repoName: "repo",
+      branch: "feature/lifecycle",
+      targetBranch: "main",
+      labels: ["ready"],
+      pullRequest: {
+        number: 42,
+        state: "closed",
+        draft: false,
+        merged: true,
+        headSha: "abc123",
+        isCrossRepository: false,
+        url: "https://github.com/test/repo/pull/42",
+        repositoryExternalId: "99",
+        providerCreatedAt: Date.parse("2026-07-10T10:00:00Z"),
+        providerUpdatedAt: Date.parse("2026-07-14T11:00:00Z"),
+        mergedAt: Date.parse("2026-07-14T10:59:00Z"),
+        closedAt: Date.parse("2026-07-14T11:00:00Z"),
+      },
+    });
   });
 });
 

@@ -196,9 +196,11 @@ async function handleWebhook(
   log.info("webhook.handled", wideEvent);
 
   // Forward normalized event to control-plane for automation triggering.
-  // This is additive — failures here must not affect existing bot behavior.
+  // Use the passthrough parse so nested lifecycle fields are not stripped by
+  // the summary schema used for logging and bot dispatch.
   if (event) {
-    const normalizedEvent = normalizeGitHubEvent(event, p);
+    const normalizationPayload = actionResult.success ? actionResult.data : {};
+    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
     if (normalizedEvent !== null) {
       try {
         const body = JSON.stringify(normalizedEvent);
@@ -250,6 +252,12 @@ function dispatchHandler(
         const parsed = reviewRequestedPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed pull_request review_requested payload");
         return handleReviewRequested(env, log, parsed.data, traceId);
+      }
+      if (p.action === "closed" || p.action === "synchronize") {
+        return Promise.resolve({
+          outcome: "skipped",
+          skip_reason: "automation_event_only",
+        });
       }
       return Promise.resolve({
         outcome: "skipped",
