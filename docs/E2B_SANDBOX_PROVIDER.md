@@ -9,8 +9,7 @@ deploy for this provider; only the sandbox template image is built (by Terraform
 Use `sandbox_provider = "e2b"` when you want sandbox sessions to run in E2B cloud sandboxes while
 keeping the same Open-Inspect control plane, web app, GitHub OAuth, and Slack/GitHub integrations.
 E2B sandboxes support pause/resume, so idle sessions are parked (not destroyed) and resumed on the
-next prompt. Note: the E2B provider does not use filesystem snapshots or prebuilt images (unlike the
-Vercel provider) — sessions always start from the template and rely on pause/resume for continuity.
+next prompt.
 
 ## Required Configuration
 
