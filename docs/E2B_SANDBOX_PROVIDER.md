@@ -1,8 +1,8 @@
 # E2B Sandbox Provider
 
 Open-Inspect can use [E2B](https://e2b.dev) as the sandbox provider for coding sessions. The control
-plane talks directly to the E2B REST API from Cloudflare Workers; there is no separate Modal-style
-shim service for this provider.
+plane talks directly to the E2B REST API from Cloudflare Workers — there is no separate service to
+deploy for this provider (only the sandbox template is built, via Terraform).
 
 ## When to Use It
 
