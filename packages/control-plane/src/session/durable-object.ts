@@ -1528,13 +1528,20 @@ export class SessionDO extends DurableObject<Env> {
   ): Promise<void> {
     if (!this.env.DB) return;
     const sessionStore = new SessionIndexStore(this.env.DB);
-    await sessionStore.updateStatus(sessionId, status, updatedAt).catch((error) => {
-      this.log.error("session_index.update_status.background_error", {
-        session_id: sessionId,
-        status,
-        updated_at: updatedAt,
-        error,
-      });
+    await sessionStore.updateStatus(sessionId, status, updatedAt);
+  }
+
+  private logSessionIndexStatusSyncError(
+    sessionId: string,
+    status: SessionStatus,
+    updatedAt: number,
+    error: unknown
+  ): void {
+    this.log.error("session_index.update_status.background_error", {
+      session_id: sessionId,
+      status,
+      updated_at: updatedAt,
+      error,
     });
   }
 
@@ -1588,7 +1595,10 @@ export class SessionDO extends DurableObject<Env> {
 
     const publicSessionId = this.getPublicSessionId(session);
     if (session.status === status) {
-      await this.syncSessionIndexStatus(publicSessionId, status, session.updated_at);
+      await this.syncSessionIndexStatus(publicSessionId, status, session.updated_at).catch(
+        (error) =>
+          this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
+      );
       if (TERMINAL_STATUSES.includes(status)) {
         this.syncSessionMetrics(publicSessionId);
       }
@@ -1597,7 +1607,9 @@ export class SessionDO extends DurableObject<Env> {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
-    await this.syncSessionIndexStatus(publicSessionId, status, updatedAt);
+    await this.syncSessionIndexStatus(publicSessionId, status, updatedAt).catch((error) =>
+      this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
+    );
 
     this.broadcast({ type: "session_status", status });
 
