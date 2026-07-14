@@ -177,7 +177,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       if (sandbox.state === "paused") {
         await this.client.connectSandbox(config.providerObjectId, timeoutSeconds);
       } else if (sandbox.state === "running") {
-        await this.client.setTimeout(config.providerObjectId, timeoutSeconds);
+        await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
       } else {
         return {
           success: false,
@@ -249,7 +249,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 
     try {
       if (effectiveTimeoutSeconds > E2B_MAX_TTL_SECONDS) {
-        await this.client.setTimeout(config.providerObjectId, effectiveTimeoutSeconds);
+        await this.client.setSandboxTimeout(config.providerObjectId, effectiveTimeoutSeconds);
       } else {
         await this.client.refreshKeepalive(
           config.providerObjectId,

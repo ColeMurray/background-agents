@@ -82,7 +82,7 @@ describe("E2BRestClient", () => {
     await client.refreshKeepalive("sb-1", 1800);
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ duration: 1800 });
 
-    await client.setTimeout("sb-1", 7200);
+    await client.setSandboxTimeout("sb-1", 7200);
     expect(JSON.parse(fetchSpy.mock.calls[2][1].body)).toEqual({ timeout: 7200 });
   });
 

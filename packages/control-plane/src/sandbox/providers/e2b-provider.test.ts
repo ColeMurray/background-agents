@@ -38,7 +38,7 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
       })
     ),
     killSandbox: vi.fn(async () => {}),
-    setTimeout: vi.fn(async () => {}),
+    setSandboxTimeout: vi.fn(async () => {}),
     refreshKeepalive: vi.fn(async () => {}),
     getHostnameForPort: vi.fn((id: string, port: number) => `https://${port}-${id}.e2b.app`),
     ...overrides,
@@ -101,7 +101,7 @@ describe("E2BSandboxProvider", () => {
     expect(client.connectSandbox).toHaveBeenCalledWith("e2b-id", 1800);
   });
 
-  it("resumeSandbox running uses setTimeout only", async () => {
+  it("resumeSandbox running uses setSandboxTimeout only", async () => {
     const client = mockClient({
       getSandbox: vi.fn(async () => ({
         sandboxID: "e2b-id",
@@ -115,7 +115,7 @@ describe("E2BSandboxProvider", () => {
       sessionId: "sess",
       sandboxId: "sandbox-logical",
     });
-    expect(client.setTimeout).toHaveBeenCalledWith("e2b-id", 1800);
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("e2b-id", 1800);
     expect(client.connectSandbox).not.toHaveBeenCalled();
   });
 
@@ -329,8 +329,8 @@ describe("E2BSandboxProvider", () => {
     await provider.createSandbox({ ...baseCreateConfig, timeoutSeconds: 7200 });
 
     await provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
-    // Uses setTimeout(7200) — the effective TTL — not refreshKeepalive at the 1800 default.
-    expect(client.setTimeout).toHaveBeenCalledWith("e2b-id", 7200);
+    // Uses setSandboxTimeout(7200) — the effective TTL — not refreshKeepalive at the 1800 default.
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("e2b-id", 7200);
     expect(client.refreshKeepalive).not.toHaveBeenCalled();
   });
 });

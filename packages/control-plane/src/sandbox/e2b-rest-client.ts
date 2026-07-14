@@ -194,7 +194,7 @@ export class E2BRestClient {
     await this.request<void>("DELETE", `/sandboxes/${id}`, TIMEOUT_KILL_MS);
   }
 
-  async setTimeout(id: string, timeoutSeconds: number): Promise<void> {
+  async setSandboxTimeout(id: string, timeoutSeconds: number): Promise<void> {
     await this.request<void>("POST", `/sandboxes/${id}/timeout`, TIMEOUT_SETTTL_MS, {
       timeout: timeoutSeconds,
     });
