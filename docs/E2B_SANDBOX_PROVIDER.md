@@ -2,14 +2,15 @@
 
 Open-Inspect can use [E2B](https://e2b.dev) as the sandbox provider for coding sessions. The control
 plane talks directly to the E2B REST API from Cloudflare Workers — there is no separate service to
-deploy for this provider (only the sandbox template is built, via Terraform).
+deploy for this provider; only the sandbox template image is built (by Terraform, or manually).
 
 ## When to Use It
 
 Use `sandbox_provider = "e2b"` when you want sandbox sessions to run in E2B cloud sandboxes while
 keeping the same Open-Inspect control plane, web app, GitHub OAuth, and Slack/GitHub integrations.
-E2B sandboxes are fast to start and support pause/resume, so idle sessions are parked (not
-destroyed) and resumed on the next prompt.
+E2B sandboxes support pause/resume, so idle sessions are parked (not destroyed) and resumed on the
+next prompt. Note: the E2B provider does not use filesystem snapshots or prebuilt images (unlike the
+Vercel provider) — sessions always start from the template and rely on pause/resume for continuity.
 
 ## Required Configuration
 
@@ -42,7 +43,7 @@ The E2B provider also needs the normal Open-Inspect values such as Cloudflare, G
 Anthropic, and web app configuration. See [GETTING_STARTED.md](./GETTING_STARTED.md) for the full
 deployment flow.
 
-> Hobby E2B plans cap sandbox lifetime (~1h). Lower `e2b_sandbox_timeout_seconds` accordingly.
+> On the **Hobby** tier (~1h runtime cap), lower `e2b_sandbox_timeout_seconds` to `3300`.
 
 ## Template Build
 
@@ -58,10 +59,10 @@ The template is built programmatically with the E2B Template SDK. There are two 
 
 ### Terraform-Managed Template
 
-This is the recommended path for a normal deployment. When `sandbox_provider = "e2b"`, Terraform
-hashes `packages/e2b-infra` and `packages/sandbox-runtime/src`, and the
-`terraform/modules/e2b-infra` module rebuilds the template on `terraform apply` whenever either
-changes.
+This is the recommended path for a normal deployment. When `sandbox_provider = "e2b"`, the
+`terraform/modules/e2b-infra` module hashes the relevant template and runtime source files under
+`packages/e2b-infra` and `packages/sandbox-runtime/src`, and rebuilds the template on
+`terraform apply` when they change.
 
 ```bash
 cd terraform/environments/production
@@ -81,9 +82,10 @@ export E2B_TEMPLATE_ID=open-inspect-sandbox
 uv run python build-template.py
 ```
 
-Optional build knobs: `E2B_TEMPLATE_CPU` (default `2`), `E2B_TEMPLATE_MEM` MB (default `1024`). See
-[`packages/e2b-infra/README.md`](../packages/e2b-infra/README.md) for details on the template
-tooling and the launcher.
+Optional build knobs: `E2B_TEMPLATE_CPU` (default `2`), `E2B_TEMPLATE_MEM` MB (default `1024`) —
+these apply to **manual** builds; Terraform-managed templates use the module's fixed defaults of **2
+vCPU / 1024 MB**. See [`packages/e2b-infra/README.md`](../packages/e2b-infra/README.md) for details
+on the template tooling and the launcher.
 
 ## Runtime Behavior
 
@@ -99,19 +101,23 @@ command once at build and resumes it per create, so it never sees per-session en
 
 ## Lifecycle: Pause and Resume
 
-E2B has an **absolute** sandbox timeout (it is not extended by in-sandbox activity) and no
-server-side idle-stop or auto-delete. Open-Inspect therefore drives the lifecycle through the shared
-lifecycle manager, treating E2B stops as a **resumable pause**:
+E2B's sandbox timeout is **not extended by in-sandbox agent activity** (Open-Inspect only resets it
+when it resumes a sandbox), and E2B has no server-side idle-stop or auto-delete. Open-Inspect
+therefore drives the lifecycle through the shared lifecycle manager, treating E2B stops as a
+**resumable pause**:
 
 - Idle sessions are **paused** after the shared inactivity timeout (default 10 minutes).
 - When the TTL lapses, the sandbox created with `E2B_AUTO_PAUSE=true` **auto-pauses** (recoverable)
   rather than being killed, and auto-resumes on the next inbound request.
 - The next prompt **resumes** the paused sandbox in place (workspace state preserved); if E2B has
   since dropped it, the control plane spawns a fresh sandbox.
-- Only a sandbox that never connected (a spawn that timed out) is **killed**, to avoid orphaning it.
+- Only sandboxes that fail before becoming usable — a spawn that never connects, or one whose
+  session-env write fails — are **killed**, to avoid orphaning them.
 
 Paused E2B sandboxes are not billed and are retained indefinitely, so pausing is the default
-recoverable stop. `E2B_AUTO_PAUSE` is the single knob controlling this behavior.
+recoverable stop. `E2B_AUTO_PAUSE` controls the **TTL action** (pause vs kill when the timeout
+lapses) and E2B's auto-resume; the ~10-minute inactivity pause above is driven by the shared
+lifecycle manager and applies regardless of that flag.
 
 ## Required Secrets
 
@@ -154,9 +160,10 @@ sandbox logs for runtime startup, bridge connection, and OpenCode health events.
 
 ### Template Was Not Built
 
-When `sandbox_provider = "e2b"`, Terraform builds the template during `terraform apply`. Update
-`CACHE_BUSTER` in the base image (or change template source) to force a rebuild. For a manual build,
-confirm `E2B_TEMPLATE_ID` matches the name set in Terraform.
+When `sandbox_provider = "e2b"`, Terraform builds the template during `terraform apply`, keyed on a
+hash of the template and runtime source. To force a rebuild, change a hashed source file under
+`packages/e2b-infra` or `packages/sandbox-runtime/src`. For a manual build, confirm
+`E2B_TEMPLATE_ID` matches the name set in Terraform.
 
 ### Sandbox Times Out Too Soon
 
@@ -177,7 +184,7 @@ Open-Inspect secrets and that the selected model is available for that account.
 
 ## References
 
-- [E2B sandbox lifecycle](https://e2b.dev/docs/sandbox/lifecycle)
+- [E2B sandbox overview](https://e2b.dev/docs/sandbox)
 - [E2B sandbox persistence (pause/resume)](https://e2b.dev/docs/sandbox/persistence)
 - [E2B billing](https://e2b.dev/docs/billing)
 - [E2B REST API](https://e2b.dev/docs/api-reference)
