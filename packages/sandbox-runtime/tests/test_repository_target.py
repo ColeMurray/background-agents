@@ -17,6 +17,7 @@ INSPECT_PLUGIN = (
 )
 
 pytestmark = pytest.mark.skipif(NODE_BINARY is None, reason="node is required")
+TOOL_SUBPROCESS_TIMEOUT_SECONDS = 10
 
 
 def _plugin_module(tmp_path: Path) -> Path:
@@ -62,7 +63,7 @@ def _resolve(
         capture_output=True,
         text=True,
         check=True,
-        timeout=10,
+        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
     )
     return json.loads(result.stdout)
 
