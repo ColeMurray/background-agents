@@ -120,18 +120,17 @@ describe("startSessionAndSendPrompt", () => {
     const env = makeEnv();
 
     await expect(
-      startSessionAndSendPrompt(
-        env,
-        repositoryTarget,
-        "C123",
-        "111.222",
-        "Fix the failing deploy",
-        "U123",
-        ["[Alice]: Earlier request", "[Bot]: Earlier response"],
-        "engineering",
-        "Build and deploy discussion",
-        "trace-1"
-      )
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "Fix the failing deploy",
+        userId: "U123",
+        previousMessages: ["[Alice]: Earlier request", "[Bot]: Earlier response"],
+        channelName: "engineering",
+        channelDescription: "Build and deploy discussion",
+        traceId: "trace-1",
+      })
     ).resolves.toEqual({ sessionId: "session-1" });
 
     expect(getResolvedUserPreferences).toHaveBeenCalledWith(env, "U123", {
@@ -170,7 +169,8 @@ describe("startSessionAndSendPrompt", () => {
       "session-1",
       repositoryTarget,
       "openai/gpt-5.4",
-      "high"
+      "high",
+      undefined
     );
     expect(storeThreadSession).toHaveBeenCalledWith(env, "C123", "111.222", {
       sessionId: "session-1",
@@ -185,14 +185,13 @@ describe("startSessionAndSendPrompt", () => {
   it("does not apply repository branch overrides to environment sessions", async () => {
     const env = makeEnv();
 
-    await startSessionAndSendPrompt(
-      env,
-      environmentTarget,
-      "C123",
-      "111.222",
-      "Inspect production",
-      "U123"
-    );
+    await startSessionAndSendPrompt(env, {
+      target: environmentTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Inspect production",
+      userId: "U123",
+    });
 
     expect(getUserRepoBranchPreference).not.toHaveBeenCalled();
     expect(createSession).toHaveBeenCalledWith(
@@ -214,7 +213,13 @@ describe("startSessionAndSendPrompt", () => {
     const env = makeEnv();
 
     await expect(
-      startSessionAndSendPrompt(env, repositoryTarget, "C123", "111.222", "Fix it", "U123")
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "Fix it",
+        userId: "U123",
+      })
     ).resolves.toBeNull();
 
     expect(postMessage).toHaveBeenCalledWith(
@@ -232,7 +237,13 @@ describe("startSessionAndSendPrompt", () => {
     const env = makeEnv();
 
     await expect(
-      startSessionAndSendPrompt(env, repositoryTarget, "C123", "111.222", "Fix it", "U123")
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "Fix it",
+        userId: "U123",
+      })
     ).resolves.toBeNull();
 
     expect(postMessage).toHaveBeenCalledWith(
