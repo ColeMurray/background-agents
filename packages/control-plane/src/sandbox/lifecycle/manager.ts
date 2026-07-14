@@ -264,10 +264,6 @@ export interface SlackAgentNotifyLookup {
 export interface LifecycleCallbacks {
   /** Called when the sandbox is being terminated (heartbeat stale, inactivity timeout). */
   onSandboxTerminating?: () => Promise<void>;
-  /** Whether a message is currently executing (gates disruptive maintenance like runtime-cap cycling). */
-  getIsProcessing?: () => boolean;
-  /** Tie a detached best-effort promise to the DO request lifetime (ctx.waitUntil). */
-  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 // ==================== Manager ====================
@@ -918,9 +914,6 @@ export class SandboxLifecycleManager {
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.storage.setLastSpawnError(errorMessage, Date.now());
       this.storage.updateSandboxStatus("failed");
-      // The sandbox may be paused/unreachable — don't leave clients holding
-      // dead code-server/tunnel URLs (matches the other failure paths).
-      this.clearSandboxAccessState();
       this.broadcaster.broadcast({
         type: "sandbox_error",
         error: errorMessage,
@@ -1067,39 +1060,6 @@ export class SandboxLifecycleManager {
   }
 
   /**
-   * Pause a provider-managed sandbox so it can be resumed later, falling back to
-   * a plain stop when the provider has no pause primitive.
-   *
-   * Used on the idle/heartbeat-stale paths where the sandbox is "freeable for
-   * later" — providers like E2B pause (state preserved, resumable), while
-   * Daytona (no pauseSandbox) falls through to its existing stop, which is
-   * itself effectively a pause. Explicit-termination paths (connecting timeout,
-   * operator/deployment shutdown) keep calling {@link stopProviderSandbox}.
-   */
-  private async pauseOrStopProviderSandbox(reason: string): Promise<void> {
-    if (!this.provider.pauseSandbox) {
-      await this.stopProviderSandbox(reason);
-      return;
-    }
-
-    const sandbox = this.storage.getSandbox();
-    const session = this.storage.getSession();
-    if (!sandbox?.modal_object_id || !session) {
-      return;
-    }
-
-    const result = await this.provider.pauseSandbox({
-      providerObjectId: sandbox.modal_object_id,
-      sessionId: session.session_name || session.id,
-      reason,
-    });
-
-    if (!result.success) {
-      throw new Error(result.error || "Failed to pause provider sandbox");
-    }
-  }
-
-  /**
    * Handle alarm for inactivity and heartbeat monitoring.
    */
   async handleAlarm(): Promise<void> {
@@ -1181,9 +1141,9 @@ export class SandboxLifecycleManager {
 
       if (this.usesProviderManagedStop()) {
         try {
-          await this.pauseOrStopProviderSandbox("heartbeat_timeout");
+          await this.stopProviderSandbox("heartbeat_timeout");
         } catch (error) {
-          this.log.warn("Provider pause failed after heartbeat timeout", {
+          this.log.warn("Provider stop failed after heartbeat timeout", {
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1226,31 +1186,21 @@ export class SandboxLifecycleManager {
       now
     );
 
-    if (inactivityDecision.action === "timeout") {
-      this.log.info("Inactivity timeout", {
-        event: "sandbox.timeout",
-        last_activity: sandbox.last_activity,
-        timeout_ms: this.config.inactivity.timeoutMs,
-      });
-      // Fail any stuck processing message before terminating
-      await this.callbacks.onSandboxTerminating?.();
-      // Set status to stopped FIRST to block reconnection attempts
-      this.storage.updateSandboxStatus("stopped");
-      this.clearSandboxAccessState();
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
+    switch (inactivityDecision.action) {
+      case "timeout":
+        this.log.info("Inactivity timeout", {
+          event: "sandbox.timeout",
+          last_activity: sandbox.last_activity,
+          timeout_ms: this.config.inactivity.timeoutMs,
+        });
+        // Fail any stuck processing message before terminating
+        await this.callbacks.onSandboxTerminating?.();
+        // Set status to stopped FIRST to block reconnection attempts
+        this.storage.updateSandboxStatus("stopped");
+        this.clearSandboxAccessState();
+        this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
 
-      if (this.usesProviderManagedStop()) {
-        try {
-          await this.pauseOrStopProviderSandbox("inactivity_timeout");
-        } catch (error) {
-          this.log.error("Provider pause failed after inactivity timeout", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      } else {
-        await this.triggerSnapshot("inactivity_timeout");
-        this.wsManager.sendToSandbox({ type: "shutdown" });
-        if (this.canStopProviderSandbox()) {
+        if (this.usesProviderManagedStop()) {
           try {
             await this.stopProviderSandbox("inactivity_timeout");
           } catch (error) {
@@ -1258,68 +1208,30 @@ export class SandboxLifecycleManager {
               error: error instanceof Error ? error.message : String(error),
             });
           }
+        } else {
+          await this.triggerSnapshot("inactivity_timeout");
+          this.wsManager.sendToSandbox({ type: "shutdown" });
+          if (this.canStopProviderSandbox()) {
+            try {
+              await this.stopProviderSandbox("inactivity_timeout");
+            } catch (error) {
+              this.log.error("Provider stop failed after inactivity timeout", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
         }
-      }
 
-      this.wsManager.closeSandboxWebSocket(1000, "Inactivity timeout");
+        this.wsManager.closeSandboxWebSocket(1000, "Inactivity timeout");
 
-      this.broadcaster.broadcast({
-        type: "sandbox_warning",
-        message: this.usesProviderManagedStop()
-          ? "Sandbox stopped due to inactivity"
-          : "Sandbox stopped due to inactivity, snapshot saved",
-      });
-      return;
-    }
-
-    // Continuous-runtime cap (e.g. E2B Hobby caps a sandbox at ~1h of running
-    // time, unextendable via TTL refresh). Pause+resume cycles the sandbox to
-    // reset the provider's runtime counter before it hard-kills, preserving
-    // filesystem state and per-port hostnames. No-op for providers without a
-    // runtime cap, which leave shouldResetRuntime undefined.
-    //
-    // Evaluated only AFTER the inactivity decision: an idle sandbox must pause
-    // (above), never cycle — the post-resume bridge reconnect refreshes
-    // last_activity, so cycling an idle sandbox would keep it alive (and
-    // billable) indefinitely. Also skipped while a message is executing so an
-    // active run isn't frozen mid-stream; the next alarm retries.
-    // Fail-closed on the processing check: only cycle when we can positively
-    // confirm no message is executing. An absent/failed callback must NOT be
-    // read as "idle" — that would let cycling freeze an active run.
-    if (
-      this.provider.shouldResetRuntime &&
-      sandbox.modal_object_id &&
-      this.callbacks.getIsProcessing?.() === false
-    ) {
-      const { shouldReset } = await this.provider.shouldResetRuntime({
-        providerObjectId: sandbox.modal_object_id,
-        startedAtMs: sandbox.created_at,
-        nowMs: now,
-      });
-      if (shouldReset) {
-        this.log.info("Runtime cap reset", {
-          event: "sandbox.runtime_cap_reset",
-          provider_object_id: sandbox.modal_object_id,
-          elapsed_ms: now - sandbox.created_at,
+        this.broadcaster.broadcast({
+          type: "sandbox_warning",
+          message: this.usesProviderManagedStop()
+            ? "Sandbox stopped due to inactivity"
+            : "Sandbox stopped due to inactivity, snapshot saved",
         });
-        try {
-          // Pause then resume: resume() only resets the counter from a paused
-          // state, and re-broadcasts tunnel/code-server state + resets created_at.
-          await this.pauseOrStopProviderSandbox("runtime_cap_reset");
-          await this.resumeSandbox(sandbox.modal_object_id);
-        } catch (error) {
-          // Best-effort: log and let the next alarm retry. If we pass the real
-          // cap, the user's next message gets a fresh-spawn fallback.
-          this.log.warn("Runtime cap reset failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        // Fall through to alarm scheduling: the chain must continue even if the
-        // bridge fails to reconnect after the cycle.
-      }
-    }
+        return;
 
-    switch (inactivityDecision.action) {
       case "extend":
         this.log.info("Inactivity extended", {
           connected_clients: connectedClients,
@@ -1367,46 +1279,10 @@ export class SandboxLifecycleManager {
   }
 
   /**
-   * Update last activity timestamp, and let the provider refresh sandbox TTLs.
-   *
-   * Synchronous by design: callers sit on hot event paths (every sandbox event,
-   * prompt dispatch, WS connect), so only the storage write happens inline. The
-   * optional provider TTL refresh is best-effort and runs detached — tied to the
-   * DO request via callbacks.waitUntil so the runtime won't GC it mid-flight —
-   * and never blocks message processing. Providers without onUserActivity
-   * (Modal, Daytona) pay nothing beyond the method-presence check.
+   * Update last activity timestamp.
    */
   updateLastActivity(timestamp: number): void {
     this.storage.updateSandboxLastActivity(timestamp);
-
-    if (!this.provider.onUserActivity) {
-      return;
-    }
-    // refreshProviderActivity never rejects, so detaching is safe even when no
-    // waitUntil callback is wired (tests, non-DO contexts).
-    const refresh = this.refreshProviderActivity();
-    this.callbacks.waitUntil?.(refresh);
-  }
-
-  /** Best-effort provider TTL refresh; swallows all errors. */
-  private async refreshProviderActivity(): Promise<void> {
-    const sandbox = this.storage.getSandbox();
-    const session = this.storage.getSession();
-    if (!sandbox?.modal_object_id || !session) {
-      return;
-    }
-    try {
-      await this.provider.onUserActivity!({
-        providerObjectId: sandbox.modal_object_id,
-        sessionId: session.session_name || session.id,
-      });
-    } catch (error) {
-      // Best-effort: a transient TTL-refresh failure must not fail the user's
-      // message. The provider throttles + logs internally.
-      this.log.warn("Provider onUserActivity failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   /**

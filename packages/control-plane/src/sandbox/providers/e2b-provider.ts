@@ -1,10 +1,12 @@
 /**
  * E2B sandbox provider — calls the E2B REST API directly.
  *
- * Pause/resume map to E2B pause/connect; per-session env is delivered via an
- * envd file write because the template's start command runs at build time. TTL
- * is kept alive from user activity, with optional runtime-cap cycling for plans
- * that impose a continuous-runtime limit.
+ * Stop is a resumable pause (like Daytona's stop), so the shared lifecycle
+ * manager's persistent-resume path drives idle-pause and resume with no
+ * E2B-specific plumbing. Sandboxes are created with auto-pause + auto-resume so
+ * a lapsed TTL pauses (recoverable) rather than kills, and inbound activity
+ * wakes it. Per-session env is delivered via an envd file write because the
+ * template's start command runs at build time.
  */
 
 import type { SandboxSettings } from "@open-inspect/shared";
@@ -29,21 +31,21 @@ import {
 
 const log = createLogger("e2b-provider");
 
-// Defaults assume a PAID E2B plan (long runtime limits): the system-wide
-// sandbox TTL and runtime-cap cycling disabled. Hobby (~1h TTL + continuous-
-// runtime caps the API cannot report) must override both via env:
-// E2B_SANDBOX_TIMEOUT_SECONDS=3300, E2B_RUNTIME_CAP_SECONDS=3300.
+/** Sandbox TTL default. Hobby plans (~1h cap) should lower this via config. */
 export const DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS = DEFAULT_SANDBOX_TIMEOUT_SECONDS;
-export const DEFAULT_E2B_RUNTIME_CAP_SECONDS = 0;
-const MAX_ACTIVITY_REFRESH_INTERVAL_MS = 300_000;
-/** E2B caps a single TTL refresh/`timeout` at one hour. */
-const E2B_MAX_TTL_SECONDS = 3600;
+/** Default to a recoverable stop: pause on timeout instead of kill. */
+export const DEFAULT_E2B_AUTO_PAUSE = true;
+/** Default to waking a paused sandbox on inbound activity. */
+export const DEFAULT_E2B_AUTO_RESUME = true;
 
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;
   codeServerPasswordSecret: string;
   sandboxTimeoutSeconds: number;
-  runtimeCapSeconds: number;
+  /** Pause (not kill) when the sandbox TTL expires, so it stays resumable. */
+  autoPause: boolean;
+  /** Wake a paused sandbox on inbound activity (only meaningful with autoPause). */
+  autoResume: boolean;
 }
 
 export class E2BSandboxProvider implements SandboxProvider {
@@ -52,21 +54,10 @@ export class E2BSandboxProvider implements SandboxProvider {
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSnapshots: false,
     supportsRestore: false,
+    // Stop is a resumable pause; the manager treats it as provider-managed state.
     supportsPersistentResume: true,
     supportsExplicitStop: true,
   };
-
-  private readonly lastActivityRefreshMs = new Map<string, number>();
-  /**
-   * Effective TTL (seconds) each sandbox was created/resumed with, keyed by
-   * provider object id. Activity refreshes must reuse this — not the provider
-   * default — so a child sandbox created with a shorter timeout isn't silently
-   * extended to the default on the next keepalive. Lost on DO eviction, where
-   * we fall back to the provider default (no worse than before).
-   */
-  private readonly effectiveTimeoutSeconds = new Map<string, number>();
-  /** Provider object ids with a TTL refresh in flight, to coalesce concurrent activity. */
-  private readonly refreshInFlight = new Set<string>();
 
   constructor(
     private readonly client: E2BRestClient,
@@ -86,13 +77,12 @@ export class E2BSandboxProvider implements SandboxProvider {
         codeServerPassword,
       });
       const metadata = this.buildMetadata(config);
-      const effectiveTimeoutSeconds =
-        config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
       const sandbox = await this.client.createSandbox({
         templateID: this.client.config.templateId,
         metadata,
-        timeout: effectiveTimeoutSeconds,
-        autoPause: false,
+        timeout: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
+        autoPause: this.providerConfig.autoPause,
+        autoResume: this.providerConfig.autoResume,
       });
 
       try {
@@ -117,8 +107,6 @@ export class E2BSandboxProvider implements SandboxProvider {
         throw error;
       }
 
-      this.effectiveTimeoutSeconds.set(sandbox.sandboxID, effectiveTimeoutSeconds);
-
       const { codeServerUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
         config.codeServerEnabled,
@@ -137,23 +125,6 @@ export class E2BSandboxProvider implements SandboxProvider {
       };
     } catch (error) {
       throw this.classifyError("Failed to create E2B sandbox", error, "create");
-    }
-  }
-
-  async pauseSandbox(config: StopConfig): Promise<StopResult> {
-    this.clearSandboxState(config.providerObjectId);
-    try {
-      try {
-        await this.client.pauseSandbox(config.providerObjectId);
-      } catch (error) {
-        if (error instanceof E2BNotFoundError || error instanceof E2BConflictError) {
-          return { success: true };
-        }
-        throw error;
-      }
-      return { success: true };
-    } catch (error) {
-      throw this.classifyError("Failed to pause E2B sandbox", error, "pause");
     }
   }
 
@@ -186,8 +157,6 @@ export class E2BSandboxProvider implements SandboxProvider {
         };
       }
 
-      this.effectiveTimeoutSeconds.set(config.providerObjectId, timeoutSeconds);
-
       const codeServerPassword = config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
@@ -213,82 +182,26 @@ export class E2BSandboxProvider implements SandboxProvider {
     }
   }
 
+  /**
+   * Stop is a resumable PAUSE — the sandbox keeps its filesystem + memory and is
+   * resumed in place by resumeSandbox. The manager routes idle/heartbeat stops
+   * here (supportsPersistentResume), so E2B needs no bespoke pause hook.
+   */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    this.clearSandboxState(config.providerObjectId);
     try {
       try {
-        await this.client.killSandbox(config.providerObjectId);
+        await this.client.pauseSandbox(config.providerObjectId);
       } catch (error) {
-        if (error instanceof E2BNotFoundError) return { success: true };
+        // Already gone or already paused — nothing to do.
+        if (error instanceof E2BNotFoundError || error instanceof E2BConflictError) {
+          return { success: true };
+        }
         throw error;
       }
       return { success: true };
     } catch (error) {
-      throw this.classifyError("Failed to stop E2B sandbox", error, "kill");
+      throw this.classifyError("Failed to stop (pause) E2B sandbox", error, "stop");
     }
-  }
-
-  async onUserActivity(config: { providerObjectId: string; sessionId: string }): Promise<void> {
-    const nowMs = Date.now();
-    // Reuse the TTL this sandbox was created/resumed with — not the provider
-    // default — so a short-lived (e.g. agent-child) sandbox isn't extended.
-    const effectiveTimeoutSeconds =
-      this.effectiveTimeoutSeconds.get(config.providerObjectId) ??
-      this.providerConfig.sandboxTimeoutSeconds;
-    const throttleMs = Math.min(
-      (effectiveTimeoutSeconds * 1000) / 4,
-      MAX_ACTIVITY_REFRESH_INTERVAL_MS
-    );
-    const lastMs = this.lastActivityRefreshMs.get(config.providerObjectId) ?? 0;
-    if (nowMs - lastMs < throttleMs) return;
-    // Coalesce concurrent activity: a second call that arrives before the first
-    // refresh resolves would otherwise fire a duplicate (both saw the stale
-    // lastActivityRefreshMs). Skip while one is already in flight.
-    if (this.refreshInFlight.has(config.providerObjectId)) return;
-    this.refreshInFlight.add(config.providerObjectId);
-
-    try {
-      if (effectiveTimeoutSeconds > E2B_MAX_TTL_SECONDS) {
-        await this.client.setSandboxTimeout(config.providerObjectId, effectiveTimeoutSeconds);
-      } else {
-        await this.client.refreshKeepalive(
-          config.providerObjectId,
-          Math.min(effectiveTimeoutSeconds, E2B_MAX_TTL_SECONDS)
-        );
-      }
-      this.lastActivityRefreshMs.set(config.providerObjectId, nowMs);
-    } catch (error) {
-      log.warn("e2b.on_user_activity_failed", {
-        provider_object_id: config.providerObjectId,
-        session_id: config.sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      this.refreshInFlight.delete(config.providerObjectId);
-    }
-  }
-
-  async shouldResetRuntime(config: {
-    providerObjectId: string;
-    startedAtMs: number;
-    nowMs: number;
-  }): Promise<{ shouldReset: boolean }> {
-    // The continuous-runtime cap is an E2B *plan* limit (~1h on Hobby), not an
-    // API constant, and the API exposes no way to query the plan — so it's
-    // operator-configured. 0 disables cycling for plans without a meaningful
-    // cap (e.g. Pro's 24h), where a 55-min pause/resume would be pure overhead.
-    if (this.providerConfig.runtimeCapSeconds <= 0) {
-      return { shouldReset: false };
-    }
-    const elapsedSeconds = (config.nowMs - config.startedAtMs) / 1000;
-    return { shouldReset: elapsedSeconds >= this.providerConfig.runtimeCapSeconds };
-  }
-
-  /** Drop per-sandbox in-memory state once a sandbox is paused or stopped. */
-  private clearSandboxState(providerObjectId: string): void {
-    this.lastActivityRefreshMs.delete(providerObjectId);
-    this.effectiveTimeoutSeconds.delete(providerObjectId);
-    this.refreshInFlight.delete(providerObjectId);
   }
 
   private buildMetadata(config: CreateSandboxConfig): Record<string, string> {
@@ -335,7 +248,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   private classifyError(
     message: string,
     error: unknown,
-    operation: "create" | "resume" | "pause" | "kill"
+    operation: "create" | "resume" | "stop"
   ): SandboxProviderError {
     if (error instanceof E2BApiError) {
       if (error.status === 429) {

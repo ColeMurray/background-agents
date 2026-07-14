@@ -14,7 +14,8 @@ const providerConfig: E2BProviderConfig = {
   scmProvider: "github",
   codeServerPasswordSecret: "secret",
   sandboxTimeoutSeconds: 1800,
-  runtimeCapSeconds: 1800,
+  autoPause: true,
+  autoResume: true,
 };
 
 function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
@@ -39,7 +40,6 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
     ),
     killSandbox: vi.fn(async () => {}),
     setSandboxTimeout: vi.fn(async () => {}),
-    refreshKeepalive: vi.fn(async () => {}),
     getHostnameForPort: vi.fn((id: string, port: number) => `https://${port}-${id}.e2b.app`),
     ...overrides,
   } as unknown as E2BRestClient;
@@ -134,59 +134,33 @@ describe("E2BSandboxProvider", () => {
     expect(result.shouldSpawnFresh).toBe(true);
   });
 
-  it("pauseSandbox treats 404/409 as success", async () => {
-    const client404 = mockClient({
-      pauseSandbox: vi.fn(async () => {
-        throw new E2BNotFoundError("gone");
-      }),
-    });
-    expect(
-      (
-        await new E2BSandboxProvider(client404, providerConfig).pauseSandbox({
-          providerObjectId: "x",
-          sessionId: "s",
-          reason: "idle",
-        })
-      ).success
-    ).toBe(true);
-
-    const client409 = mockClient({
-      pauseSandbox: vi.fn(async () => {
-        throw new E2BConflictError("already paused");
-      }),
-    });
-    expect(
-      (
-        await new E2BSandboxProvider(client409, providerConfig).pauseSandbox({
-          providerObjectId: "x",
-          sessionId: "s",
-          reason: "idle",
-        })
-      ).success
-    ).toBe(true);
-  });
-
-  it("onUserActivity throttles refresh calls", async () => {
+  it("stopSandbox pauses (resumable), not kills, and treats 404/409 as success", async () => {
     const client = mockClient();
-    const provider = new E2BSandboxProvider(client, providerConfig);
-    await provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
-    await provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
-    expect(client.refreshKeepalive).toHaveBeenCalledTimes(1);
-  });
-
-  it("onUserActivity coalesces concurrent calls into one refresh", async () => {
-    // Both calls see the stale lastActivityRefreshMs; the in-flight guard must
-    // stop the second from firing a duplicate refresh before the first resolves.
-    let release: () => void = () => {};
-    const client = mockClient({
-      refreshKeepalive: vi.fn(() => new Promise<void>((r) => (release = r))),
+    const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
+      providerObjectId: "x",
+      sessionId: "s",
+      reason: "idle",
     });
-    const provider = new E2BSandboxProvider(client, providerConfig);
-    const a = provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
-    const b = provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
-    release();
-    await Promise.all([a, b]);
-    expect(client.refreshKeepalive).toHaveBeenCalledTimes(1);
+    expect(res.success).toBe(true);
+    expect(client.pauseSandbox).toHaveBeenCalledWith("x");
+    expect(client.killSandbox).not.toHaveBeenCalled();
+
+    for (const err of [new E2BNotFoundError("gone"), new E2BConflictError("already paused")]) {
+      const c = mockClient({
+        pauseSandbox: vi.fn(async () => {
+          throw err;
+        }),
+      });
+      expect(
+        (
+          await new E2BSandboxProvider(c, providerConfig).stopSandbox({
+            providerObjectId: "x",
+            sessionId: "s",
+            reason: "idle",
+          })
+        ).success
+      ).toBe(true);
+    }
   });
 
   it("honors config.timeoutSeconds on create and resume (child sandboxes)", async () => {
@@ -258,18 +232,12 @@ describe("E2BSandboxProvider", () => {
     expect(result.codeServerUrl).toBe("https://8080-e2b-id.dedicated.example");
   });
 
-  it("shouldResetRuntime is disabled when runtimeCapSeconds is 0 (paid plans)", async () => {
+  it("creates with autoPause + autoResume so a lapsed TTL is recoverable", async () => {
     const client = mockClient();
-    const provider = new E2BSandboxProvider(client, {
-      ...providerConfig,
-      runtimeCapSeconds: 0,
-    });
-    const result = await provider.shouldResetRuntime({
-      providerObjectId: "e2b-id",
-      startedAtMs: 0,
-      nowMs: 100 * 60 * 60 * 1000, // far past any cap
-    });
-    expect(result.shouldReset).toBe(false);
+    await new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig);
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ autoPause: true, autoResume: true })
+    );
   });
 
   it("429 maps to a TRANSIENT SandboxProviderError (not counted toward the circuit breaker)", async () => {
@@ -322,15 +290,21 @@ describe("E2BSandboxProvider", () => {
     expect(result.codeServerUrl).toBe("https://9999-e2b-id.e2b.app");
   });
 
-  it("onUserActivity refreshes with the sandbox's effective timeout, not the provider default", async () => {
-    const client = mockClient();
+  it("resumeSandbox running extends the TTL via setSandboxTimeout", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () => ({
+        sandboxID: "e2b-id",
+        templateID: "tmpl",
+        state: "running",
+      })),
+    });
     const provider = new E2BSandboxProvider(client, providerConfig);
-    // Child sandbox created with a longer TTL (> E2B's 1h single-refresh cap).
-    await provider.createSandbox({ ...baseCreateConfig, timeoutSeconds: 7200 });
-
-    await provider.onUserActivity({ providerObjectId: "e2b-id", sessionId: "sess" });
-    // Uses setSandboxTimeout(7200) — the effective TTL — not refreshKeepalive at the 1800 default.
+    await provider.resumeSandbox({
+      providerObjectId: "e2b-id",
+      sessionId: "sess",
+      sandboxId: "sandbox-logical",
+      timeoutSeconds: 7200,
+    });
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("e2b-id", 7200);
-    expect(client.refreshKeepalive).not.toHaveBeenCalled();
   });
 });

@@ -485,10 +485,16 @@ variable "e2b_sandbox_timeout_seconds" {
   default     = 7200
 }
 
-variable "e2b_runtime_cap_seconds" {
-  description = "Continuous-runtime cap in seconds before a transparent pause/resume reset. The cap is an E2B plan limit (~1h on Hobby) the API cannot report, so set it per plan. Default 0 = cycling disabled (paid plans). Hobby must set 3300 (just under the 1h cap)."
-  type        = number
-  default     = 0
+variable "e2b_auto_pause" {
+  description = "Pause (not kill) the sandbox when its TTL expires, so it stays resumable. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "e2b_auto_resume" {
+  description = "Wake a paused sandbox on inbound activity. Only meaningful with e2b_auto_pause. Default true."
+  type        = bool
+  default     = true
 }
 
 variable "nextauth_secret" {

@@ -7,7 +7,8 @@ import type { SandboxProvider } from "./provider";
 import { createDaytonaProvider, type DaytonaSandboxProvider } from "./providers/daytona-provider";
 import {
   createE2BProvider,
-  DEFAULT_E2B_RUNTIME_CAP_SECONDS,
+  DEFAULT_E2B_AUTO_PAUSE,
+  DEFAULT_E2B_AUTO_RESUME,
   DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS,
   type E2BSandboxProvider,
 } from "./providers/e2b-provider";
@@ -138,11 +139,8 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
       env.E2B_SANDBOX_TIMEOUT_SECONDS,
       DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS
     ),
-    runtimeCapSeconds: parseNumericEnv(
-      "E2B_RUNTIME_CAP_SECONDS",
-      env.E2B_RUNTIME_CAP_SECONDS,
-      DEFAULT_E2B_RUNTIME_CAP_SECONDS
-    ),
+    autoPause: parseBooleanEnv(env.E2B_AUTO_PAUSE, DEFAULT_E2B_AUTO_PAUSE),
+    autoResume: parseBooleanEnv(env.E2B_AUTO_RESUME, DEFAULT_E2B_AUTO_RESUME),
   });
 }
 
@@ -185,4 +183,10 @@ function parseNumericEnv(name: string, value: string | undefined, defaultValue: 
     throw new Error(`${name} must be a valid number`);
   }
   return parsed;
+}
+
+function parseBooleanEnv(value: string | undefined, defaultValue: boolean): boolean {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return defaultValue;
+  return raw !== "false" && raw !== "0";
 }

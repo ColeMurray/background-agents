@@ -20,7 +20,6 @@ const TIMEOUT_CONNECT_MS = 60_000;
 const TIMEOUT_PAUSE_MS = 30_000;
 const TIMEOUT_KILL_MS = 30_000;
 const TIMEOUT_GET_MS = 15_000;
-const TIMEOUT_REFRESH_MS = 15_000;
 const TIMEOUT_SETTTL_MS = 15_000;
 const TIMEOUT_WRITE_FILE_MS = 30_000;
 
@@ -58,7 +57,10 @@ export interface E2BCreateSandboxParams {
   envVars?: Record<string, string>;
   metadata?: Record<string, string>;
   timeout?: number;
+  /** Pause (not kill) the sandbox when its timeout expires. */
   autoPause?: boolean;
+  /** Wake a paused sandbox on inbound activity (only meaningful with autoPause). */
+  autoResume?: boolean;
 }
 
 export class E2BNotFoundError extends Error {
@@ -105,6 +107,7 @@ export class E2BRestClient {
         metadata: params.metadata,
         timeout: params.timeout,
         autoPause: params.autoPause ?? false,
+        autoResume: { enabled: params.autoResume ?? false },
       });
     } finally {
       log.info("e2b.create_sandbox", {
@@ -197,12 +200,6 @@ export class E2BRestClient {
   async setSandboxTimeout(id: string, timeoutSeconds: number): Promise<void> {
     await this.request<void>("POST", `/sandboxes/${id}/timeout`, TIMEOUT_SETTTL_MS, {
       timeout: timeoutSeconds,
-    });
-  }
-
-  async refreshKeepalive(id: string, durationSeconds: number): Promise<void> {
-    await this.request<void>("POST", `/sandboxes/${id}/refreshes`, TIMEOUT_REFRESH_MS, {
-      duration: durationSeconds,
     });
   }
 

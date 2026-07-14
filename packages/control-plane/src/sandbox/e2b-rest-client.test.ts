@@ -67,10 +67,25 @@ describe("E2BRestClient", () => {
       metadata: { k: "v" },
       timeout: 3300,
       autoPause: false,
+      autoResume: { enabled: false },
     });
   });
 
-  it("connect, refresh, timeout endpoints", async () => {
+  it("create body carries autoPause + autoResume when set", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-new", templateID: "tmpl-123" }));
+    await client.createSandbox({
+      templateID: "tmpl-123",
+      timeout: 3300,
+      autoPause: true,
+      autoResume: true,
+    });
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.autoPause).toBe(true);
+    expect(body.autoResume).toEqual({ enabled: true });
+  });
+
+  it("connect + timeout endpoints", async () => {
     const client = new E2BRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(
       jsonResponse({ sandboxID: "sb-1", templateID: "tmpl", state: "running" })
@@ -79,11 +94,8 @@ describe("E2BRestClient", () => {
     expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ timeout: 3300 });
 
     fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
-    await client.refreshKeepalive("sb-1", 1800);
-    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ duration: 1800 });
-
     await client.setSandboxTimeout("sb-1", 7200);
-    expect(JSON.parse(fetchSpy.mock.calls[2][1].body)).toEqual({ timeout: 7200 });
+    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ timeout: 7200 });
   });
 
   it("classifies 404/409/429 errors", async () => {
