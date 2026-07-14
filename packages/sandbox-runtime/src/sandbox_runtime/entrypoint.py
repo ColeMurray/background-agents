@@ -689,7 +689,6 @@ class SandboxSupervisor:
 
         # Legacy tool (inspect-plugin.js → create-pull-request.js)
         legacy_tool = Path("/app/sandbox_runtime/plugins/inspect-plugin.js")
-        repository_target_helper = Path("/app/sandbox_runtime/plugins/repository-target.js")
         # New tools directory
         tools_dir = Path("/app/sandbox_runtime/tools")
 
@@ -701,8 +700,6 @@ class SandboxSupervisor:
 
         if legacy_tool.exists() and self.has_repository:
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
-            if repository_target_helper.exists():
-                shutil.copy(repository_target_helper, tool_dest / repository_target_helper.name)
 
         # Copy all .js files from tools/ — these must export tool() for OpenCode.
         # Tools listed in AGENT_TOOLS_GATED_ON_ENV are skipped unless their gate

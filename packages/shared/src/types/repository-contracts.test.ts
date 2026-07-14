@@ -5,6 +5,7 @@ import {
   MAX_AUTOMATION_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
+  decodeRepositoryPathSegments,
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
@@ -26,6 +27,21 @@ describe("repository full names", () => {
     expect(encodeRepositoryPathSegments({ repoOwner: "group/subgroup", repoName: "web app" })).toBe(
       "group%2Fsubgroup/web%20app"
     );
+  });
+
+  it("decodes a canonical repository API path", () => {
+    expect(decodeRepositoryPathSegments("group%2Fsubgroup", "web%20app")).toEqual({
+      repoOwner: "group/subgroup",
+      repoName: "web app",
+    });
+  });
+
+  it.each([
+    ["group", "web%2Fapi"],
+    ["group%2F%2Fsubgroup", "web"],
+    ["group%ZZsubgroup", "web"],
+  ])("rejects a non-canonical repository API path (%s/%s)", (owner, name) => {
+    expect(decodeRepositoryPathSegments(owner, name)).toBeNull();
   });
 });
 

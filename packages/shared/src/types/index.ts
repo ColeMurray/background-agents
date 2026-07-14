@@ -31,6 +31,7 @@ export {
   repositoriesInputSchema,
   sessionRepositoriesInputSchema,
   RepositoryPairValidationError,
+  decodeRepositoryPathSegments,
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,

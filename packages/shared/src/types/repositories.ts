@@ -171,6 +171,24 @@ export function parseRepositoryFullName(fullName: string): RepositoryPair | null
   return { repoOwner, repoName };
 }
 
+/** Decode and validate the two path segments used by repository APIs. */
+export function decodeRepositoryPathSegments(
+  encodedOwner: string,
+  encodedName: string
+): RepositoryPair | null {
+  try {
+    const repoOwner = decodeURIComponent(encodedOwner);
+    const repoName = decodeURIComponent(encodedName);
+    const repository = parseRepositoryFullName(formatRepositoryFullName({ repoOwner, repoName }));
+
+    return repository?.repoOwner === repoOwner && repository.repoName === repoName
+      ? repository
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export class RepositoryPairValidationError extends Error {
   constructor(message: string) {
     super(message);

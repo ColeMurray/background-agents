@@ -9,7 +9,6 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
-import { resolveRepositoryTarget } from "./repository-target.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +68,29 @@ function getRepositories() {
     console.log("[create-pull-request] Failed to read repo manifest:", e.message);
     return [];
   }
+}
+
+/** Resolve an owner/name argument, preserving nested owners and manifest casing. */
+export function resolveRepositoryTarget(repo, repositories) {
+  const requested = String(repo || "").trim();
+
+  if (repositories.length > 0) {
+    const normalized = requested.toLowerCase();
+    return (
+      repositories.find(
+        (repository) => `${repository.owner}/${repository.name}`.toLowerCase() === normalized
+      ) || null
+    );
+  }
+
+  const separator = requested.lastIndexOf("/");
+  if (separator <= 0 || separator === requested.length - 1) {
+    return null;
+  }
+
+  const owner = requested.slice(0, separator);
+  const name = requested.slice(separator + 1);
+  return owner.split("/").some((segment) => !segment) ? null : { owner, name };
 }
 
 async function getCurrentBranch(repoPath) {
