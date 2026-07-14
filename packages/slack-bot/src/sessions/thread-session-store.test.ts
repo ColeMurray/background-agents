@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env, ThreadSession } from "../types";
 import {
+  advanceLastPromptTs,
   buildThreadSession,
   clearThreadSession,
   lookupThreadSession,
@@ -162,6 +163,58 @@ describe("thread session store", () => {
     await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(
       withLastPrompt
     );
+  });
+
+  describe("advanceLastPromptTs", () => {
+    const stored: ThreadSession = {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "openai/gpt-5.4",
+      createdAt: 123,
+      lastPromptTs: "222.333",
+    };
+
+    it("advances the checkpoint when the new ts is newer", async () => {
+      mocks.get.mockResolvedValue(stored);
+
+      await advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
+
+      expect(mocks.put).toHaveBeenCalledWith(
+        "thread:C123:111.222",
+        JSON.stringify({ ...stored, lastPromptTs: "333.444" }),
+        { expirationTtl: 7 * 24 * 60 * 60 }
+      );
+    });
+
+    it("stamps mappings that have no checkpoint yet", async () => {
+      const { lastPromptTs: _legacy, ...legacy } = stored;
+      mocks.get.mockResolvedValue(legacy);
+
+      await advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
+
+      expect(mocks.put).toHaveBeenCalledWith(
+        "thread:C123:111.222",
+        JSON.stringify({ ...legacy, lastPromptTs: "333.444" }),
+        { expirationTtl: 7 * 24 * 60 * 60 }
+      );
+    });
+
+    it("does not move the checkpoint backwards on out-of-order completion", async () => {
+      mocks.get.mockResolvedValue({ ...stored, lastPromptTs: "999.999" });
+
+      await advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
+
+      expect(mocks.put).not.toHaveBeenCalled();
+    });
+
+    it("does not resurrect a cleared mapping", async () => {
+      mocks.get.mockResolvedValue(null);
+
+      await advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
+
+      expect(mocks.put).not.toHaveBeenCalled();
+    });
   });
 
   it("handles KV write and delete failures", async () => {

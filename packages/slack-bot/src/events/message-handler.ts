@@ -22,9 +22,9 @@ import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { sendPrompt } from "../sessions/control-plane-client";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import {
+  advanceLastPromptTs,
   clearThreadSession,
   lookupThreadSession,
-  storeThreadSession,
 } from "../sessions/thread-session-store";
 import { buildTargetClarificationBlocks } from "../target-clarification";
 import { targetLabel } from "../targets";
@@ -41,6 +41,14 @@ interface ThreadHistoryOptions {
   includeBotMessages: boolean;
 }
 
+/**
+ * Collect the last THREAD_HISTORY_MESSAGE_LIMIT relevant thread messages as
+ * "[name]: text" lines. getThreadMessages paginates the full window, so the
+ * newest messages survive the cap even in long threads. Returns [] when the
+ * window holds no relevant messages and undefined when Slack could not be
+ * queried — callers use the distinction to decide whether the window was
+ * actually considered.
+ */
 async function fetchThreadHistory(
   env: Env,
   channel: string,
@@ -49,32 +57,26 @@ async function fetchThreadHistory(
 ): Promise<string[] | undefined> {
   const { excludeTs, sinceTs, includeBotMessages } = options;
   try {
-    const threadResult = await getThreadMessages(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      threadTs,
-      THREAD_HISTORY_MESSAGE_LIMIT,
-      sinceTs
-    );
+    const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, sinceTs);
     if (!threadResult.ok || !threadResult.messages) return undefined;
-    const filtered = threadResult.messages.filter((m) => {
-      if (m.ts === excludeTs) return false;
-      if (!includeBotMessages && m.bot_id) return false;
-      // conversations.replies can still return the parent message when
-      // `oldest` is set, so re-check the boundary here.
-      if (sinceTs && parseFloat(m.ts) <= parseFloat(sinceTs)) return false;
-      return true;
-    });
-    if (filtered.length === 0) return undefined;
-    const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
-    const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-    return filtered
-      .map((m) => {
-        if (m.bot_id) return `[Bot]: ${m.text}`;
-        const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
-        return `[${name}]: ${m.text}`;
+    const relevant = threadResult.messages
+      .filter((m) => {
+        if (m.ts === excludeTs) return false;
+        if (!includeBotMessages && m.bot_id) return false;
+        // conversations.replies can still return the parent message when
+        // `oldest` is set, so re-check the boundary here.
+        if (sinceTs && parseFloat(m.ts) <= parseFloat(sinceTs)) return false;
+        return true;
       })
       .slice(-THREAD_HISTORY_MESSAGE_LIMIT);
+    if (relevant.length === 0) return [];
+    const uniqueUserIds = [...new Set(relevant.map((m) => m.user).filter(Boolean))] as string[];
+    const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
+    return relevant.map((m) => {
+      if (m.bot_id) return `[Bot]: ${m.text}`;
+      const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+      return `[${name}]: ${m.text}`;
+    });
   } catch {
     // Thread context is best effort.
     return undefined;
@@ -151,10 +153,14 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         traceId
       );
       if (promptResult.ok) {
-        await storeThreadSession(env, channel, threadTs, {
-          ...existingSession,
-          lastPromptTs: ts,
-        });
+        // Only advance the checkpoint past messages we know were considered.
+        // When the interim fetch failed, keeping the old watermark lets the
+        // next follow-up retry the window; at worst it re-includes this
+        // message's text as interim context.
+        const interimFetchFailed = Boolean(existingSession.lastPromptTs) && !interimMessages;
+        if (!interimFetchFailed) {
+          await advanceLastPromptTs(env, channel, threadTs, ts);
+        }
         const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
         if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
           log.warn("slack.reaction.add", {

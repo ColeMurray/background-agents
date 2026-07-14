@@ -57,8 +57,9 @@ export async function handleTargetSelection(
     messageText: message,
     userId,
     // The original message ts isn't persisted with the pending request, so
-    // the "Working on..." ack marks where interim thread context resumes.
-    messageTs: ackTs,
+    // the "Working on..." ack — or the interaction message when the ack post
+    // fails — marks where interim thread context resumes.
+    messageTs: ackTs ?? messageTs,
     previousMessages,
     channelName,
     channelDescription,

@@ -290,19 +290,42 @@ export interface SlackThreadMessage {
   bot_id?: string;
 }
 
-export function getThreadMessages(
+/**
+ * Fetch a thread's replies via `conversations.replies`, following
+ * `response_metadata.next_cursor` pagination so long threads are collected in
+ * full rather than truncated to Slack's first (oldest) page. Pass `oldest` to
+ * restrict the window to messages posted after that ts. Messages are returned
+ * oldest-first. Returns the SlackEnvelope failure arm on any page's error.
+ */
+export async function getThreadMessages(
   token: string,
   channelId: string,
   threadTs: string,
-  limit = 10,
   oldest?: string
 ): Promise<SlackEnvelope<{ messages: SlackThreadMessage[] }>> {
-  return slackGet(token, "conversations.replies", {
-    channel: channelId,
-    ts: threadTs,
-    limit: String(limit),
-    ...(oldest ? { oldest } : {}),
-  });
+  const messages: SlackThreadMessage[] = [];
+  let cursor: string | undefined;
+  // Bound the loop defensively: 200/page × 25 pages caps at 5k messages.
+  for (let page = 0; page < 25; page++) {
+    const query: Record<string, string> = {
+      channel: channelId,
+      ts: threadTs,
+      limit: "200",
+    };
+    if (oldest) query.oldest = oldest;
+    if (cursor) query.cursor = cursor;
+
+    const res = await slackGet<{
+      messages: SlackThreadMessage[];
+      response_metadata?: { next_cursor?: string };
+    }>(token, "conversations.replies", query);
+    if (!res.ok) return res;
+
+    messages.push(...(res.messages ?? []));
+    cursor = res.response_metadata?.next_cursor || undefined;
+    if (!cursor) break;
+  }
+  return { ok: true, messages };
 }
 
 export interface SlackUser {
