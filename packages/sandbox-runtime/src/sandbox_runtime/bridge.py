@@ -1456,9 +1456,21 @@ class AgentBridge:
                 f"(no data received). Total elapsed: {elapsed:.0f}s"
             )
 
-        except httpx.ReadError as e:
-            self.log.error("bridge.sse_read_error", exc=e)
-            raise SSEConnectionError(f"SSE read error: {e}")
+        except httpx.TransportError as e:
+            self.log.error("bridge.sse_transport_error", exc=e)
+            async for final_event in self._fetch_final_message_state(
+                message_id,
+                opencode_message_id,
+                cumulative_text,
+                allowed_assistant_msg_ids,
+                user_message_ids=user_message_ids,
+                compaction_occurred=compaction_occurred,
+            ):
+                yield final_event
+            raise SSEConnectionError(
+                "OpenCode event stream disconnected before completion; "
+                "partial output was preserved when available."
+            ) from e
 
     async def _fetch_final_message_state(
         self,
