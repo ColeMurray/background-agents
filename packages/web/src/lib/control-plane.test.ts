@@ -33,6 +33,7 @@ describe("controlPlaneFetch correlation", () => {
       new Headers({
         "x-trace-id": "trace-123",
         "x-request-id": "bff-hop-1",
+        "x-open-inspect-bff-request-id": "bffhop01",
       })
     );
 
@@ -51,6 +52,26 @@ describe("controlPlaneFetch correlation", () => {
     expect(forwardedHeaders.get("x-request-id")).toBeNull();
     expect(forwardedHeaders.get("Range")).toBe("bytes=0-5");
     expect(forwardedHeaders.get("Authorization")).toMatch(/^Bearer /);
+  });
+
+  it("merges tuple and Headers option headers without dropping values", async () => {
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({
+        "x-trace-id": "trace-123",
+        "x-open-inspect-bff-request-id": "bffhop01",
+      })
+    );
+
+    await controlPlaneFetch("/sessions", {
+      headers: new Headers({ Accept: "application/json" }),
+    });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const forwardedHeaders = new Headers(init?.headers);
+
+    expect(forwardedHeaders.get("Accept")).toBe("application/json");
+    expect(forwardedHeaders.get("Content-Type")).toBe("application/json");
+    expect(forwardedHeaders.get("x-trace-id")).toBe("trace-123");
   });
 
   it("generates a fresh trace id when the inbound one is invalid", async () => {

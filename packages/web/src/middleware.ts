@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   applyBffCorrelationHeaders,
   createBffRequestId,
+  INTERNAL_BFF_REQUEST_ID_HEADER,
   resolveTraceId,
 } from "@/lib/bff-correlation";
 
@@ -14,6 +15,7 @@ export function middleware(request: NextRequest) {
 
   const requestHeaders = new Headers(request.headers);
   applyBffCorrelationHeaders(requestHeaders, correlation);
+  requestHeaders.set(INTERNAL_BFF_REQUEST_ID_HEADER, correlation.requestId);
 
   const response = NextResponse.next({
     request: {

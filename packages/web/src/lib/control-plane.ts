@@ -125,12 +125,15 @@ export async function controlPlaneFetch(
 
   try {
     const headers = await getControlPlaneHeaders(correlation.traceId);
+    const mergedHeaders = new Headers(headers);
+    const optionHeaders = new Headers(options.headers);
+    optionHeaders.forEach((value, key) => {
+      mergedHeaders.set(key, value);
+    });
+
     const fetchOptions: RequestInit = {
       ...options,
-      headers: {
-        ...headers,
-        ...options.headers,
-      },
+      headers: mergedHeaders,
     };
 
     // On Cloudflare Workers, use the service binding to call the control plane

@@ -1,5 +1,6 @@
 export const TRACE_ID_HEADER = "x-trace-id";
 export const REQUEST_ID_HEADER = "x-request-id";
+export const INTERNAL_BFF_REQUEST_ID_HEADER = "x-open-inspect-bff-request-id";
 
 const TRACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
