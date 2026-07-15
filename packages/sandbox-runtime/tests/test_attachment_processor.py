@@ -5,7 +5,11 @@ from typing import Any
 
 import pytest
 
-from sandbox_runtime.attachment_processor import AttachmentProcessor
+from sandbox_runtime.attachment_processor import (
+    AttachmentProcessor,
+    HydratedPromptImage,
+    PromptImageAttachment,
+)
 
 
 class TestLogger:
@@ -30,23 +34,27 @@ def processor() -> AttachmentProcessor:
     )
 
 
-async def test_video_attachment_is_rejected_without_downloading(
+async def test_upload_is_hydrated_to_base64(
     processor: AttachmentProcessor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def fail_download(upload_id: str, max_bytes: int) -> bytes:
-        raise AssertionError("unsupported attachments must not be downloaded")
+    calls: list[str] = []
 
-    monkeypatch.setattr(processor, "_download_upload_bytes", fail_download)
+    async def download(upload_id: str) -> bytes:
+        calls.append(upload_id)
+        return b"ABC"
+
+    monkeypatch.setattr(processor, "_download_upload_bytes", download)
 
     result = await processor.process(
-        [{"type": "file", "name": "clip.mp4", "mimeType": "video/mp4", "uploadId": "up-1"}]
+        [{"name": "shot.png", "mimeType": "image/png", "uploadId": "up-1"}]
     )
 
-    assert result == []
+    assert result == [{"name": "shot.png", "mimeType": "image/png", "content": "QUJD"}]
+    assert calls == ["up-1"]
 
 
 async def test_invalid_upload_id_is_rejected(processor: AttachmentProcessor) -> None:
-    assert await processor._download_upload_bytes("../admin", processor.MAX_IMAGE_BYTES) is None
+    assert await processor._download_upload_bytes("../admin") is None
 
 
 async def test_processing_concurrency_is_bounded(
@@ -55,18 +63,25 @@ async def test_processing_concurrency_is_bounded(
     active = 0
     peak = 0
 
-    async def hydrate(attachment: dict[str, Any]) -> dict[str, Any]:
+    async def hydrate(attachment: PromptImageAttachment) -> HydratedPromptImage:
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
         await asyncio.sleep(0.01)
         active -= 1
-        return attachment
+        return {
+            "name": attachment["name"],
+            "mimeType": attachment["mimeType"],
+            "content": "QQ==",
+        }
 
     monkeypatch.setattr(processor, "_hydrate_image_upload", hydrate)
-    attachments = [
-        {"type": "image", "name": f"{index}.png", "content": "QQ=="} for index in range(6)
+    attachments: list[PromptImageAttachment] = [
+        {"name": f"{index}.png", "mimeType": "image/png", "uploadId": f"up-{index}"}
+        for index in range(6)
     ]
 
-    assert await processor.process(attachments) == attachments
+    result = await processor.process(attachments)
+    assert result is not None
+    assert len(result) == len(attachments)
     assert peak == processor.MAX_CONCURRENCY

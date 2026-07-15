@@ -42,8 +42,8 @@ function uploadRequest(body: unknown): Request {
 }
 
 const VALID_BODY = {
+  action: "record",
   uploadId: "up-1",
-  kind: "image",
   mimeType: "image/png",
   sizeBytes: 1024,
   objectKey: "sessions/sess-1/uploads/up-1",
@@ -61,8 +61,8 @@ describe("createUploadsHandler", () => {
 
   it.each([
     ["missing uploadId", { ...VALID_BODY, uploadId: "" }],
-    ["invalid kind", { ...VALID_BODY, kind: "pdf" }],
-    ["video kind", { ...VALID_BODY, kind: "video", mimeType: "video/mp4" }],
+    ["invalid action", { ...VALID_BODY, action: "invalid" }],
+    ["unsupported MIME type", { ...VALID_BODY, mimeType: "video/mp4" }],
     ["missing mimeType", { ...VALID_BODY, mimeType: "" }],
     ["non-positive size", { ...VALID_BODY, sizeBytes: 0 }],
     ["non-integer size", { ...VALID_BODY, sizeBytes: 1.5 }],
@@ -106,7 +106,6 @@ describe("createUploadsHandler", () => {
   it("prunes stale uploads before enforcing quota totals", async () => {
     const staleUpload: UploadRow = {
       id: "old-1",
-      kind: "image",
       mime_type: "image/png",
       size_bytes: 1024,
       object_key: "sessions/sess-1/uploads/old-1",
@@ -139,8 +138,7 @@ describe("createUploadsHandler", () => {
   it("records the upload and returns pruned stale object keys", async () => {
     const staleUpload: UploadRow = {
       id: "old-1",
-      kind: "video",
-      mime_type: "video/mp4",
+      mime_type: "image/jpeg",
       size_bytes: 5_000_000,
       object_key: "sessions/sess-1/uploads/old-1",
       message_id: null,

@@ -2,7 +2,7 @@
  * User-attached prompt images (chat composer attachments).
  *
  * POST stores the file in the media bucket keyed by an unguessable upload id;
- * the prompt then references it as `{ uploadId }` so the message row and
+ * the prompt then references it as `{ uploadId, name }` so the message row and
  * user_message event stay small (Durable Object SQLite rows cap at 2 MB —
  * base64 payloads must never ride through the message queue).
  *
@@ -16,6 +16,7 @@
  * deletes them from storage.
  */
 
+import { promptUploadIdSchema } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {
@@ -25,12 +26,12 @@ import {
   isSupportedPromptUploadMimeType,
   PROMPT_UPLOAD_IMAGE_MAX_BYTES,
 } from "../media";
-import { SessionInternalPaths } from "../session/contracts";
-import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-storage";
+import { createMediaObjectStorage } from "../storage/object-storage";
 import type { Env } from "../types";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 import { streamStoredMedia } from "./stream-stored-media";
+import { PromptUploadCoordinator } from "./prompt-upload-coordinator";
 
 const logger = createLogger("router:session-uploads");
 
@@ -84,34 +85,17 @@ async function handleUploadPost(
   const uploadId = generateId();
   const objectKey = buildPromptUploadObjectKey(sessionId, uploadId);
   const storage = createMediaObjectStorage(env);
-  await storage.put(objectKey, bytes, { contentType: detected.mimeType });
-
-  // Register the upload with the session DO so it is tracked and quota-governed.
-  // On rejection (unknown session, quota exceeded) remove the object again.
-  const recordResponse = await recordTrackedUpload(ctx, storage, sessionId, {
+  const coordinator = new PromptUploadCoordinator(ctx.sessionRuntime, storage, sessionId, logger, {
+    requestId: ctx.request_id,
+    traceId: ctx.trace_id,
+  });
+  const stored = await coordinator.store(bytes, {
     uploadId,
-    kind: detected.kind,
     mimeType: detected.mimeType,
     sizeBytes: bytes.byteLength,
     objectKey,
   });
-
-  if (!recordResponse.ok) {
-    try {
-      await storage.delete(objectKey);
-    } catch (cleanupError) {
-      logger.error("uploads.cleanup_failed", {
-        session_id: sessionId,
-        upload_id: uploadId,
-        object_key: objectKey,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-        error: cleanupError instanceof Error ? cleanupError : String(cleanupError),
-      });
-    }
-    const message = await parseUploadError(recordResponse);
-    return error(message, recordResponse.status);
-  }
+  if (!stored.ok) return error(stored.error, stored.status);
 
   logger.info("uploads.stored", {
     session_id: sessionId,
@@ -122,107 +106,7 @@ async function handleUploadPost(
     trace_id: ctx.trace_id,
   });
 
-  return json({ uploadId, kind: detected.kind, mimeType: detected.mimeType }, 201);
-}
-
-interface UploadRecordRequest {
-  uploadId: string;
-  kind: "image";
-  mimeType: string;
-  sizeBytes: number;
-  objectKey: string;
-}
-
-interface StaleUploadClaim {
-  uploadId: string;
-  objectKey: string;
-}
-
-async function recordTrackedUpload(
-  ctx: SessionRouteContext,
-  storage: ObjectStorage,
-  sessionId: string,
-  record: UploadRecordRequest
-): Promise<Response> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.uploads, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(record),
-    });
-    if (!response.ok) return response;
-
-    const body = (await response.json()) as {
-      status?: string;
-      staleUploads?: StaleUploadClaim[];
-    };
-    if (body.status !== "cleanup_required") {
-      return Response.json(body, { status: response.status });
-    }
-
-    const cleanup = await deleteClaimedUploadObjects(
-      storage,
-      body.staleUploads ?? [],
-      sessionId,
-      ctx
-    );
-    const completion = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.uploads, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "complete_cleanup",
-        acknowledgedUploadIds: cleanup.acknowledgedUploadIds,
-        releasedUploadIds: cleanup.releasedUploadIds,
-      }),
-    });
-    if (!completion.ok) return completion;
-    if (cleanup.releasedUploadIds.length > 0) {
-      return Response.json(
-        { error: "Failed to clean up expired uploads; please retry" },
-        { status: 503 }
-      );
-    }
-  }
-  return Response.json({ error: "Upload cleanup did not converge; please retry" }, { status: 503 });
-}
-
-async function parseUploadError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: unknown };
-    if (typeof body.error === "string" && body.error.trim()) {
-      return body.error;
-    }
-  } catch {
-    // Fall through to the generic message.
-  }
-  return response.status === 404 ? "Session not found" : "Failed to record upload";
-}
-
-async function deleteClaimedUploadObjects(
-  storage: ObjectStorage,
-  uploads: StaleUploadClaim[],
-  sessionId: string,
-  ctx: SessionRouteContext
-): Promise<{ acknowledgedUploadIds: string[]; releasedUploadIds: string[] }> {
-  const results = await Promise.allSettled(
-    uploads.map((upload) => storage.delete(upload.objectKey))
-  );
-  const acknowledgedUploadIds: string[] = [];
-  const releasedUploadIds: string[] = [];
-  results.forEach((result, index) => {
-    const uploadId = uploads[index]?.uploadId;
-    if (!uploadId) return;
-    if (result.status === "fulfilled") acknowledgedUploadIds.push(uploadId);
-    else releasedUploadIds.push(uploadId);
-  });
-  logger.info("uploads.pruned_stale_objects", {
-    session_id: sessionId,
-    deleted: acknowledgedUploadIds.length,
-    failed: releasedUploadIds.length,
-    request_id: ctx.request_id,
-    trace_id: ctx.trace_id,
-  });
-  return { acknowledgedUploadIds, releasedUploadIds };
+  return json({ uploadId, mimeType: detected.mimeType }, 201);
 }
 
 async function handleUploadGet(
@@ -236,7 +120,7 @@ async function handleUploadGet(
   if (!sessionId || !uploadId) {
     return error("Session ID and upload ID are required", 400);
   }
-  if (!/^[A-Za-z0-9-]+$/.test(uploadId)) {
+  if (!promptUploadIdSchema.safeParse(uploadId).success) {
     return error("Invalid upload ID", 400);
   }
 

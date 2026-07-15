@@ -15,7 +15,7 @@ import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import { CheckIcon, CopyIcon, ErrorIcon, FileIcon } from "@/components/ui/icons";
+import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -354,46 +354,14 @@ function UserMessageAttachments({
   return (
     <div className="flex flex-wrap gap-2 mt-3">
       {attachments.map((attachment, index) => {
-        const key = attachment.uploadId ?? `${attachment.name}-${index}`;
-        const src = attachment.uploadId
-          ? `/api/sessions/${sessionId}/uploads/${attachment.uploadId}`
-          : null;
-
-        if (src && attachment.mimeType?.startsWith("image/")) {
-          return (
-            <img
-              key={key}
-              src={src}
-              alt={attachment.name}
-              title={attachment.name}
-              className="max-h-48 max-w-full border border-border object-contain"
-            />
-          );
-        }
-
-        if (src && attachment.mimeType?.startsWith("video/")) {
-          return (
-            <video
-              key={key}
-              src={src}
-              controls
-              preload="metadata"
-              title={attachment.name}
-              className="max-h-48 max-w-full border border-border"
-            />
-          );
-        }
-
-        // No streamable reference (e.g. attachments from integrations) — show a chip.
         return (
-          <span
-            key={key}
-            className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground border border-border bg-muted"
+          <img
+            key={`${attachment.uploadId}-${index}`}
+            src={`/api/sessions/${sessionId}/uploads/${attachment.uploadId}`}
+            alt={attachment.name}
             title={attachment.name}
-          >
-            <FileIcon className="w-3.5 h-3.5" />
-            {attachment.name}
-          </span>
+            className="max-h-48 max-w-full border border-border object-contain"
+          />
         );
       })}
     </div>

@@ -5,8 +5,23 @@
  * through this barrel. Keep internal schemas out of this export surface.
  */
 
-export { attachmentSchema, clientMessageSchema } from "./websocket";
-export type { Attachment, ClientMessage } from "./websocket";
+export {
+  MAX_PROMPT_ATTACHMENTS,
+  PROMPT_IMAGE_MIME_TYPES,
+  promptImageMimeTypeSchema,
+  promptUploadIdSchema,
+  promptAttachmentSchema,
+  promptAttachmentsSchema,
+  resolvedPromptAttachmentSchema,
+  resolvedPromptAttachmentsSchema,
+  clientMessageSchema,
+} from "./websocket";
+export type {
+  PromptImageMimeType,
+  PromptAttachment,
+  ResolvedPromptAttachment,
+  ClientMessage,
+} from "./websocket";
 
 export { sessionStatusSchema } from "./statuses";
 export type {

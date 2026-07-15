@@ -3,7 +3,7 @@
  */
 
 import type {
-  Attachment,
+  ResolvedPromptAttachment,
   SessionStatus,
   SandboxStatus,
   GitSyncStatus,
@@ -88,7 +88,6 @@ export interface MessageRow {
 
 export interface UploadRow {
   id: string;
-  kind: string; // 'image' | 'video'
   mime_type: string;
   size_bytes: number;
   object_key: string;
@@ -150,7 +149,7 @@ export interface PromptCommand {
     scmName: string | null;
     scmEmail: string | null;
   };
-  attachments?: Attachment[];
+  attachments?: ResolvedPromptAttachment[];
 }
 
 export interface StopCommand {

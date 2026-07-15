@@ -1,7 +1,7 @@
 import type { Logger } from "../../../logger";
 import type { EnqueuePromptRequest, MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
-import { PromptAttachmentError } from "../../message-queue";
+import { PromptAttachmentError } from "../../prompt-attachments";
 
 /**
  * Valid event types for filtering.

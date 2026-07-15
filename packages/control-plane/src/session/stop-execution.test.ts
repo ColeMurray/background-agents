@@ -54,7 +54,7 @@ describe("Stop execution - repository interactions", () => {
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(mock.sql);
+    repo = new SessionRepository(mock.sql, (closure) => closure());
   });
 
   describe("getProcessingMessage", () => {

@@ -17,7 +17,7 @@ import {
   resolveAppName,
   sandboxEventSchema,
   timingSafeEqual,
-  type Attachment,
+  type PromptAttachment,
 } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
@@ -221,7 +221,9 @@ export class SessionDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.repository = new SessionRepository(this.sql);
+    this.repository = new SessionRepository(this.sql, (closure) =>
+      ctx.storage.transactionSync(closure)
+    );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -1396,7 +1398,7 @@ export class SessionDO extends DurableObject<Env> {
       content: string;
       model?: string;
       reasoningEffort?: string;
-      attachments?: Attachment[];
+      attachments?: PromptAttachment[];
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, data);

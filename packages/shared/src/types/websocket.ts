@@ -1,33 +1,42 @@
 import { z } from "zod";
 
-const attachmentBaseSchema = z.object({
-  type: z.enum(["file", "image", "url"]),
-  name: z.string().min(1),
-  mimeType: z.string().min(1).optional(),
-});
+export const MAX_PROMPT_ATTACHMENTS = 6;
+export const PROMPT_IMAGE_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+] as const;
 
-// Exactly one attachment source is allowed. Upload metadata is canonicalized
-// from the durable upload row before enqueueing, so clients cannot combine an
-// upload reference with arbitrary inline or remote content.
-export const attachmentSchema = z.union([
-  attachmentBaseSchema.extend({
-    uploadId: z.string().min(1),
-    content: z.never().optional(),
-    url: z.never().optional(),
-  }),
-  attachmentBaseSchema.extend({
-    content: z.string().min(1),
-    uploadId: z.never().optional(),
-    url: z.never().optional(),
-  }),
-  attachmentBaseSchema.extend({
-    url: z.string().url(),
-    uploadId: z.never().optional(),
-    content: z.never().optional(),
-  }),
-]);
+export const promptImageMimeTypeSchema = z.enum(PROMPT_IMAGE_MIME_TYPES);
+export type PromptImageMimeType = z.infer<typeof promptImageMimeTypeSchema>;
+export const promptUploadIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9-]+$/);
 
-export type Attachment = z.infer<typeof attachmentSchema>;
+/** Client-supplied reference to an image previously uploaded for this session. */
+export const promptAttachmentSchema = z
+  .object({
+    uploadId: promptUploadIdSchema,
+    name: z.string().min(1).max(255),
+  })
+  .strict();
+
+export const promptAttachmentsSchema = z.array(promptAttachmentSchema).max(MAX_PROMPT_ATTACHMENTS);
+export type PromptAttachment = z.infer<typeof promptAttachmentSchema>;
+
+/** Server-resolved attachment metadata persisted with messages and events. */
+export const resolvedPromptAttachmentSchema = promptAttachmentSchema
+  .extend({
+    mimeType: promptImageMimeTypeSchema,
+  })
+  .strict();
+export type ResolvedPromptAttachment = z.infer<typeof resolvedPromptAttachmentSchema>;
+export const resolvedPromptAttachmentsSchema = z
+  .array(resolvedPromptAttachmentSchema)
+  .max(MAX_PROMPT_ATTACHMENTS);
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
@@ -37,7 +46,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     content: z.string(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
-    attachments: z.array(attachmentSchema).optional(),
+    attachments: promptAttachmentsSchema.optional(),
   }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),

@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Attachment } from "@open-inspect/shared";
+import {
+  MAX_PROMPT_ATTACHMENTS,
+  PROMPT_IMAGE_MIME_TYPES,
+  type PromptAttachment,
+} from "@open-inspect/shared";
 import { WEB_PROMPT_IMAGE_MAX_BYTES } from "@/lib/prompt-attachment-limits";
 
 export type PendingAttachment = {
@@ -10,9 +14,7 @@ export type PendingAttachment = {
   previewUrl: string;
 };
 
-const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-
-export const MAX_ATTACHMENTS = 6;
+const IMAGE_MIME_TYPES: ReadonlySet<string> = new Set(PROMPT_IMAGE_MIME_TYPES);
 
 export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES].join(",");
 export const DEFAULT_ATTACHMENT_ONLY_MESSAGE = "See the attached files.";
@@ -36,7 +38,9 @@ export function usePromptAttachments() {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const attachmentsRef = useRef<PendingAttachment[]>([]);
-  const uploadedByIdRef = useRef(new Map<string, { sessionId: string; attachment: Attachment }>());
+  const uploadedByIdRef = useRef(
+    new Map<string, { sessionId: string; attachment: PromptAttachment }>()
+  );
   attachmentsRef.current = attachments;
 
   // Revoke preview URLs on unmount only — removals revoke their own URL.
@@ -60,8 +64,8 @@ export function usePromptAttachments() {
         errors.push(`${file.name || "File"} is not a supported image`);
         continue;
       }
-      if (attachmentCount >= MAX_ATTACHMENTS) {
-        errors.push(`You can attach up to ${MAX_ATTACHMENTS} files per message`);
+      if (attachmentCount >= MAX_PROMPT_ATTACHMENTS) {
+        errors.push(`You can attach up to ${MAX_PROMPT_ATTACHMENTS} files per message`);
         break;
       }
       if (file.size > WEB_PROMPT_IMAGE_MAX_BYTES) {
@@ -115,14 +119,14 @@ export function usePromptAttachments() {
    * prompt. Throws (with a user-readable message) if any upload fails; the
    * pending list is left intact so the user can retry.
    */
-  const uploadAll = useCallback(async (sessionId: string): Promise<Attachment[]> => {
+  const uploadAll = useCallback(async (sessionId: string): Promise<PromptAttachment[]> => {
     const pending = attachmentsRef.current;
     if (pending.length === 0) return [];
 
     setIsUploading(true);
     setAttachmentError(null);
     try {
-      const uploaded: Attachment[] = [];
+      const uploaded: PromptAttachment[] = [];
       for (const pendingAttachment of pending) {
         const cached = uploadedByIdRef.current.get(pendingAttachment.id);
         if (cached?.sessionId === sessionId) {
@@ -140,14 +144,11 @@ export function usePromptAttachments() {
           const data = (await response.json().catch(() => null)) as { error?: string } | null;
           throw new Error(data?.error || `Failed to upload ${pendingAttachment.file.name}`);
         }
-        const { uploadId, mimeType } = (await response.json()) as {
+        const { uploadId } = (await response.json()) as {
           uploadId: string;
-          mimeType: string;
         };
-        const attachment: Attachment = {
-          type: "image",
+        const attachment: PromptAttachment = {
           name: pendingAttachment.file.name || "image-attachment",
-          mimeType,
           uploadId,
         };
         uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });

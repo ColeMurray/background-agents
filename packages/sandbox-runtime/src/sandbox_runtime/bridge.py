@@ -29,7 +29,7 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
-from .attachment_processor import AttachmentProcessor
+from .attachment_processor import AttachmentProcessor, HydratedPromptImage
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .log_config import configure_logging, get_logger
 from .repo_config import find_repo_entry, load_repo_manifest
@@ -937,25 +937,13 @@ class AgentBridge:
     }
     ANTHROPIC_ADAPTIVE_EFFORTS: ClassVar[set[str]] = {"low", "medium", "high", "xhigh", "max"}
 
-    async def _hydrate_upload_attachments(
-        self, attachments: list[dict[str, Any]] | None
-    ) -> list[dict[str, Any]] | None:
-        """Compatibility wrapper for tests and older bridge callers."""
-        return await self.attachment_processor.hydrate_uploads(attachments)
-
-    def _build_attachment_parts(
-        self, attachments: list[dict[str, Any]] | None
-    ) -> list[dict[str, Any]]:
-        """Compatibility wrapper around the extracted attachment processor."""
-        return self.attachment_processor.build_file_parts(attachments)
-
     def _build_prompt_request_body(
         self,
         content: str,
         model: str | None,
         opencode_message_id: str | None = None,
         reasoning_effort: str | None = None,
-        attachments: list[dict[str, Any]] | None = None,
+        attachments: list[HydratedPromptImage] | None = None,
     ) -> dict[str, Any]:
         """Build request body for OpenCode prompt requests.
 
@@ -970,7 +958,7 @@ class AgentBridge:
                          to forward as OpenCode file parts.
         """
         parts: list[dict[str, Any]] = [{"type": "text", "text": content}]
-        parts.extend(self._build_attachment_parts(attachments))
+        parts.extend(dict(part) for part in self.attachment_processor.build_file_parts(attachments))
         request_body: dict[str, Any] = {"parts": parts}
 
         if opencode_message_id:
@@ -1062,7 +1050,7 @@ class AgentBridge:
         content: str,
         model: str | None = None,
         reasoning_effort: str | None = None,
-        attachments: list[dict[str, Any]] | None = None,
+        attachments: list[HydratedPromptImage] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 

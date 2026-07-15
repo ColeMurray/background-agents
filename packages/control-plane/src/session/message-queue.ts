@@ -6,7 +6,9 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-  type Attachment,
+  resolvedPromptAttachmentsSchema,
+  type PromptAttachment,
+  type ResolvedPromptAttachment,
 } from "@open-inspect/shared";
 import type {
   ClientInfo,
@@ -18,19 +20,24 @@ import type {
 } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SessionRow, ParticipantRow, SandboxCommand } from "./types";
-import type { SessionRepository } from "./repository";
+import { UploadClaimConflictError, type SessionRepository } from "./repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
+import {
+  PromptAttachmentError,
+  resolvePromptAttachments,
+  type ResolvedPromptAttachments,
+} from "./prompt-attachments";
 
 interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: Attachment[];
+  attachments?: PromptAttachment[];
 }
 
 interface MessageQueueDeps {
@@ -57,20 +64,6 @@ interface StopExecutionOptions {
   suppressStatusReconcile?: boolean;
 }
 
-const MAX_ATTACHMENTS_PER_PROMPT = 6;
-const MAX_PERSISTED_ATTACHMENTS_BYTES = 1_500_000;
-
-export class PromptAttachmentError extends Error {}
-
-function isValidBase64(content: string): boolean {
-  const normalized = content.replace(/\s/g, "");
-  return (
-    normalized.length > 0 &&
-    normalized.length % 4 === 0 &&
-    /^[A-Za-z0-9+/]*={0,2}$/.test(normalized)
-  );
-}
-
 export class SessionMessageQueue {
   constructor(private readonly deps: MessageQueueDeps) {}
 
@@ -85,9 +78,9 @@ export class SessionMessageQueue {
       return;
     }
 
-    let attachments: Attachment[] | undefined;
+    let resolvedAttachments: ResolvedPromptAttachments | undefined;
     try {
-      attachments = this.normalizeAttachments(data.attachments);
+      resolvedAttachments = resolvePromptAttachments(data.attachments, this.deps.repository);
     } catch (error) {
       this.deps.wsManager.send(ws, {
         type: "error",
@@ -120,18 +113,31 @@ export class SessionMessageQueue {
       data.reasoningEffort
     );
 
-    this.deps.repository.createMessage({
-      id: messageId,
-      authorId: participant.id,
-      content: data.content,
-      source: "web",
-      model: messageModel,
-      reasoningEffort: messageReasoningEffort,
-      attachments: attachments ? JSON.stringify(attachments) : null,
-      status: "pending",
-      createdAt: now,
-    });
-    this.markAttachmentUploadsReferenced(attachments, messageId);
+    const attachments = resolvedAttachments?.attachments;
+    try {
+      this.deps.repository.createMessageWithUploads(
+        {
+          id: messageId,
+          authorId: participant.id,
+          content: data.content,
+          source: "web",
+          model: messageModel,
+          reasoningEffort: messageReasoningEffort,
+          attachments: attachments ? JSON.stringify(attachments) : null,
+          status: "pending",
+          createdAt: now,
+        },
+        resolvedAttachments?.uploadIds ?? []
+      );
+    } catch (error) {
+      if (!(error instanceof UploadClaimConflictError)) throw error;
+      this.deps.wsManager.send(ws, {
+        type: "error",
+        code: "INVALID_ATTACHMENTS",
+        message: "One or more uploads are missing, expired, or already used",
+      });
+      return;
+    }
 
     await this.deps.setSessionStatus("active");
 
@@ -230,7 +236,7 @@ export class SessionMessageQueue {
         scmName: author?.scm_name ?? null,
         scmEmail: author?.scm_email ?? null,
       },
-      attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
+      attachments: this.parseStoredAttachments(message.attachments),
     };
 
     const sent = this.deps.wsManager.send(sandboxWs, command);
@@ -342,78 +348,21 @@ export class SessionMessageQueue {
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
 
-  /** Tie referenced uploads to their message so the DO's TTL prune keeps them. */
-  private markAttachmentUploadsReferenced(
-    attachments: Attachment[] | undefined,
-    messageId: string
-  ): void {
-    const uploadIds =
-      attachments?.flatMap((attachment) =>
-        attachment && typeof attachment === "object" && attachment.uploadId
-          ? [attachment.uploadId]
-          : []
-      ) ?? [];
-    if (uploadIds.length > 0) {
-      this.deps.repository.markUploadsReferenced(uploadIds, messageId);
+  private parseStoredAttachments(value: string | null): ResolvedPromptAttachment[] | undefined {
+    if (!value) return undefined;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(value);
+    } catch {
+      this.deps.log.error("prompt.invalid_stored_attachments");
+      return undefined;
     }
-  }
-
-  /** Validate once at the queue boundary and hydrate upload metadata from durable rows. */
-  private normalizeAttachments(attachments: Attachment[] | undefined): Attachment[] | undefined {
-    if (!attachments || attachments.length === 0) return undefined;
-    if (attachments.length > MAX_ATTACHMENTS_PER_PROMPT) {
-      throw new PromptAttachmentError(
-        `You can attach up to ${MAX_ATTACHMENTS_PER_PROMPT} files per message`
-      );
+    const parsed = resolvedPromptAttachmentsSchema.safeParse(raw);
+    if (!parsed.success) {
+      this.deps.log.error("prompt.invalid_stored_attachments");
+      return undefined;
     }
-    if (attachments.some((attachment) => attachment.mimeType?.startsWith("video/"))) {
-      throw new PromptAttachmentError("Video prompt attachments are not supported");
-    }
-    if (
-      attachments.some(
-        (attachment) => typeof attachment.content === "string" && !isValidBase64(attachment.content)
-      )
-    ) {
-      throw new PromptAttachmentError("Inline attachment content must be valid base64");
-    }
-
-    const uploadIds = attachments.flatMap((attachment) =>
-      typeof attachment.uploadId === "string" ? [attachment.uploadId] : []
-    );
-    if (new Set(uploadIds).size !== uploadIds.length) {
-      throw new PromptAttachmentError("An upload can only be attached once per message");
-    }
-    const uploads = new Map(
-      this.deps.repository
-        .getUnreferencedUploads(uploadIds)
-        .map((upload) => [upload.id, upload] as const)
-    );
-    if (uploads.size !== uploadIds.length) {
-      throw new PromptAttachmentError("One or more uploads are missing, expired, or already used");
-    }
-
-    const normalized = attachments.map((attachment): Attachment => {
-      if (typeof attachment.uploadId !== "string") return attachment;
-      const upload = uploads.get(attachment.uploadId);
-      if (!upload) throw new PromptAttachmentError("Upload not found");
-      if (upload.kind !== "image") {
-        throw new PromptAttachmentError("Video prompt attachments are not supported");
-      }
-      return {
-        type: "image",
-        name: attachment.name,
-        mimeType: upload.mime_type,
-        uploadId: upload.id,
-      };
-    });
-
-    if (
-      new TextEncoder().encode(JSON.stringify(normalized)).byteLength >
-      MAX_PERSISTED_ATTACHMENTS_BYTES
-    ) {
-      throw new PromptAttachmentError("Inline attachments are too large; upload the files instead");
-    }
-    return normalized;
+    return parsed.data;
   }
 
   writeUserMessageEvent(
@@ -421,20 +370,10 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: Attachment[]
+    attachments?: ResolvedPromptAttachment[]
   ): void {
     // Metadata only — base64 payloads would bloat the events table and every
     // broadcast, and DO SQLite rows cap at 2 MB.
-    const attachmentMeta = attachments
-      ?.filter((attachment) => attachment && typeof attachment === "object")
-      .map(({ type, name, mimeType, uploadId, url }) => ({
-        type,
-        name,
-        ...(mimeType ? { mimeType } : {}),
-        ...(uploadId ? { uploadId } : {}),
-        ...(url ? { url } : {}),
-      }));
-
     const userMessageEvent: SandboxEvent = {
       type: "user_message",
       content,
@@ -445,7 +384,7 @@ export class SessionMessageQueue {
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(participant.scm_login, this.deps.scmProvider),
       },
-      ...(attachmentMeta && attachmentMeta.length > 0 ? { attachments: attachmentMeta } : {}),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
     this.deps.repository.createEvent({
       id: generateId(),
@@ -460,7 +399,8 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
-    const attachments = this.normalizeAttachments(data.attachments);
+    const resolvedAttachments = resolvePromptAttachments(data.attachments, this.deps.repository);
+    const attachments = resolvedAttachments?.attachments;
     let participant = this.deps.participantService.getByUserId(data.authorId);
     if (!participant) {
       participant = this.deps.participantService.create(
@@ -507,19 +447,30 @@ export class SessionMessageQueue {
       data.reasoningEffort
     );
 
-    this.deps.repository.createMessage({
-      id: messageId,
-      authorId: participant.id,
-      content: data.content,
-      source: data.source as MessageSource,
-      model: messageModel,
-      reasoningEffort: messageReasoningEffort,
-      attachments: attachments ? JSON.stringify(attachments) : null,
-      callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
-      status: "pending",
-      createdAt: now,
-    });
-    this.markAttachmentUploadsReferenced(attachments, messageId);
+    try {
+      this.deps.repository.createMessageWithUploads(
+        {
+          id: messageId,
+          authorId: participant.id,
+          content: data.content,
+          source: data.source as MessageSource,
+          model: messageModel,
+          reasoningEffort: messageReasoningEffort,
+          attachments: attachments ? JSON.stringify(attachments) : null,
+          callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
+          status: "pending",
+          createdAt: now,
+        },
+        resolvedAttachments?.uploadIds ?? []
+      );
+    } catch (error) {
+      if (error instanceof UploadClaimConflictError) {
+        throw new PromptAttachmentError(
+          "One or more uploads are missing, expired, or already used"
+        );
+      }
+      throw error;
+    }
 
     await this.deps.setSessionStatus("active");
 

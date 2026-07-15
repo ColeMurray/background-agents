@@ -67,14 +67,12 @@ describe("media helpers", () => {
   it("detects prompt upload images including gif", () => {
     const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     expect(detectPromptUploadFileType(png)).toEqual({
-      kind: "image",
       mimeType: "image/png",
       extension: "png",
     });
 
     const gif89 = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01]);
     expect(detectPromptUploadFileType(gif89)).toEqual({
-      kind: "image",
       mimeType: "image/gif",
       extension: "gif",
     });

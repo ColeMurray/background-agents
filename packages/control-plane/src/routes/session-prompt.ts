@@ -1,5 +1,9 @@
-import { attachmentSchema, type Attachment, type CallbackContext } from "@open-inspect/shared";
-import { PROMPT_UPLOAD_IMAGE_MAX_BYTES } from "../media";
+import {
+  MAX_PROMPT_ATTACHMENTS,
+  promptAttachmentsSchema,
+  type CallbackContext,
+  type PromptAttachment,
+} from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -10,42 +14,16 @@ import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
-const MAX_ATTACHMENTS_PER_PROMPT = 6;
-
-function base64ByteLength(content: string): number | null {
-  const normalized = content.replace(/\s/g, "");
-  if (normalized.length === 0) return 0;
-  if (normalized.length % 4 !== 0) return null;
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) return null;
-
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  return (normalized.length / 4) * 3 - padding;
-}
-
-function validateAttachments(raw: unknown): Attachment[] | Response | undefined {
+function validateAttachments(raw: unknown): PromptAttachment[] | Response | undefined {
   if (raw === undefined) return undefined;
-  if (!Array.isArray(raw)) return error("attachments must be an array", 400);
-  if (raw.length > MAX_ATTACHMENTS_PER_PROMPT) {
-    return error(`You can attach up to ${MAX_ATTACHMENTS_PER_PROMPT} files per message`, 400);
-  }
-
-  const attachments: Attachment[] = [];
-  for (const item of raw) {
-    const result = attachmentSchema.safeParse(item);
-    if (!result.success) return error("Invalid attachment", 400);
-
-    const attachment = result.data;
-    if (attachment.content) {
-      const byteLength = base64ByteLength(attachment.content);
-      if (byteLength === null) return error("Invalid attachment content", 400);
-
-      if (byteLength > PROMPT_UPLOAD_IMAGE_MAX_BYTES) {
-        return error(`${attachment.name} exceeds the attachment size limit`, 413);
-      }
+  const result = promptAttachmentsSchema.safeParse(raw);
+  if (!result.success) {
+    if (Array.isArray(raw) && raw.length > MAX_PROMPT_ATTACHMENTS) {
+      return error(`You can attach up to ${MAX_PROMPT_ATTACHMENTS} files per message`, 400);
     }
-    attachments.push(attachment);
+    return error("Invalid attachments", 400);
   }
-  return attachments;
+  return result.data;
 }
 
 async function handleSessionPrompt(

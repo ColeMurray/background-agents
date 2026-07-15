@@ -70,7 +70,7 @@ describe("applyMigrations", () => {
   });
 
   it("skips all migrations when fully migrated", () => {
-    // All 24 IDs already applied
+    // Every migration ID is already applied.
     const appliedRows = MIGRATIONS.map((m) => ({ id: m.id }));
     mock.setData("SELECT id FROM _schema_migrations", appliedRows);
 
@@ -241,5 +241,24 @@ describe("applyMigrations", () => {
         c.query.includes("updated_at IS NULL")
     );
     expect(backfill).toBeDefined();
+  });
+
+  it("removes the obsolete upload kind column only when it exists", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 37);
+    expect(migration).toBeDefined();
+    expect(typeof migration?.run).toBe("function");
+
+    mock.setData("PRAGMA table_info(uploads)", [{ name: "id" }, { name: "kind" }]);
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+    expect(mock.calls.some((call) => call.query === "ALTER TABLE uploads DROP COLUMN kind")).toBe(
+      true
+    );
+
+    mock.calls.length = 0;
+    mock.setData("PRAGMA table_info(uploads)", [{ name: "id" }, { name: "mime_type" }]);
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+    expect(mock.calls.some((call) => call.query === "ALTER TABLE uploads DROP COLUMN kind")).toBe(
+      false
+    );
   });
 });

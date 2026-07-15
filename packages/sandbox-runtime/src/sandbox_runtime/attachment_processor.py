@@ -2,10 +2,9 @@
 
 import asyncio
 import base64
-import mimetypes
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar, Protocol
+from typing import Any, Literal, Protocol, TypedDict
 
 import httpx
 
@@ -18,15 +17,33 @@ class MediaLogger(Protocol):
     def warn(self, event: str, **kwargs: Any) -> None: ...
 
 
+PromptImageMimeType = Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
+
+
+class PromptImageAttachment(TypedDict):
+    """Trusted image metadata resolved by the control plane."""
+
+    uploadId: str
+    name: str
+    mimeType: PromptImageMimeType
+
+
+class HydratedPromptImage(TypedDict):
+    name: str
+    mimeType: PromptImageMimeType
+    content: str
+
+
+class OpenCodeFilePart(TypedDict):
+    type: str
+    mime: str
+    filename: str
+    url: str
+
+
 class AttachmentProcessor:
     """Resolve prompt image uploads with bounded network concurrency."""
 
-    IMAGE_MIME_TYPES: ClassVar[set[str]] = {
-        "image/png",
-        "image/jpeg",
-        "image/webp",
-        "image/gif",
-    }
     MAX_IMAGE_BYTES = 10 * 1024 * 1024
     DOWNLOAD_TIMEOUT_SECONDS = 120.0
     MAX_CONCURRENCY = 2
@@ -48,53 +65,44 @@ class AttachmentProcessor:
         self._semaphore = asyncio.Semaphore(self.MAX_CONCURRENCY)
 
     async def process(
-        self, attachments: list[dict[str, Any]] | None
-    ) -> list[dict[str, Any]] | None:
+        self, attachments: list[PromptImageAttachment] | None
+    ) -> list[HydratedPromptImage] | None:
         """Hydrate upload-backed images in one bounded processing pass."""
+        if attachments is None:
+            return None
         if not attachments:
-            return attachments
+            return []
 
-        async def bounded(attachment: dict[str, Any]) -> dict[str, Any] | None:
+        async def bounded(attachment: PromptImageAttachment) -> HydratedPromptImage | None:
             async with self._semaphore:
                 return await self._hydrate_image_upload(attachment)
 
         results = await asyncio.gather(*(bounded(attachment) for attachment in attachments))
         return [result for result in results if result is not None]
 
-    async def hydrate_uploads(
-        self, attachments: list[dict[str, Any]] | None
-    ) -> list[dict[str, Any]] | None:
-        """Compatibility helper for older bridge callers."""
-        return await self.process(attachments)
-
-    async def _hydrate_image_upload(self, attachment: dict[str, Any]) -> dict[str, Any] | None:
-        name = attachment.get("name") or "attachment"
-        mime = attachment.get("mimeType") or attachment.get("mime")
-        if mime and mime not in self.IMAGE_MIME_TYPES:
-            self.log.warn("prompt.attachment_unsupported", attachment_name=name, mime_type=mime)
-            await self.warn_user(f"Attachment {name} is not a supported image and was skipped.")
-            return None
-
-        upload_id = attachment.get("uploadId")
-        if not upload_id or attachment.get("content"):
-            return attachment
-
-        data = await self._download_upload_bytes(str(upload_id), self.MAX_IMAGE_BYTES)
+    async def _hydrate_image_upload(
+        self, attachment: PromptImageAttachment
+    ) -> HydratedPromptImage | None:
+        name = attachment["name"]
+        upload_id = attachment["uploadId"]
+        data = await self._download_upload_bytes(upload_id)
         if data is None:
             self.log.warn("prompt.upload_fetch_failed", attachment_name=name, upload_id=upload_id)
             await self.warn_user(f"Attachment {name} could not be fetched and was skipped.")
             return None
-        hydrated = {key: value for key, value in attachment.items() if key != "uploadId"}
-        hydrated["content"] = base64.b64encode(data).decode("ascii")
         self.log.info(
             "prompt.upload_fetched",
             attachment_name=name,
             upload_id=upload_id,
             size_bytes=len(data),
         )
-        return hydrated
+        return {
+            "name": name,
+            "mimeType": attachment["mimeType"],
+            "content": base64.b64encode(data).decode("ascii"),
+        }
 
-    async def _download_upload_bytes(self, upload_id: str, max_bytes: int) -> bytes | None:
+    async def _download_upload_bytes(self, upload_id: str) -> bytes | None:
         if re.fullmatch(r"[A-Za-z0-9-]+", upload_id) is None:
             self.log.warn("prompt.upload_id_invalid", upload_id=upload_id)
             return None
@@ -117,7 +125,7 @@ class AttachmentProcessor:
                 total = 0
                 async for chunk in response.aiter_bytes():
                     total += len(chunk)
-                    if total > max_bytes:
+                    if total > self.MAX_IMAGE_BYTES:
                         self.log.warn("prompt.media_too_large", bytes=total)
                         return None
                     chunks.append(chunk)
@@ -129,26 +137,18 @@ class AttachmentProcessor:
     def _upload_url(self, upload_id: str) -> str:
         return f"{self.control_plane_url}/sessions/{self.session_id}/uploads/{upload_id}"
 
-    def build_file_parts(self, attachments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    def build_file_parts(
+        self, attachments: list[HydratedPromptImage] | None
+    ) -> list[OpenCodeFilePart]:
         """Convert resolved image attachments into OpenCode file parts."""
-        parts: list[dict[str, Any]] = []
+        parts: list[OpenCodeFilePart] = []
         for attachment in attachments or []:
-            if not isinstance(attachment, dict):
-                continue
-            name = attachment.get("name") or "attachment"
-            mime = attachment.get("mimeType") or attachment.get("mime")
-            content = attachment.get("content")
-            url = attachment.get("url")
-            resolved_mime = mime or (mimetypes.guess_type(url)[0] if url else None)
-            if resolved_mime not in self.IMAGE_MIME_TYPES:
-                self.log.warn("prompt.attachment_unsupported", attachment_name=name)
-                continue
-            if content:
-                file_url = f"data:{resolved_mime};base64,{content}"
-            elif url:
-                file_url = url
-            else:
-                self.log.warn("prompt.attachment_skipped", attachment_name=name)
-                continue
-            parts.append({"type": "file", "mime": resolved_mime, "filename": name, "url": file_url})
+            parts.append(
+                {
+                    "type": "file",
+                    "mime": attachment["mimeType"],
+                    "filename": attachment["name"],
+                    "url": f"data:{attachment['mimeType']};base64,{attachment['content']}",
+                }
+            )
         return parts

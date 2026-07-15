@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionMessageQueue } from "./message-queue";
+import { UploadClaimConflictError } from "./repository";
 import type { ClientInfo, Env, ServerMessage } from "../types";
 import type { MessageRow, ParticipantRow, SessionRow, UploadRow } from "./types";
 
@@ -86,8 +87,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 
 function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | null }) {
   const repository = {
-    createMessage: vi.fn(),
-    markUploadsReferenced: vi.fn(),
+    createMessageWithUploads: vi.fn(),
     getUnreferencedUploads: vi.fn((): UploadRow[] => []),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
@@ -171,7 +171,7 @@ describe("SessionMessageQueue", () => {
       expect.anything(),
       expect.objectContaining({ code: "NOT_SUBSCRIBED" })
     );
-    expect(h.repository.createMessage).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithUploads).not.toHaveBeenCalled();
     expect(h.setSessionStatus).not.toHaveBeenCalled();
   });
 
@@ -200,7 +200,6 @@ describe("SessionMessageQueue", () => {
     h.repository.getUnreferencedUploads.mockReturnValue([
       {
         id: "up-1",
-        kind: "image",
         mime_type: "image/png",
         size_bytes: 100,
         object_key: "sessions/sess-1/uploads/up-1",
@@ -214,46 +213,62 @@ describe("SessionMessageQueue", () => {
       content: "look at this",
       attachments: [
         {
-          type: "image",
           name: "shot.png",
-          mimeType: "image/png",
           uploadId: "up-1",
-        },
-        {
-          type: "image",
-          name: "inline.png",
-          mimeType: "image/png",
-          content: "aGVsbG8=",
         },
       ],
     });
 
-    // Full attachments (including any inline content) go to the message row…
-    expect(h.repository.createMessage).toHaveBeenCalledWith(
+    expect(h.repository.createMessageWithUploads).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: JSON.stringify([
-          { type: "image", name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
-          { type: "image", name: "inline.png", mimeType: "image/png", content: "aGVsbG8=" },
+          { name: "shot.png", uploadId: "up-1", mimeType: "image/png" },
         ]),
-      })
+      }),
+      ["up-1"]
     );
 
-    // …but the broadcast/persisted event carries metadata only.
     expect(h.broadcast).toHaveBeenCalledWith({
       type: "sandbox_event",
       event: expect.objectContaining({
         type: "user_message",
-        attachments: [
-          { type: "image", name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
-          { type: "image", name: "inline.png", mimeType: "image/png" },
-        ],
+        attachments: [{ name: "shot.png", mimeType: "image/png", uploadId: "up-1" }],
       }),
     });
     const storedEvent = JSON.parse(h.repository.createEvent.mock.calls[0][0].data as string);
     expect(storedEvent.attachments).toEqual([
-      { type: "image", name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
-      { type: "image", name: "inline.png", mimeType: "image/png" },
+      { name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
     ]);
+  });
+
+  it("rejects a prompt when its upload loses the atomic claim race", async () => {
+    const h = buildQueue();
+    h.repository.getUnreferencedUploads.mockReturnValue([
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/sess-1/uploads/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+    h.repository.createMessageWithUploads.mockImplementation(() => {
+      throw new UploadClaimConflictError("already claimed");
+    });
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "look",
+      attachments: [{ name: "shot.png", uploadId: "up-1" }],
+    });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
+    );
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.setSessionStatus).not.toHaveBeenCalled();
   });
 
   it("rejects upload references that cannot be claimed", async () => {
@@ -261,50 +276,24 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.handlePromptMessage({} as WebSocket, {
       content: "look",
-      attachments: [{ type: "image", name: "missing.png", uploadId: "missing" }],
+      attachments: [{ name: "missing.png", uploadId: "missing" }],
     });
 
-    expect(h.repository.createMessage).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithUploads).not.toHaveBeenCalled();
     expect(h.wsManager.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
     );
   });
 
-  it("rejects inline video attachments at the queue boundary", async () => {
-    const h = buildQueue();
-
-    await h.queue.handlePromptMessage({} as WebSocket, {
-      content: "watch this",
-      attachments: [
-        {
-          type: "file",
-          name: "clip.mp4",
-          mimeType: "video/mp4",
-          content: "aGVsbG8=",
-        },
-      ],
-    });
-
-    expect(h.repository.createMessage).not.toHaveBeenCalled();
-    expect(h.wsManager.send).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        code: "INVALID_ATTACHMENTS",
-        message: "Video prompt attachments are not supported",
-      })
-    );
-  });
-
-  it("rejects upload records for videos at the queue boundary", async () => {
+  it("rejects upload rows with unsupported image metadata", async () => {
     const h = buildQueue();
     h.repository.getUnreferencedUploads.mockReturnValue([
       {
-        id: "up-video",
-        kind: "video",
-        mime_type: "video/mp4",
+        id: "up-invalid",
+        mime_type: "application/pdf",
         size_bytes: 100,
-        object_key: "sessions/sess-1/uploads/up-video",
+        object_key: "sessions/sess-1/uploads/up-invalid",
         message_id: null,
         cleanup_claimed_at: null,
         created_at: 1,
@@ -313,15 +302,15 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.handlePromptMessage({} as WebSocket, {
       content: "watch this",
-      attachments: [{ type: "file", name: "clip.mp4", uploadId: "up-video" }],
+      attachments: [{ name: "document.pdf", uploadId: "up-invalid" }],
     });
 
-    expect(h.repository.createMessage).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithUploads).not.toHaveBeenCalled();
     expect(h.wsManager.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         code: "INVALID_ATTACHMENTS",
-        message: "Video prompt attachments are not supported",
+        message: "Upload is not a supported image",
       })
     );
   });

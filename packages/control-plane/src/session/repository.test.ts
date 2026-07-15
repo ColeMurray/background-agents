@@ -5,7 +5,12 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionRepository, type SqlStorage, type SqlResult } from "./repository";
+import {
+  SessionRepository,
+  UploadClaimConflictError,
+  type SqlStorage,
+  type SqlResult,
+} from "./repository";
 
 /**
  * Create a mock SqlStorage that tracks calls and returns configurable data.
@@ -14,6 +19,7 @@ function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const mockData: Map<string, unknown[]> = new Map();
   const rowsWrittenByQuery: Map<string, number> = new Map();
+  let defaultRowsWritten = 0;
   let oneValue: unknown = null;
 
   const sql: SqlStorage = {
@@ -31,7 +37,7 @@ function createMockSql() {
           return oneValue;
         },
         get rowsWritten() {
-          return consumed ? (rowsWrittenByQuery.get(query) ?? 0) : 0;
+          return consumed ? (rowsWrittenByQuery.get(query) ?? defaultRowsWritten) : 0;
         },
       };
     },
@@ -46,6 +52,9 @@ function createMockSql() {
     setRowsWritten(query: string, rowsWritten: number) {
       rowsWrittenByQuery.set(query, rowsWritten);
     },
+    setDefaultRowsWritten(rowsWritten: number) {
+      defaultRowsWritten = rowsWritten;
+    },
     setOne(value: unknown) {
       oneValue = value;
     },
@@ -53,6 +62,7 @@ function createMockSql() {
       calls.length = 0;
       mockData.clear();
       rowsWrittenByQuery.clear();
+      defaultRowsWritten = 0;
       oneValue = null;
     },
   };
@@ -64,7 +74,7 @@ describe("SessionRepository", () => {
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(mock.sql);
+    repo = new SessionRepository(mock.sql, (closure) => closure());
   });
 
   // === SESSION ===
@@ -638,6 +648,42 @@ describe("SessionRepository", () => {
         "pending",
         1000,
       ]);
+    });
+  });
+
+  describe("createMessageWithUploads", () => {
+    const message = {
+      id: "msg-1",
+      authorId: "p-1",
+      content: "Look",
+      source: "web" as const,
+      status: "pending" as const,
+      createdAt: 1000,
+    };
+
+    it("claims every upload and creates the message in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(mock.sql, (closure) => {
+        transactions += 1;
+        return closure();
+      });
+      mock.setDefaultRowsWritten(2);
+
+      repo.createMessageWithUploads(message, ["up-1", "up-2"]);
+
+      expect(transactions).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE uploads SET message_id");
+      expect(mock.calls[0].params).toEqual(["msg-1", "up-1", "up-2"]);
+      expect(mock.calls[1].query).toContain("INSERT INTO messages");
+    });
+
+    it("fails before creating the message when not every upload can be claimed", () => {
+      mock.setDefaultRowsWritten(1);
+
+      expect(() => repo.createMessageWithUploads(message, ["up-1", "up-2"])).toThrow(
+        UploadClaimConflictError
+      );
+      expect(mock.calls).toHaveLength(1);
     });
   });
 

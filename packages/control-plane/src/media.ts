@@ -1,4 +1,8 @@
-import type { VideoArtifactMetadata } from "@open-inspect/shared";
+import {
+  PROMPT_IMAGE_MIME_TYPES,
+  type PromptImageMimeType,
+  type VideoArtifactMetadata,
+} from "@open-inspect/shared";
 
 export const SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024;
 export const SCREENSHOT_UPLOAD_LIMIT_PER_SESSION = 100;
@@ -96,19 +100,13 @@ export function detectVideoFileType(bytes: Uint8Array): VideoFileType | null {
 }
 
 export type PromptUploadFileType = {
-  kind: "image";
-  mimeType: SupportedScreenshotMimeType | "image/gif";
+  mimeType: PromptImageMimeType;
   extension: string;
 };
 
-const PROMPT_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-]);
+const PROMPT_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set(PROMPT_IMAGE_MIME_TYPES);
 
-export function isSupportedPromptUploadMimeType(value: string): boolean {
+export function isSupportedPromptUploadMimeType(value: string): value is PromptImageMimeType {
   return PROMPT_UPLOAD_MIME_TYPES.has(value);
 }
 
@@ -120,7 +118,7 @@ export function isSupportedPromptUploadMimeType(value: string): boolean {
 export function detectPromptUploadFileType(bytes: Uint8Array): PromptUploadFileType | null {
   const image = detectScreenshotFileType(bytes);
   if (image) {
-    return { kind: "image", mimeType: image.mimeType, extension: image.extension };
+    return { mimeType: image.mimeType, extension: image.extension };
   }
 
   // GIF87a / GIF89a
@@ -130,7 +128,7 @@ export function detectPromptUploadFileType(bytes: Uint8Array): PromptUploadFileT
     (bytes[4] === 0x37 || bytes[4] === 0x39) &&
     bytes[5] === 0x61
   ) {
-    return { kind: "image", mimeType: "image/gif", extension: "gif" };
+    return { mimeType: "image/gif", extension: "gif" };
   }
 
   return null;

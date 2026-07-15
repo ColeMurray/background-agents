@@ -7,6 +7,7 @@ import {
 } from "../../../media";
 import type { SessionRepository } from "../../repository";
 import type { SessionRow } from "../../types";
+import { uploadCommandSchema } from "../../upload-contracts";
 
 export interface UploadsHandlerDeps {
   repository: Pick<
@@ -24,50 +25,6 @@ export interface UploadsHandlerDeps {
 
 export interface UploadsHandler {
   recordUpload: (request: Request) => Promise<Response>;
-}
-
-interface RecordUploadBody {
-  action?: "record";
-  uploadId: string;
-  kind: "image";
-  mimeType: string;
-  sizeBytes: number;
-  objectKey: string;
-}
-
-interface CompleteCleanupBody {
-  action: "complete_cleanup";
-  acknowledgedUploadIds: string[];
-  releasedUploadIds: string[];
-}
-
-function isValidBody(raw: unknown): raw is RecordUploadBody {
-  if (!raw || typeof raw !== "object") return false;
-  const body = raw as Partial<RecordUploadBody>;
-  return (
-    typeof body.uploadId === "string" &&
-    body.uploadId.length > 0 &&
-    body.kind === "image" &&
-    typeof body.mimeType === "string" &&
-    body.mimeType.length > 0 &&
-    typeof body.sizeBytes === "number" &&
-    Number.isSafeInteger(body.sizeBytes) &&
-    body.sizeBytes > 0 &&
-    typeof body.objectKey === "string" &&
-    body.objectKey.length > 0
-  );
-}
-
-function isCompleteCleanupBody(raw: unknown): raw is CompleteCleanupBody {
-  if (!raw || typeof raw !== "object") return false;
-  const body = raw as Partial<CompleteCleanupBody>;
-  return (
-    body.action === "complete_cleanup" &&
-    Array.isArray(body.acknowledgedUploadIds) &&
-    body.acknowledgedUploadIds.every((id) => typeof id === "string" && id.length > 0) &&
-    Array.isArray(body.releasedUploadIds) &&
-    body.releasedUploadIds.every((id) => typeof id === "string" && id.length > 0)
-  );
 }
 
 /**
@@ -92,14 +49,16 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
       } catch {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
-      if (isCompleteCleanupBody(raw)) {
-        deps.repository.acknowledgeUploadCleanup(raw.acknowledgedUploadIds);
-        deps.repository.releaseUploadCleanupClaims(raw.releasedUploadIds);
+      const command = uploadCommandSchema.safeParse(raw);
+      if (!command.success) {
+        return Response.json({ error: "Invalid upload command" }, { status: 400 });
+      }
+      if (command.data.action === "complete_cleanup") {
+        deps.repository.acknowledgeUploadCleanup(command.data.acknowledgedUploadIds);
+        deps.repository.releaseUploadCleanupClaims(command.data.releasedUploadIds);
         return Response.json({ status: "ok" });
       }
-      if (!isValidBody(raw)) {
-        return Response.json({ error: "Invalid upload record body" }, { status: 400 });
-      }
+      const record = command.data;
 
       const timestamp = now();
       const stale = deps.repository.claimStaleUnreferencedUploads(
@@ -128,16 +87,15 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
           { status: 429 }
         );
       }
-      if (totals.totalBytes + raw.sizeBytes > PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION) {
+      if (totals.totalBytes + record.sizeBytes > PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION) {
         return Response.json({ error: "Session upload storage limit exceeded" }, { status: 429 });
       }
 
       deps.repository.createUpload({
-        id: raw.uploadId,
-        kind: raw.kind,
-        mimeType: raw.mimeType,
-        sizeBytes: raw.sizeBytes,
-        objectKey: raw.objectKey,
+        id: record.uploadId,
+        mimeType: record.mimeType,
+        sizeBytes: record.sizeBytes,
+        objectKey: record.objectKey,
         createdAt: timestamp,
       });
 

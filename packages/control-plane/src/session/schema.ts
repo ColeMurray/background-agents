@@ -21,7 +21,6 @@ const SESSION_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_repos
 
 const UPLOADS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
   mime_type TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   object_key TEXT NOT NULL,
@@ -466,6 +465,16 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 36,
     description: "Add retryable cleanup claims to uploads",
     run: `ALTER TABLE uploads ADD COLUMN cleanup_claimed_at INTEGER`,
+  },
+  {
+    id: 37,
+    description: "Remove obsolete upload kind discriminator",
+    run: (sql) => {
+      const columns = sql.exec(`PRAGMA table_info(uploads)`).toArray() as Array<{ name: string }>;
+      if (columns.some((column) => column.name === "kind")) {
+        sql.exec(`ALTER TABLE uploads DROP COLUMN kind`);
+      }
+    },
   },
 ];
 

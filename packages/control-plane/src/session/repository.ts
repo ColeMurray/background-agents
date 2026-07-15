@@ -176,7 +176,6 @@ export interface CreateMessageData {
  */
 export interface CreateUploadData {
   id: string;
-  kind: "image" | "video";
   mimeType: string;
   sizeBytes: number;
   objectKey: string;
@@ -284,6 +283,10 @@ export interface SqlStorage {
   exec(query: string, ...params: unknown[]): SqlResult;
 }
 
+export class UploadClaimConflictError extends Error {}
+
+type TransactionSync = <T>(closure: () => T) => T;
+
 export interface SqlResult {
   toArray(): unknown[];
   one(): unknown;
@@ -295,7 +298,10 @@ export interface SqlResult {
  * SessionRepository encapsulates all database operations for a session.
  */
 export class SessionRepository {
-  constructor(private readonly sql: SqlStorage) {}
+  constructor(
+    private readonly sql: SqlStorage,
+    private readonly transactionSync: TransactionSync
+  ) {}
 
   private rows<T>(result: SqlResult): T[] {
     return result.toArray() as T[];
@@ -804,10 +810,9 @@ export class SessionRepository {
 
   createUpload(data: CreateUploadData): void {
     this.sql.exec(
-      `INSERT INTO uploads (id, kind, mime_type, size_bytes, object_key, message_id, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+      `INSERT INTO uploads (id, mime_type, size_bytes, object_key, message_id, created_at)
+       VALUES (?, ?, ?, ?, NULL, ?)`,
       data.id,
-      data.kind,
       data.mimeType,
       data.sizeBytes,
       data.objectKey,
@@ -835,15 +840,24 @@ export class SessionRepository {
     return result.toArray() as unknown as UploadRow[];
   }
 
-  /** Tie uploads to the prompt that references them so they survive pruning. */
-  markUploadsReferenced(uploadIds: string[], messageId: string): void {
-    if (uploadIds.length === 0) return;
-    const placeholders = uploadIds.map(() => "?").join(", ");
-    this.sql.exec(
-      `UPDATE uploads SET message_id = ? WHERE id IN (${placeholders}) AND message_id IS NULL`,
-      messageId,
-      ...uploadIds
-    );
+  /** Persist a message and claim all referenced uploads in one SQLite transaction. */
+  createMessageWithUploads(data: CreateMessageData, uploadIds: string[]): void {
+    this.transactionSync(() => {
+      if (uploadIds.length > 0) {
+        const placeholders = uploadIds.map(() => "?").join(", ");
+        const claimed = this.sql.exec(
+          `UPDATE uploads SET message_id = ?
+           WHERE id IN (${placeholders}) AND message_id IS NULL AND cleanup_claimed_at IS NULL`,
+          data.id,
+          ...uploadIds
+        );
+        claimed.toArray();
+        if (claimed.rowsWritten !== uploadIds.length) {
+          throw new UploadClaimConflictError("One or more uploads could not be claimed");
+        }
+      }
+      this.createMessage(data);
+    });
   }
 
   /** Claim stale records without losing ownership before fallible object deletion. */
@@ -887,10 +901,6 @@ export class SessionRepository {
        WHERE id IN (${placeholders}) AND message_id IS NULL`,
       ...uploadIds
     );
-  }
-
-  deleteUpload(uploadId: string): void {
-    this.sql.exec(`DELETE FROM uploads WHERE id = ?`, uploadId);
   }
 
   updateMessageToProcessing(messageId: string, startedAt: number): void {

@@ -21,7 +21,11 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort, type Attachment } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  type PromptAttachment,
+} from "@open-inspect/shared";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {
@@ -473,7 +477,7 @@ function usePromptInput(
 
     submitInFlightRef.current = true;
     try {
-      let attachments: Attachment[] | undefined;
+      let attachments: PromptAttachment[] | undefined;
       if (hasAttachments) {
         try {
           attachments = await promptAttachments.uploadAll(sessionId);

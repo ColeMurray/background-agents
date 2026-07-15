@@ -14,7 +14,7 @@ import { APP_NAME } from "@/lib/site-config";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
-  type Attachment,
+  type PromptAttachment,
   type ModelCategory,
 } from "@open-inspect/shared";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
@@ -245,7 +245,7 @@ export default function Home() {
         return;
       }
 
-      let attachments: Attachment[] | undefined;
+      let attachments: PromptAttachment[] | undefined;
       if (hasAttachments) {
         try {
           attachments = await promptAttachments.uploadAll(sessionId);
