@@ -81,9 +81,15 @@ describe("CallbackNotificationService", () => {
 
       await harness.service.notifyComplete("msg-1", true);
 
-      expect(harness.log.debug).toHaveBeenCalledWith(
-        "No callback context for message, skipping notification",
-        expect.objectContaining({ message_id: "msg-1" })
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({
+          session_id: "session-123",
+          message_id: "msg-1",
+          outcome: "rejected",
+          reject_reason: "no_callback_context",
+          duration_ms: expect.any(Number),
+        })
       );
       expect(
         (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
@@ -128,9 +134,16 @@ describe("CallbackNotificationService", () => {
 
       await h.service.notifyComplete("msg-1", true);
 
-      expect(h.log.debug).toHaveBeenCalledWith(
-        "No callback binding for source, skipping notification",
-        expect.objectContaining({ message_id: "msg-1", source: "slack" })
+      expect(h.log.info).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({
+          session_id: "session-123",
+          message_id: "msg-1",
+          source: "slack",
+          outcome: "rejected",
+          reject_reason: "no_binding",
+          duration_ms: expect.any(Number),
+        })
       );
     });
 
@@ -168,9 +181,21 @@ describe("CallbackNotificationService", () => {
       expect(body.signature).toEqual(expect.any(String));
       expect(body.timestamp).toEqual(expect.any(Number));
 
-      expect(harness.log.info).toHaveBeenCalledWith(
-        "Callback succeeded",
-        expect.objectContaining({ message_id: "msg-1", source: "slack" })
+      const terminalEvents = vi
+        .mocked(harness.log.info)
+        .mock.calls.filter(([event]) => event === "callback.complete_delivery");
+      expect(terminalEvents).toHaveLength(1);
+      expect(terminalEvents[0][1]).toEqual(
+        expect.objectContaining({
+          session_id: "session-123",
+          message_id: "msg-1",
+          source: "slack",
+          outcome: "success",
+          duration_ms: expect.any(Number),
+          attempts: 1,
+          retries: 0,
+          http_status: 200,
+        })
       );
     });
 
@@ -191,31 +216,34 @@ describe("CallbackNotificationService", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(harness.log.info).toHaveBeenCalledWith(
-        "Callback succeeded",
-        expect.objectContaining({ message_id: "msg-1" })
+        "callback.complete_delivery",
+        expect.objectContaining({ message_id: "msg-1", attempts: 2, retries: 1 })
       );
     });
 
-    it("safely bounds failed response bodies in logs", async () => {
+    it("emits one terminal event after retries are exhausted", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ channel: "C123" }),
         source: "slack",
       });
-      const unreadableResponse = new Response("unreadable", { status: 503 });
-      vi.spyOn(unreadableResponse, "text").mockRejectedValue(new Error("body unavailable"));
-      harness.slackBot.fetch
-        .mockResolvedValueOnce(unreadableResponse)
-        .mockResolvedValueOnce(new Response("x".repeat(600), { status: 503 }));
+      harness.slackBot.fetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
 
       await harness.service.notifyComplete("msg-1", false);
 
-      expect(harness.log.error).toHaveBeenCalledWith(
-        "Callback failed",
-        expect.objectContaining({ response_text: "" })
-      );
-      expect(harness.log.error).toHaveBeenCalledWith(
-        "Callback failed",
-        expect.objectContaining({ response_text: "x".repeat(500) })
+      const terminalEvents = vi
+        .mocked(harness.log.error)
+        .mock.calls.filter(([event]) => event === "callback.complete_delivery");
+      expect(terminalEvents).toHaveLength(1);
+      expect(terminalEvents[0][1]).toEqual(
+        expect.objectContaining({
+          session_id: "session-123",
+          message_id: "msg-1",
+          outcome: "error",
+          duration_ms: expect.any(Number),
+          attempts: 2,
+          retries: 1,
+          http_status: 503,
+        })
       );
     });
 
@@ -765,8 +793,21 @@ describe("CallbackNotificationService", () => {
 
       await h.service.notifyComplete("msg-1", true);
 
-      expect(h.log.warn).toHaveBeenCalledWith(
-        "No SCHEDULER_CALLBACK binding, skipping automation notification"
+      const terminalEvents = vi
+        .mocked(h.log.info)
+        .mock.calls.filter(([event]) => event === "callback.complete_delivery");
+      expect(terminalEvents).toHaveLength(1);
+      expect(terminalEvents[0][1]).toEqual(
+        expect.objectContaining({
+          session_id: "session-123",
+          message_id: "msg-1",
+          source: "automation",
+          outcome: "rejected",
+          reject_reason: "no_binding",
+          duration_ms: expect.any(Number),
+          attempts: 0,
+          retries: 0,
+        })
       );
     });
 
@@ -797,8 +838,8 @@ describe("CallbackNotificationService", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(h.log.info).toHaveBeenCalledWith(
-        "Automation callback succeeded",
-        expect.objectContaining({ automation_id: "auto-1" })
+        "callback.complete_delivery",
+        expect.objectContaining({ source: "automation", attempts: 2, retries: 1 })
       );
     });
 

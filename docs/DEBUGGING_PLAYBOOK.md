@@ -116,13 +116,14 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 
 #### Session Durable Object (`component: "session-do"`)
 
-| Event             | Level      | Key Fields                                                                                                     | Description                    |
-| ----------------- | ---------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `do.request`      | info       | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                            | One per DO internal route call |
-| `ws.connect`      | info, warn | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`         | WebSocket lifecycle            |
-| `prompt.enqueue`  | info       | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position` | Message queued                 |
-| `prompt.dispatch` | info       | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                  | Message sent to sandbox        |
-| `prompt.complete` | info, warn | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                    | Prompt run finished            |
+| Event                        | Level       | Key Fields                                                                                                            | Description                         |
+| ---------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                   | One per DO internal route call      |
+| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                | WebSocket lifecycle                 |
+| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`        | Message queued                      |
+| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox             |
+| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                           | Prompt run finished                 |
+| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason` | Completion callback delivery result |
 
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 
