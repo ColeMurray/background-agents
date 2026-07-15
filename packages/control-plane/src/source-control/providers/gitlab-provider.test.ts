@@ -129,6 +129,28 @@ describe("GitLabSourceControlProvider", () => {
       expect((err as SourceControlProviderError).errorType).toBe("permanent");
       expect((err as SourceControlProviderError).httpStatus).toBe(401);
     });
+
+    it("throws permanent error when the project response shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 42,
+          path: "web",
+          path_with_namespace: "acme/web",
+          namespace: {},
+          default_branch: "main",
+          visibility: "private",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .getRepository({ authType: "pat", token: "user-token" }, { owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
+    });
   });
 
   describe("createPullRequest", () => {
@@ -374,6 +396,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "acme", full_path: "acme" },
           path: "web",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -395,6 +418,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "backend", full_path: "acme/backend" },
           path: "web",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -418,7 +442,7 @@ describe("GitLabSourceControlProvider", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
           id: 99,
-          namespace: { path: "acme" },
+          namespace: { path: "acme", full_path: "acme" },
           path: "web",
           default_branch: "main",
           archived: true,
@@ -450,6 +474,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "ACME", full_path: "ACME" },
           path: "WEB",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -458,6 +483,26 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(result?.repoOwner).toBe("acme");
       expect(result?.repoName).toBe("web");
+    });
+
+    it("throws permanent error when the access response shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 99,
+          namespace: { path: "acme", full_path: "acme" },
+          path: "web",
+          default_branch: "main",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .checkRepositoryAccess({ owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
     });
   });
 
@@ -588,6 +633,29 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).errorType).toBe("transient");
+    });
+
+    it("throws permanent error when a listed repository shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([
+          {
+            id: 1,
+            path: "web",
+            path_with_namespace: "acme/web",
+            namespace: { path: "acme", full_path: "acme" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+          },
+        ])
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider.listRepositories().catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
     });
   });
 
