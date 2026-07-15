@@ -57,7 +57,7 @@ describe("E2BRestClient", () => {
       templateID: "tmpl-123",
       envVars: { FOO: "bar" },
       metadata: { k: "v" },
-      timeout: 3300,
+      timeoutSeconds: 3300,
       autoPause: false,
     });
     const [, init] = fetchSpy.mock.calls[0];
@@ -76,7 +76,7 @@ describe("E2BRestClient", () => {
     fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-new", templateID: "tmpl-123" }));
     await client.createSandbox({
       templateID: "tmpl-123",
-      timeout: 3300,
+      timeoutSeconds: 3300,
       autoPause: true,
       autoResume: true,
     });

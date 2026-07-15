@@ -56,7 +56,7 @@ export interface E2BCreateSandboxParams {
   templateID: string;
   envVars?: Record<string, string>;
   metadata?: Record<string, string>;
-  timeout?: number;
+  timeoutSeconds?: number;
   /** Pause (not kill) the sandbox when its timeout expires. */
   autoPause?: boolean;
   /** Wake a paused sandbox on inbound activity (only meaningful with autoPause). */
@@ -105,7 +105,7 @@ export class E2BRestClient {
         templateID: params.templateID,
         envVars: params.envVars,
         metadata: params.metadata,
-        timeout: params.timeout,
+        timeout: params.timeoutSeconds,
         autoPause: params.autoPause ?? false,
         autoResume: { enabled: params.autoResume ?? false },
       });

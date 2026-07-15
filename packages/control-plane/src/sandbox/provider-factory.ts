@@ -138,7 +138,7 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
       env.E2B_SANDBOX_TIMEOUT_SECONDS,
       DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS
     ),
-    autoPause: parseBooleanEnv(env.E2B_AUTO_PAUSE, DEFAULT_E2B_AUTO_PAUSE),
+    autoPause: parseBooleanEnv("E2B_AUTO_PAUSE", env.E2B_AUTO_PAUSE, DEFAULT_E2B_AUTO_PAUSE),
   });
 }
 
@@ -183,8 +183,10 @@ function parseNumericEnv(name: string, value: string | undefined, defaultValue: 
   return parsed;
 }
 
-function parseBooleanEnv(value: string | undefined, defaultValue: boolean): boolean {
+function parseBooleanEnv(name: string, value: string | undefined, defaultValue: boolean): boolean {
   const raw = value?.trim().toLowerCase();
   if (!raw) return defaultValue;
-  return raw !== "false" && raw !== "0";
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  throw new Error(`${name} must be a valid boolean`);
 }

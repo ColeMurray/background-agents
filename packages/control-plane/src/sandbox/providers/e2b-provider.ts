@@ -86,7 +86,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       const sandbox = await this.client.createSandbox({
         templateID: this.client.config.templateId,
         metadata,
-        timeout: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
+        timeoutSeconds: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
         autoPause: this.providerConfig.autoPause,
         // Auto-resume tracks auto-pause: a recoverable pause you can't auto-wake
         // would be pointless.

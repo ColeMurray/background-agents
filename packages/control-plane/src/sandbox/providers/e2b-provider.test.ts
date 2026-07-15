@@ -195,7 +195,9 @@ describe("E2BSandboxProvider", () => {
     const provider = new E2BSandboxProvider(client, providerConfig);
 
     await provider.createSandbox({ ...baseCreateConfig, timeoutSeconds: 3600 });
-    expect(client.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ timeout: 3600 }));
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutSeconds: 3600 })
+    );
 
     await provider.resumeSandbox({
       providerObjectId: "e2b-id",
@@ -210,7 +212,9 @@ describe("E2BSandboxProvider", () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);
     await provider.createSandbox(baseCreateConfig);
-    expect(client.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ timeout: 1800 }));
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutSeconds: 1800 })
+    );
   });
 
   it("kills the created sandbox when writeSessionEnv fails (no leak)", async () => {
