@@ -492,6 +492,41 @@ describe("D1 SessionIndexStore", () => {
       expect(children[1].id).toBe(childId1); // older
     });
 
+    it("listByParent attaches pull request summaries to children", async () => {
+      const now = Date.now();
+      await new SessionPullRequestStore(env.DB).upsert({
+        artifactId: "child-pr-artifact",
+        sessionId: childId1,
+        repositoryExternalId: "1",
+        repoOwner: "owner",
+        repoName: "repo",
+        prNumber: 42,
+        url: "https://github.com/owner/repo/pull/42",
+        lifecycleState: "open",
+        isDraft: false,
+        headBranch: "open-inspect/child-session-1",
+        baseBranch: "main",
+        headSha: null,
+        providerCreatedAt: null,
+        providerUpdatedAt: null,
+        mergedAt: null,
+        closedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const children = await store.listByParent(parentId);
+
+      expect(children.find((child) => child.id === childId1)?.pullRequestSummary).toEqual({
+        total: 1,
+        open: 1,
+        draft: 0,
+        merged: 0,
+        closed: 0,
+      });
+      expect(children.find((child) => child.id === childId2)?.pullRequestSummary).toBeUndefined();
+    });
+
     it("listByParent returns empty array when no children exist", async () => {
       const children = await store.listByParent("nonexistent-parent");
       expect(children).toEqual([]);

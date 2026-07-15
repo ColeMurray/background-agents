@@ -456,7 +456,7 @@ export class SessionIndexStore {
       .prepare(`SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at DESC`)
       .bind(parentSessionId)
       .all<SessionRow>();
-    return (result.results || []).map(toEntry);
+    return this.decorateEntries((result.results || []).map(toEntry));
   }
 
   /** Count active (non-terminal) children for concurrent cap enforcement. */

@@ -165,6 +165,7 @@ describe("SessionSidebar", () => {
       spawnSource: "agent",
       spawnDepth: 1,
       updatedAt: 3000,
+      pullRequestSummary: { total: 1, open: 0, draft: 0, merged: 1, closed: 0 },
     });
     const grandchild = createSession(3, {
       title: "Grandchild session",
@@ -192,7 +193,9 @@ describe("SessionSidebar", () => {
     );
 
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
-    expect(screen.getByText("Child session")).toBeInTheDocument();
+    const childLink = screen.getByText("Child session").closest("a");
+    expect(childLink).toBeInTheDocument();
+    expect(childLink).toContainElement(screen.getByLabelText("PR merged"));
     expect(screen.getByText("Grandchild session")).toBeInTheDocument();
   });
 
