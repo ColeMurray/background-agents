@@ -47,6 +47,18 @@ _STANDARD_ATTRS = {
     # Our internal attributes (prefixed with _)
     "_component",
     "_service",
+    "_msg",
+}
+
+_OWNED_FIELDS = {
+    "level",
+    "service",
+    "component",
+    "msg",
+    "ts",
+    "error_type",
+    "error_message",
+    "error_stack",
 }
 
 
@@ -58,12 +70,12 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname.lower(),
             "service": getattr(record, "_service", "modal-infra"),
             "component": getattr(record, "_component", record.name),
-            "event": record.getMessage(),
+            "msg": getattr(record, "_msg", record.getMessage()),
             "ts": int(record.created * 1000),
         }
         # Merge extra fields from record.__dict__ (skip standard attrs)
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_ATTRS and key not in output and not key.startswith("_"):
+            if key not in _STANDARD_ATTRS and key not in _OWNED_FIELDS and not key.startswith("_"):
                 output[key] = value
         # Extract exception info
         if record.exc_info and record.exc_info[1]:
@@ -143,6 +155,7 @@ class StructuredLogger:
             **kw,
             "_component": self._component,
             "_service": self._service,
+            "_msg": event,
         }
         self._logger.log(
             level,

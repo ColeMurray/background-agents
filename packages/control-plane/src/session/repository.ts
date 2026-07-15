@@ -162,6 +162,7 @@ export interface CreateMessageData {
   authorId: string;
   content: string;
   source: MessageSource;
+  traceId?: string | null;
   model?: string | null;
   reasoningEffort?: string | null;
   attachments?: string | null;
@@ -758,26 +759,28 @@ export class SessionRepository {
 
   getMessageCallbackContext(
     messageId: string
-  ): { callback_context: string | null; source: string | null } | null {
+  ): { callback_context: string | null; source: string | null; trace_id?: string | null } | null {
     const result = this.sql.exec(
-      `SELECT callback_context, source FROM messages WHERE id = ?`,
+      `SELECT callback_context, source, trace_id FROM messages WHERE id = ?`,
       messageId
     );
     const rows = result.toArray() as Array<{
       callback_context: string | null;
       source: string | null;
+      trace_id: string | null;
     }>;
     return rows[0] ?? null;
   }
 
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
-      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, author_id, content, source, trace_id, model, reasoning_effort, attachments, callback_context, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
       data.source,
+      data.traceId ?? null,
       data.model ?? null,
       data.reasoningEffort ?? null,
       data.attachments ?? null,

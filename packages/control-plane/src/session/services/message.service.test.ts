@@ -45,6 +45,7 @@ describe("MessageService", () => {
       content: "hello",
       authorId: "user-1",
       source: "web",
+      traceId: "trace-1",
     });
 
     expect(result).toEqual({ messageId: "msg-1", status: "queued" });
@@ -52,6 +53,7 @@ describe("MessageService", () => {
       content: "hello",
       authorId: "user-1",
       source: "web",
+      traceId: "trace-1",
     });
   });
 
@@ -173,6 +175,7 @@ describe("MessageService", () => {
         author_id: "p1",
         content: "3",
         source: "web",
+        trace_id: "trace-3",
         model: null,
         reasoning_effort: null,
         attachments: null,
@@ -188,6 +191,7 @@ describe("MessageService", () => {
         author_id: "p1",
         content: "2",
         source: "web",
+        trace_id: null,
         model: null,
         reasoning_effort: null,
         attachments: null,
@@ -203,6 +207,7 @@ describe("MessageService", () => {
         author_id: "p1",
         content: "1",
         source: "web",
+        trace_id: "trace-1",
         model: null,
         reasoning_effort: null,
         attachments: null,

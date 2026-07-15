@@ -117,6 +117,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     author_id: "user-1",
     content: "Do the thing",
     source: "web",
+    trace_id: null,
     model: null,
     reasoning_effort: null,
     attachments: null,

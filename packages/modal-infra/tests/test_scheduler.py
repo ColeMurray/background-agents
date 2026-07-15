@@ -479,12 +479,12 @@ class TestBuildImageCallbackPayloads:
             stdout_lines=[
                 json.dumps(
                     {
-                        "event": "git.sync_complete",
+                        "msg": "git.sync_complete",
                         "head_sha": "sha-web",
                         "repository_shas": REPOSITORY_SHAS,
                     }
                 ),
-                json.dumps({"event": "image_build.complete", "runtime_version": RUNTIME_VERSION}),
+                json.dumps({"msg": "image_build.complete", "runtime_version": RUNTIME_VERSION}),
             ]
         )
         with self._patched_build(handle) as callback:
@@ -513,7 +513,7 @@ class TestBuildImageCallbackPayloads:
     async def test_failure_payload_is_identical_for_every_scope_kind(self, scope_kwargs):
         handle = self._build_handle(
             stdout_lines=[
-                json.dumps({"event": "setup.failed", "output_tail": "npm install failed"}),
+                json.dumps({"msg": "setup.failed", "output_tail": "npm install failed"}),
             ],
             returncode=1,
         )

@@ -131,6 +131,7 @@ function badJsonRequest(message: string): Response {
 interface StartInvocationParams {
   automation: AutomationRow;
   source: AutomationInvocationSource;
+  traceId?: string;
   /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
   scheduledAt?: number;
   /** Next cron slot, advanced atomically with the insert (schedule source only). */
@@ -351,12 +352,17 @@ export class SchedulerDO extends DurableObject<Env> {
 
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
-        const { sessionId } = await this.createSessionForAutomationRun(automation, child);
+        const { sessionId } = await this.createSessionForAutomationRun(
+          automation,
+          child,
+          params.traceId
+        );
         await this.sendPromptToSession(
           sessionId,
           automation,
           child.id,
-          params.instructionsOverride
+          params.instructionsOverride,
+          params.traceId
         );
         await store.updateRun(child.id, {
           status: "running",
@@ -787,6 +793,7 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Event handler ───────────────────────────────────────────────────────
 
   private async handleEvent(request: Request): Promise<Response> {
+    const traceId = request.headers.get("x-trace-id") ?? undefined;
     const parsedEvent = automationEventSchema.safeParse(await request.json());
     if (!parsedEvent.success) {
       return badJsonRequest("Invalid automation event");
@@ -856,7 +863,10 @@ export class SchedulerDO extends DurableObject<Env> {
           event.concurrencyKey,
           now - SLACK_THREAD_CONTINUITY_WINDOW_MS
         );
-        if (steerable?.session_id && (await this.steerSession(steerable, automation, event))) {
+        if (
+          steerable?.session_id &&
+          (await this.steerSession(steerable, automation, event, traceId))
+        ) {
           steered++;
           continue;
         }
@@ -882,6 +892,7 @@ export class SchedulerDO extends DurableObject<Env> {
       const result = await this.startInvocation(store, {
         automation,
         source: "event",
+        traceId,
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
@@ -932,6 +943,7 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
   private async handleTrigger(request: Request): Promise<Response> {
+    const traceId = request.headers.get("x-trace-id") ?? undefined;
     const parsedBody = manualTriggerBodySchema.safeParse(await request.json());
     if (!parsedBody.success) return badJsonRequest("automationId required");
 
@@ -946,7 +958,7 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
-    const result = await this.startInvocation(store, { automation, source: "manual" });
+    const result = await this.startInvocation(store, { automation, source: "manual", traceId });
 
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing and answers 409.
@@ -1198,7 +1210,8 @@ export class SchedulerDO extends DurableObject<Env> {
 
   private async createSessionForAutomationRun(
     automation: AutomationRow,
-    run: AutomationRunRow
+    run: AutomationRunRow,
+    traceId?: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
 
@@ -1223,7 +1236,7 @@ export class SchedulerDO extends DurableObject<Env> {
     }
 
     const ctx: RequestContext = {
-      trace_id: `automation:${automation.id}`,
+      trace_id: traceId ?? `automation:${automation.id}`,
       request_id: run.id,
       metrics: createRequestMetrics(),
     };
@@ -1277,7 +1290,8 @@ export class SchedulerDO extends DurableObject<Env> {
     sessionId: string,
     automation: AutomationRow,
     runId: string,
-    instructionsOverride?: string
+    instructionsOverride?: string,
+    traceId?: string
   ): Promise<void> {
     const callbackContext: AutomationCallbackContext = {
       source: "automation",
@@ -1291,6 +1305,7 @@ export class SchedulerDO extends DurableObject<Env> {
       authorId: automation.created_by,
       source: "automation",
       callbackContext,
+      traceId,
     });
   }
 
@@ -1307,7 +1322,8 @@ export class SchedulerDO extends DurableObject<Env> {
   private async steerSession(
     run: AutomationRunRow,
     automation: AutomationRow,
-    event: SlackAutomationEvent
+    event: SlackAutomationEvent,
+    traceId?: string
   ): Promise<boolean> {
     const sessionId = run.session_id!;
     const callbackContext: SlackCallbackContext = {
@@ -1328,6 +1344,7 @@ export class SchedulerDO extends DurableObject<Env> {
         authorId: `slack:${event.actorUserId}`,
         source: "slack",
         callbackContext,
+        traceId,
       });
       this.log.info("Steered thread session with slack follow-up", {
         event: "scheduler.slack_steer",
@@ -1355,12 +1372,16 @@ export class SchedulerDO extends DurableObject<Env> {
       authorId: string;
       source: string;
       callbackContext: AutomationCallbackContext | SlackCallbackContext;
+      traceId?: string;
     }
   ): Promise<void> {
     const stub = this.env.SESSION.get(this.env.SESSION.idFromName(sessionId));
     const promptResponse = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(body.traceId ? { "x-trace-id": body.traceId } : {}),
+      },
       body: JSON.stringify(body),
     });
 

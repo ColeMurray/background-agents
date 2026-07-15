@@ -17,7 +17,7 @@ async function handleSentryWebhook(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const automationId = match.groups?.id;
   if (!automationId) return error("Automation ID required", 400);
@@ -88,7 +88,7 @@ async function handleSentryWebhook(
 
   const response = await stub.fetch("http://internal/internal/event", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-trace-id": ctx.trace_id },
     body: JSON.stringify(event),
   });
 

@@ -8,6 +8,7 @@ export interface EnqueuePromptRequest {
   content: string;
   authorId: string;
   source: string;
+  traceId?: string | null;
   model?: string;
   reasoningEffort?: string;
   attachments?: Array<{ type: string; name: string; url?: string }>;

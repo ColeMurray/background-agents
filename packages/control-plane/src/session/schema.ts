@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS messages (
   author_id TEXT NOT NULL,
   content TEXT NOT NULL,
   source TEXT NOT NULL,                             -- 'web', 'slack', 'extension', 'github'
+  trace_id TEXT,                                   -- Originating x-trace-id, when provided by the caller
   model TEXT,                                       -- LLM model for this specific message (per-message override)
   reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
@@ -440,6 +441,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(sql, `ALTER TABLE artifacts ADD COLUMN updated_at INTEGER`);
       sql.exec(`UPDATE artifacts SET updated_at = created_at WHERE updated_at IS NULL`);
     },
+  },
+  {
+    id: 35,
+    description: "Add trace_id to messages",
+    run: `ALTER TABLE messages ADD COLUMN trace_id TEXT`,
   },
 ];
 

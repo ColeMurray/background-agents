@@ -47,7 +47,7 @@ class TestJSONFormatter:
         assert record["level"] == "info"
         assert record["service"] == "modal-infra"
         assert record["component"] == "test-component"
-        assert record["event"] == "test.event"
+        assert record["msg"] == "test.event"
         assert isinstance(record["ts"], int)
 
     def test_extra_fields_included(self):
@@ -165,6 +165,13 @@ class TestStructuredLogger:
         log = get_logger("override-test", sandbox_id="sb-1")
         record = _capture_log(log, sandbox_id="sb-override")
         assert record["sandbox_id"] == "sb-override"
+
+    def test_extra_cannot_override_owned_fields(self):
+        log = get_logger("owned-fields")
+        record = _capture_log(log, msg="override", level="debug", component="fake")
+        assert record["msg"] == "test.event"
+        assert record["level"] == "info"
+        assert record["component"] == "owned-fields"
 
 
 class TestConfigureLogging:

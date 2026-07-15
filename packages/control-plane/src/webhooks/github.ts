@@ -139,7 +139,11 @@ async function handleGitHubAutomationEvent(
     await lifecycleWork;
   }
 
-  return forwardAutomationEventToScheduler(env, validated.event);
+  return forwardAutomationEventToScheduler(
+    env,
+    validated.event,
+    request.headers.get("x-trace-id") ?? undefined
+  );
 }
 
 export const githubAutomationEventRoute: Route = {
