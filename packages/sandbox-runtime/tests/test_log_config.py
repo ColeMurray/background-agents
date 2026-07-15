@@ -24,7 +24,7 @@ def _reset_root_logger():
     logging.root.level = original_level
 
 
-def _capture_log(logger: StructuredLogger, level: str = "info", **kwargs) -> dict:
+def _capture_log(logger: StructuredLogger, method: str = "info", **kwargs) -> dict:
     """Capture a single log record as parsed JSON."""
     stream = StringIO()
     handler = logging.StreamHandler(stream)
@@ -33,7 +33,7 @@ def _capture_log(logger: StructuredLogger, level: str = "info", **kwargs) -> dic
     py_logger.addHandler(handler)
     py_logger.setLevel(logging.DEBUG)
     try:
-        getattr(logger, level)("test.event", **kwargs)
+        getattr(logger, method)("test.event", **kwargs)
         output = stream.getvalue().strip()
         return json.loads(output)
     finally:
@@ -66,7 +66,14 @@ class TestJSONFormatter:
         py_logger.setLevel(logging.DEBUG)
         try:
             exc = ValueError("something broke")
-            log.error("test.error", exc=exc, extra_field="val")
+            log.error(
+                "test.error",
+                exc=exc,
+                extra_field="val",
+                error_type="FakeError",
+                error_message="fake message",
+                error_stack="fake stack",
+            )
             output = stream.getvalue().strip()
             record = json.loads(output)
             assert record["level"] == "error"
@@ -185,7 +192,7 @@ class TestStructuredLogger:
         assert record["component"] == "owned-fields"
         assert record["service"] == "modal-infra"
         assert "asctime" not in record
-        assert "error_message" not in record
+        assert record["error_message"] == "fake-error"
 
 
 class TestConfigureLogging:

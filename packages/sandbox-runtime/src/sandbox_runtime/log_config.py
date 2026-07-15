@@ -57,6 +57,9 @@ _OWNED_FIELDS = {
     "component",
     "msg",
     "ts",
+}
+
+_EXCEPTION_FIELDS = {
     "error_type",
     "error_message",
     "error_stack",
@@ -155,7 +158,7 @@ class StructuredLogger:
             **self._context,
             **kw,
         }
-        for key in _STANDARD_ATTRS | _OWNED_FIELDS:
+        for key in _STANDARD_ATTRS | _OWNED_FIELDS | (_EXCEPTION_FIELDS if exc else set()):
             extra.pop(key, None)
         extra.update(
             _component=self._component,
