@@ -19,7 +19,7 @@ import type { SessionRow } from "./types";
 export interface CallbackRepository {
   getMessageCallbackContext(
     messageId: string
-  ): { callback_context: string | null; source: string | null } | null;
+  ): { callback_context: string | null; source: string | null; trace_id?: string | null } | null;
   getSession(): SessionRow | null;
 }
 
@@ -141,6 +141,7 @@ export class CallbackNotificationService {
     await notifyLinearStarted({
       messageId,
       callbackContext: message.callback_context,
+      traceId: message.trace_id ?? null,
       sessionId: this.getSessionId(),
       secret: this.env.INTERNAL_CALLBACK_SECRET,
       binding: this.env.LINEAR_BOT,
@@ -176,7 +177,13 @@ export class CallbackNotificationService {
 
       // Route automation callbacks to SchedulerDO (different URL + payload).
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(context, success, error, messageId);
+        result = await this.notifyAutomationComplete(
+          context,
+          success,
+          error,
+          messageId,
+          message.trace_id ?? null
+        );
         return;
       }
 
@@ -206,7 +213,10 @@ export class CallbackNotificationService {
         (signal) =>
           binding.fetch("https://internal/callbacks/complete", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(message.trace_id ? { "x-trace-id": message.trace_id } : {}),
+            },
             body: JSON.stringify(payload),
             signal,
           }),
@@ -265,7 +275,8 @@ export class CallbackNotificationService {
     context: { automationId: string; runId: string; automationName: string },
     success: boolean,
     error: string | undefined,
-    messageId: string
+    messageId: string,
+    traceId: string | null
   ): Promise<CallbackDeliveryResult> {
     const binding = this.env.SCHEDULER_CALLBACK;
     if (!binding) {
@@ -287,7 +298,10 @@ export class CallbackNotificationService {
       (signal) =>
         binding.fetch("https://internal/internal/run-complete", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(traceId ? { "x-trace-id": traceId } : {}),
+          },
           body: JSON.stringify(payload),
           signal,
         }),

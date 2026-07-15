@@ -73,7 +73,7 @@ class BuildError(Exception):
 
 def _format_build_failure_event(entry: dict, redact_values: Iterable[str] = ()) -> str | None:
     """Return a concise build failure message from a structured log entry."""
-    event = entry.get("event")
+    event = entry.get("msg") or entry.get("event")
     if not isinstance(event, str):
         return None
     if event not in _SETUP_FAILURE_EVENTS | _SUPERVISOR_FAILURE_EVENTS:
@@ -196,9 +196,9 @@ async def _stream_build_logs(sandbox, redact_values: Iterable[str] = ()) -> Buil
     Stream sandbox stdout and extract build results.
 
     The entrypoint logs structured JSON lines. We look for:
-    - event="git.sync_complete" with "head_sha" (single-repo) and "repository_shas"
+    - msg="git.sync_complete" with "head_sha" (single-repo) and "repository_shas"
       (per-repository provenance, [{repoOwner, repoName, baseSha}])
-    - event="image_build.complete" with "runtime_version" to know the build
+    - msg="image_build.complete" with "runtime_version" to know the build
       finished and which runtime it baked
     - setup/supervisor errors to preserve the actual build failure
 
@@ -215,7 +215,9 @@ async def _stream_build_logs(sandbox, redact_values: Iterable[str] = ()) -> Buil
                 entry = json.loads(line)
                 if not isinstance(entry, dict):
                     continue
-                event = entry.get("event")
+                # New runtimes emit canonical msg; retain event fallback so old
+                # images continue to report build status during rollout.
+                event = entry.get("msg") or entry.get("event")
                 if not isinstance(event, str):
                     continue
                 if event == "git.sync_complete":

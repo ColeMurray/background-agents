@@ -45,7 +45,12 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
     async enqueuePrompt(request: Request): Promise<Response> {
       try {
         const body = (await request.json()) as EnqueuePromptRequest;
-        return Response.json(await deps.messageService.enqueuePrompt(body));
+        return Response.json(
+          await deps.messageService.enqueuePrompt({
+            ...body,
+            traceId: request.headers.get("x-trace-id"),
+          })
+        );
       } catch (error) {
         deps.getLog().error("handleEnqueuePrompt error", {
           error: error instanceof Error ? error : String(error),

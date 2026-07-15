@@ -42,7 +42,7 @@ describe("createMessagesHandler", () => {
     const response = await handler.enqueuePrompt(
       new Request("http://internal/internal/prompt", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-trace-id": "trace-123" },
         body: JSON.stringify({
           content: "hello",
           authorId: "user-1",
@@ -57,6 +57,7 @@ describe("createMessagesHandler", () => {
       content: "hello",
       authorId: "user-1",
       source: "web",
+      traceId: "trace-123",
     });
   });
 
@@ -230,6 +231,7 @@ describe("createMessagesHandler", () => {
           author_id: "p1",
           content: "hello",
           source: "web",
+          trace_id: "internal-trace",
           model: null,
           reasoning_effort: null,
           attachments: null,

@@ -617,6 +617,7 @@ describe("SessionRepository", () => {
         authorId: "p-1",
         content: "Hello",
         source: "web",
+        traceId: "trace-1",
         model: "claude-sonnet-4",
         attachments: "[]",
         callbackContext: '{"channel":"C123"}',
@@ -631,6 +632,7 @@ describe("SessionRepository", () => {
         "p-1",
         "Hello",
         "web",
+        "trace-1",
         "claude-sonnet-4",
         null,
         "[]",
@@ -1085,17 +1087,18 @@ describe("SessionRepository", () => {
 
   describe("getMessageCallbackContext", () => {
     it("returns null for unknown message", () => {
-      mock.setData(`SELECT callback_context, source FROM messages WHERE id = ?`, []);
+      mock.setData(`SELECT callback_context, source, trace_id FROM messages WHERE id = ?`, []);
       expect(repo.getMessageCallbackContext("unknown")).toBeNull();
     });
 
     it("returns callback context", () => {
-      mock.setData(`SELECT callback_context, source FROM messages WHERE id = ?`, [
-        { callback_context: '{"channel":"C123"}', source: "slack" },
+      mock.setData(`SELECT callback_context, source, trace_id FROM messages WHERE id = ?`, [
+        { callback_context: '{"channel":"C123"}', source: "slack", trace_id: "trace-1" },
       ]);
       expect(repo.getMessageCallbackContext("msg-1")).toEqual({
         callback_context: '{"channel":"C123"}',
         source: "slack",
+        trace_id: "trace-1",
       });
     });
   });

@@ -5,6 +5,7 @@ import { deliverWithRetry } from "./callback-delivery";
 interface LinearStartCallbackOptions {
   messageId: string;
   callbackContext: string;
+  traceId: string | null;
   sessionId: string;
   secret: string;
   binding: Fetcher;
@@ -24,6 +25,7 @@ interface StartCallbackDeliverySummary {
 async function deliverLinearStarted({
   messageId,
   callbackContext,
+  traceId,
   sessionId,
   secret,
   binding,
@@ -54,7 +56,10 @@ async function deliverLinearStarted({
       (signal) =>
         binding.fetch("https://internal/callbacks/start", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(traceId ? { "x-trace-id": traceId } : {}),
+          },
           body: JSON.stringify(payload),
           signal,
         }),
@@ -87,6 +92,7 @@ async function deliverLinearStarted({
 export async function notifyLinearStarted({
   messageId,
   callbackContext,
+  traceId,
   sessionId,
   secret,
   binding,
@@ -97,6 +103,7 @@ export async function notifyLinearStarted({
   const summary = await deliverLinearStarted({
     messageId,
     callbackContext,
+    traceId,
     sessionId,
     secret,
     binding,

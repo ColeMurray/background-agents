@@ -23,6 +23,7 @@ from typing import Any
 # Built from a blank LogRecord's __dict__ plus our custom underscore-prefixed attrs.
 _STANDARD_ATTRS = {
     "args",
+    "asctime",
     "created",
     "exc_info",
     "exc_text",
@@ -47,6 +48,21 @@ _STANDARD_ATTRS = {
     # Our internal attributes (prefixed with _)
     "_component",
     "_service",
+    "_msg",
+}
+
+_OWNED_FIELDS = {
+    "level",
+    "service",
+    "component",
+    "msg",
+    "ts",
+}
+
+_EXCEPTION_FIELDS = {
+    "error_type",
+    "error_message",
+    "error_stack",
 }
 
 
@@ -58,12 +74,12 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname.lower(),
             "service": getattr(record, "_service", "modal-infra"),
             "component": getattr(record, "_component", record.name),
-            "event": record.getMessage(),
+            "msg": getattr(record, "_msg", record.getMessage()),
             "ts": int(record.created * 1000),
         }
         # Merge extra fields from record.__dict__ (skip standard attrs)
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_ATTRS and key not in output and not key.startswith("_"):
+            if key not in _STANDARD_ATTRS and key not in _OWNED_FIELDS and not key.startswith("_"):
                 output[key] = value
         # Extract exception info
         if record.exc_info and record.exc_info[1]:
@@ -133,7 +149,7 @@ class StructuredLogger:
 
     def _log(
         self,
-        level: int,
+        log_level: int,
         event: str,
         exc: BaseException | None = None,
         **kw: Any,
@@ -141,11 +157,16 @@ class StructuredLogger:
         extra = {
             **self._context,
             **kw,
-            "_component": self._component,
-            "_service": self._service,
         }
+        for key in _STANDARD_ATTRS | _OWNED_FIELDS | (_EXCEPTION_FIELDS if exc else set()):
+            extra.pop(key, None)
+        extra.update(
+            _component=self._component,
+            _service=self._service,
+            _msg=event,
+        )
         self._logger.log(
-            level,
+            log_level,
             event,
             extra=extra,
             exc_info=(type(exc), exc, exc.__traceback__) if exc else None,

@@ -42,6 +42,25 @@ describe("POST /internal/prompt", () => {
     expect(["pending", "processing"]).toContain(messages[0].status);
   });
 
+  it("persists x-trace-id on the message row", async () => {
+    const { stub } = await initSession();
+
+    const res = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-trace-id": "trace-enqueue-1" },
+      body: JSON.stringify({ content: "Trace this", authorId: "user-1", source: "web" }),
+    });
+
+    const { messageId } = await res.json<{ messageId: string }>();
+    const messages = await queryDO<{ trace_id: string | null }>(
+      stub,
+      `SELECT trace_id FROM messages WHERE id = ?`,
+      messageId
+    );
+
+    expect(messages[0].trace_id).toBe("trace-enqueue-1");
+  });
+
   it("creates participant for new authorId", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 

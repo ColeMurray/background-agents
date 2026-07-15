@@ -938,7 +938,7 @@ async function handleTriggerAutomation(
 
   const triggerResponse = await stub.fetch("http://internal/internal/trigger", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-trace-id": ctx.trace_id },
     body: JSON.stringify({ automationId: id }),
   });
 

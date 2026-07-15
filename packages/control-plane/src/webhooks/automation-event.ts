@@ -73,7 +73,8 @@ export function validateAutomationEventEnvelope(
 /** Forward a validated event to the singleton SchedulerDO for matching. */
 export async function forwardAutomationEventToScheduler(
   env: Env,
-  event: Record<string, unknown>
+  event: object,
+  traceId?: string
 ): Promise<Response> {
   if (!env.SCHEDULER) {
     return error("Scheduler not configured", 503);
@@ -84,7 +85,10 @@ export async function forwardAutomationEventToScheduler(
   try {
     response = await stub.fetch("http://internal/internal/event", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(traceId ? { "x-trace-id": traceId } : {}),
+      },
       body: JSON.stringify(event),
     });
   } catch {
@@ -126,7 +130,11 @@ export function createAutomationEventRoute(opts: {
     const validated = validateAutomationEventEnvelope(body, opts.source, opts.validate);
     if (validated.response) return validated.response;
 
-    return forwardAutomationEventToScheduler(env, validated.event);
+    return forwardAutomationEventToScheduler(
+      env,
+      validated.event,
+      request.headers.get("x-trace-id") ?? undefined
+    );
   }
 
   return { method: "POST", pattern: parsePattern(opts.path), handler };

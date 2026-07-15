@@ -140,8 +140,14 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       const request = call[0] as Request;
       return new URL(request.url).pathname === SessionInternalPaths.init;
     })?.[0] as Request | undefined;
+    const promptRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
+      const request = call[0] as Request;
+      return new URL(request.url).pathname === SessionInternalPaths.prompt;
+    })?.[0] as Request | undefined;
     expect(initRequest).toBeDefined();
+    expect(promptRequest).toBeDefined();
     await expect(initRequest!.json()).resolves.toMatchObject({ environmentId: "env_parent" });
+    expect(promptRequest!.headers.get("x-trace-id")).toBeTruthy();
     expect(store.updateStatus).not.toHaveBeenCalled();
   });
 

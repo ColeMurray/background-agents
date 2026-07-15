@@ -151,6 +151,7 @@ describe("CallbackNotificationService", () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ channel: "C123", threadTs: "1234.5678" }),
         source: "slack",
+        trace_id: "trace-1",
       });
 
       const mockResponse = new Response("ok", { status: 200 });
@@ -166,7 +167,7 @@ describe("CallbackNotificationService", () => {
         "https://internal/callbacks/complete",
         expect.objectContaining({
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-trace-id": "trace-1" },
         })
       );
 
@@ -304,6 +305,7 @@ describe("CallbackNotificationService", () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify(context),
         source: "linear",
+        trace_id: "trace-start-1",
       });
       const fetchMock = harness.linearBot.fetch;
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
@@ -313,7 +315,10 @@ describe("CallbackNotificationService", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(fetchMock).toHaveBeenCalledWith(
         "https://internal/callbacks/start",
-        expect.objectContaining({ method: "POST" })
+        expect.objectContaining({
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-trace-id": "trace-start-1" },
+        })
       );
       const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
       expect(body).toMatchObject({

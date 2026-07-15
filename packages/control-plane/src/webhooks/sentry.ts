@@ -9,6 +9,7 @@ import { decryptSentrySecret } from "../auth/webhook-key";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
 import type { Env } from "../types";
+import { forwardAutomationEventToScheduler } from "./automation-event";
 
 /** Maximum Sentry webhook payload size (256KB — Sentry payloads with stack traces can be large). */
 const MAX_PAYLOAD_SIZE = 256 * 1024;
@@ -79,21 +80,11 @@ async function handleSentryWebhook(
   }
 
   // 4. Forward to SchedulerDO
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-
-  const doId = env.SCHEDULER.idFromName("global-scheduler");
-  const stub = env.SCHEDULER.get(doId);
-
-  const response = await stub.fetch("http://internal/internal/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
-
-  const result = await response.json<{ triggered: number; skipped: number }>();
-  return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);
+  return forwardAutomationEventToScheduler(
+    env,
+    event,
+    request.headers.get("x-trace-id") ?? undefined
+  );
 }
 
 export const sentryWebhookRoute: Route = {

@@ -75,6 +75,7 @@ export interface MessageRow {
   author_id: string;
   content: string;
   source: MessageSource;
+  trace_id: string | null;
   model: string | null; // LLM model for per-message override
   reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON

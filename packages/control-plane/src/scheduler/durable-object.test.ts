@@ -242,6 +242,22 @@ async function getPromptBody(
   return JSON.parse(String(init?.body)) as Record<string, unknown>;
 }
 
+function getPromptTraceHeader(fetchMock: ReturnType<typeof vi.fn>): string | null {
+  const promptCall = fetchMock.mock.calls.find((call) => {
+    const input = call[0];
+    const url =
+      typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+    return new URL(url).pathname === "/internal/prompt";
+  });
+
+  expect(promptCall).toBeDefined();
+  const [input, init] = promptCall!;
+  if (input instanceof Request) {
+    return input.headers.get("x-trace-id");
+  }
+  return new Headers(init?.headers).get("x-trace-id");
+}
+
 function promptCallCount(fetchMock: ReturnType<typeof vi.fn>): number {
   return fetchMock.mock.calls.filter((call) => {
     const input = call[0];
@@ -396,7 +412,7 @@ function makeSlackEvent(overrides?: Record<string, unknown>) {
 function slackEventRequest(overrides?: Record<string, unknown>): Request {
   return new Request("http://internal/internal/event", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-trace-id": "trace-slack-1" },
     body: JSON.stringify(makeSlackEvent(overrides)),
   });
 }
@@ -2122,11 +2138,14 @@ describe("SchedulerDO", () => {
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
 
-      const scheduler = createSchedulerDO();
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+      const scheduler = createSchedulerDO(env);
       const res = await scheduler.fetch(
         new Request("http://internal/internal/trigger", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-trace-id": "trace-manual-1" },
           body: JSON.stringify({ automationId: "auto-1" }),
         })
       );
@@ -2151,6 +2170,7 @@ describe("SchedulerDO", () => {
       expect(body.invocationId).toEqual(expect.any(String));
       expect(body.runs[0].status).toBe("running");
       expect(body.runs).toHaveLength(1);
+      expect(getPromptTraceHeader(fetchMock)).toBe("trace-manual-1");
     });
 
     it("returns 500 when every launch fails, still recording the failed children", async () => {
@@ -2259,6 +2279,7 @@ describe("SchedulerDO", () => {
       expect(promptBody.source).toBe("slack");
       expect(promptBody.content).toBe("thanks — also update the changelog");
       expect(promptBody.authorId).toBe("slack:U1");
+      expect(getPromptTraceHeader(fetchMock)).toBe("trace-slack-1");
       expect(promptBody.callbackContext).toMatchObject({
         source: "slack",
         channel: "C1",

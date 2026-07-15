@@ -58,6 +58,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     author_id: "part-1",
     content: "hello",
     source: "web",
+    trace_id: null,
     model: null,
     reasoning_effort: null,
     attachments: null,
@@ -307,10 +308,14 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github-bot",
+        traceId: "trace-1",
         authorDisplayName: "Octo Cat",
       });
 
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "Octo Cat");
+      expect(h.repository.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ traceId: "trace-1" })
+      );
     });
 
     it("uses authorId as display name when authorDisplayName is missing", async () => {

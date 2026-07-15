@@ -242,4 +242,15 @@ describe("applyMigrations", () => {
     );
     expect(backfill).toBeDefined();
   });
+
+  it("adds messages.trace_id for both fresh DOs and migrated DOs", () => {
+    const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
+      ");"
+    )[0];
+    expect(messagesTable).toContain("trace_id TEXT");
+
+    const migration = MIGRATIONS.find((m) => m.id === 35);
+    expect(migration).toBeDefined();
+    expect(migration?.run).toContain("ALTER TABLE messages ADD COLUMN trace_id TEXT");
+  });
 });

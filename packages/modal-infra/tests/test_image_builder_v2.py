@@ -189,10 +189,10 @@ class TestStreamBuildLogs:
     async def test_returns_sha_and_complete(self):
         """Should return head_sha and build_complete=True on success."""
         log_lines = [
-            json.dumps({"level": "info", "event": "supervisor.start"}),
-            json.dumps({"level": "info", "event": "git.clone_start"}),
-            json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123def456"}),
-            json.dumps({"level": "info", "event": "image_build.complete", "duration_ms": 5000}),
+            json.dumps({"level": "info", "msg": "supervisor.start"}),
+            json.dumps({"level": "info", "msg": "git.clone_start"}),
+            json.dumps({"level": "info", "msg": "git.sync_complete", "head_sha": "abc123def456"}),
+            json.dumps({"level": "info", "msg": "image_build.complete", "duration_ms": 5000}),
         ]
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
@@ -206,8 +206,8 @@ class TestStreamBuildLogs:
     async def test_complete_without_sha(self):
         """Should return empty SHA but build_complete=True if sync_complete missing."""
         log_lines = [
-            json.dumps({"level": "info", "event": "supervisor.start"}),
-            json.dumps({"level": "info", "event": "image_build.complete"}),
+            json.dumps({"level": "info", "msg": "supervisor.start"}),
+            json.dumps({"level": "info", "msg": "image_build.complete"}),
         ]
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
@@ -237,18 +237,18 @@ class TestStreamBuildLogs:
     async def test_captures_setup_failure_tail(self):
         """Should preserve the setup failure that caused a build to exit."""
         log_lines = [
-            json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123"}),
+            json.dumps({"level": "info", "msg": "git.sync_complete", "head_sha": "abc123"}),
             json.dumps(
                 {
                     "level": "error",
-                    "event": "supervisor.error",
+                    "msg": "supervisor.error",
                     "error_message": "setup hook failed in build mode",
                 }
             ),
             json.dumps(
                 {
                     "level": "error",
-                    "event": "setup.failed",
+                    "msg": "setup.failed",
                     "output_tail": "npm install\nmissing dependency",
                 }
             ),
@@ -268,7 +268,7 @@ class TestStreamBuildLogs:
             json.dumps(
                 {
                     "level": "error",
-                    "event": "supervisor.error",
+                    "msg": "supervisor.error",
                     "error_message": "unexpected startup failure",
                 }
             ),
@@ -288,7 +288,7 @@ class TestStreamBuildLogs:
             json.dumps(
                 {
                     "level": "error",
-                    "event": "supervisor.fatal",
+                    "msg": "supervisor.fatal",
                     "error_message": "unexpected startup failure",
                 }
             ),
@@ -322,6 +322,20 @@ class TestStreamBuildLogs:
         """Should skip malformed JSON lines containing keywords."""
         log_lines = [
             "not json but has git.sync_complete in it",
+            json.dumps({"level": "info", "msg": "git.sync_complete", "head_sha": "abc123"}),
+            json.dumps({"level": "info", "msg": "image_build.complete"}),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = self._async_stdout(log_lines)
+
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123"
+        assert result.complete is True
+        assert result.error is None
+
+    @pytest.mark.asyncio
+    async def test_accepts_legacy_event_field_from_old_images(self):
+        log_lines = [
             json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123"}),
             json.dumps({"level": "info", "event": "image_build.complete"}),
         ]
