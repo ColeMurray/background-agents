@@ -53,18 +53,13 @@ describe("media helpers", () => {
     );
   });
 
-  it("accepts the prompt upload mime types", () => {
-    for (const mimeType of [
-      "image/png",
-      "image/jpeg",
-      "image/webp",
-      "image/gif",
-      "video/mp4",
-      "video/quicktime",
-      "video/webm",
-    ]) {
+  it("accepts only image prompt upload mime types", () => {
+    for (const mimeType of ["image/png", "image/jpeg", "image/webp", "image/gif"]) {
       expect(isSupportedPromptUploadMimeType(mimeType)).toBe(true);
     }
+    expect(isSupportedPromptUploadMimeType("video/mp4")).toBe(false);
+    expect(isSupportedPromptUploadMimeType("video/quicktime")).toBe(false);
+    expect(isSupportedPromptUploadMimeType("video/webm")).toBe(false);
     expect(isSupportedPromptUploadMimeType("application/pdf")).toBe(false);
     expect(isSupportedPromptUploadMimeType("image/svg+xml")).toBe(false);
   });
@@ -88,28 +83,15 @@ describe("media helpers", () => {
     expect(detectPromptUploadFileType(gif87)?.mimeType).toBe("image/gif");
   });
 
-  it("detects prompt upload videos including mov and webm", () => {
-    expect(detectPromptUploadFileType(MP4_SIGNATURE)).toEqual({
-      kind: "video",
-      mimeType: "video/mp4",
-      extension: "mp4",
-    });
-
+  it("rejects video prompt uploads", () => {
+    expect(detectPromptUploadFileType(MP4_SIGNATURE)).toBeNull();
     const mov = Uint8Array.from([
       0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20,
     ]);
-    expect(detectPromptUploadFileType(mov)).toEqual({
-      kind: "video",
-      mimeType: "video/quicktime",
-      extension: "mov",
-    });
+    expect(detectPromptUploadFileType(mov)).toBeNull();
 
     const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x01]);
-    expect(detectPromptUploadFileType(webm)).toEqual({
-      kind: "video",
-      mimeType: "video/webm",
-      extension: "webm",
-    });
+    expect(detectPromptUploadFileType(webm)).toBeNull();
   });
 
   it("rejects unsupported prompt upload bytes", () => {

@@ -271,6 +271,61 @@ describe("SessionMessageQueue", () => {
     );
   });
 
+  it("rejects inline video attachments at the queue boundary", async () => {
+    const h = buildQueue();
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "watch this",
+      attachments: [
+        {
+          type: "file",
+          name: "clip.mp4",
+          mimeType: "video/mp4",
+          content: "aGVsbG8=",
+        },
+      ],
+    });
+
+    expect(h.repository.createMessage).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        code: "INVALID_ATTACHMENTS",
+        message: "Video prompt attachments are not supported",
+      })
+    );
+  });
+
+  it("rejects upload records for videos at the queue boundary", async () => {
+    const h = buildQueue();
+    h.repository.getUnreferencedUploads.mockReturnValue([
+      {
+        id: "up-video",
+        kind: "video",
+        mime_type: "video/mp4",
+        size_bytes: 100,
+        object_key: "sessions/sess-1/uploads/up-video",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "watch this",
+      attachments: [{ type: "file", name: "clip.mp4", uploadId: "up-video" }],
+    });
+
+    expect(h.repository.createMessage).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        code: "INVALID_ATTACHMENTS",
+        message: "Video prompt attachments are not supported",
+      })
+    );
+  });
+
   it("omits attachments from the user_message event when none are sent", async () => {
     const h = buildQueue();
 

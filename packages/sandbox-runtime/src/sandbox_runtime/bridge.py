@@ -943,16 +943,6 @@ class AgentBridge:
         """Compatibility wrapper for tests and older bridge callers."""
         return await self.attachment_processor.hydrate_uploads(attachments)
 
-    def _is_video_attachment(self, attachment: dict[str, Any]) -> bool:
-        """Compatibility wrapper around the extracted attachment processor."""
-        return self.attachment_processor.is_video(attachment)
-
-    async def _expand_video_attachments(
-        self, attachments: list[dict[str, Any]] | None
-    ) -> list[dict[str, Any]] | None:
-        """Compatibility wrapper around the extracted attachment processor."""
-        return await self.attachment_processor.expand_videos(attachments)
-
     def _build_attachment_parts(
         self, attachments: list[dict[str, Any]] | None
     ) -> list[dict[str, Any]]:

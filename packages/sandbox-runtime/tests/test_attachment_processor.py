@@ -1,7 +1,6 @@
 """Tests for bounded prompt attachment processing."""
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -31,33 +30,23 @@ def processor() -> AttachmentProcessor:
     )
 
 
-async def test_upload_backed_video_streams_to_disk_without_byte_hydration(
+async def test_video_attachment_is_rejected_without_downloading(
     processor: AttachmentProcessor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def fail_byte_download(upload_id: str, max_bytes: int) -> bytes:
-        raise AssertionError("videos must not be buffered into bytes")
+    async def fail_download(upload_id: str, max_bytes: int) -> bytes:
+        raise AssertionError("unsupported attachments must not be downloaded")
 
-    async def download_to_file(upload_id: str, destination: Path) -> bool:
-        destination.write_bytes(b"video")
-        return True
-
-    async def extract(video_path: Path, out_dir: Path) -> list[Path]:
-        assert video_path.read_bytes() == b"video"
-        frame = out_dir / "frame.jpg"
-        frame.write_bytes(b"jpeg")
-        return [frame]
-
-    monkeypatch.setattr(processor, "_download_upload_bytes", fail_byte_download)
-    monkeypatch.setattr(processor, "_download_upload_to_file", download_to_file)
-    monkeypatch.setattr(processor, "_extract_video_frames", extract)
+    monkeypatch.setattr(processor, "_download_upload_bytes", fail_download)
 
     result = await processor.process(
         [{"type": "file", "name": "clip.mp4", "mimeType": "video/mp4", "uploadId": "up-1"}]
     )
 
-    assert result is not None
-    assert result[0]["type"] == "image"
-    assert result[0]["content"] == "anBlZw=="
+    assert result == []
+
+
+async def test_invalid_upload_id_is_rejected(processor: AttachmentProcessor) -> None:
+    assert await processor._download_upload_bytes("../admin", processor.MAX_IMAGE_BYTES) is None
 
 
 async def test_processing_concurrency_is_bounded(

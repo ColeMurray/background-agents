@@ -62,6 +62,7 @@ describe("createUploadsHandler", () => {
   it.each([
     ["missing uploadId", { ...VALID_BODY, uploadId: "" }],
     ["invalid kind", { ...VALID_BODY, kind: "pdf" }],
+    ["video kind", { ...VALID_BODY, kind: "video", mimeType: "video/mp4" }],
     ["missing mimeType", { ...VALID_BODY, mimeType: "" }],
     ["non-positive size", { ...VALID_BODY, sizeBytes: 0 }],
     ["non-integer size", { ...VALID_BODY, sizeBytes: 1.5 }],

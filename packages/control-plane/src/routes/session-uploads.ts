@@ -1,5 +1,5 @@
 /**
- * User-attached prompt media (chat composer attachments).
+ * User-attached prompt images (chat composer attachments).
  *
  * POST stores the file in the media bucket keyed by an unguessable upload id;
  * the prompt then references it as `{ uploadId }` so the message row and
@@ -24,7 +24,6 @@ import {
   isMultipartFile,
   isSupportedPromptUploadMimeType,
   PROMPT_UPLOAD_IMAGE_MAX_BYTES,
-  PROMPT_UPLOAD_VIDEO_MAX_BYTES,
 } from "../media";
 import { SessionInternalPaths } from "../session/contracts";
 import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-storage";
@@ -64,20 +63,18 @@ async function handleUploadPost(
     return error("Unsupported attachment MIME type", 400);
   }
 
-  if (fileEntry.size > PROMPT_UPLOAD_VIDEO_MAX_BYTES) {
-    return error(`Attachments must be ${PROMPT_UPLOAD_VIDEO_MAX_BYTES} bytes or smaller`, 400);
+  if (fileEntry.size > PROMPT_UPLOAD_IMAGE_MAX_BYTES) {
+    return error(`Images must be ${PROMPT_UPLOAD_IMAGE_MAX_BYTES} bytes or smaller`, 400);
   }
 
   const bytes = new Uint8Array(await fileEntry.arrayBuffer());
   const detected = detectPromptUploadFileType(bytes);
   if (!detected) {
-    return error("Uploaded file is not a supported image or video format", 400);
+    return error("Uploaded file is not a supported image format", 400);
   }
 
-  const maxBytes =
-    detected.kind === "image" ? PROMPT_UPLOAD_IMAGE_MAX_BYTES : PROMPT_UPLOAD_VIDEO_MAX_BYTES;
-  if (bytes.byteLength > maxBytes) {
-    return error(`${detected.kind} attachments must be ${maxBytes} bytes or smaller`, 400);
+  if (bytes.byteLength > PROMPT_UPLOAD_IMAGE_MAX_BYTES) {
+    return error(`Images must be ${PROMPT_UPLOAD_IMAGE_MAX_BYTES} bytes or smaller`, 400);
   }
 
   if (fileEntry.type && fileEntry.type !== detected.mimeType) {
@@ -130,7 +127,7 @@ async function handleUploadPost(
 
 interface UploadRecordRequest {
   uploadId: string;
-  kind: "image" | "video";
+  kind: "image";
   mimeType: string;
   sizeBytes: number;
   objectKey: string;

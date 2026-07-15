@@ -1,5 +1,5 @@
 import { attachmentSchema, type Attachment, type CallbackContext } from "@open-inspect/shared";
-import { PROMPT_UPLOAD_IMAGE_MAX_BYTES, PROMPT_UPLOAD_VIDEO_MAX_BYTES } from "../media";
+import { PROMPT_UPLOAD_IMAGE_MAX_BYTES } from "../media";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -39,10 +39,7 @@ function validateAttachments(raw: unknown): Attachment[] | Response | undefined 
       const byteLength = base64ByteLength(attachment.content);
       if (byteLength === null) return error("Invalid attachment content", 400);
 
-      const maxBytes = attachment.mimeType?.startsWith("video/")
-        ? PROMPT_UPLOAD_VIDEO_MAX_BYTES
-        : PROMPT_UPLOAD_IMAGE_MAX_BYTES;
-      if (byteLength > maxBytes) {
+      if (byteLength > PROMPT_UPLOAD_IMAGE_MAX_BYTES) {
         return error(`${attachment.name} exceeds the attachment size limit`, 413);
       }
     }

@@ -2,12 +2,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
+import { WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES } from "@/lib/prompt-attachment-limits";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
-
-// Control plane enforces exact per-kind caps (10 MB images / 50 MB videos);
-// this is just a cheap upper bound including multipart overhead.
-const MAX_UPLOAD_REQUEST_BYTES = 52 * 1024 * 1024;
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
@@ -26,14 +23,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const contentLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_REQUEST_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES) {
     return NextResponse.json({ error: "Attachment is too large" }, { status: 413 });
   }
 
   try {
     // Forward the raw body so the original multipart boundary stays intact.
     const body = await request.arrayBuffer();
-    if (body.byteLength > MAX_UPLOAD_REQUEST_BYTES) {
+    if (body.byteLength > WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES) {
       return NextResponse.json({ error: "Attachment is too large" }, { status: 413 });
     }
 

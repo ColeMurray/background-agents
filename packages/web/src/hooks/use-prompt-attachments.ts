@@ -2,30 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Attachment } from "@open-inspect/shared";
+import { WEB_PROMPT_IMAGE_MAX_BYTES } from "@/lib/prompt-attachment-limits";
 
 export type PendingAttachment = {
   id: string;
   file: File;
   previewUrl: string;
-  kind: "image" | "video";
 };
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-const VIDEO_MIME_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm"]);
 
-// Mirrors the control plane's prompt upload caps (see packages/control-plane/src/media.ts).
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 6;
-export const MAX_VIDEO_ATTACHMENTS = 2;
 
-export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES, ...VIDEO_MIME_TYPES].join(",");
+export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES].join(",");
 export const DEFAULT_ATTACHMENT_ONLY_MESSAGE = "See the attached files.";
 
-function attachmentKind(file: File): "image" | "video" | null {
-  if (IMAGE_MIME_TYPES.has(file.type)) return "image";
-  if (VIDEO_MIME_TYPES.has(file.type)) return "video";
-  return null;
+function isSupportedImage(file: File): boolean {
+  return IMAGE_MIME_TYPES.has(file.type);
 }
 
 function formatMegabytes(bytes: number): string {
@@ -61,26 +54,19 @@ export function usePromptAttachments() {
     const current = attachmentsRef.current;
     const additions: PendingAttachment[] = [];
     let attachmentCount = current.length;
-    let videoCount = current.filter((attachment) => attachment.kind === "video").length;
 
     for (const file of files) {
-      const kind = attachmentKind(file);
-      if (!kind) {
-        errors.push(`${file.name || "File"} is not a supported image or video`);
+      if (!isSupportedImage(file)) {
+        errors.push(`${file.name || "File"} is not a supported image`);
         continue;
       }
       if (attachmentCount >= MAX_ATTACHMENTS) {
         errors.push(`You can attach up to ${MAX_ATTACHMENTS} files per message`);
         break;
       }
-      if (kind === "video" && videoCount >= MAX_VIDEO_ATTACHMENTS) {
-        errors.push(`You can attach up to ${MAX_VIDEO_ATTACHMENTS} videos per message`);
-        continue;
-      }
-      const maxBytes = kind === "image" ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
-      if (file.size > maxBytes) {
+      if (file.size > WEB_PROMPT_IMAGE_MAX_BYTES) {
         errors.push(
-          `${file.name || "File"} is too large (${kind}s must be under ${formatMegabytes(maxBytes)})`
+          `${file.name || "File"} is too large (images must be under ${formatMegabytes(WEB_PROMPT_IMAGE_MAX_BYTES)})`
         );
         continue;
       }
@@ -89,10 +75,8 @@ export function usePromptAttachments() {
         id: crypto.randomUUID(),
         file,
         previewUrl: URL.createObjectURL(file),
-        kind,
       });
       attachmentCount += 1;
-      if (kind === "video") videoCount += 1;
     }
 
     if (additions.length > 0) {
@@ -147,11 +131,7 @@ export function usePromptAttachments() {
         }
 
         const formData = new FormData();
-        formData.append(
-          "file",
-          pendingAttachment.file,
-          pendingAttachment.file.name || pendingAttachment.kind
-        );
+        formData.append("file", pendingAttachment.file, pendingAttachment.file.name || "image");
         const response = await fetch(`/api/sessions/${sessionId}/uploads`, {
           method: "POST",
           body: formData,
@@ -165,8 +145,8 @@ export function usePromptAttachments() {
           mimeType: string;
         };
         const attachment: Attachment = {
-          type: pendingAttachment.kind === "image" ? "image" : "file",
-          name: pendingAttachment.file.name || `${pendingAttachment.kind}-attachment`,
+          type: "image",
+          name: pendingAttachment.file.name || "image-attachment",
           mimeType,
           uploadId,
         };

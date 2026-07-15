@@ -29,7 +29,7 @@ export interface UploadsHandler {
 interface RecordUploadBody {
   action?: "record";
   uploadId: string;
-  kind: "image" | "video";
+  kind: "image";
   mimeType: string;
   sizeBytes: number;
   objectKey: string;
@@ -47,7 +47,7 @@ function isValidBody(raw: unknown): raw is RecordUploadBody {
   return (
     typeof body.uploadId === "string" &&
     body.uploadId.length > 0 &&
-    (body.kind === "image" || body.kind === "video") &&
+    body.kind === "image" &&
     typeof body.mimeType === "string" &&
     body.mimeType.length > 0 &&
     typeof body.sizeBytes === "number" &&

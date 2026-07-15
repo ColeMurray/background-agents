@@ -1,6 +1,6 @@
 "use client";
 
-import { PlayIcon, XIcon } from "@/components/ui/icons";
+import { XIcon } from "@/components/ui/icons";
 import type { PendingAttachment } from "@/hooks/use-prompt-attachments";
 
 function AttachmentPreview({
@@ -17,25 +17,11 @@ function AttachmentPreview({
       className="group/attachment relative w-16 h-16 border border-border bg-muted overflow-hidden flex-shrink-0"
       title={attachment.file.name}
     >
-      {attachment.kind === "image" ? (
-        <img
-          src={attachment.previewUrl}
-          alt={attachment.file.name}
-          className="w-full h-full object-cover"
-        />
-      ) : (
-        <>
-          <video
-            src={attachment.previewUrl}
-            muted
-            preload="metadata"
-            className="w-full h-full object-cover"
-          />
-          <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <PlayIcon className="w-5 h-5 text-white drop-shadow" />
-          </span>
-        </>
-      )}
+      <img
+        src={attachment.previewUrl}
+        alt={attachment.file.name}
+        className="w-full h-full object-cover"
+      />
       {!disabled && (
         <button
           type="button"

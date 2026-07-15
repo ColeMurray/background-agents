@@ -366,6 +366,9 @@ export class SessionMessageQueue {
         `You can attach up to ${MAX_ATTACHMENTS_PER_PROMPT} files per message`
       );
     }
+    if (attachments.some((attachment) => attachment.mimeType?.startsWith("video/"))) {
+      throw new PromptAttachmentError("Video prompt attachments are not supported");
+    }
     if (
       attachments.some(
         (attachment) => typeof attachment.content === "string" && !isValidBase64(attachment.content)
@@ -393,8 +396,11 @@ export class SessionMessageQueue {
       if (typeof attachment.uploadId !== "string") return attachment;
       const upload = uploads.get(attachment.uploadId);
       if (!upload) throw new PromptAttachmentError("Upload not found");
+      if (upload.kind !== "image") {
+        throw new PromptAttachmentError("Video prompt attachments are not supported");
+      }
       return {
-        type: upload.kind === "image" ? "image" : "file",
+        type: "image",
         name: attachment.name,
         mimeType: upload.mime_type,
         uploadId: upload.id,

@@ -132,8 +132,8 @@ export function SessionPromptComposer({
                 onClick={() => fileInputRef.current?.click()}
                 disabled={attachmentsLocked}
                 className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                title="Attach images or videos"
-                aria-label="Attach images or videos"
+                title="Attach images"
+                aria-label="Attach images"
               >
                 <PaperclipIcon className="w-5 h-5" />
               </button>
