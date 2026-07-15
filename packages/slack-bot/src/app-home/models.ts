@@ -3,6 +3,7 @@ import {
   MODEL_OPTIONS,
   buildInternalAuthHeaders,
   isValidModel,
+  normalizeValidModels,
   type SlackGlobalConfig,
 } from "@open-inspect/shared";
 import type { Env } from "../types";
@@ -37,9 +38,12 @@ export async function getAvailableModels(env: Env, traceId?: string): Promise<Mo
     });
 
     if (response.ok) {
-      const data = (await response.json()) as { enabledModels: string[] };
-      if (data.enabledModels.length > 0) {
-        const enabledSet = new Set(data.enabledModels);
+      const data = (await response.json()) as { enabledModels?: unknown };
+      if (
+        Array.isArray(data.enabledModels) &&
+        data.enabledModels.every((id): id is string => typeof id === "string")
+      ) {
+        const enabledSet = new Set(normalizeValidModels(data.enabledModels));
         const enabledModels = ALL_MODELS.filter((model) => enabledSet.has(model.value));
         if (enabledModels.length > 0) {
           return enabledModels;

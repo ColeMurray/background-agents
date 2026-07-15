@@ -13,6 +13,7 @@ import {
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
+  normalizeValidModels,
   supportsReasoning,
 } from "./models";
 
@@ -113,6 +114,21 @@ describe("model utilities", () => {
     expect(isValidModel("claude-fable-5")).toBe(true);
     expect(isValidModel("gpt-5.3-codex")).toBe(true);
     expect(isValidModel("gpt-5.6-sol")).toBe(true);
+  });
+
+  it("normalizes, filters, and deduplicates model lists", () => {
+    expect(
+      normalizeValidModels([
+        "openai/gpt-5.4",
+        "gpt-5.3-codex",
+        "openai/gpt-5.2",
+        "openai/gpt-5.3-codex",
+        "unknown/model",
+        "anthropic/claude-sonnet-4-6",
+      ])
+    ).toEqual(["openai/gpt-5.4", "openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-6"]);
+    expect(normalizeValidModels(["openai/gpt-5.2", "unknown/model"])).toEqual([]);
+    expect(normalizeValidModels([])).toEqual([]);
   });
 
   it("rejects invalid, legacy, empty, and case-mismatched models", () => {

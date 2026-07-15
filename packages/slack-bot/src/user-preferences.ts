@@ -6,6 +6,7 @@ import {
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
+  normalizeValidModels,
 } from "@open-inspect/shared";
 import type { Env, UserPreferences } from "./types";
 import {
@@ -84,10 +85,11 @@ function resolveEnabledModel(
     return desired;
   }
 
-  const enabled = new Set(enabledModels);
+  const validEnabledModels = normalizeValidModels(enabledModels);
+  const enabled = new Set<string>(validEnabledModels);
   if (enabled.has(desired)) return desired;
   if (enabled.has(fallback)) return fallback;
-  return enabledModels[0] ?? fallback;
+  return validEnabledModels[0] ?? fallback;
 }
 
 function mergeUserPreferencesPatch(

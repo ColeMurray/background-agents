@@ -282,6 +282,16 @@ export function isValidModel(model: string): model is ValidModel {
   return VALID_MODELS.includes(normalizeModelId(model) as ValidModel);
 }
 
+/** Normalize a list to unique, canonical model IDs that exist in the current catalog. */
+export function normalizeValidModels(modelIds: readonly string[]): ValidModel[] {
+  const validModels = new Set<ValidModel>();
+  for (const modelId of modelIds) {
+    const normalized = normalizeModelId(modelId);
+    if (isValidModel(normalized)) validModels.add(normalized);
+  }
+  return [...validModels];
+}
+
 /**
  * Check if a model supports reasoning controls.
  */
