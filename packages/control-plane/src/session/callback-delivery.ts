@@ -6,18 +6,27 @@ type DeliveryFailure =
   | { attempt: number; response: Response; error?: never }
   | { attempt: number; response?: never; error: unknown };
 
+interface DeliveryResult {
+  delivered: boolean;
+  attempts: number;
+  httpStatus?: number;
+}
+
 export async function deliverWithRetry(
   send: (signal: AbortSignal) => Promise<Response>,
   sleep: (ms: number) => Promise<void>,
   onFailure: (failure: DeliveryFailure) => void | Promise<void>
-): Promise<boolean> {
+): Promise<DeliveryResult> {
+  let httpStatus: number | undefined;
   for (let attempt = 1; attempt <= CALLBACK_ATTEMPTS; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), CALLBACK_ATTEMPT_TIMEOUT_MS);
     let failure: DeliveryFailure;
+    httpStatus = undefined;
     try {
       const response = await send(controller.signal);
-      if (response.ok) return true;
+      httpStatus = response.status;
+      if (response.ok) return { delivered: true, attempts: attempt, httpStatus };
       failure = { attempt, response };
     } catch (error) {
       failure = { attempt, error };
@@ -32,5 +41,9 @@ export async function deliverWithRetry(
 
     if (attempt < CALLBACK_ATTEMPTS) await sleep(CALLBACK_RETRY_DELAY_MS);
   }
-  return false;
+  return {
+    delivered: false,
+    attempts: CALLBACK_ATTEMPTS,
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+  };
 }

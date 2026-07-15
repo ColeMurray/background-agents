@@ -42,7 +42,7 @@ export async function notifyLinearStarted({
     signature: await computeHmacHex(JSON.stringify(payloadData), secret),
   };
 
-  const delivered = await deliverWithRetry(
+  const { delivered } = await deliverWithRetry(
     (signal) =>
       binding.fetch("https://internal/callbacks/start", {
         method: "POST",

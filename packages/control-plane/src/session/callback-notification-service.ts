@@ -202,21 +202,14 @@ export class CallbackNotificationService {
       };
       const signature = await this.signPayload(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
       const payload = { ...payloadData, signature };
-      let attempts = 0;
-      let httpStatus: number | undefined;
-
-      const delivered = await deliverWithRetry(
-        async (signal) => {
-          attempts++;
-          const response = await binding.fetch("https://internal/callbacks/complete", {
+      result = await deliverWithRetry(
+        (signal) =>
+          binding.fetch("https://internal/callbacks/complete", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
             signal,
-          });
-          httpStatus = response.status;
-          return response;
-        },
+          }),
         this.sleep,
         ({ attempt, response, error: deliveryError }) => {
           this.log.warn("callback.complete_delivery_attempt_failed", {
@@ -231,7 +224,6 @@ export class CallbackNotificationService {
           });
         }
       );
-      result = { delivered, attempts, ...(httpStatus !== undefined ? { httpStatus } : {}) };
     } catch (caught) {
       thrownError = caught;
       throw caught;
@@ -291,20 +283,14 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    let attempts = 0;
-    let httpStatus: number | undefined;
-    const delivered = await deliverWithRetry(
-      async (signal) => {
-        attempts++;
-        const response = await binding.fetch("https://internal/internal/run-complete", {
+    return deliverWithRetry(
+      (signal) =>
+        binding.fetch("https://internal/internal/run-complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           signal,
-        });
-        httpStatus = response.status;
-        return response;
-      },
+        }),
       this.sleep,
       ({ attempt, response, error: deliveryError }) => {
         this.log.warn("callback.complete_delivery_attempt_failed", {
@@ -321,7 +307,6 @@ export class CallbackNotificationService {
         });
       }
     );
-    return { delivered, attempts, ...(httpStatus !== undefined ? { httpStatus } : {}) };
   }
 
   /**

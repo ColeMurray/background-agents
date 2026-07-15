@@ -247,6 +247,26 @@ describe("CallbackNotificationService", () => {
       );
     });
 
+    it("does not report a stale HTTP status when the final attempt throws", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C123" }),
+        source: "slack",
+      });
+      harness.slackBot.fetch
+        .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+        .mockRejectedValueOnce(new Error("network error"));
+
+      await harness.service.notifyComplete("msg-1", false);
+
+      const terminalEvent = vi
+        .mocked(harness.log.error)
+        .mock.calls.find(([event]) => event === "callback.complete_delivery");
+      expect(terminalEvent?.[1]).toEqual(
+        expect.objectContaining({ outcome: "error", attempts: 2, retries: 1 })
+      );
+      expect(terminalEvent?.[1]).not.toHaveProperty("http_status");
+    });
+
     it("routes to LINEAR_BOT for linear source", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ issueId: "LIN-123" }),
