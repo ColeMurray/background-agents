@@ -5,7 +5,11 @@ vi.mock("next/headers", () => ({
 }));
 
 import { headers } from "next/headers";
-import { INTERNAL_REQUEST_ID_HEADER, REQUEST_ID_HEADER } from "./request-correlation";
+import {
+  INTERNAL_REQUEST_ID_HEADER,
+  REQUEST_ID_HEADER,
+  TRACE_ID_HEADER,
+} from "./request-correlation";
 import { getRequestCorrelation } from "./request-context";
 
 describe("getRequestCorrelation", () => {
@@ -16,7 +20,7 @@ describe("getRequestCorrelation", () => {
   it("ignores the public x-request-id when the internal request id is absent", async () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({
-        "x-trace-id": "trace-123",
+        [TRACE_ID_HEADER]: "trace-123",
         [REQUEST_ID_HEADER]: "client-request-id",
       })
     );
@@ -31,7 +35,7 @@ describe("getRequestCorrelation", () => {
   it("reuses the normalized internal request id when present", async () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({
-        "x-trace-id": "trace-123",
+        [TRACE_ID_HEADER]: "trace-123",
         [INTERNAL_REQUEST_ID_HEADER]: "webhop01",
         [REQUEST_ID_HEADER]: "client-request-id",
       })
@@ -43,5 +47,14 @@ describe("getRequestCorrelation", () => {
       traceId: "trace-123",
       requestId: "webhop01",
     });
+  });
+
+  it("rethrows Next.js dynamic rendering errors", async () => {
+    const error = Object.assign(new Error("Dynamic server usage"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    vi.mocked(headers).mockRejectedValue(error);
+
+    await expect(getRequestCorrelation()).rejects.toBe(error);
   });
 });
