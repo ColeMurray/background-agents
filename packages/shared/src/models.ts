@@ -292,6 +292,26 @@ export function normalizeValidModels(modelIds: readonly string[]): ValidModel[] 
   return [...validModels];
 }
 
+/** Resolve a desired model against the enabled catalog using a canonical fallback policy. */
+export function resolveEnabledModel(options: {
+  model?: string | null;
+  enabledModels?: readonly string[];
+  fallbackModel?: string | null;
+}): ValidModel {
+  const fallback = getValidModelOrDefault(options.fallbackModel);
+  const desired =
+    options.model && isValidModel(options.model)
+      ? (normalizeModelId(options.model) as ValidModel)
+      : fallback;
+  if (!options.enabledModels) return desired;
+
+  const enabledModels = normalizeValidModels(options.enabledModels);
+  const enabled = new Set(enabledModels);
+  if (enabled.has(desired)) return desired;
+  if (enabled.has(fallback)) return fallback;
+  return enabledModels[0] ?? fallback;
+}
+
 /**
  * Check if a model supports reasoning controls.
  */

@@ -3,7 +3,7 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidReasoningEffort,
-  normalizeValidModels,
+  resolveEnabledModel as resolveSharedEnabledModel,
 } from "@open-inspect/shared";
 
 export interface ModelPreference {
@@ -23,12 +23,7 @@ export interface ModelPreference {
  * also normalizes legacy/bare ids and falls back for unknown ones.
  */
 export function resolveEnabledModel(model: string, enabledModels: string[]): string {
-  const desired = getValidModelOrDefault(model);
-  const validEnabledModels = normalizeValidModels(enabledModels);
-  const enabled = new Set(validEnabledModels);
-  if (enabled.has(desired)) return desired;
-  if (enabled.has(DEFAULT_MODEL)) return DEFAULT_MODEL;
-  return validEnabledModels[0] ?? DEFAULT_MODEL;
+  return resolveSharedEnabledModel({ model, enabledModels, fallbackModel: DEFAULT_MODEL });
 }
 
 export function resolveModelPreference(
