@@ -1,12 +1,12 @@
 export const TRACE_ID_HEADER = "x-trace-id";
 export const REQUEST_ID_HEADER = "x-request-id";
-export const INTERNAL_BFF_REQUEST_ID_HEADER = "x-open-inspect-bff-request-id";
+export const INTERNAL_REQUEST_ID_HEADER = "x-open-inspect-request-id";
 
 const TRACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
-const BFF_REQUEST_ID_LENGTH = 8;
+const REQUEST_ID_LENGTH = 8;
 
-export interface BffCorrelation {
+export interface RequestCorrelation {
   traceId: string;
   requestId: string;
 }
@@ -15,8 +15,8 @@ export function createTraceId(): string {
   return crypto.randomUUID();
 }
 
-export function createBffRequestId(): string {
-  return crypto.randomUUID().slice(0, BFF_REQUEST_ID_LENGTH);
+export function createRequestId(): string {
+  return crypto.randomUUID().slice(0, REQUEST_ID_LENGTH);
 }
 
 export function isValidTraceId(value: string | null | undefined): value is string {
@@ -31,18 +31,18 @@ export function resolveTraceId(value: string | null | undefined): string {
   return isValidTraceId(value) ? value : createTraceId();
 }
 
-export function resolveBffRequestId(value: string | null | undefined): string {
-  return isValidRequestId(value) ? value : createBffRequestId();
+export function resolveRequestId(value: string | null | undefined): string {
+  return isValidRequestId(value) ? value : createRequestId();
 }
 
-export function getBffCorrelationLogFields(correlation: BffCorrelation): Record<string, string> {
+export function getCorrelationLogFields(correlation: RequestCorrelation): Record<string, string> {
   return {
     trace_id: correlation.traceId,
     request_id: correlation.requestId,
   };
 }
 
-export function applyBffCorrelationHeaders(headers: Headers, correlation: BffCorrelation): void {
+export function applyCorrelationHeaders(headers: Headers, correlation: RequestCorrelation): void {
   headers.set(TRACE_ID_HEADER, correlation.traceId);
   headers.set(REQUEST_ID_HEADER, correlation.requestId);
 }

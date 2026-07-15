@@ -5,15 +5,15 @@ vi.mock("next/headers", () => ({
 }));
 
 import { headers } from "next/headers";
-import { INTERNAL_BFF_REQUEST_ID_HEADER, REQUEST_ID_HEADER } from "./bff-correlation";
-import { getBffRequestCorrelation } from "./bff-request-context";
+import { INTERNAL_REQUEST_ID_HEADER, REQUEST_ID_HEADER } from "./request-correlation";
+import { getRequestCorrelation } from "./request-context";
 
-describe("getBffRequestCorrelation", () => {
+describe("getRequestCorrelation", () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
 
-  it("ignores the public x-request-id when the internal BFF request id is absent", async () => {
+  it("ignores the public x-request-id when the internal request id is absent", async () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({
         "x-trace-id": "trace-123",
@@ -21,27 +21,27 @@ describe("getBffRequestCorrelation", () => {
       })
     );
 
-    const correlation = await getBffRequestCorrelation();
+    const correlation = await getRequestCorrelation();
 
     expect(correlation.traceId).toBe("trace-123");
     expect(correlation.requestId).toMatch(/^[A-Za-z0-9]{8}$/);
     expect(correlation.requestId).not.toBe("client-request-id");
   });
 
-  it("reuses the normalized internal BFF request id when present", async () => {
+  it("reuses the normalized internal request id when present", async () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({
         "x-trace-id": "trace-123",
-        [INTERNAL_BFF_REQUEST_ID_HEADER]: "bffhop01",
+        [INTERNAL_REQUEST_ID_HEADER]: "webhop01",
         [REQUEST_ID_HEADER]: "client-request-id",
       })
     );
 
-    const correlation = await getBffRequestCorrelation();
+    const correlation = await getRequestCorrelation();
 
     expect(correlation).toEqual({
       traceId: "trace-123",
-      requestId: "bffhop01",
+      requestId: "webhop01",
     });
   });
 });

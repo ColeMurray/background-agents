@@ -8,11 +8,11 @@
  */
 
 import { buildInternalAuthHeaders } from "@open-inspect/shared";
-import { getBffCorrelationLogFields } from "@/lib/bff-correlation";
-import { getBffRequestCorrelation } from "@/lib/bff-request-context";
 import { createLogger } from "@/lib/logger";
+import { getCorrelationLogFields } from "@/lib/request-correlation";
+import { getRequestCorrelation } from "@/lib/request-context";
 
-const log = createLogger("bff:control-plane");
+const log = createLogger("control-plane-client");
 
 /**
  * Get the control plane URL from environment.
@@ -120,8 +120,8 @@ export async function controlPlaneFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const correlation = await getBffRequestCorrelation();
-  const correlationFields = getBffCorrelationLogFields(correlation);
+  const correlation = await getRequestCorrelation();
+  const correlationFields = getCorrelationLogFields(correlation);
 
   try {
     const headers = await getControlPlaneHeaders(correlation.traceId);

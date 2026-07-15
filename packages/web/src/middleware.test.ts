@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { middleware } from "./middleware";
 
-describe("BFF middleware correlation", () => {
-  it("preserves a valid incoming trace id and generates a fresh BFF request id", () => {
+describe("API middleware correlation", () => {
+  it("preserves a valid incoming trace id and generates a fresh request id", () => {
     const response = middleware(
       new NextRequest("http://localhost/api/sessions", {
         headers: {

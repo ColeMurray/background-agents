@@ -52,12 +52,12 @@ For Slack with Modal, the path is: **slack-bot -> control-plane -> modal-infra -
 3. Provider-specific clients or endpoints bind the same trace to sandbox startup logs where
    supported.
 
-### Web BFF correlation
+### Web API correlation
 
-The Next.js BFF accepts a valid inbound `x-trace-id` or generates one at the `/api` edge. It also
-generates a fresh hop-local `x-request-id` for the BFF response and logs. When the BFF calls the
-control-plane, it forwards only `x-trace-id`; the control-plane still generates its own per-hop
-`request_id`.
+The Next.js API layer accepts a valid inbound `x-trace-id` or generates one at the `/api` edge. It
+also generates a fresh hop-local `x-request-id` for the web response and logs. When the web service
+calls the control-plane, it forwards only `x-trace-id`; the control-plane still generates its own
+per-hop `request_id`.
 
 To trace a full request: filter by `trace_id` across all three services, or narrow by `session_id` +
 `message_id` for a specific prompt run.

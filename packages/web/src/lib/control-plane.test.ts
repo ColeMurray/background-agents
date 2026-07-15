@@ -32,8 +32,8 @@ describe("controlPlaneFetch correlation", () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({
         "x-trace-id": "trace-123",
-        "x-request-id": "bff-hop-1",
-        "x-open-inspect-bff-request-id": "bffhop01",
+        "x-request-id": "client-hop-1",
+        "x-open-inspect-request-id": "webhop01",
       })
     );
 
@@ -58,7 +58,7 @@ describe("controlPlaneFetch correlation", () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({
         "x-trace-id": "trace-123",
-        "x-open-inspect-bff-request-id": "bffhop01",
+        "x-open-inspect-request-id": "webhop01",
       })
     );
 
@@ -78,7 +78,7 @@ describe("controlPlaneFetch correlation", () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({
         "x-trace-id": "not a valid trace id",
-        "x-request-id": "bff-hop-1",
+        "x-request-id": "client-hop-1",
       })
     );
 
