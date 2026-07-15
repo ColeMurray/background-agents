@@ -345,6 +345,18 @@ describe("CallbackNotificationService", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(harness.sleep).toHaveBeenCalledWith(1000);
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "callback.started_delivery",
+        expect.objectContaining({
+          session_id: "session-123",
+          message_id: "msg-1",
+          outcome: "success",
+          attempts: 2,
+          retries: 1,
+          http_status: 200,
+          duration_ms: expect.any(Number),
+        })
+      );
     });
 
     it("retries when failure logging throws", async () => {
@@ -380,8 +392,15 @@ describe("CallbackNotificationService", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(harness.log.error).toHaveBeenCalledWith(
-        "callback.started",
-        expect.objectContaining({ message_id: "msg-1", outcome: "failed" })
+        "callback.started_delivery",
+        expect.objectContaining({
+          session_id: "session-123",
+          message_id: "msg-1",
+          outcome: "error",
+          attempts: 2,
+          retries: 1,
+          duration_ms: expect.any(Number),
+        })
       );
     });
 

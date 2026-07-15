@@ -48,6 +48,33 @@ class TestIsFatalConnectionError:
     def test_empty_string_is_not_fatal(self, bridge):
         assert bridge._is_fatal_connection_error("") is False
 
+    def test_connection_aggregate_fields_track_lifetime_and_reconnects(self, bridge):
+        bridge._reconnect_attempt_count = 2
+
+        bridge._mark_connected(now_monotonic=10.0)
+        first = bridge._finalize_connection(now_monotonic=13.25)
+
+        bridge._mark_connected(now_monotonic=20.0)
+        second = bridge._finalize_connection(now_monotonic=21.5)
+
+        assert first == {
+            "connection_duration_seconds": 3.25,
+            "total_connected_duration_seconds": 3.25,
+            "connection_count": 1,
+            "reconnect_count": 0,
+            "reconnect_attempt_count": 2,
+        }
+        assert second == {
+            "connection_duration_seconds": 1.5,
+            "total_connected_duration_seconds": 4.75,
+            "connection_count": 2,
+            "reconnect_count": 1,
+            "reconnect_attempt_count": 2,
+        }
+
+    def test_finalize_connection_returns_none_without_active_connection(self, bridge):
+        assert bridge._finalize_connection(now_monotonic=5.0) is None
+
 
 class TestSessionTerminatedError:
     """Tests for SessionTerminatedError exception."""

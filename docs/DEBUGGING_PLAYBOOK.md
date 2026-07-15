@@ -123,28 +123,26 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 
 #### Session Durable Object (`component: "session-do"`)
 
-| Event                        | Level       | Key Fields                                                                                                            | Description                         |
-| ---------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                   | One per DO internal route call      |
-| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                | WebSocket lifecycle                 |
-| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`        | Message queued                      |
-| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox             |
-| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                           | Prompt run finished                 |
-| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason` | Completion callback delivery result |
+| Event                        | Level       | Key Fields                                                                                                            | Description                           |
+| ---------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                   | One per DO internal route call        |
+| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                | WebSocket lifecycle                   |
+| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`        | Message queued                        |
+| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox               |
+| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                           | Prompt run finished                   |
+| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason` | Completion callback delivery result   |
+| `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`           | Linear start-callback delivery result |
 
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 
-| Event                     | Level | Key Fields                                       | Description                |
-| ------------------------- | ----- | ------------------------------------------------ | -------------------------- |
-| `sandbox.spawn`           | info  | `expected_sandbox_id`, `repo_owner`, `repo_name` | Spawn attempt started      |
-| `sandbox.spawned`         | info  | `sandbox_id`, `provider_object_id`               | Spawn succeeded            |
-| `sandbox.spawn_failed`    | error | `error`                                          | Spawn failed               |
-| `sandbox.restore`         | info  | `snapshot_image_id`                              | Restore attempt started    |
-| `sandbox.restored`        | info  | `sandbox_id`, `provider_object_id`               | Restore succeeded          |
-| `sandbox.snapshot`        | info  | `reason`, `provider_object_id`                   | Snapshot attempt started   |
-| `sandbox.snapshot_saved`  | info  | `image_id`, `reason`                             | Snapshot saved             |
-| `sandbox.heartbeat_stale` | warn  | `last_heartbeat_ms`, `threshold_ms`              | Heartbeat missed           |
-| `sandbox.timeout`         | info  | `last_activity`, `timeout_ms`                    | Inactivity timeout reached |
+| Event                     | Level       | Key Fields                                                                                                              | Description                |
+| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `sandbox.spawn`           | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed            |
+| `sandbox.restore`         | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed          |
+| `sandbox.snapshot`        | info        | `reason`, `provider_object_id`                                                                                          | Snapshot attempt started   |
+| `sandbox.snapshot_saved`  | info        | `image_id`, `reason`                                                                                                    | Snapshot saved             |
+| `sandbox.heartbeat_stale` | warn        | `last_heartbeat_ms`, `threshold_ms`                                                                                     | Heartbeat missed           |
+| `sandbox.timeout`         | info        | `last_activity`, `timeout_ms`                                                                                           | Inactivity timeout reached |
 
 #### Provider Clients
 
@@ -177,18 +175,16 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 The `build_image` worker and the 30-minute `rebuild_images` cron. Worker events carry
 `scope_kind`/`scope_id` like the control-plane side.
 
-| Event                                                                                   | Level | Key Fields                                                                                       | Description                                                      |
-| --------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| `image_build.start`                                                                     | info  | `build_id`, `scope_kind`, `scope_id`, `repository_count`                                         | Build worker started                                             |
-| `image_build.success`                                                                   | info  | `build_id`, `scope_kind`, `scope_id`, `provider_image_id`, `runtime_version`, `build_duration_s` | Filesystem snapshotted; success callback follows                 |
-| `image_build.failed`                                                                    | error | `build_id`, `scope_kind`, `scope_id`, `error`, `build_duration_s`                                | Build failed; failure callback follows                           |
-| `scheduler.start` / `scheduler.done`                                                    | info  | `builds_triggered`, `duration_s` (on done)                                                       | One cron pass over all enabled scope units                       |
-| `scheduler.build_triggered`                                                             | info  | `scope_kind`, `scope_id`                                                                         | Cron triggered a rebuild for a unit                              |
-| `scheduler.no_ready_image` / `scheduler.runtime_below_floor` / `scheduler.sha_mismatch` | info  | `scope_kind`, `scope_id` (+ trigger-specific fields)                                             | Which rebuild trigger fired for a unit                           |
-| `scheduler.skip_building`                                                               | info  | `scope_kind`, `scope_id`                                                                         | Unit skipped: a build is already in flight                       |
-| `scheduler.trigger_cap_reached`                                                         | info  | `cap`                                                                                            | Per-tick trigger cap hit; remaining units wait for the next tick |
-| `scheduler.malformed_repository_shas`                                                   | warn  | `scope_kind`, `scope_id`                                                                         | Stored provenance JSON did not parse; unit treated as stale      |
-| `scheduler.mark_stale_error` / `scheduler.cleanup_error`                                | warn  | `error`                                                                                          | Post-pass maintenance call (mark-stale / cleanup) failed         |
+| Event                                                                                   | Level       | Key Fields                                                                                                                               | Description                                                      |
+| --------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `image_build.complete`                                                                  | info, error | `build_id`, `scope_kind`, `scope_id`, `outcome`, `duration_seconds`, `repository_count`, `provider_image_id`, `runtime_version`, `error` | Build completed; success or failure callback follows             |
+| `scheduler.start` / `scheduler.done`                                                    | info        | `builds_triggered`, `duration_s` (on done)                                                                                               | One cron pass over all enabled scope units                       |
+| `scheduler.build_triggered`                                                             | info        | `scope_kind`, `scope_id`                                                                                                                 | Cron triggered a rebuild for a unit                              |
+| `scheduler.no_ready_image` / `scheduler.runtime_below_floor` / `scheduler.sha_mismatch` | info        | `scope_kind`, `scope_id` (+ trigger-specific fields)                                                                                     | Which rebuild trigger fired for a unit                           |
+| `scheduler.skip_building`                                                               | info        | `scope_kind`, `scope_id`                                                                                                                 | Unit skipped: a build is already in flight                       |
+| `scheduler.trigger_cap_reached`                                                         | info        | `cap`                                                                                                                                    | Per-tick trigger cap hit; remaining units wait for the next tick |
+| `scheduler.malformed_repository_shas`                                                   | warn        | `scope_kind`, `scope_id`                                                                                                                 | Stored provenance JSON did not parse; unit treated as stale      |
+| `scheduler.mark_stale_error` / `scheduler.cleanup_error`                                | warn        | `error`                                                                                                                                  | Post-pass maintenance call (mark-stale / cleanup) failed         |
 
 #### Supervisor (`component: "supervisor"`)
 
@@ -201,14 +197,15 @@ The `build_image` worker and the 30-minute `rebuild_images` cron. Worker events 
 
 #### Bridge (`component: "bridge"`)
 
-| Event               | Level      | Key Fields                                      | Description                          |
-| ------------------- | ---------- | ----------------------------------------------- | ------------------------------------ |
-| `bridge.connect`    | info       | `outcome`                                       | WebSocket connected to control-plane |
-| `bridge.disconnect` | info, warn | `reason`, `ws_close_code`                       | WebSocket disconnected               |
-| `bridge.reconnect`  | info       | `attempt`, `delay_s`                            | Reconnection attempt                 |
-| `prompt.start`      | info       | `message_id`, `model`                           | Prompt processing started            |
-| `prompt.run`        | info       | `message_id`, `model`, `outcome`, `duration_ms` | Prompt processing completed (wide)   |
-| `prompt.error`      | error      | `message_id`, `exc`                             | Prompt processing failed             |
+| Event                 | Level      | Key Fields                                                                                                                                                     | Description                                           |
+| --------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `bridge.connect`      | info       | `outcome`                                                                                                                                                      | WebSocket connected to control-plane                  |
+| `bridge.disconnect`   | info, warn | `reason`, `ws_close_code`, `connection_duration_seconds`, `total_connected_duration_seconds`, `connection_count`, `reconnect_count`, `reconnect_attempt_count` | WebSocket disconnected with lifetime aggregates       |
+| `bridge.reconnect`    | info       | `attempt`, `reconnect_attempt_count`, `delay_s`                                                                                                                | Reconnection attempt                                  |
+| `bridge.run_complete` | info       | `outcome`, `connection_count`, `reconnect_count`, `reconnect_attempt_count`, `total_connected_duration_seconds`                                                | Bridge process exited with aggregate connection stats |
+| `prompt.start`        | info       | `message_id`, `model`                                                                                                                                          | Prompt processing started                             |
+| `prompt.run`          | info       | `message_id`, `model`, `outcome`, `duration_ms`                                                                                                                | Prompt processing completed (wide)                    |
+| `prompt.error`        | error      | `message_id`, `exc`                                                                                                                                            | Prompt processing failed                              |
 
 #### Git Operations (`component: "bridge"` / `"supervisor"`)
 

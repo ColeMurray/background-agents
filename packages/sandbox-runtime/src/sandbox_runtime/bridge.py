@@ -278,6 +278,10 @@ class AgentBridge:
         self._pending_acks: dict[str, dict[str, Any]] = {}
 
         self._last_forwarded_session_title: str | None = None
+        self._connected_at_monotonic: float | None = None
+        self._connection_count = 0
+        self._reconnect_attempt_count = 0
+        self._total_connected_duration_seconds = 0.0
 
     @property
     def ws_url(self) -> str:
@@ -311,41 +315,29 @@ class AgentBridge:
         await self._load_session_id()
 
         reconnect_attempts = 0
+        run_outcome = "shutdown"
 
         try:
             while not self.shutdown_event.is_set():
                 try:
                     await self._connect_and_run()
                     reconnect_attempts = 0
-                except SessionTerminatedError as e:
-                    # Non-recoverable: session has been terminated by control plane
-                    self.log.info(
-                        "bridge.disconnect",
-                        reason="session_terminated",
-                        detail=str(e),
-                    )
+                except SessionTerminatedError:
+                    run_outcome = "session_terminated"
                     self.shutdown_event.set()
                     break
-                except websockets.ConnectionClosed as e:
-                    self.log.warn(
-                        "bridge.disconnect",
-                        reason="connection_closed",
-                        ws_close_code=e.code,
-                    )
+                except websockets.ConnectionClosed:
+                    run_outcome = "connection_closed"
                 except Exception as e:
                     error_str = str(e)
                     # Check for fatal HTTP errors that shouldn't trigger retry
                     if self._is_fatal_connection_error(error_str):
-                        self.log.error(
-                            "bridge.disconnect",
-                            reason="fatal_error",
-                            exc=e,
-                        )
+                        run_outcome = "fatal_error"
                         self.shutdown_event.set()
                         break
+                    run_outcome = "connection_error"
                     self.log.warn(
-                        "bridge.disconnect",
-                        reason="connection_error",
+                        "bridge.connect_error",
                         detail=error_str,
                     )
 
@@ -353,6 +345,7 @@ class AgentBridge:
                     break
 
                 reconnect_attempts += 1
+                self._reconnect_attempt_count += 1
                 delay = min(
                     self.RECONNECT_BACKOFF_BASE**reconnect_attempts,
                     self.RECONNECT_MAX_DELAY,
@@ -360,6 +353,7 @@ class AgentBridge:
                 self.log.info(
                     "bridge.reconnect",
                     attempt=reconnect_attempts,
+                    reconnect_attempt_count=self._reconnect_attempt_count,
                     delay_s=round(delay, 1),
                 )
                 await asyncio.sleep(delay)
@@ -372,6 +366,50 @@ class AgentBridge:
                     await self._current_prompt_task
             if self.http_client:
                 await self.http_client.aclose()
+            self.log.info(
+                "bridge.run_complete",
+                outcome=run_outcome,
+                connection_count=self._connection_count,
+                reconnect_count=max(0, self._connection_count - 1),
+                reconnect_attempt_count=self._reconnect_attempt_count,
+                total_connected_duration_seconds=round(self._total_connected_duration_seconds, 3),
+            )
+
+    def _mark_connected(self, *, now_monotonic: float | None = None) -> None:
+        self._connection_count += 1
+        self._connected_at_monotonic = time.monotonic() if now_monotonic is None else now_monotonic
+
+    def _finalize_connection(
+        self, *, now_monotonic: float | None = None
+    ) -> dict[str, float | int] | None:
+        if self._connected_at_monotonic is None:
+            return None
+
+        ended_at = time.monotonic() if now_monotonic is None else now_monotonic
+        connection_duration_seconds = max(0.0, ended_at - self._connected_at_monotonic)
+        self._connected_at_monotonic = None
+        self._total_connected_duration_seconds += connection_duration_seconds
+
+        return {
+            "connection_duration_seconds": round(connection_duration_seconds, 3),
+            "total_connected_duration_seconds": round(self._total_connected_duration_seconds, 3),
+            "connection_count": self._connection_count,
+            "reconnect_count": max(0, self._connection_count - 1),
+            "reconnect_attempt_count": self._reconnect_attempt_count,
+        }
+
+    def _log_disconnect(
+        self,
+        *,
+        reason: str,
+        level: str = "info",
+        **fields: Any,
+    ) -> None:
+        connection_fields = self._finalize_connection()
+        if connection_fields is None:
+            return
+        log_method = getattr(self.log, level)
+        log_method("bridge.disconnect", reason=reason, **connection_fields, **fields)
 
     def _is_fatal_connection_error(self, error_str: str) -> bool:
         """Check if a connection error is fatal and shouldn't trigger retry.
@@ -414,7 +452,14 @@ class AgentBridge:
                 ping_timeout=10,
             ) as ws:
                 self.ws = ws
-                self.log.info("bridge.connect", outcome="success")
+                self._mark_connected()
+                self.log.info(
+                    "bridge.connect",
+                    outcome="success",
+                    connection_count=self._connection_count,
+                    reconnect_count=max(0, self._connection_count - 1),
+                    reconnect_attempt_count=self._reconnect_attempt_count,
+                )
 
                 await self._send_event(
                     {
@@ -448,11 +493,31 @@ class AgentBridge:
                         except Exception as e:
                             self.log.error("bridge.command_error", exc=e)
 
+                except websockets.ConnectionClosed as e:
+                    self._log_disconnect(
+                        reason="connection_closed",
+                        level="warn",
+                        ws_close_code=e.code,
+                    )
+                    raise
+
                 finally:
                     heartbeat_task.cancel()
                     for task in background_tasks:
                         task.cancel()
                     self.ws = None
+                    if self._connected_at_monotonic is not None:
+                        close_code = getattr(ws, "close_code", None)
+                        reason = (
+                            "shutdown_requested"
+                            if self.shutdown_event.is_set()
+                            else "connection_closed"
+                        )
+                        level = "warn" if close_code not in (None, 1000, 1001) else "info"
+                        extra_fields = (
+                            {"ws_close_code": close_code} if close_code is not None else {}
+                        )
+                        self._log_disconnect(reason=reason, level=level, **extra_fields)
 
         except InvalidStatus as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
