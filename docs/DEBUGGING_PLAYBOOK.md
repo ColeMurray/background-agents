@@ -135,6 +135,9 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 
+Dashboards and alerts must migrate `sandbox.spawned` and `sandbox.spawn_failed` to `sandbox.spawn`
+outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
+
 | Event                     | Level       | Key Fields                                                                                                              | Description                |
 | ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------- |
 | `sandbox.spawn`           | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed            |
@@ -174,6 +177,9 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 
 The `build_image` worker and the 30-minute `rebuild_images` cron. Worker events carry
 `scope_kind`/`scope_id` like the control-plane side.
+
+Dashboards and alerts must migrate `image_build.start`, `image_build.success`, and
+`image_build.failed` to `image_build.complete` outcomes.
 
 | Event                                                                                   | Level       | Key Fields                                                                                                                               | Description                                                      |
 | --------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |

@@ -319,8 +319,11 @@ class AgentBridge:
 
         try:
             while not self.shutdown_event.is_set():
+                run_outcome = "shutdown"
                 try:
                     await self._connect_and_run()
+                    if not self.shutdown_event.is_set():
+                        run_outcome = "connection_closed"
                     reconnect_attempts = 0
                 except SessionTerminatedError:
                     run_outcome = "session_terminated"
@@ -453,31 +456,29 @@ class AgentBridge:
             ) as ws:
                 self.ws = ws
                 self._mark_connected()
-                self.log.info(
-                    "bridge.connect",
-                    outcome="success",
-                    connection_count=self._connection_count,
-                    reconnect_count=max(0, self._connection_count - 1),
-                    reconnect_attempt_count=self._reconnect_attempt_count,
-                )
-
-                await self._send_event(
-                    {
-                        "type": "ready",
-                        "sandboxId": self.sandbox_id,
-                        "opencodeSessionId": self.opencode_session_id,
-                    }
-                )
-
-                await self._drain_boot_warnings()
-
-                just_flushed = await self._flush_event_buffer()
-                await self._flush_pending_acks(skip_ack_ids=just_flushed)
-
-                heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                heartbeat_task: asyncio.Task[None] | None = None
                 background_tasks: set[asyncio.Task[None]] = set()
 
                 try:
+                    self.log.info(
+                        "bridge.connect",
+                        outcome="success",
+                        connection_count=self._connection_count,
+                        reconnect_count=max(0, self._connection_count - 1),
+                        reconnect_attempt_count=self._reconnect_attempt_count,
+                    )
+                    await self._send_event(
+                        {
+                            "type": "ready",
+                            "sandboxId": self.sandbox_id,
+                            "opencodeSessionId": self.opencode_session_id,
+                        }
+                    )
+                    await self._drain_boot_warnings()
+                    just_flushed = await self._flush_event_buffer()
+                    await self._flush_pending_acks(skip_ack_ids=just_flushed)
+
+                    heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                     async for message in ws:
                         if self.shutdown_event.is_set():
                             break
@@ -502,7 +503,8 @@ class AgentBridge:
                     raise
 
                 finally:
-                    heartbeat_task.cancel()
+                    if heartbeat_task is not None:
+                        heartbeat_task.cancel()
                     for task in background_tasks:
                         task.cancel()
                     self.ws = None

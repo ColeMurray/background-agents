@@ -1,5 +1,8 @@
 """Tests for bridge reconnection and error handling logic."""
 
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge, SessionTerminatedError
@@ -74,6 +77,75 @@ class TestIsFatalConnectionError:
 
     def test_finalize_connection_returns_none_without_active_connection(self, bridge):
         assert bridge._finalize_connection(now_monotonic=5.0) is None
+
+    @pytest.mark.asyncio
+    async def test_pre_loop_cancellation_cleans_up_connection_state(self, bridge, monkeypatch):
+        class ConnectionContext:
+            def __init__(self, ws):
+                self.ws = ws
+
+            async def __aenter__(self):
+                return self.ws
+
+            async def __aexit__(self, *_args):
+                return False
+
+        ws = MagicMock(close_code=None)
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.websockets.connect",
+            lambda *_args, **_kwargs: ConnectionContext(ws),
+        )
+        bridge.log = MagicMock()
+        bridge._send_event = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await bridge._connect_and_run()
+
+        assert bridge.ws is None
+        assert bridge._connected_at_monotonic is None
+        bridge.log.info.assert_any_call(
+            "bridge.disconnect",
+            reason="connection_closed",
+            connection_duration_seconds=pytest.approx(0, abs=0.1),
+            total_connected_duration_seconds=pytest.approx(0, abs=0.1),
+            connection_count=1,
+            reconnect_count=0,
+            reconnect_attempt_count=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_complete_does_not_retain_transient_outcome(self, bridge, monkeypatch):
+        class HttpClient:
+            async def aclose(self):
+                return None
+
+        attempts = 0
+
+        async def connect_and_run():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("temporary failure")
+            bridge.shutdown_event.set()
+
+        bridge.log = MagicMock()
+        bridge._load_session_id = AsyncMock()
+        bridge._connect_and_run = connect_and_run
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.httpx.AsyncClient", lambda **_kwargs: HttpClient()
+        )
+        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", AsyncMock())
+
+        await bridge.run()
+
+        bridge.log.info.assert_any_call(
+            "bridge.run_complete",
+            outcome="shutdown",
+            connection_count=0,
+            reconnect_count=0,
+            reconnect_attempt_count=1,
+            total_connected_duration_seconds=0.0,
+        )
 
 
 class TestSessionTerminatedError:

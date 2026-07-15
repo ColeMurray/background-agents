@@ -12,7 +12,16 @@ interface LinearStartCallbackOptions {
   sleep: (ms: number) => Promise<void>;
 }
 
-export async function notifyLinearStarted({
+interface StartCallbackDeliverySummary {
+  outcome: "success" | "error" | "rejected";
+  attempts: number;
+  httpStatus?: number;
+  rejectReason?: string;
+  error?: unknown;
+  rethrow?: boolean;
+}
+
+async function deliverLinearStarted({
   messageId,
   callbackContext,
   sessionId,
@@ -20,23 +29,20 @@ export async function notifyLinearStarted({
   binding,
   log,
   sleep,
-}: LinearStartCallbackOptions): Promise<void> {
-  const startedAt = Date.now();
-  let context: unknown;
-  let delivered = false;
-  let attempts = 0;
-  let httpStatus: number | undefined;
-  let rejectReason: string | undefined;
-  let thrownError: unknown;
+}: LinearStartCallbackOptions): Promise<StartCallbackDeliverySummary> {
   try {
+    let context: unknown;
     try {
       context = JSON.parse(callbackContext);
     } catch {
       context = null;
     }
     if (!context || typeof context !== "object" || Array.isArray(context)) {
-      rejectReason = "invalid_callback_context";
-      return;
+      return {
+        outcome: "rejected",
+        attempts: 0,
+        rejectReason: "invalid_callback_context",
+      };
     }
 
     const payloadData = { sessionId, messageId, timestamp: Date.now(), context };
@@ -44,7 +50,6 @@ export async function notifyLinearStarted({
       ...payloadData,
       signature: await computeHmacHex(JSON.stringify(payloadData), secret),
     };
-
     const result = await deliverWithRetry(
       (signal) =>
         binding.fetch("https://internal/callbacks/start", {
@@ -69,35 +74,52 @@ export async function notifyLinearStarted({
         });
       }
     );
-    delivered = result.delivered;
-    attempts = result.attempts;
-    httpStatus = result.httpStatus;
-  } catch (error) {
-    thrownError = error;
-    throw error;
-  } finally {
-    const outcome =
-      thrownError !== undefined
-        ? "error"
-        : rejectReason
-          ? "rejected"
-          : delivered
-            ? "success"
-            : "error";
-    const fields = {
-      session_id: sessionId,
-      message_id: messageId,
-      outcome,
-      duration_ms: Date.now() - startedAt,
-      attempts,
-      retries: Math.max(0, attempts - 1),
-      ...(httpStatus !== undefined ? { http_status: httpStatus } : {}),
-      ...(rejectReason && thrownError === undefined ? { reject_reason: rejectReason } : {}),
-      ...(thrownError !== undefined
-        ? { error: thrownError instanceof Error ? thrownError : new Error(String(thrownError)) }
-        : {}),
+    return {
+      outcome: result.delivered ? "success" : "error",
+      attempts: result.attempts,
+      httpStatus: result.httpStatus,
     };
-    if (outcome === "error") log.error("callback.started_delivery", fields);
-    else log.info("callback.started_delivery", fields);
+  } catch (error) {
+    return { outcome: "error", attempts: 0, error, rethrow: true };
   }
+}
+
+export async function notifyLinearStarted({
+  messageId,
+  callbackContext,
+  sessionId,
+  secret,
+  binding,
+  log,
+  sleep,
+}: LinearStartCallbackOptions): Promise<void> {
+  const startedAt = Date.now();
+  const summary = await deliverLinearStarted({
+    messageId,
+    callbackContext,
+    sessionId,
+    secret,
+    binding,
+    log,
+    sleep,
+  });
+  const fields = {
+    session_id: sessionId,
+    message_id: messageId,
+    outcome: summary.outcome,
+    duration_ms: Date.now() - startedAt,
+    attempts: summary.attempts,
+    retries: Math.max(0, summary.attempts - 1),
+    ...(summary.httpStatus !== undefined ? { http_status: summary.httpStatus } : {}),
+    ...(summary.rejectReason ? { reject_reason: summary.rejectReason } : {}),
+    ...(summary.error !== undefined
+      ? {
+          error: summary.error instanceof Error ? summary.error : new Error(String(summary.error)),
+        }
+      : {}),
+  };
+  if (summary.outcome === "error") log.error("callback.started_delivery", fields);
+  else log.info("callback.started_delivery", fields);
+
+  if (summary.rethrow) throw summary.error;
 }

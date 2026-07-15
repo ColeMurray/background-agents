@@ -433,6 +433,37 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
+    it("logs only an error terminal event when spawn success-side effects fail", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      vi.mocked(storage.updateSandboxModalObjectId).mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const terminalLogs = [
+        ...parseStructuredLogs(infoSpy),
+        ...parseStructuredLogs(errorSpy),
+      ].filter((entry) => entry.event === "sandbox.spawn");
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0]).toEqual(expect.objectContaining({ outcome: "error" }));
+    });
+
     it("broadcasts sandbox_dashboard_url after spawn when builder is configured", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
@@ -755,6 +786,47 @@ describe("SandboxLifecycleManager", () => {
           duration_ms: expect.any(Number),
         })
       );
+    });
+
+    it("logs only an error terminal event when restore success-side effects fail", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      vi.mocked(storage.updateSandboxModalObjectId).mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const provider = createMockProvider({
+        restoreFromSnapshot: vi.fn(async (config: RestoreConfig) => ({
+          success: true,
+          sandboxId: config.sandboxId,
+          providerObjectId: "restored-object",
+        })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const terminalLogs = [
+        ...parseStructuredLogs(infoSpy),
+        ...parseStructuredLogs(errorSpy),
+      ].filter((entry) => entry.event === "sandbox.restore");
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0]).toEqual(expect.objectContaining({ outcome: "error" }));
     });
 
     it("schedules connecting timeout alarm after restore", async () => {

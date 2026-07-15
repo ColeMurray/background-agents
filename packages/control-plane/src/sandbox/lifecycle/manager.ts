@@ -521,17 +521,6 @@ export class SandboxLifecycleManager {
         });
       }
 
-      this.log.info("Sandbox spawn completed", {
-        event: "sandbox.spawn",
-        outcome: "success",
-        duration_ms: Date.now() - spawnStartedAt,
-        expected_sandbox_id: expectedSandboxId,
-        sandbox_id: result.sandboxId,
-        provider_object_id: result.providerObjectId,
-        repo_owner: session.repo_owner,
-        repo_name: session.repo_name,
-      });
-
       if (result.providerObjectId) {
         this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
@@ -558,6 +547,17 @@ export class SandboxLifecycleManager {
 
       // Reset circuit breaker on successful spawn initiation
       this.storage.resetCircuitBreaker();
+
+      this.log.info("Sandbox spawn completed", {
+        event: "sandbox.spawn",
+        outcome: "success",
+        duration_ms: Date.now() - spawnStartedAt,
+        expected_sandbox_id: expectedSandboxId,
+        sandbox_id: result.sandboxId,
+        provider_object_id: result.providerObjectId,
+        repo_owner: session.repo_owner,
+        repo_name: session.repo_name,
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to spawn sandbox";
       this.storage.setLastSpawnError(errorMessage, Date.now());
@@ -777,17 +777,6 @@ export class SandboxLifecycleManager {
       });
 
       if (result.success) {
-        this.log.info("Sandbox restore completed", {
-          event: "sandbox.restore",
-          outcome: "success",
-          duration_ms: Date.now() - restoreStartedAt,
-          snapshot_image_id: snapshotImageId,
-          sandbox_id: result.sandboxId,
-          provider_object_id: result.providerObjectId,
-          repo_owner: session.repo_owner,
-          repo_name: session.repo_name,
-        });
-
         if (result.providerObjectId) {
           this.storeAndBroadcastProviderObjectId(result.providerObjectId);
         }
@@ -815,6 +804,17 @@ export class SandboxLifecycleManager {
         this.broadcaster.broadcast({
           type: "sandbox_restored",
           message: "Session restored from snapshot",
+        });
+
+        this.log.info("Sandbox restore completed", {
+          event: "sandbox.restore",
+          outcome: "success",
+          duration_ms: Date.now() - restoreStartedAt,
+          snapshot_image_id: snapshotImageId,
+          sandbox_id: result.sandboxId,
+          provider_object_id: result.providerObjectId,
+          repo_owner: session.repo_owner,
+          repo_name: session.repo_name,
         });
       } else {
         this.log.error("Sandbox restore completed", {
