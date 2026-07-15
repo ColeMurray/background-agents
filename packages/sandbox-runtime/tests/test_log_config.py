@@ -167,11 +167,25 @@ class TestStructuredLogger:
         assert record["sandbox_id"] == "sb-override"
 
     def test_extra_cannot_override_owned_fields(self):
-        log = get_logger("owned-fields")
-        record = _capture_log(log, msg="override", level="debug", component="fake")
+        log = get_logger(
+            "owned-fields",
+            service="fake-service",
+            ts=0,
+            error_message="fake-error",
+        )
+        record = _capture_log(
+            log,
+            msg="override",
+            level="debug",
+            component="fake",
+            asctime="fake-time",
+        )
         assert record["msg"] == "test.event"
         assert record["level"] == "info"
         assert record["component"] == "owned-fields"
+        assert record["service"] == "modal-infra"
+        assert "asctime" not in record
+        assert "error_message" not in record
 
 
 class TestConfigureLogging:

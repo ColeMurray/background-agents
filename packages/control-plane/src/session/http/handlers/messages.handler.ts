@@ -116,7 +116,6 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
           authorId: message.author_id,
           content: message.content,
           source: message.source,
-          traceId: message.trace_id,
           status: message.status,
           createdAt: message.created_at,
           startedAt: message.started_at,

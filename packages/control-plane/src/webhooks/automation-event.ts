@@ -73,7 +73,7 @@ export function validateAutomationEventEnvelope(
 /** Forward a validated event to the singleton SchedulerDO for matching. */
 export async function forwardAutomationEventToScheduler(
   env: Env,
-  event: Record<string, unknown>,
+  event: object,
   traceId?: string
 ): Promise<Response> {
   if (!env.SCHEDULER) {

@@ -23,6 +23,7 @@ from typing import Any
 # Built from a blank LogRecord's __dict__ plus our custom underscore-prefixed attrs.
 _STANDARD_ATTRS = {
     "args",
+    "asctime",
     "created",
     "exc_info",
     "exc_text",
@@ -145,7 +146,7 @@ class StructuredLogger:
 
     def _log(
         self,
-        level: int,
+        log_level: int,
         event: str,
         exc: BaseException | None = None,
         **kw: Any,
@@ -153,12 +154,16 @@ class StructuredLogger:
         extra = {
             **self._context,
             **kw,
-            "_component": self._component,
-            "_service": self._service,
-            "_msg": event,
         }
+        for key in _STANDARD_ATTRS | _OWNED_FIELDS:
+            extra.pop(key, None)
+        extra.update(
+            _component=self._component,
+            _service=self._service,
+            _msg=event,
+        )
         self._logger.log(
-            level,
+            log_level,
             event,
             extra=extra,
             exc_info=(type(exc), exc, exc.__traceback__) if exc else None,

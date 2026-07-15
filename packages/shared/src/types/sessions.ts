@@ -79,7 +79,6 @@ export interface SessionMessage {
   authorId: string;
   content: string;
   source: MessageSource;
-  traceId?: string | null;
   attachments: Attachment[] | null;
   status: MessageStatus;
   createdAt: number;
