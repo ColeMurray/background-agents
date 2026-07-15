@@ -16,6 +16,9 @@ import {
   pullRequestOpenedPayloadSchema,
   reviewCommentPayloadSchema,
   reviewRequestedPayloadSchema,
+  webhookActionPayloadSchema,
+  webhookSummaryPayloadSchema,
+  type WebhookSummaryPayload,
 } from "./payload-schemas";
 import {
   handlePullRequestOpened,
@@ -78,17 +81,21 @@ app.post("/webhooks/github", async (c) => {
     log.warn("webhook.delivery_id_missing", { event_type: event });
   }
 
-  const payload = JSON.parse(rawBody);
+  const payload: unknown = JSON.parse(rawBody);
+  const summaryResult = webhookSummaryPayloadSchema.safeParse(payload);
+  const summary = summaryResult.success ? summaryResult.data : null;
+  const actionResult = webhookActionPayloadSchema.safeParse(payload);
+  const action = summary?.action ?? (actionResult.success ? actionResult.data.action : undefined);
   const traceId = crypto.randomUUID();
 
   log.info("webhook.received", {
     event_type: event,
     delivery_id: deliveryId,
     trace_id: traceId,
-    repo: payload?.repository
-      ? `${payload.repository.owner?.login}/${payload.repository.name}`
+    repo: summary?.repository
+      ? `${summary.repository.owner.login}/${summary.repository.name}`
       : undefined,
-    action: payload?.action,
+    action,
   });
 
   c.executionCtx.waitUntil(
@@ -140,14 +147,14 @@ async function handleWebhook(
   traceId: string,
   deliveryId: string | undefined
 ): Promise<void> {
-  const p = payload as Record<string, unknown>;
-  const repo = p.repository
-    ? `${(p.repository as Record<string, unknown> & { owner: { login: string }; name: string }).owner.login}/${(p.repository as Record<string, unknown> & { name: string }).name}`
-    : undefined;
-  const sender = (p.sender as { login?: string } | undefined)?.login;
-  const pullNumber =
-    (p.pull_request as { number?: number } | undefined)?.number ??
-    (p.issue as { number?: number } | undefined)?.number;
+  const parsed = webhookSummaryPayloadSchema.safeParse(payload);
+  const actionResult = webhookActionPayloadSchema.safeParse(payload);
+  const p: WebhookSummaryPayload = parsed.success
+    ? parsed.data
+    : { action: actionResult.success ? actionResult.data.action : undefined };
+  const repo = p.repository ? `${p.repository.owner.login}/${p.repository.name}` : undefined;
+  const sender = p.sender?.login;
+  const pullNumber = p.pull_request?.number ?? p.issue?.number;
 
   const wideEventBase = {
     trace_id: traceId,
@@ -189,9 +196,11 @@ async function handleWebhook(
   log.info("webhook.handled", wideEvent);
 
   // Forward normalized event to control-plane for automation triggering.
-  // This is additive — failures here must not affect existing bot behavior.
+  // Use the passthrough parse so nested lifecycle fields are not stripped by
+  // the summary schema used for logging and bot dispatch.
   if (event) {
-    const normalizedEvent = normalizeGitHubEvent(event, p);
+    const normalizationPayload = actionResult.success ? actionResult.data : {};
+    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
     if (normalizedEvent !== null) {
       try {
         const body = JSON.stringify(normalizedEvent);
@@ -225,7 +234,7 @@ function dispatchHandler(
   env: Env,
   log: Logger,
   event: string | undefined,
-  p: Record<string, unknown>,
+  p: WebhookSummaryPayload,
   payload: unknown,
   traceId: string
 ): Promise<HandlerResult> {

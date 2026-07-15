@@ -202,9 +202,44 @@ describe("applyMigrations", () => {
     expect(transactionControlStatements).toEqual([]);
   });
 
+  it("creates session_repositories for both fresh DOs and migrated DOs", () => {
+    // Fresh DOs get the table from SCHEMA_SQL; existing DOs via migration 31.
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
+
+    const migration = MIGRATIONS.find((m) => m.id === 31);
+    expect(migration).toBeDefined();
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
+  });
+
   it("keeps repository context consistent at the session table boundary", () => {
     expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
     expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");
     expect(SCHEMA_SQL).toContain("repo_id IS NULL AND base_branch IS NULL");
+  });
+
+  it("adds artifacts.updated_at for both fresh DOs and migrated DOs", () => {
+    // Fresh DOs get the column NOT NULL from SCHEMA_SQL; existing DOs get a
+    // nullable ADD COLUMN (SQLite restriction) plus a backfill via migration 34.
+    const artifactsTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS artifacts")[1]?.split(
+      ");"
+    )[0];
+    expect(artifactsTable).toContain("updated_at INTEGER NOT NULL");
+
+    const migration = MIGRATIONS.find((m) => m.id === 34);
+    expect(migration).toBeDefined();
+    expect(typeof migration?.run).toBe("function");
+
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+
+    const alter = mock.calls.find((c) =>
+      c.query.includes("ALTER TABLE artifacts ADD COLUMN updated_at INTEGER")
+    );
+    expect(alter).toBeDefined();
+    const backfill = mock.calls.find(
+      (c) =>
+        c.query.includes("UPDATE artifacts SET updated_at = created_at") &&
+        c.query.includes("updated_at IS NULL")
+    );
+    expect(backfill).toBeDefined();
   });
 });

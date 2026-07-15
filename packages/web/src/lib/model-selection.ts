@@ -1,4 +1,15 @@
-import { DEFAULT_MODEL, getValidModelOrDefault } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  getValidModelOrDefault,
+  isValidReasoningEffort,
+  resolveEnabledModel as resolveSharedEnabledModel,
+} from "@open-inspect/shared";
+
+export interface ModelPreference {
+  model: string;
+  reasoningEffort?: string;
+}
 
 /**
  * Pick the model the automation form should actually use, given a desired model
@@ -12,9 +23,21 @@ import { DEFAULT_MODEL, getValidModelOrDefault } from "@open-inspect/shared";
  * also normalizes legacy/bare ids and falls back for unknown ones.
  */
 export function resolveEnabledModel(model: string, enabledModels: string[]): string {
-  const desired = getValidModelOrDefault(model);
-  const enabled = new Set(enabledModels);
-  if (enabled.has(desired)) return desired;
-  if (enabled.has(DEFAULT_MODEL)) return DEFAULT_MODEL;
-  return enabledModels[0] ?? DEFAULT_MODEL;
+  return resolveSharedEnabledModel({ model, enabledModels, fallbackModel: DEFAULT_MODEL });
+}
+
+export function resolveModelPreference(
+  preference: ModelPreference,
+  enabledModels: string[] | undefined
+): ModelPreference {
+  const model = enabledModels
+    ? resolveEnabledModel(preference.model, enabledModels)
+    : getValidModelOrDefault(preference.model);
+  return {
+    model,
+    reasoningEffort:
+      preference.reasoningEffort && isValidReasoningEffort(model, preference.reasoningEffort)
+        ? preference.reasoningEffort
+        : getDefaultReasoningEffort(model),
+  };
 }

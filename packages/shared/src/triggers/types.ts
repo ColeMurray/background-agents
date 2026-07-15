@@ -2,7 +2,7 @@
  * Core types for the trigger-based automation event system.
  */
 
-import type { AutomationTriggerType } from "../types";
+import type { AutomationTriggerType } from "../types/automations";
 import type { ConditionType } from "./conditions";
 import { z } from "zod";
 
@@ -44,6 +44,40 @@ interface BaseAutomationEvent {
 
 // ─── Source-Specific Variants ─────────────────────────────────────────────────
 
+/**
+ * Typed pull-request facts carried on pull_request events. Every field beyond
+ * the number is optional and reflects only what the webhook payload actually
+ * said — consumers fall back to a provider read when a field is absent.
+ */
+export interface GitHubPullRequestEventFacts {
+  number: number;
+  /** Raw provider state; merged-vs-closed is disambiguated by `merged`. */
+  state?: "open" | "closed";
+  draft?: boolean;
+  merged?: boolean;
+  headSha?: string;
+  /**
+   * True when the head branch lives in a different repository than the base
+   * (fork PR). Undefined when the payload lacks repo identity to compare.
+   */
+  isCrossRepository?: boolean;
+  /** Web URL of the pull request (html_url). */
+  url?: string;
+  /**
+   * Stable id of the repository the PR lives in (the base repo) — the
+   * canonical PR-record identity used for webhook correlation.
+   */
+  repositoryExternalId?: string;
+  /** Provider's created_at (epoch ms) — analytics cohort bucketing. */
+  providerCreatedAt?: number;
+  /** Provider's updated_at (epoch ms) — the monotonic write guard source. */
+  providerUpdatedAt?: number;
+  /** Provider's merged_at (epoch ms); only meaningful when merged. */
+  mergedAt?: number;
+  /** Provider's closed_at (epoch ms); only meaningful when not open. */
+  closedAt?: number;
+}
+
 export interface GitHubAutomationEvent extends BaseAutomationEvent {
   source: "github";
   repoOwner: string;
@@ -56,6 +90,8 @@ export interface GitHubAutomationEvent extends BaseAutomationEvent {
   actor?: string;
   changedFiles?: string[];
   checkConclusion?: string;
+  /** Present only on pull_request events. */
+  pullRequest?: GitHubPullRequestEventFacts;
 }
 
 export interface LinearAutomationEvent extends BaseAutomationEvent {
@@ -123,6 +159,22 @@ export const automationEventSchema = z.discriminatedUnion("source", [
     actor: z.string().optional(),
     changedFiles: z.array(z.string()).optional(),
     checkConclusion: z.string().optional(),
+    pullRequest: z
+      .object({
+        number: z.number(),
+        state: z.enum(["open", "closed"]).optional(),
+        draft: z.boolean().optional(),
+        merged: z.boolean().optional(),
+        headSha: z.string().optional(),
+        isCrossRepository: z.boolean().optional(),
+        url: z.string().optional(),
+        repositoryExternalId: z.string().optional(),
+        providerCreatedAt: z.number().optional(),
+        providerUpdatedAt: z.number().optional(),
+        mergedAt: z.number().optional(),
+        closedAt: z.number().optional(),
+      })
+      .optional(),
   }),
   z.object({
     ...baseAutomationEventSchema,

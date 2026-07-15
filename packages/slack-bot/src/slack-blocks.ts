@@ -17,6 +17,11 @@ export type SlackSelectOption = {
   value: string;
 };
 
+export type SlackSelectOptionGroup = {
+  label: SlackPlainText;
+  options: SlackSelectOption[];
+};
+
 export type SlackConfirmation = {
   title: SlackPlainText;
   text: SlackText;
@@ -33,13 +38,13 @@ export type SlackButtonElement = {
   confirm?: SlackConfirmation;
 };
 
+// Slack accepts exactly one of options / option_groups on a static_select.
 export type SlackStaticSelectElement = {
   type: "static_select";
   action_id: string;
   initial_option?: SlackSelectOption;
   placeholder?: SlackPlainText;
-  options: SlackSelectOption[];
-};
+} & ({ options: SlackSelectOption[] } | { option_groups: SlackSelectOptionGroup[] });
 
 export type SlackExternalSelectElement = {
   type: "external_select";

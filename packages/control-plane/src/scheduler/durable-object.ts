@@ -16,6 +16,7 @@ import {
   conditionRegistry,
   computeHmacHex,
   type AutomationCallbackContext,
+  type AutomationInvocationSource,
   type SlackAutomationEvent,
   type SlackCallbackContext,
   type TriggerConfig,
@@ -27,12 +28,16 @@ import {
   isDuplicateKeyError,
   type AutomationRow,
   type AutomationRunRow,
+  type AutomationInvocationRow,
+  type InvocationOverlapScope,
+  type AutomationRepositoryInsert,
+  type AutomationEnvironmentRow,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
-  getSlackRunMetadata,
+  parseSlackTriggerMetadata,
   type SlackRunMetadata,
   type SlackCompletionContext,
 } from "./slack-completion";
@@ -43,14 +48,27 @@ import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
 import { initializeSession } from "../session/initialize";
-import {
-  resolveCodeServerEnabled,
-  resolveSandboxSettings,
-} from "../session/integration-settings-resolution";
-import { resolveAutomationRepository } from "../automation/repository";
+import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import { resolveAutomationRepositories } from "../automation/repository";
+import { resolveAutomationSessionTarget } from "../automation/session-target";
+import type { RequestContext } from "../routes/shared";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
+
+/**
+ * Per-tick cap on child-run launches. Each launch costs ~8 subrequests, so an
+ * uncapped 25-automation × 10-repo tick would blow the Workers per-invocation
+ * subrequest limit; automations left overdue when the budget runs out are
+ * simply picked up next tick.
+ */
+const TICK_CHILD_LAUNCH_BUDGET = 50;
+
+/**
+ * Smooths Modal cold-start pressure for multi-repo fan-out. The maximum fan-out
+ * is 10 repositories, so this only caps the per-invocation spike.
+ */
+const AUTOMATION_LAUNCH_CONCURRENCY = 4;
 
 /** Threshold for detecting orphaned "starting" runs (5 minutes). */
 const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
@@ -65,6 +83,13 @@ const AUTO_PAUSE_THRESHOLD = 3;
 const RECOVERY_SWEEP_LIMIT = 50;
 
 /**
+ * How far back the finalization sweep scans invocations for missed failure
+ * strikes or resets (the crash-after-last-callback window is seconds; a day
+ * keeps the derived-status scan cheap while covering long outages).
+ */
+const INVOCATION_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
  * How long after a slack run's first trigger that thread replies keep continuing
  * the same session (matches the interactive thread→session KV TTL of 7 days). Steering
  * does not create new runs, so this is measured from the root run's `created_at` and
@@ -72,12 +97,15 @@ const RECOVERY_SWEEP_LIMIT = 50;
  */
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-function formatAutomationTargetLabel(
-  automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
+/**
+ * Repository label for user-facing surfaces (Slack), read from the run's
+ * firing-time snapshot — the automation row's selection may have been edited
+ * since this run started.
+ */
+function formatRunRepositoryLabel(
+  run: Pick<AutomationRunRow, "repo_owner" | "repo_name"> | null | undefined
 ): string {
-  return automation?.repo_owner && automation?.repo_name
-    ? `${automation.repo_owner}/${automation.repo_name}`
-    : "No repository";
+  return run?.repo_owner && run?.repo_name ? `${run.repo_owner}/${run.repo_name}` : "No repository";
 }
 
 const manualTriggerBodySchema = z.object({
@@ -100,6 +128,34 @@ function badJsonRequest(message: string): Response {
   });
 }
 
+interface StartInvocationParams {
+  automation: AutomationRow;
+  source: AutomationInvocationSource;
+  /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
+  scheduledAt?: number;
+  /** Next cron slot, advanced atomically with the insert (schedule source only). */
+  advanceToNextRunAt?: number;
+  triggerKey?: string | null;
+  concurrencyKey?: string | null;
+  /** Source-specific JSON stored on the invocation (slack message coordinates). */
+  triggerMetadata?: string | null;
+  /** Pre-fetched repository selection (the tick passes its batched fetch). */
+  repositories?: AutomationRepositoryInsert[];
+  /** Pre-fetched environment selection (the tick passes its batched fetch). */
+  environments?: AutomationEnvironmentRow[];
+  instructionsOverride?: string;
+}
+
+type StartInvocationResult =
+  /** Invocation inserted; children launched (some may have pre-failed). */
+  | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
+  /** Overlap — a childless skipped invocation was recorded (schedule/event). */
+  | { outcome: "skipped" }
+  /** Overlap on a manual firing — nothing recorded; the caller answers 409. */
+  | { outcome: "blocked" }
+  /** Idempotency/dedup collision — another firing owns this slot or event. */
+  | { outcome: "deduplicated" };
+
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
 
@@ -109,21 +165,14 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 
   /**
-   * Mark a run as failed and increment consecutive failures for the automation.
-   * If the failure count reaches AUTO_PAUSE_THRESHOLD, auto-pause the automation.
+   * Increment the automation's failure streak and auto-pause at the threshold.
+   * Callers gate this per-invocation via the failure_counted_at CAS; only the
+   * legacy rollback-window path (runs without an invocation) calls it directly.
    */
-  private async failRunAndTrack(
+  private async trackAutomationFailure(
     store: AutomationStore,
-    runId: string,
-    automationId: string,
-    reason: string
+    automationId: string
   ): Promise<void> {
-    await store.updateRun(runId, {
-      status: "failed",
-      failure_reason: reason,
-      completed_at: Date.now(),
-    });
-
     const count = await store.incrementConsecutiveFailures(automationId);
     if (count >= AUTO_PAUSE_THRESHOLD) {
       await store.autoPause(automationId);
@@ -135,23 +184,286 @@ export class SchedulerDO extends DurableObject<Env> {
     }
   }
 
-  private async failRunAndTrackBestEffort(
+  /**
+   * Invocation-level failure/success accounting (D2). Aggregates the sibling
+   * runs and applies at most one consecutive-failures strike per invocation
+   * (the failure_counted_at CAS admits a single winner across concurrent
+   * callbacks, launch failures, and sweeps) or — once every child completed —
+   * the streak reset. Idempotent by construction: safe to call after every
+   * child transition and again from the finalization sweep.
+   */
+  private async applyInvocationAccounting(
     store: AutomationStore,
-    runId: string,
     automationId: string,
-    reason: string
+    invocationId: string
   ): Promise<void> {
-    try {
-      await this.failRunAndTrack(store, runId, automationId, reason);
-    } catch (trackingError) {
-      this.log.error("Failed to track run failure", {
-        event: "scheduler.fail_track_error",
-        automation_id: automationId,
-        run_id: runId,
-        original_reason: reason,
-        error: trackingError instanceof Error ? trackingError.message : String(trackingError),
-      });
+    const aggregate = await store.getInvocationRunAggregate(invocationId);
+    if (aggregate.total === 0) return; // childless skip — never counts
+
+    if (aggregate.failed > 0) {
+      const won = await store.tryMarkInvocationFailureCounted(invocationId);
+      if (!won) return;
+      await this.trackAutomationFailure(store, automationId);
+    } else if (aggregate.active === 0 && aggregate.completed === aggregate.total) {
+      await store.resetConsecutiveFailures(automationId);
     }
+  }
+
+  // ─── Invocation creation (all three entry points) ────────────────────────
+
+  /**
+   * The single firing pipeline (D6): overlap check per source, atomic
+   * invocation+children insert with self-guarded statements, repository
+   * resolution with per-repo error capture, child launches, and born-terminal
+   * finalization. Tick, manual trigger, and the event path all come through
+   * here.
+   */
+  private async startInvocation(
+    store: AutomationStore,
+    params: StartInvocationParams
+  ): Promise<StartInvocationResult> {
+    const { automation, source } = params;
+    const now = Date.now();
+    const concurrencyKey = params.concurrencyKey ?? null;
+
+    // Schedule/manual firings block on any active run of the automation; event
+    // firings block per concurrency key (an automation-wide guard would
+    // serialize unrelated events, e.g. PR #42 against PR #43).
+    const overlapScope: InvocationOverlapScope =
+      source === "event" && concurrencyKey !== null
+        ? { kind: "concurrencyKey", concurrencyKey }
+        : { kind: "automation" };
+
+    // Cheap pre-check; the guarded insert below re-applies the same predicate
+    // atomically, so a race here only costs a wasted child build.
+    const activeRun =
+      overlapScope.kind === "concurrencyKey"
+        ? await store.getActiveRunForKey(automation.id, concurrencyKey)
+        : await store.getActiveRunForAutomation(automation.id);
+    if (activeRun) {
+      return this.recordOverlapSkip(store, params, { advanceSchedule: true });
+    }
+
+    const selection =
+      params.repositories ?? (await store.getRepositoriesForAutomation(automation.id));
+    const environmentSelection =
+      params.environments ?? (await store.getEnvironmentsForAutomation(automation.id));
+    const resolutions = await resolveAutomationRepositories(this.env, selection);
+
+    const invocationId = generateId();
+    const scheduledAt = params.scheduledAt ?? now;
+
+    const childBase = () => ({
+      id: generateId(),
+      automation_id: automation.id,
+      invocation_id: invocationId,
+      session_id: null,
+      skip_reason: null,
+      failure_reason: null,
+      scheduled_at: scheduledAt,
+      started_at: null,
+      completed_at: null,
+      created_at: now,
+      repo_owner: null,
+      repo_name: null,
+      repo_id: null,
+      base_branch: null,
+      environment_id: null,
+    });
+
+    // One child per target. Repository children snapshot the resolved repo; a
+    // failed resolution pre-fails its child (snapshot from the selection row)
+    // without blocking siblings. Environment children snapshot the environment
+    // id — the workspace itself resolves at launch time (design §13.3), so a
+    // deleted environment fails through the launch-failure path. No targets →
+    // one repo-less child.
+    const children: AutomationRunRow[] = [
+      ...resolutions.map(
+        (resolution): AutomationRunRow => ({
+          ...childBase(),
+          status: resolution.error ? "failed" : "starting",
+          failure_reason: resolution.error,
+          completed_at: resolution.error ? now : null,
+          repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
+          repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
+          repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
+          base_branch: resolution.repository?.baseBranch ?? resolution.requested.base_branch,
+        })
+      ),
+      ...environmentSelection.map(
+        (environment): AutomationRunRow => ({
+          ...childBase(),
+          status: "starting",
+          environment_id: environment.environment_id,
+        })
+      ),
+    ];
+    if (children.length === 0) {
+      children.push({ ...childBase(), status: "starting" });
+    }
+
+    const invocation: AutomationInvocationRow = {
+      id: invocationId,
+      automation_id: automation.id,
+      source,
+      scheduled_at: params.scheduledAt ?? null,
+      trigger_key: params.triggerKey ?? null,
+      concurrency_key: concurrencyKey,
+      trigger_metadata: params.triggerMetadata ?? null,
+      skip_reason: null,
+      failure_counted_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    let inserted: boolean;
+    try {
+      ({ inserted } = await store.insertInvocationGuarded({
+        invocation,
+        children,
+        overlapScope,
+        advanceSchedule:
+          source === "schedule" && params.advanceToNextRunAt !== undefined
+            ? { nextRunAt: params.advanceToNextRunAt }
+            : undefined,
+      }));
+    } catch (e) {
+      if (isDuplicateKeyError(e)) {
+        // A UNIQUE violation rolls back the whole batch INCLUDING the schedule
+        // advance. The colliding firing owns this slot (cron double-fire) or
+        // event (trigger_key dedup) — re-advance and stand down.
+        if (source === "schedule" && params.advanceToNextRunAt !== undefined) {
+          // Monotonic: never rewind the schedule. A stale duplicate for an old
+          // slot must not move next_run_at behind a newer tick's advance.
+          await store.advanceNextRunAt(automation.id, params.advanceToNextRunAt);
+        }
+        return { outcome: "deduplicated" };
+      }
+      throw e;
+    }
+
+    if (!inserted) {
+      // Raced an active invocation between the pre-check and the batch. The
+      // batch's schedule advance already ran (deliberately unconditional), so
+      // the skip record must not advance again.
+      return this.recordOverlapSkip(store, params, { advanceSchedule: false });
+    }
+
+    const launchChild = async (child: AutomationRunRow): Promise<void> => {
+      try {
+        const { sessionId } = await this.createSessionForAutomationRun(automation, child);
+        await this.sendPromptToSession(
+          sessionId,
+          automation,
+          child.id,
+          params.instructionsOverride
+        );
+        await store.updateRun(child.id, {
+          status: "running",
+          session_id: sessionId,
+          started_at: Date.now(),
+        });
+        child.status = "running";
+        child.session_id = sessionId;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        this.log.error("Failed to launch automation run", {
+          event: "scheduler.session_creation_failed",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          run_id: child.id,
+          error: message,
+        });
+        try {
+          await store.updateRun(child.id, {
+            status: "failed",
+            failure_reason: message,
+            completed_at: Date.now(),
+          });
+        } catch (updateError) {
+          this.log.error("Failed to record launch failure", {
+            event: "scheduler.fail_track_error",
+            automation_id: automation.id,
+            run_id: child.id,
+            original_reason: message,
+            error: updateError instanceof Error ? updateError.message : String(updateError),
+          });
+        }
+        child.status = "failed";
+        child.failure_reason = message;
+      }
+    };
+
+    const launchCandidates = children.filter((child) => child.status === "starting");
+    let nextLaunchIndex = 0;
+    const launchWorkerCount = Math.min(AUTOMATION_LAUNCH_CONCURRENCY, launchCandidates.length);
+    await Promise.all(
+      Array.from({ length: launchWorkerCount }, async () => {
+        for (;;) {
+          const child = launchCandidates[nextLaunchIndex++];
+          if (!child) return;
+          await launchChild(child);
+        }
+      })
+    );
+    const launched = launchCandidates.filter((child) => child.status === "running").length;
+
+    // Pre-failed and launch-failed children have no callback coming — apply
+    // the failure strike now (CAS-deduped). This is also the born-terminal
+    // path: every repo inaccessible → invocation finalizes immediately.
+    if (children.some((child) => child.status === "failed")) {
+      try {
+        await this.applyInvocationAccounting(store, automation.id, invocationId);
+      } catch (e) {
+        this.log.error("Failed to apply invocation accounting after launch failures", {
+          event: "scheduler.fail_track_error",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    return { outcome: "started", invocationId, runs: children, launched };
+  }
+
+  /**
+   * Record an overlap-blocked firing. Manual firings surface as a 409 with no
+   * row; schedule and event firings persist a childless skipped invocation —
+   * for schedule slots atomically with the schedule advance (a skip recorded
+   * without its advance would re-collide on the same slot every tick). A skip
+   * never stores the event trigger_key: a skip must not consume the dedup
+   * slot of a firing that never ran.
+   */
+  private async recordOverlapSkip(
+    store: AutomationStore,
+    params: StartInvocationParams,
+    options: { advanceSchedule: boolean }
+  ): Promise<StartInvocationResult> {
+    if (params.source === "manual") return { outcome: "blocked" };
+
+    const now = Date.now();
+    await store.insertSkippedInvocation(
+      {
+        id: generateId(),
+        automation_id: params.automation.id,
+        source: params.source,
+        scheduled_at: params.scheduledAt ?? null,
+        trigger_key: null,
+        concurrency_key: params.concurrencyKey ?? null,
+        trigger_metadata: params.triggerMetadata ?? null,
+        skip_reason: "concurrent_run_active",
+        failure_counted_at: null,
+        created_at: now,
+        updated_at: now,
+      },
+      options.advanceSchedule &&
+        params.source === "schedule" &&
+        params.advanceToNextRunAt !== undefined
+        ? { nextRunAt: params.advanceToNextRunAt }
+        : undefined
+    );
+    return { outcome: "skipped" };
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -185,95 +497,69 @@ export class SchedulerDO extends DurableObject<Env> {
     let processed = 0;
     let skipped = 0;
     let failed = 0;
+    let launchedChildren = 0;
 
     // 1. Recovery sweep
     await this.recoverySweep(store);
 
-    // 2. Process overdue automations
+    // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
+    const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
+      store.getRepositoriesForAutomationIds(overdue.map((automation) => automation.id)),
+      store.getEnvironmentsForAutomationIds(overdue.map((automation) => automation.id)),
+    ]);
 
-    for (const automation of overdue) {
+    for (const [index, automation] of overdue.entries()) {
+      const repositories = repositoriesByAutomation.get(automation.id) ?? [];
+      const environments = environmentsByAutomation.get(automation.id) ?? [];
+      // Each target — repository or environment — launches one child (a
+      // target-less automation launches one null-repo child), so estimate this
+      // firing's child count up front and defer whole automations that would
+      // push the tick past the budget. Checking before startInvocation
+      // prevents the overshoot where a firing materializes and launches up to
+      // 10 children before the budget is reconciled. Always admit the first
+      // automation so a tick makes progress.
+      const estimatedChildren = Math.max(repositories.length + environments.length, 1);
+      if (launchedChildren > 0 && launchedChildren + estimatedChildren > TICK_CHILD_LAUNCH_BUDGET) {
+        this.log.info("Tick child budget reached; remaining overdue deferred to next tick", {
+          event: "scheduler.tick_budget_exhausted",
+          launched_children: launchedChildren,
+          deferred: overdue.length - index,
+        });
+        break;
+      }
       try {
-        // Concurrency check — advance next_run_at to avoid repeat skip inserts
-        const activeRun = await store.getActiveRunForAutomation(automation.id);
-        if (activeRun) {
-          const nextRunAt = nextCronOccurrence(
-            automation.schedule_cron!,
-            automation.schedule_tz
-          ).getTime();
-          const skipRunId = generateId();
-          await store.insertRun({
-            id: skipRunId,
-            automation_id: automation.id,
-            session_id: null,
-            status: "skipped",
-            skip_reason: "concurrent_run_active",
-            failure_reason: null,
-            scheduled_at: automation.next_run_at!,
-            started_at: null,
-            completed_at: now,
-            created_at: now,
-            trigger_key: null,
-            concurrency_key: null,
-          });
-          await store.update(automation.id, { next_run_at: nextRunAt });
-          skipped++;
-          continue;
-        }
-
-        // Compute next run time
         const nextRunAt = nextCronOccurrence(
           automation.schedule_cron!,
           automation.schedule_tz
         ).getTime();
 
-        // Atomic: create run + advance schedule
-        const runId = generateId();
-        await store.createRunAndAdvanceSchedule(
-          {
-            id: runId,
-            automation_id: automation.id,
-            session_id: null,
-            status: "starting",
-            skip_reason: null,
-            failure_reason: null,
-            scheduled_at: automation.next_run_at!,
-            started_at: null,
-            completed_at: null,
-            created_at: now,
-            trigger_key: null,
-            concurrency_key: null,
-          },
-          automation.id,
-          nextRunAt
-        );
+        const result = await this.startInvocation(store, {
+          automation,
+          source: "schedule",
+          scheduledAt: automation.next_run_at!,
+          advanceToNextRunAt: nextRunAt,
+          repositories,
+          environments,
+        });
 
-        // Create session + send prompt
-        try {
-          const { sessionId } = await this.createSessionForAutomation(automation, runId);
-
-          await this.sendPromptToSession(sessionId, automation, runId);
-
-          // Update run to running
-          await store.updateRun(runId, {
-            status: "running",
-            session_id: sessionId,
-            started_at: Date.now(),
-          });
-
-          processed++;
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          this.log.error("Failed to create session for automation", {
-            event: "scheduler.session_creation_failed",
-            automation_id: automation.id,
-            run_id: runId,
-            error: message,
-          });
-
-          await this.failRunAndTrackBestEffort(store, runId, automation.id, message);
-
-          failed++;
+        switch (result.outcome) {
+          case "started":
+            // Summary parity with the pre-invocations tick: a firing that
+            // launched nothing (every child pre-failed or failed to launch)
+            // reports as failed, not processed.
+            if (result.launched > 0) {
+              processed++;
+            } else {
+              failed++;
+            }
+            launchedChildren += result.runs.length;
+            break;
+          case "skipped":
+          case "deduplicated":
+          case "blocked":
+            skipped++;
+            break;
         }
       } catch (e) {
         this.log.error("Unexpected error processing automation", {
@@ -336,7 +622,10 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
-    if (orphaned.length === 0 && timedOut.length === 0) return;
+    if (orphaned.length === 0 && timedOut.length === 0) {
+      await this.finalizationSweep(store);
+      return;
+    }
 
     for (const run of orphaned) {
       this.log.warn("Recovering orphaned starting run", {
@@ -392,42 +681,106 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    if (recoveredRuns.length === 0) return;
-
-    const automationCounts = new Map<string, number>();
-    for (const run of recoveredRuns) {
-      automationCounts.set(run.automation_id, (automationCounts.get(run.automation_id) ?? 0) + 1);
-    }
-
-    let newCounts: Map<string, number>;
-    try {
-      newCounts = await store.bulkIncrementFailures(automationCounts);
-    } catch (e) {
-      this.log.error("Recovery sweep failed to track failures", {
-        event: "scheduler.recovery.bulk_track_error",
-        error: e instanceof Error ? e.message : String(e),
-      });
+    if (recoveredRuns.length === 0) {
+      await this.finalizationSweep(store);
       return;
     }
 
-    for (const [automationId, count] of newCounts) {
-      if (count < AUTO_PAUSE_THRESHOLD) continue;
+    // Failure accounting: strikes are per INVOCATION (CAS-deduped), so two
+    // stuck children of one fan-out cost one strike, not two. Runs without an
+    // invocation link (rollback-window writes by pre-invocation code) keep the
+    // legacy per-run bulk accounting until the backfill repairs them.
+    const affectedInvocations = new Map<string, string>(); // invocation id → automation id
+    const legacyCounts = new Map<string, number>();
+    for (const run of recoveredRuns) {
+      if (run.invocation_id) {
+        affectedInvocations.set(run.invocation_id, run.automation_id);
+      } else {
+        legacyCounts.set(run.automation_id, (legacyCounts.get(run.automation_id) ?? 0) + 1);
+      }
+    }
 
+    for (const [invocationId, automationId] of affectedInvocations) {
       try {
-        await store.autoPause(automationId);
-        this.log.warn("Automation auto-paused due to consecutive failures", {
-          event: "scheduler.auto_pause",
-          automation_id: automationId,
-          consecutive_failures: count,
-        });
+        await this.applyInvocationAccounting(store, automationId, invocationId);
       } catch (e) {
-        this.log.error("Recovery sweep failed to auto-pause automation", {
-          event: "scheduler.recovery.auto_pause_error",
+        this.log.error("Recovery sweep failed to track failures", {
+          event: "scheduler.recovery.bulk_track_error",
           automation_id: automationId,
-          consecutive_failures: count,
+          invocation_id: invocationId,
           error: e instanceof Error ? e.message : String(e),
         });
       }
+    }
+
+    if (legacyCounts.size > 0) {
+      let newCounts: Map<string, number>;
+      try {
+        newCounts = await store.bulkIncrementFailures(legacyCounts);
+      } catch (e) {
+        this.log.error("Recovery sweep failed to track failures", {
+          event: "scheduler.recovery.bulk_track_error",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        newCounts = new Map();
+      }
+
+      for (const [automationId, count] of newCounts) {
+        if (count < AUTO_PAUSE_THRESHOLD) continue;
+
+        try {
+          await store.autoPause(automationId);
+          this.log.warn("Automation auto-paused due to consecutive failures", {
+            event: "scheduler.auto_pause",
+            automation_id: automationId,
+            consecutive_failures: count,
+          });
+        } catch (e) {
+          this.log.error("Recovery sweep failed to auto-pause automation", {
+            event: "scheduler.recovery.auto_pause_error",
+            automation_id: automationId,
+            consecutive_failures: count,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    }
+
+    await this.finalizationSweep(store);
+  }
+
+  /**
+   * D2c arm: invocation-level accounting missed in the crash window between a
+   * child's terminal update and its callback's accounting — all-terminal
+   * invocations with an uncounted failure, and failing automations whose
+   * latest invocation may be a fully-completed one (missed reset). Every
+   * application goes through the same CAS-guarded, idempotent helper, so
+   * overlap with live callbacks is harmless.
+   */
+  private async finalizationSweep(store: AutomationStore): Promise<void> {
+    const since = Date.now() - INVOCATION_SWEEP_WINDOW_MS;
+    try {
+      const uncounted = await store.getUncountedFailedInvocations(since, RECOVERY_SWEEP_LIMIT);
+      for (const invocation of uncounted) {
+        await this.applyInvocationAccounting(store, invocation.automation_id, invocation.id);
+      }
+
+      const resetCandidates = await store.getStaleFailureResetCandidates(
+        since,
+        RECOVERY_SWEEP_LIMIT
+      );
+      for (const candidate of resetCandidates) {
+        await this.applyInvocationAccounting(
+          store,
+          candidate.automation_id,
+          candidate.invocation_id
+        );
+      }
+    } catch (e) {
+      this.log.error("Invocation finalization sweep failed", {
+        event: "scheduler.recovery.finalization_error",
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -503,10 +856,7 @@ export class SchedulerDO extends DurableObject<Env> {
           event.concurrencyKey,
           now - SLACK_THREAD_CONTINUITY_WINDOW_MS
         );
-        if (
-          steerable?.session_id &&
-          (await this.steerSession(steerable.session_id, automation, event))
-        ) {
+        if (steerable?.session_id && (await this.steerSession(steerable, automation, event))) {
           steered++;
           continue;
         }
@@ -523,62 +873,39 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
-      // Concurrency guard: never start a second run while one is active for this
-      // key. For slack this also covers the brief window before a run has created
-      // its session (no steerable row yet), so a reply racing the initial trigger
-      // gets the "already active" notice instead of a second session.
-      const activeRun = await store.getActiveRunForKey(automation.id, event.concurrencyKey);
-      if (activeRun) {
-        if (event.source === "slack") {
-          await this.recordSlackSkip(store, automation.id, event, "concurrent_run_active");
-          concurrencySkipped = true;
-        }
-        skipped++;
-        continue;
-      }
+      // Event firings are invocations of 1 (or 0 children when skipped): same
+      // per-key concurrency, same trigger_key dedup — both now enforced on the
+      // invocation, atomically. The overlap skip also covers the brief slack
+      // window before a run has created its session (no steerable row yet), so
+      // a reply racing the initial trigger gets the "already active" notice
+      // instead of a second session.
+      const result = await this.startInvocation(store, {
+        automation,
+        source: "event",
+        triggerKey: event.triggerKey,
+        concurrencyKey: event.concurrencyKey,
+        triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
+        instructionsOverride: `${event.contextBlock}\n---\n\n${automation.instructions}`,
+      });
 
-      // Create run (dedup via unique index on trigger_key)
-      const runId = generateId();
-      try {
-        await store.insertRun({
-          id: runId,
-          automation_id: automation.id,
-          session_id: null,
-          status: "starting",
-          skip_reason: null,
-          failure_reason: null,
-          scheduled_at: now,
-          started_at: null,
-          completed_at: null,
-          created_at: now,
-          trigger_key: event.triggerKey,
-          concurrency_key: event.concurrencyKey,
-          ...(event.source === "slack" ? slackRunMetadata(event) : {}),
-        });
-      } catch (e) {
-        if (isDuplicateKeyError(e)) {
+      switch (result.outcome) {
+        case "started":
+          // Counter parity with the pre-invocations path: a firing whose
+          // launch failed counted as neither triggered nor skipped.
+          if (result.launched > 0) {
+            triggered++;
+          }
+          break;
+        case "skipped":
+          if (event.source === "slack") {
+            concurrencySkipped = true;
+          }
           skipped++;
-          continue;
-        }
-        throw e;
-      }
-
-      // Create session + send prompt (with event context prepended)
-      try {
-        const instructions = `${event.contextBlock}\n---\n\n${automation.instructions}`;
-        const { sessionId } = await this.createSessionForAutomation(automation, runId);
-        await this.sendPromptToSession(sessionId, automation, runId, instructions);
-
-        await store.updateRun(runId, {
-          status: "running",
-          session_id: sessionId,
-          started_at: Date.now(),
-        });
-
-        triggered++;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        await this.failRunAndTrackBestEffort(store, runId, automation.id, message);
+          break;
+        case "deduplicated":
+        case "blocked":
+          skipped++;
+          break;
       }
     }
 
@@ -619,68 +946,27 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
-    // Concurrency check
-    const activeRun = await store.getActiveRunForAutomation(automationId);
-    if (activeRun) {
+    const result = await this.startInvocation(store, { automation, source: "manual" });
+
+    if (result.outcome !== "started") {
+      // Manual overlap (pre-check or lost race) records nothing and answers 409.
       return new Response(JSON.stringify({ error: "An active run already exists" }), {
         status: 409,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    const now = Date.now();
-    const runId = generateId();
+    const runs = result.runs.map((run) =>
+      toAutomationRun({ ...run, session_title: null, artifact_summary: null })
+    );
+    const allFailed = runs.every((run) => run.status === "failed");
 
-    // Create run record (no schedule advance for manual trigger)
-    await store.insertRun({
-      id: runId,
-      automation_id: automationId,
-      session_id: null,
-      status: "starting",
-      skip_reason: null,
-      failure_reason: null,
-      scheduled_at: now,
-      started_at: null,
-      completed_at: null,
-      created_at: now,
-      trigger_key: null,
-      concurrency_key: null,
-    });
-
-    try {
-      const { sessionId } = await this.createSessionForAutomation(automation, runId);
-
-      await this.sendPromptToSession(sessionId, automation, runId);
-
-      await store.updateRun(runId, {
-        status: "running",
-        session_id: sessionId,
-        started_at: Date.now(),
-      });
-
-      const run = await store.getRunById(automationId, runId);
-
-      this.log.info("Manual trigger succeeded", {
-        event: "scheduler.manual_trigger",
-        automation_id: automationId,
-        run_id: runId,
-        session_id: sessionId,
-      });
-
-      return new Response(JSON.stringify({ run: run ? toAutomationRun(run) : { id: runId } }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-
-      await this.failRunAndTrackBestEffort(store, runId, automationId, message);
-
+    if (allFailed) {
       this.log.error("Manual trigger failed", {
         event: "scheduler.manual_trigger_failed",
         automation_id: automationId,
-        run_id: runId,
-        error: message,
+        invocation_id: result.invocationId,
+        error: result.runs[0]?.failure_reason ?? "unknown",
       });
 
       return new Response(JSON.stringify({ error: "Failed to trigger automation" }), {
@@ -688,6 +974,20 @@ export class SchedulerDO extends DurableObject<Env> {
         headers: { "Content-Type": "application/json" },
       });
     }
+
+    this.log.info("Manual trigger succeeded", {
+      event: "scheduler.manual_trigger",
+      automation_id: automationId,
+      invocation_id: result.invocationId,
+      launched: result.launched,
+    });
+
+    // `run` (first child) is the deprecated pre-invocations response field;
+    // removed with the other one-release compatibility artifacts.
+    return new Response(JSON.stringify({ invocationId: result.invocationId, runs }), {
+      status: 201,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   // ─── Run complete callback ───────────────────────────────────────────────
@@ -700,28 +1000,59 @@ export class SchedulerDO extends DurableObject<Env> {
 
     const store = new AutomationStore(this.env.DB);
 
-    // Verify the run exists and is still in an active state.
-    // The recovery sweep may have already marked it as failed.
     const run = await store.getRunById(body.automationId, body.runId);
-    if (!run || (run.status !== "starting" && run.status !== "running")) {
+    if (!run) {
       this.log.warn("Ignoring run-complete callback for non-active run", {
         event: "scheduler.run_complete_ignored",
         automation_id: body.automationId,
         run_id: body.runId,
-        current_status: run?.status ?? "not_found",
+        current_status: "not_found",
       });
       return new Response(JSON.stringify({ ok: true, ignored: true }), {
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    if (body.success) {
-      await store.updateRun(body.runId, {
-        status: "completed",
-        completed_at: Date.now(),
-      });
-      await store.resetConsecutiveFailures(body.automationId);
+    // SQL-guarded transition: only an active run may go terminal. When the
+    // guard suppresses the write (recovery sweep or a concurrent callback got
+    // there first) the callback is acknowledged as ignored — a terminal child
+    // must never transition again.
+    const transitioned = await store.updateRun(
+      body.runId,
+      body.success
+        ? { status: "completed", completed_at: Date.now() }
+        : {
+            status: "failed",
+            failure_reason: body.error || "Unknown error",
+            completed_at: Date.now(),
+          }
+    );
 
+    if (!transitioned) {
+      this.log.warn("Ignoring run-complete callback for non-active run", {
+        event: "scheduler.run_complete_ignored",
+        automation_id: body.automationId,
+        run_id: body.runId,
+        current_status: run.status,
+      });
+      return new Response(JSON.stringify({ ok: true, ignored: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Invocation-level accounting: one CAS-guarded strike per invocation on
+    // first failure; streak reset once every sibling completed. Runs without
+    // an invocation link (rollback-window writes) keep the legacy per-run
+    // accounting until the backfill repairs them.
+    if (run.invocation_id) {
+      await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
+    } else if (body.success) {
+      await store.resetConsecutiveFailures(body.automationId);
+    } else {
+      await this.trackAutomationFailure(store, body.automationId);
+    }
+
+    if (body.success) {
       this.log.info("Run completed successfully", {
         event: "scheduler.run_complete",
         automation_id: body.automationId,
@@ -729,13 +1060,6 @@ export class SchedulerDO extends DurableObject<Env> {
         session_id: body.sessionId,
       });
     } else {
-      await this.failRunAndTrack(
-        store,
-        body.runId,
-        body.automationId,
-        body.error || "Unknown error"
-      );
-
       this.log.warn("Run completed with failure", {
         event: "scheduler.run_failed",
         automation_id: body.automationId,
@@ -748,8 +1072,9 @@ export class SchedulerDO extends DurableObject<Env> {
     // Slack-triggered runs post the agent's result into the triggering message's
     // thread and clear the `eyes` reaction when they finish. The scheduler owns
     // this fan-out (not the session callback path) because the message
-    // coordinates live on the run row. Best-effort.
-    const slackMeta = getSlackRunMetadata(run);
+    // coordinates live on the invocation. Best-effort.
+    const invocation = run.invocation_id ? await store.getInvocationById(run.invocation_id) : null;
+    const slackMeta = parseSlackTriggerMetadata(invocation?.trigger_metadata ?? null);
     if (slackMeta) {
       const automation = await store.getById(body.automationId);
       await this.notifySlackCompletion(run, slackMeta, {
@@ -757,7 +1082,7 @@ export class SchedulerDO extends DurableObject<Env> {
         messageId: body.messageId ?? "",
         success: body.success,
         error: body.error,
-        repoFullName: formatAutomationTargetLabel(automation),
+        repoFullName: formatRunRepositoryLabel(run),
         model: automation?.model ?? "",
         reasoningEffort: automation?.reasoning_effort ?? undefined,
       });
@@ -765,27 +1090,6 @@ export class SchedulerDO extends DurableObject<Env> {
 
     return new Response(JSON.stringify({ ok: true }), {
       headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  /**
-   * Persist a `skipped` run for a slack event dropped by the per-thread
-   * concurrency guard, carrying the same message coordinates a materialized run
-   * would. Best-effort observability; `recordSkippedRun` swallows the unexpected
-   * duplicate-key case internally.
-   */
-  private async recordSlackSkip(
-    store: AutomationStore,
-    automationId: string,
-    event: SlackAutomationEvent,
-    reason: string
-  ): Promise<void> {
-    await store.recordSkippedRun({
-      id: generateId(),
-      automationId,
-      skipReason: reason,
-      concurrencyKey: event.concurrencyKey,
-      runMetadata: slackRunMetadata(event),
     });
   }
 
@@ -892,12 +1196,11 @@ export class SchedulerDO extends DurableObject<Env> {
 
   // ─── Session creation ────────────────────────────────────────────────────
 
-  private async createSessionForAutomation(
+  private async createSessionForAutomationRun(
     automation: AutomationRow,
-    runId: string
+    run: AutomationRunRow
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
-    const repository = await resolveAutomationRepository(this.env, automation);
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -919,24 +1222,37 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    const repoOwner = repository?.repoOwner ?? null;
-    const repoName = repository?.repoName ?? null;
-    const repoId = repository?.repoId ?? null;
-    const baseBranch = repository?.baseBranch ?? null;
+    const ctx: RequestContext = {
+      trace_id: `automation:${automation.id}`,
+      request_id: run.id,
+      metrics: createRequestMetrics(),
+    };
 
-    const [codeServerEnabled, sandboxSettings] = await Promise.all([
-      resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),
-      resolveSandboxSettings(this.env.DB, repoOwner, repoName),
-    ]);
+    // What the session opens — the run's repository snapshot or, for
+    // environment-bound automations, the environment's workspace. All target
+    // semantics live in resolveAutomationSessionTarget; a resolution failure
+    // throws into launchChild's failure path.
+    const target = await resolveAutomationSessionTarget(this.env, run, ctx, this.log);
+
+    // Session-scoped integration settings resolve from the primary member
+    // (design §6.2), with environment-bound runs layering that environment's
+    // overrides on top (design §13.5) — same rules as handleCreateSession.
+    const scopeMembers =
+      target.repositories ??
+      (target.repoOwner && target.repoName
+        ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
+        : []);
+    const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+      this.env.DB,
+      scopeMembers,
+      target.environmentId
+    );
 
     await initializeSession(
       this.env,
       {
         sessionId,
-        repoOwner,
-        repoName,
-        repoId,
-        defaultBranch: baseBranch,
+        ...target,
         title: `[Auto] ${automation.name}`,
         model: automation.model,
         reasoningEffort: automation.reasoning_effort,
@@ -949,13 +1265,9 @@ export class SchedulerDO extends DurableObject<Env> {
         spawnSource: "automation",
         spawnDepth: 0,
         automationId: automation.id,
-        automationRunId: runId,
+        automationRunId: run.id,
       },
-      {
-        trace_id: `automation:${automation.id}`,
-        request_id: runId,
-        metrics: createRequestMetrics(),
-      }
+      ctx
     );
 
     return { sessionId };
@@ -993,10 +1305,11 @@ export class SchedulerDO extends DurableObject<Env> {
    * path (stale-session recovery).
    */
   private async steerSession(
-    sessionId: string,
+    run: AutomationRunRow,
     automation: AutomationRow,
     event: SlackAutomationEvent
   ): Promise<boolean> {
+    const sessionId = run.session_id!;
     const callbackContext: SlackCallbackContext = {
       source: "slack",
       channel: event.channelId,
@@ -1004,7 +1317,7 @@ export class SchedulerDO extends DurableObject<Env> {
       threadTs: event.threadTs ?? event.ts,
       // React on (and later clear) the follow-up message itself.
       reactionMessageTs: event.ts,
-      repoFullName: formatAutomationTargetLabel(automation),
+      repoFullName: formatRunRepositoryLabel(run),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
     };
@@ -1057,13 +1370,14 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 }
 
-/** Serialized slack run metadata for a slack-origin event — shared by insertRun and recordSkippedRun. */
-function slackRunMetadata(
-  event: SlackAutomationEvent
-): Pick<AutomationRunRow, "trigger_run_metadata"> {
+/**
+ * Serialize a slack event's message coordinates for the invocation's
+ * trigger_metadata — carried by both real firings and concurrency skips.
+ */
+function serializeSlackTriggerMetadata(event: SlackAutomationEvent): string {
   const metadata: SlackRunMetadata = {
     channel: event.channelId,
     messageTs: event.ts,
   };
-  return { trigger_run_metadata: JSON.stringify(metadata) };
+  return JSON.stringify(metadata);
 }

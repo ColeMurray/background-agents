@@ -121,6 +121,7 @@ describe("SessionRepository", () => {
         0,
         0,
         null,
+        null,
         1000,
         2000,
       ]);
@@ -235,6 +236,52 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
       expect(mock.calls[0].query).toContain("updated_at = ?");
       expect(mock.calls[0].params).toEqual([0.0123, 5000]);
+    });
+  });
+
+  // === SESSION REPOSITORIES ===
+
+  describe("replaceSessionRepositories", () => {
+    it("deletes existing rows before inserting the new set in order", () => {
+      repo.replaceSessionRepositories([
+        { position: 0, repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "backend",
+          repoId: null,
+          baseBranch: "develop",
+        },
+      ]);
+
+      expect(mock.calls.length).toBe(3);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+      expect(mock.calls[1].query).toContain("INSERT INTO session_repositories");
+      expect(mock.calls[1].params).toEqual([0, "acme", "frontend", 1, "main"]);
+      expect(mock.calls[2].params).toEqual([1, "acme", "backend", null, "develop"]);
+    });
+
+    it("clears all rows when given an empty set", () => {
+      repo.replaceSessionRepositories([]);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+    });
+  });
+
+  describe("getSessionRepositoryRows", () => {
+    it("returns rows ordered by position", () => {
+      const rows = [
+        { position: 0, repo_owner: "acme", repo_name: "frontend" },
+        { position: 1, repo_owner: "acme", repo_name: "backend" },
+      ];
+      mock.setData(`SELECT * FROM session_repositories ORDER BY position`, rows);
+
+      expect(repo.getSessionRepositoryRows()).toEqual(rows);
+    });
+
+    it("returns an empty list for pre-feature sessions", () => {
+      expect(repo.getSessionRepositoryRows()).toEqual([]);
     });
   });
 
@@ -422,6 +469,7 @@ describe("SessionRepository", () => {
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
+        authName: "Authenticated User",
         scmEmail: "test@example.com",
         scmAccessTokenEncrypted: "encrypted-token",
         scmTokenExpiresAt: 9000,
@@ -437,6 +485,7 @@ describe("SessionRepository", () => {
         "gh-123",
         "testuser",
         "Test User",
+        "Authenticated User",
         "test@example.com",
         "encrypted-token",
         null,
@@ -464,6 +513,7 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
+        null,
         "member",
         1000,
       ]);
@@ -475,13 +525,15 @@ describe("SessionRepository", () => {
       repo.updateParticipantCoalesce("p-1", {
         scmLogin: "newlogin",
         scmName: null,
+        authName: "Authenticated User",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
       expect(mock.calls[0].params[0]).toBe(null); // scmUserId
       expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[3]).toBe("Authenticated User");
+      expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
     });
   });
 
@@ -902,7 +954,7 @@ describe("SessionRepository", () => {
   // === ARTIFACTS ===
 
   describe("createArtifact", () => {
-    it("stores artifact", () => {
+    it("stores artifact with updated_at starting at created_at", () => {
       repo.createArtifact({
         id: "art-1",
         type: "pr",
@@ -913,12 +965,35 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO artifacts");
+      expect(mock.calls[0].query).toContain("updated_at");
       expect(mock.calls[0].params).toEqual([
         "art-1",
         "pr",
         "https://github.com/owner/repo/pull/1",
         '{"number":1}',
         1000,
+        1000,
+      ]);
+    });
+  });
+
+  describe("updateArtifact", () => {
+    it("updates url, metadata, and updated_at in place", () => {
+      repo.updateArtifact("art-1", {
+        url: "https://github.com/owner/renamed/pull/1",
+        metadata: '{"number":1}',
+        updatedAt: 3000,
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain(
+        "UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?"
+      );
+      expect(mock.calls[0].params).toEqual([
+        "https://github.com/owner/renamed/pull/1",
+        '{"number":1}',
+        3000,
+        "art-1",
       ]);
     });
   });

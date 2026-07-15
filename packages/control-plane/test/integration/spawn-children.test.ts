@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth } from "./helpers";
+import { initNamedSession, queryDO, seedSandboxAuth } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
@@ -16,6 +16,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     spawnDepth?: number;
     parentSessionId?: string;
     spawnSource?: "user" | "agent";
+    environmentId?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const { stub } = await initNamedSession(parentName, {
@@ -43,6 +44,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       parentSessionId: opts?.parentSessionId ?? null,
       spawnSource: opts?.spawnSource ?? "user",
       spawnDepth: opts?.spawnDepth ?? 0,
+      environmentId: opts?.environmentId ?? null,
       userId: opts?.canonicalUserId ?? null,
       createdAt: now,
       updatedAt: now,
@@ -95,6 +97,100 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it("persists environment provenance for spawned children", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      environmentId: "env_parent",
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        title: "Child with environment",
+        prompt: "Verify environment provenance is inherited",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+
+    const child = await store.get(body.sessionId);
+    expect(child?.environmentId).toBe("env_parent");
+
+    const childDoId = env.SESSION.idFromName(body.sessionId);
+    const childStub = env.SESSION.get(childDoId);
+    const [session] = await queryDO<{ environment_id: string | null }>(
+      childStub,
+      "SELECT environment_id FROM session"
+    );
+    expect(session.environment_id).toBe("env_parent");
+  });
+
+  it("preserves environment provenance for grandchildren", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      environmentId: "env_parent",
+    });
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        title: "Child with environment",
+        prompt: "Spawn another child",
+      }),
+    });
+    expect(childRes.status).toBe(201);
+    const childBody = await childRes.json<{ sessionId: string }>();
+
+    const childDoId = env.SESSION.idFromName(childBody.sessionId);
+    const childStub = env.SESSION.get(childDoId);
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${childBody.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({
+          title: "Grandchild with environment",
+          prompt: "Verify inherited provenance",
+        }),
+      }
+    );
+
+    expect(grandchildRes.status).toBe(201);
+    const grandchildBody = await grandchildRes.json<{ sessionId: string }>();
+
+    const grandchild = await store.get(grandchildBody.sessionId);
+    expect(grandchild?.environmentId).toBe("env_parent");
+    expect(grandchild?.spawnDepth).toBe(2);
+
+    const grandchildDoId = env.SESSION.idFromName(grandchildBody.sessionId);
+    const grandchildStub = env.SESSION.get(grandchildDoId);
+    const [session] = await queryDO<{ environment_id: string | null }>(
+      grandchildStub,
+      "SELECT environment_id FROM session"
+    );
+    expect(session.environment_id).toBe("env_parent");
   });
 
   it("propagates null userId from parent to child", async () => {

@@ -5,16 +5,111 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
+import type { Automation } from "@open-inspect/shared";
 import { AutomationsList } from "./automations-list";
 
 expect.extend(matchers);
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 vi.mock("next/link", () => ({
   default: ({ children, ...props }: ComponentProps<"a">) => <a {...props}>{children}</a>,
 }));
 
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: () => ({
+    environments: [{ id: "env_1", name: "Fullstack", repositories: [] }],
+    loading: false,
+  }),
+}));
+
 const noop = () => {};
+
+function makeAutomation(overrides: Partial<Automation> = {}): Automation {
+  return {
+    id: "auto-1",
+    name: "Nightly review",
+    instructions: "Review the repo.",
+    triggerType: "schedule",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+    model: "openai/gpt-5.4",
+    reasoningEffort: null,
+    enabled: true,
+    nextRunAt: null,
+    consecutiveFailures: 0,
+    createdBy: "user-1",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    deletedAt: null,
+    eventType: null,
+    triggerConfig: null,
+    repositories: [{ repoOwner: "acme", repoName: "web-app", repoId: 1, baseBranch: "main" }],
+    environmentIds: [],
+    ...overrides,
+  };
+}
+
+describe("AutomationsList repository labels", () => {
+  const renderList = (automations: Automation[]) =>
+    render(
+      <AutomationsList
+        automations={automations}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+  it("shows the repository name for a single-repository automation", () => {
+    renderList([makeAutomation()]);
+    expect(screen.getByText("acme/web-app")).toBeInTheDocument();
+  });
+
+  it("shows a count for a multi-repository automation", () => {
+    renderList([
+      makeAutomation({
+        repositories: [
+          { repoOwner: "acme", repoName: "web-app", repoId: 1, baseBranch: "main" },
+          { repoOwner: "acme", repoName: "api", repoId: 2, baseBranch: "main" },
+          { repoOwner: "acme", repoName: "docs", repoId: 3, baseBranch: "main" },
+        ],
+      }),
+    ]);
+    expect(screen.getByText("3 repositories")).toBeInTheDocument();
+  });
+
+  it("shows the repo-less label when no repository is selected", () => {
+    renderList([
+      makeAutomation({
+        repositories: [],
+      }),
+    ]);
+    expect(screen.getByText("No repository")).toBeInTheDocument();
+  });
+});
+
+describe("AutomationsList schedule metadata", () => {
+  it("shows how long remains until the next scheduled run", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00Z"));
+
+    render(
+      <AutomationsList
+        automations={[makeAutomation({ nextRunAt: Date.now() + 2 * 60 * 60 * 1000 })]}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.getByText("Next: in 2h")).toBeInTheDocument();
+  });
+});
 
 describe("AutomationsList empty state", () => {
   it("offers a template path and a from-scratch path when there are no automations", () => {

@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  resolveSandboxBackendName,
-  isModalSandboxBackend,
-  supportsRepoImageBackend,
-} from "./provider-name";
+import { resolveSandboxBackendName, isModalSandboxBackend } from "./provider-name";
 
 describe("resolveSandboxBackendName", () => {
   it("defaults to modal when undefined", () => {
@@ -74,18 +70,5 @@ describe("isModalSandboxBackend", () => {
 
   it("returns false for opencomputer", () => {
     expect(isModalSandboxBackend("opencomputer")).toBe(false);
-  });
-});
-
-describe("supportsRepoImageBackend", () => {
-  it("returns true for modal, vercel, and opencomputer", () => {
-    expect(supportsRepoImageBackend("modal")).toBe(true);
-    expect(supportsRepoImageBackend("vercel")).toBe(true);
-    expect(supportsRepoImageBackend("opencomputer")).toBe(true);
-    expect(supportsRepoImageBackend(undefined)).toBe(true);
-  });
-
-  it("returns false for daytona", () => {
-    expect(supportsRepoImageBackend("daytona")).toBe(false);
   });
 });

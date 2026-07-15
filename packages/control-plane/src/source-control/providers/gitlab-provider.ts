@@ -5,7 +5,8 @@
  * using Personal Access Tokens (PAT) for authentication.
  */
 
-import type { InstallationRepository } from "@open-inspect/shared";
+import { z } from "zod";
+import type { InstallationRepository, PullRequestStatus } from "@open-inspect/shared";
 import type {
   SourceControlProvider,
   SourceControlAuthContext,
@@ -14,13 +15,15 @@ import type {
   RepositoryInfo,
   CreatePullRequestConfig,
   CreatePullRequestResult,
+  GetPullRequestConfig,
+  PullRequestSnapshot,
   BuildManualPullRequestUrlConfig,
   BuildGitPushSpecConfig,
   GitPushSpec,
   GitPushAuthContext,
   CredentialHelperAuth,
 } from "../types";
-import { SourceControlProviderError } from "../errors";
+import { SourceControlProviderError, parseProviderResponse } from "../errors";
 import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
@@ -45,6 +48,76 @@ function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
 /** URL-encode a project path (owner/name → owner%2Fname). */
 function encodeProjectPath(owner: string, name: string): string {
   return encodeURIComponent(`${owner}/${name}`);
+}
+
+/** URL-encode a project web path while preserving nested group separators. */
+function encodeProjectWebPath(owner: string, name: string): string {
+  const encodedOwner = owner.split("/").map(encodeURIComponent).join("/");
+  return `${encodedOwner}/${encodeURIComponent(name)}`;
+}
+
+/** GitLab merge-request state fields as the REST API reports them. */
+interface GitLabMergeRequestStateFields {
+  /**
+   * GitLab's wire states we accept: merged/closed are terminal, opened is
+   * live, and locked is the transient mid-merge state. Anything else is
+   * schema drift and is rejected at the parse boundary.
+   */
+  state: "opened" | "closed" | "merged" | "locked";
+  draft?: boolean | null;
+}
+
+/**
+ * Pure mapping from GitLab's MR state fields to the stored status. GitLab
+ * models merged as a first-class state; terminal states win over a stale
+ * draft flag (isDraft is only meaningful while open), and the transient
+ * "locked" state (mid-merge) counts as open. Shared by createPullRequest
+ * (user-authed) and getPullRequest (PAT/app-authed).
+ */
+export function deriveGitLabMergeRequestStatus(
+  data: GitLabMergeRequestStateFields
+): PullRequestStatus {
+  if (data.state === "merged") return { lifecycleState: "merged", isDraft: false };
+  if (data.state === "closed") return { lifecycleState: "closed", isDraft: false };
+  return { lifecycleState: "open", isDraft: data.draft === true };
+}
+
+/**
+ * Wire schema of a GitLab REST merge request, limited to the fields we read.
+ * `state` is a strict enum — an unexpected value is schema drift and fails
+ * the parse rather than being coerced into an apparently-valid status.
+ */
+const gitlabMergeRequestResponseSchema = z.object({
+  iid: z.number(),
+  web_url: z.string(),
+  state: z.enum(["opened", "closed", "merged", "locked"]),
+  draft: z.boolean().nullable().optional(),
+  source_branch: z.string(),
+  target_branch: z.string(),
+  sha: z.string().nullable().optional(),
+  project_id: z.number().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  merged_at: z.string().nullable().optional(),
+  closed_at: z.string().nullable().optional(),
+});
+
+/** The create response additionally carries the API self link. */
+const gitlabCreateMergeRequestResponseSchema = gitlabMergeRequestResponseSchema.extend({
+  _links: z.object({ self: z.string() }),
+});
+
+/** Wire shape of GET /projects/{id}, limited to the location fields. */
+const gitlabProjectLocationSchema = z.object({
+  path: z.string(),
+  namespace: z.object({ full_path: z.string() }),
+});
+
+/** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
+function parseProviderTimestamp(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 /**
@@ -104,13 +177,15 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       name: string;
       path: string;
       path_with_namespace: string;
-      namespace: { path: string };
+      namespace: { full_path: string };
       default_branch: string;
       visibility: string;
     };
 
+    // full_path, not path: nested groups ("group/subgroup") need the
+    // entire namespace so owner/name lookups reconstruct the project path.
     return {
-      owner: data.namespace.path,
+      owner: data.namespace.full_path,
       name: data.path,
       fullName: data.path_with_namespace,
       defaultBranch: data.default_branch,
@@ -171,36 +246,110 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as {
-      iid: number;
-      web_url: string;
-      _links: { self: string };
-      state: string;
-      draft: boolean;
-      source_branch: string;
-      target_branch: string;
-    };
+    const data = await parseProviderResponse(
+      response,
+      gitlabCreateMergeRequestResponseSchema,
+      "Failed to create merge request"
+    );
 
-    // Check terminal states first — a merged/closed MR cannot also be a draft.
-    let state: CreatePullRequestResult["state"];
-    if (data.state === "merged") {
-      state = "merged";
-    } else if (data.state === "closed") {
-      state = "closed";
-    } else if (data.draft) {
-      state = "draft";
-    } else {
-      state = "open";
-    }
-
+    const status = deriveGitLabMergeRequestStatus(data);
     return {
       id: data.iid,
       webUrl: data.web_url,
       apiUrl: data._links.self,
-      state,
+      lifecycleState: status.lifecycleState,
+      isDraft: status.isDraft,
       sourceBranch: data.source_branch,
       targetBranch: data.target_branch,
+      headSha: data.sha ?? undefined,
+      repositoryExternalId: data.project_id !== undefined ? String(data.project_id) : undefined,
+      providerUpdatedAt: parseProviderTimestamp(data.updated_at),
     };
+  }
+
+  /**
+   * Read the current state of a merge request using the provider PAT.
+   *
+   * On a 404 with a known stable project id, re-resolves the project's
+   * current path by id and retries once (rename/transfer tolerance).
+   */
+  async getPullRequest(config: GetPullRequestConfig): Promise<PullRequestSnapshot> {
+    let owner = config.owner;
+    let name = config.name;
+    let response = await this.fetchMergeRequest(owner, name, config.number);
+
+    if (response.status === 404 && config.repositoryExternalId) {
+      const resolved = await this.resolveProjectLocationById(config.repositoryExternalId);
+      if (resolved) {
+        ({ owner, name } = resolved);
+        response = await this.fetchMergeRequest(owner, name, config.number);
+      }
+    }
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to get merge request: ${response.status} ${error}`,
+        new Error(error),
+        response.status
+      );
+    }
+
+    const data = await parseProviderResponse(
+      response,
+      gitlabMergeRequestResponseSchema,
+      "Failed to get merge request"
+    );
+    const status = deriveGitLabMergeRequestStatus(data);
+
+    return {
+      number: data.iid,
+      url: data.web_url,
+      lifecycleState: status.lifecycleState,
+      isDraft: status.isDraft,
+      headBranch: data.source_branch,
+      baseBranch: data.target_branch,
+      headSha: data.sha ?? undefined,
+      // The MR response has no namespace path; the path we successfully read
+      // from (config, or the by-id resolution) is the current location.
+      repoOwner: owner,
+      repoName: name,
+      repositoryExternalId:
+        data.project_id !== undefined ? String(data.project_id) : config.repositoryExternalId,
+      providerCreatedAt: parseProviderTimestamp(data.created_at),
+      providerUpdatedAt: parseProviderTimestamp(data.updated_at),
+      mergedAt: parseProviderTimestamp(data.merged_at),
+      closedAt: parseProviderTimestamp(data.closed_at),
+    };
+  }
+
+  private fetchMergeRequest(owner: string, name: string, number: number): Promise<Response> {
+    const projectPath = encodeProjectPath(owner, name);
+    return fetchWithTimeout(`${GITLAB_API_BASE}/projects/${projectPath}/merge_requests/${number}`, {
+      headers: this.headers(this.accessToken),
+    });
+  }
+
+  /** Resolve a project's current namespace/path from its stable numeric id. */
+  private async resolveProjectLocationById(
+    repositoryExternalId: string
+  ): Promise<{ owner: string; name: string } | null> {
+    const response = await fetchWithTimeout(
+      `${GITLAB_API_BASE}/projects/${encodeURIComponent(repositoryExternalId)}`,
+      { headers: this.headers(this.accessToken) }
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    // Best-effort repair path: a malformed resolution body degrades to "not
+    // resolved" so the caller surfaces the original 404 instead.
+    const parsed = gitlabProjectLocationSchema.safeParse(await response.json().catch(() => null));
+    if (!parsed.success) {
+      return null;
+    }
+    return { owner: parsed.data.namespace.full_path, name: parsed.data.path };
   }
 
   /**
@@ -229,7 +378,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
       const data = (await response.json()) as {
         id: number;
-        namespace: { path: string };
+        namespace: { full_path: string };
         path: string;
         default_branch: string;
         archived: boolean;
@@ -241,7 +390,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
       return {
         repoId: data.id,
-        repoOwner: data.namespace.path.toLowerCase(),
+        repoOwner: data.namespace.full_path.toLowerCase(),
         repoName: data.path.toLowerCase(),
         defaultBranch: data.default_branch,
       };
@@ -286,7 +435,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         name: string;
         path: string;
         path_with_namespace: string;
-        namespace: { path: string };
+        namespace: { full_path: string };
         description: string | null;
         visibility: string;
         default_branch: string;
@@ -297,7 +446,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         .filter((project) => !project.archived)
         .map((project) => ({
           id: project.id,
-          owner: project.namespace.path,
+          owner: project.namespace.full_path,
           name: project.path,
           fullName: project.path_with_namespace,
           description: project.description,
@@ -369,12 +518,11 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   }
 
   buildManualPullRequestUrl(config: BuildManualPullRequestUrlConfig): string {
-    const encodedOwner = encodeURIComponent(config.owner);
-    const encodedName = encodeURIComponent(config.name);
+    const encodedProjectPath = encodeProjectWebPath(config.owner, config.name);
     const encodedSource = encodeURIComponent(config.sourceBranch);
     const encodedTarget = encodeURIComponent(config.targetBranch);
     return (
-      `https://gitlab.com/${encodedOwner}/${encodedName}/-/merge_requests/new` +
+      `https://gitlab.com/${encodedProjectPath}/-/merge_requests/new` +
       `?merge_request[source_branch]=${encodedSource}` +
       `&merge_request[target_branch]=${encodedTarget}`
     );
@@ -392,6 +540,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       redactedRemoteUrl,
       refspec: `${config.sourceRef}:refs/heads/${config.targetBranch}`,
       targetBranch: config.targetBranch,
+      repoOwner: config.owner,
+      repoName: config.name,
       force,
     };
   }

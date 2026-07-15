@@ -93,6 +93,10 @@ export interface OpenComputerCreateCheckpointOptions {
   retentionPolicy?: OpenComputerCheckpointRetentionPolicy;
 }
 
+export interface OpenComputerDeleteSandboxOptions {
+  deleteSecretStore?: boolean;
+}
+
 export interface OpenComputerExecResult {
   exitCode: number;
   stdout: string;
@@ -341,8 +345,15 @@ export class OpenComputerRestClient {
     });
   }
 
-  async deleteSandbox(id: string): Promise<void> {
-    await this.request<void>("DELETE", this.expandPath(this.paths.sandbox, { id }), TIMEOUT_GET_MS);
+  async deleteSandbox(id: string, options?: OpenComputerDeleteSandboxOptions): Promise<void> {
+    const params = new URLSearchParams();
+    if (options?.deleteSecretStore) params.set("deleteSecretStore", "true");
+    const query = params.toString() ? `?${params.toString()}` : "";
+    await this.request<void>(
+      "DELETE",
+      `${this.expandPath(this.paths.sandbox, { id })}${query}`,
+      TIMEOUT_GET_MS
+    );
   }
 
   async startRuntime(id: string, extraEnv: Record<string, string> = {}): Promise<void> {

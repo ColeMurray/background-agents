@@ -7,6 +7,7 @@ export type {
   AutomationEventSource,
   AutomationEvent,
   GitHubAutomationEvent,
+  GitHubPullRequestEventFacts,
   LinearAutomationEvent,
   SentryAutomationEvent,
   WebhookAutomationEvent,

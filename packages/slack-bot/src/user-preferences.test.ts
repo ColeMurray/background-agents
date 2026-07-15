@@ -93,7 +93,7 @@ describe("updateUserPreferences", () => {
       "user_prefs:U123",
       JSON.stringify({
         userId: "U123",
-        model: "openai/gpt-5.2",
+        model: "openai/gpt-5.4",
         updatedAt: 1,
       })
     );
@@ -101,7 +101,7 @@ describe("updateUserPreferences", () => {
     await updateUserPreferences(env, "U123", { branch: "feature/test" });
 
     const prefs = await getUserPreferences(env, "U123");
-    expect(prefs?.model).toBe("openai/gpt-5.2");
+    expect(prefs?.model).toBe("openai/gpt-5.4");
     expect(prefs?.branch).toBe("feature/test");
   });
 
@@ -121,8 +121,8 @@ describe("updateUserPreferences", () => {
       "U123",
       { branch: "feature/test" },
       {
-        defaultModel: "openai/gpt-5.2",
-        enabledModels: ["openai/gpt-5.2"],
+        defaultModel: "openai/gpt-5.4",
+        enabledModels: ["openai/gpt-5.4"],
       }
     );
 
@@ -140,8 +140,8 @@ describe("updateUserPreferences", () => {
       "U123",
       { reasoningEffort: "none" },
       {
-        defaultModel: "openai/gpt-5.2",
-        enabledModels: ["openai/gpt-5.2"],
+        defaultModel: "openai/gpt-5.4",
+        enabledModels: ["openai/gpt-5.4"],
       }
     );
 
@@ -179,18 +179,18 @@ describe("resolveUserPreferences", () => {
     expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
   });
 
-  it("uses the Slack default before the shared default for invalid stored models", () => {
+  it("uses the Slack default before the shared default for unsupported stored models", () => {
     const resolved = resolveUserPreferences(
       {
         userId: "U123",
-        model: "not-a-real-model",
+        model: "openai/gpt-5.2",
         updatedAt: 1,
       },
-      "openai/gpt-5.2",
-      ["anthropic/claude-sonnet-4-6", "openai/gpt-5.2"]
+      "openai/gpt-5.4",
+      ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
     );
 
-    expect(resolved.model).toBe("openai/gpt-5.2");
+    expect(resolved.model).toBe("openai/gpt-5.4");
   });
 
   it("falls back when the App Home model is no longer enabled", () => {
@@ -201,7 +201,7 @@ describe("resolveUserPreferences", () => {
         updatedAt: 1,
       },
       "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]
+      ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]
     );
 
     expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
@@ -215,10 +215,24 @@ describe("resolveUserPreferences", () => {
         updatedAt: 1,
       },
       "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.2"]
+      ["openai/gpt-5.4"]
     );
 
-    expect(resolved.model).toBe("openai/gpt-5.2");
+    expect(resolved.model).toBe("openai/gpt-5.4");
+  });
+
+  it("ignores removed models when choosing the first enabled model", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["openai/gpt-5.2", "gpt-5.4"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.4");
   });
 
   it("validates stored reasoning effort against the resolved Slack default model", () => {
@@ -228,11 +242,11 @@ describe("resolveUserPreferences", () => {
         reasoningEffort: "none",
         updatedAt: 1,
       },
-      "openai/gpt-5.2",
-      ["openai/gpt-5.2"]
+      "openai/gpt-5.4",
+      ["openai/gpt-5.4"]
     );
 
-    expect(resolved.model).toBe("openai/gpt-5.2");
+    expect(resolved.model).toBe("openai/gpt-5.4");
     expect(resolved.reasoningEffort).toBe("none");
   });
 });

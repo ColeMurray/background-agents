@@ -5,6 +5,7 @@ import { sessionChildSpawnRoutes } from "./session-child-spawn";
 import { sessionIndexRoutes } from "./session-index";
 import { sessionMediaRoutes } from "./session-media";
 import { sessionPromptRoutes } from "./session-prompt";
+import { sessionPullRequestRoutes } from "./session-pull-requests";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import { sessionWsTokenRoutes } from "./session-ws-token";
 
@@ -14,6 +15,7 @@ export const sessionRoutes: Route[] = [
   ...sessionRuntimeProxyRoutes,
   ...sessionWsTokenRoutes,
   ...sessionPromptRoutes,
+  ...sessionPullRequestRoutes,
   ...sessionMediaRoutes,
   ...sessionChildSpawnRoutes,
   ...sessionChildRoutes,

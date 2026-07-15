@@ -47,4 +47,24 @@ describe("resolveCurrentUserId — provider-scoped cache", () => {
     expect(githubAgain).toEqual({ ok: true, userId: githubUserId });
     expect(controlPlaneFetch).toHaveBeenCalledTimes(2);
   });
+
+  it("rejects malformed current-user responses from the control plane", async () => {
+    vi.mocked(controlPlaneFetch).mockResolvedValueOnce(Response.json({ userId: "not-canonical" }));
+
+    await expect(resolveCurrentUserId({ id: "123", provider: "github" })).resolves.toEqual({
+      ok: false,
+      status: 502,
+      body: { error: "Invalid current user response" },
+    });
+  });
+
+  it("rejects partial current-user responses without a userId", async () => {
+    vi.mocked(controlPlaneFetch).mockResolvedValueOnce(Response.json({}));
+
+    await expect(resolveCurrentUserId({ id: "123", provider: "github" })).resolves.toEqual({
+      ok: false,
+      status: 502,
+      body: { error: "Invalid current user response" },
+    });
+  });
 });

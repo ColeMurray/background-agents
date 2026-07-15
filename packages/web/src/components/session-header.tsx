@@ -1,11 +1,8 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
-import { useSidebarContext } from "@/components/sidebar-layout";
-import { Button } from "@/components/ui/button";
-import { SidebarIcon } from "@/components/ui/icons";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
@@ -19,7 +16,6 @@ export type SessionHeaderProps = {
   };
   connected: boolean;
   connecting: boolean;
-  participants: SessionSocketState["participants"];
   isDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
@@ -31,13 +27,12 @@ export function SessionHeader({
   fallbackSessionInfo,
   connected,
   connecting,
-  participants,
   isDetailsOpen,
   detailsButtonRef,
   onToggleDetails,
   renameSession,
 }: SessionHeaderProps) {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const hasFallbackSessionInfo =
     fallbackSessionInfo.repoOwner !== null ||
     fallbackSessionInfo.repoName !== null ||
@@ -101,17 +96,7 @@ export function SessionHeader({
     <header className="border-b border-border-muted flex-shrink-0">
       <div className="px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {!isOpen && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
-          )}
+          {!isOpen && <CollapsedSidebarControls />}
           <div>
             {isRenaming ? (
               <input
@@ -176,7 +161,6 @@ export function SessionHeader({
               status={sessionState?.sandboxStatus}
               dashboardUrl={sessionState?.sandboxDashboardUrl}
             />
-            <ParticipantsList participants={participants} />
           </div>
         </div>
       </div>
@@ -296,34 +280,5 @@ export function CombinedStatusDot({
     <span title={label} className="flex items-center">
       <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
     </span>
-  );
-}
-
-export function ParticipantsList({
-  participants,
-}: {
-  participants: SessionSocketState["participants"];
-}) {
-  if (participants.length === 0) return null;
-
-  const uniqueParticipants = Array.from(new Map(participants.map((p) => [p.userId, p])).values());
-
-  return (
-    <div className="flex -space-x-2">
-      {uniqueParticipants.slice(0, 3).map((p) => (
-        <div
-          key={p.userId}
-          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-white"
-          title={p.name}
-        >
-          {p.name.charAt(0).toUpperCase()}
-        </div>
-      ))}
-      {uniqueParticipants.length > 3 && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-white">
-          +{uniqueParticipants.length - 3}
-        </div>
-      )}
-    </div>
   );
 }

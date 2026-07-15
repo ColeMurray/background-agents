@@ -87,9 +87,7 @@ Some optimizations you should add for increased speed:
 Warm the sandbox for your session as soon as a user starts to type their prompt This lets it start
 cloning the latest changes, and doing any initial setup in the newly created sandbox before the user
 has even hit enter If your spin up is fast, it can be ready before the user finishes typing, making
-the prompt feel as fast as it would on a local machine You can also keep a pool of warm sandboxes
-for any high-volume repositories, so they’re already there before you start Just ensure to expire
-and recreate the pool as new image builds come in Allow your agent to start reading files
+the prompt feel as fast as it would on a local machine Allow your agent to start reading files
 immediately, even if the sync from the latest base branch is not complete yet In a large enough
 repository, it is unlikely that an incoming prompt is going to modify a file changed in the last 30
 minutes As such, you can let it start researching immediately, and avoid any latency from git here
@@ -170,7 +168,7 @@ bot. They should just be able to chat with it, and it should figure it out.
 
 A critical piece is to build a classifier to determine what repository to work in. Take the user’s
 incoming message, any thread context (if sent in a thread), and the channel’s name. Give that to a
-fast model (we use GPT 5.2 with no reasoning), along with descriptions of every repository your
+fast model (we use GPT 5.4 with no reasoning), along with descriptions of every repository your
 coding agent can access. Be sure to give it hints on the most common repositories, and example
 classifications. Be sure to include an “unknown” option, so the AI can ask the user if unsure. You
 may need to tweak this at first, but this significantly lowers the barrier for entry.

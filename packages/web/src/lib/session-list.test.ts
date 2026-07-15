@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
+  buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
   isArchivedSessionListKey,
@@ -47,6 +48,33 @@ describe("buildSessionsPageKey", () => {
     ).toBe(
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
+  });
+});
+
+describe("buildSessionSearchValue", () => {
+  it("includes every repository attached to a multi-repository session", () => {
+    const value = buildSessionSearchValue(
+      session("multi", {
+        title: "Update services",
+        repositories: [
+          {
+            repoOwner: "open-inspect",
+            repoName: "background-agents",
+            repoId: 1,
+            baseBranch: "main",
+          },
+          { repoOwner: "acme", repoName: "api", repoId: 2, baseBranch: "main" },
+        ],
+      })
+    );
+
+    expect(value).toContain("Update services");
+    expect(value).toContain("open-inspect/background-agents");
+    expect(value).toContain("acme/api");
+  });
+
+  it("falls back to the scalar repository fields", () => {
+    expect(buildSessionSearchValue(session("legacy"))).toContain("open-inspect/background-agents");
   });
 });
 

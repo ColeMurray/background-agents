@@ -13,6 +13,7 @@ type SessionPromptComposerProps = {
     id: string;
     status: string;
     artifacts: Artifact[];
+    primaryRepo?: { repoOwner: string; repoName: string } | null;
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
   };
@@ -44,6 +45,7 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
             sessionId={session.id}
             sessionStatus={session.status}
             artifacts={session.artifacts}
+            primaryRepo={session.primaryRepo}
             onArchive={session.onArchive}
             onUnarchive={session.onUnarchive}
           />

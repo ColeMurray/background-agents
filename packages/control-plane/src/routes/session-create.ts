@@ -1,5 +1,11 @@
-import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared";
+import {
+  getValidModelOrDefault,
+  isValidReasoningEffort,
+  type RepositoryRef,
+} from "@open-inspect/shared";
 import { encryptTokenPair, generateId } from "../auth/crypto";
+import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
+import { EnvironmentStore } from "../db/environments";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -10,25 +16,27 @@ import {
   resolveGitHubEnrichment,
   resolveProviderIdentity,
 } from "../session/identity";
-import {
-  resolveCodeServerEnabled,
-  resolveSandboxSettings,
-} from "../session/integration-settings-resolution";
+import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { CreateSessionResponse, Env } from "../types";
+import {
+  normalizeOptionalRepositoryPair,
+  RepositoryPairValidationError,
+  type RepositoryPair,
+} from "@open-inspect/shared";
 import {
   error,
   json,
-  normalizeOptionalRepositoryContext,
   parsePattern,
-  RepositoryContextValidationError,
   resolveRepoOrError,
-  type OptionalRepositoryContext,
   type RequestContext,
   type Route,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
 const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
+
+// Defense in depth on top of schema validation — matches git ref charsets.
+const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
 
 async function handleCreateSession(
   request: Request,
@@ -40,33 +48,60 @@ async function handleCreateSession(
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
 
-  let repositoryContext: OptionalRepositoryContext;
+  let repositoryContext: RepositoryPair | null;
   try {
-    repositoryContext = normalizeOptionalRepositoryContext(
-      body,
-      INVALID_SESSION_REQUEST_BODY_ERROR
-    );
+    repositoryContext = normalizeOptionalRepositoryPair(body, INVALID_SESSION_REQUEST_BODY_ERROR);
   } catch (e) {
-    if (e instanceof RepositoryContextValidationError) {
+    if (e instanceof RepositoryPairValidationError) {
       return error(e.message, 400);
     }
     throw e;
   }
 
-  // Validate branch name if provided (defense in depth)
-  if (body.branch && !/^[\w.\-/]+$/.test(body.branch)) {
+  // Validate branch names if provided (defense in depth)
+  if (body.branch && !BRANCH_NAME_PATTERN.test(body.branch)) {
     return error("Invalid branch name");
+  }
+  for (const entry of body.repositories ?? []) {
+    if (entry.baseBranch && !BRANCH_NAME_PATTERN.test(entry.baseBranch)) {
+      return error(`Invalid branch name for ${entry.repoOwner}/${entry.repoName}`);
+    }
   }
 
   let repoId: number | null = null;
   let defaultBranch: string | null = null;
   let repoOwner: string | null = null;
   let repoName: string | null = null;
-  if (repositoryContext) {
+  let repositories: RepositoryRef[] | undefined;
+  let environmentId: string | null = null;
+  // Environment and ad-hoc list modes both produce a resolved member list;
+  // scalar mode stays a single lookup. The three are mutually exclusive by
+  // schema (hasExclusiveSessionTarget).
+  if (body.environmentId) {
+    // Snapshot the environment's members and resolve them like any other list
+    // (design §7.6); environment_id records provenance on the session.
+    const envInputs = await resolveEnvironmentTarget(
+      new EnvironmentStore(env.DB),
+      body.environmentId
+    );
+    repositories = await resolveSessionRepositories(env, envInputs, ctx, logger);
+    environmentId = body.environmentId;
+  } else if (body.repositories) {
+    repositories = await resolveSessionRepositories(env, body.repositories, ctx, logger);
+  }
+
+  if (repositories) {
+    // The primary entry is mirrored into the scalar columns so filters,
+    // settings resolution, and pre-list consumers keep working unchanged.
+    const primary = repositories[0];
+    repoOwner = primary.repoOwner;
+    repoName = primary.repoName;
+    repoId = primary.repoId;
+    defaultBranch = primary.baseBranch;
+  } else if (repositoryContext) {
     repoOwner = repositoryContext.repoOwner;
     repoName = repositoryContext.repoName;
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-    if (resolved instanceof Response) return resolved;
 
     repoId = resolved.repoId;
     defaultBranch = resolved.defaultBranch;
@@ -154,11 +189,16 @@ async function handleCreateSession(
       ? body.reasoningEffort
       : null;
 
-  // Resolve code-server integration setting and sandbox settings for this repo
-  const [codeServerEnabled, sandboxSettings] = await Promise.all([
-    resolveCodeServerEnabled(env.DB, repoOwner, repoName),
-    resolveSandboxSettings(env.DB, repoOwner, repoName),
-  ]);
+  // Session-scoped integration settings resolve from the primary member (design
+  // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
+  // two are the same repo by the row-0-mirrors-scalars invariant. Launching
+  // from a saved environment layers its overrides on top (design §13.5).
+  const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
+  const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+    env.DB,
+    scopeMembers,
+    environmentId
+  );
 
   const sessionId = generateId();
 
@@ -169,6 +209,8 @@ async function handleCreateSession(
     repoId,
     defaultBranch,
     branch: body.branch,
+    repositories,
+    environmentId,
     title: body.title,
     model,
     reasoningEffort,

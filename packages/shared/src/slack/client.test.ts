@@ -328,7 +328,7 @@ describe("getThreadMessages", () => {
     vi.restoreAllMocks();
   });
 
-  it("fetches replies via GET with channel/ts/limit", async () => {
+  it("fetches replies via GET with channel/ts", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
         ok: true,
@@ -339,7 +339,7 @@ describe("getThreadMessages", () => {
       })
     );
 
-    const result = await getThreadMessages("xoxb-token", "C123", "1.0", 5);
+    const result = await getThreadMessages("xoxb-token", "C123", "1.0");
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -347,18 +347,46 @@ describe("getThreadMessages", () => {
       expect(result.messages[0]!.text).toBe("first");
     }
     const [url] = fetchSpy.mock.calls[0]!;
-    expect(url).toBe("https://slack.com/api/conversations.replies?channel=C123&ts=1.0&limit=5");
+    expect(url).toBe("https://slack.com/api/conversations.replies?channel=C123&ts=1.0&limit=200");
   });
 
-  it("defaults limit to 10 when not provided", async () => {
+  it("passes oldest to fetch only newer replies", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ ok: true, messages: [] }));
 
-    await getThreadMessages("xoxb-token", "C123", "1.0");
+    await getThreadMessages("xoxb-token", "C123", "1.0", "1.5");
 
     const [url] = fetchSpy.mock.calls[0]!;
-    expect(String(url)).toContain("limit=10");
+    expect(url).toBe(
+      "https://slack.com/api/conversations.replies?channel=C123&ts=1.0&limit=200&oldest=1.5"
+    );
+  });
+
+  it("follows next_cursor pagination and concatenates pages", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          messages: [{ ts: "1.1", text: "first", user: "U1" }],
+          response_metadata: { next_cursor: "cursor-2" },
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ ok: true, messages: [{ ts: "1.2", text: "second", user: "U2" }] })
+      );
+
+    const result = await getThreadMessages("xoxb-token", "C123", "1.0", "1.0");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.messages.map((m) => m.text)).toEqual(["first", "second"]);
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const [secondUrl] = fetchSpy.mock.calls[1]!;
+    expect(String(secondUrl)).toContain("cursor=cursor-2");
+    expect(String(secondUrl)).toContain("oldest=1.0");
   });
 
   it("returns Slack's error envelope on lookup failure", async () => {
@@ -370,6 +398,24 @@ describe("getThreadMessages", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe("thread_not_found");
+    }
+  });
+
+  it("returns the failure arm when a later page errors", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          messages: [{ ts: "1.1", text: "first", user: "U1" }],
+          response_metadata: { next_cursor: "cursor-2" },
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ ok: false, error: "ratelimited" }));
+
+    const result = await getThreadMessages("xoxb-token", "C123", "1.0");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("ratelimited");
     }
   });
 });

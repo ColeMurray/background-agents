@@ -6,9 +6,10 @@ import { describeCron, GITHUB_WEBHOOK_EVENT_CATALOG } from "@open-inspect/shared
 import type { Automation } from "@open-inspect/shared";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { Button } from "@/components/ui/button";
-import { FolderIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
-import { formatRelativeTime } from "@/lib/time";
-import { formatRepoLabel } from "@/lib/repo-label";
+import { FolderIcon, BoxIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
+import { useEnvironments } from "@/hooks/use-environments";
+import { formatFutureRelativeTime } from "@/lib/time";
+import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 
 interface AutomationsListProps {
   automations: Automation[];
@@ -62,6 +63,7 @@ export function AutomationsList({
   onDelete,
 }: AutomationsListProps) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const { environments } = useEnvironments();
 
   if (automations.length === 0) {
     return (
@@ -144,8 +146,12 @@ export function AutomationsList({
           {/* Metadata: icon-paired items */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1">
-              <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-              {formatRepoLabel(automation.repoOwner, automation.repoName)}
+              {automation.environmentIds.length > 0 && automation.repositories.length === 0 ? (
+                <BoxIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+              ) : (
+                <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+              )}
+              {formatAutomationTargetsLabel(automation, environments)}
             </span>
             <span className="inline-flex items-center gap-1">
               <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
@@ -153,7 +159,7 @@ export function AutomationsList({
             </span>
             {automation.triggerType === "schedule" && automation.nextRunAt && (
               <span className="inline-flex items-center gap-1">
-                Next: {formatRelativeTime(automation.nextRunAt)}
+                Next: {formatFutureRelativeTime(automation.nextRunAt)}
               </span>
             )}
           </div>

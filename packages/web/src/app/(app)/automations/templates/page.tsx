@@ -1,27 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { TemplateGallery } from "@/components/automations/template-gallery";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { BackIcon } from "@/components/ui/icons";
 
 export default function AutomationTemplatesPage() {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
 
   return (
     <div className="h-full flex flex-col">
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3 flex items-center gap-2">
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+            <CollapsedSidebarControls />
             <Link
               href="/automations"
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"

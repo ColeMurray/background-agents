@@ -116,6 +116,7 @@ function createMockRepository() {
         client_id: data.clientId,
         user_id: `user-${data.participantId}`,
         scm_name: null,
+        auth_name: null,
         scm_login: null,
       });
     },
@@ -486,6 +487,7 @@ describe("SessionWebSocketManagerImpl", () => {
         client_id: "client-1",
         user_id: "user-1",
         scm_name: "Test",
+        auth_name: null,
         scm_login: "testuser",
       };
       mockRepo.addMapping("ws-42", mapping);
@@ -544,6 +546,7 @@ describe("SessionWebSocketManagerImpl", () => {
         client_id: "c-1",
         user_id: "u-1",
         scm_name: null,
+        auth_name: null,
         scm_login: null,
       });
 
@@ -664,6 +667,7 @@ describe("SessionWebSocketManagerImpl", () => {
         client_id: "c-1",
         user_id: "u-1",
         scm_name: null,
+        auth_name: null,
         scm_login: null,
       });
 
@@ -701,6 +705,7 @@ describe("SessionWebSocketManagerImpl", () => {
         client_id: "c-2",
         user_id: "u-2",
         scm_name: null,
+        auth_name: null,
         scm_login: null,
       });
 
@@ -763,6 +768,7 @@ describe("SessionWebSocketManagerImpl", () => {
         client_id: "c-1",
         user_id: "u-1",
         scm_name: null,
+        auth_name: null,
         scm_login: null,
       });
 

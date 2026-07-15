@@ -6,42 +6,6 @@
  */
 
 /**
- * Valid model names supported by the system.
- * All models use "provider/model" format.
- */
-export const VALID_MODELS = [
-  "anthropic/claude-haiku-4-5",
-  "anthropic/claude-sonnet-4-5",
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-opus-4-5",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-8",
-  "anthropic/claude-fable-5",
-  "openai/gpt-5.2",
-  "openai/gpt-5.4",
-  "openai/gpt-5.5",
-  "openai/gpt-5.2-codex",
-  "openai/gpt-5.3-codex",
-  "openai/gpt-5.3-codex-spark",
-  "opencode/kimi-k2.5",
-  "opencode/kimi-k2.6",
-  "opencode/minimax-m2.5",
-  "opencode/qwen3.7-max",
-  "opencode/glm-5",
-  "opencode/glm-5.1",
-  "deepseek/deepseek-v4-flash",
-  "deepseek/deepseek-v4-pro",
-] as const;
-
-export type ValidModel = (typeof VALID_MODELS)[number];
-
-/**
- * Default model to use when none specified or invalid.
- */
-export const DEFAULT_MODEL: ValidModel = "anthropic/claude-sonnet-4-6";
-
-/**
  * Reasoning effort levels supported across providers.
  *
  * - "none": No reasoning (OpenAI only)
@@ -55,35 +19,214 @@ export interface ModelReasoningConfig {
   default: ReasoningEffort | undefined;
 }
 
+interface ModelCatalogGroup {
+  category: string;
+  enabledByDefault: boolean;
+  models: readonly ModelCatalogEntry[];
+}
+
+interface ModelCatalogEntry {
+  id: `${string}/${string}`;
+  name: string;
+  description: string;
+  default?: true;
+  reasoning?: {
+    readonly efforts: readonly ReasoningEffort[];
+    readonly default: ReasoningEffort | undefined;
+  };
+}
+
 /**
- * Per-model reasoning configuration.
- * Models not listed here do not support reasoning controls.
+ * Authoritative model metadata, grouped in UI display order.
  */
-export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningConfig>> = {
-  "anthropic/claude-haiku-4-5": { efforts: ["high", "max"], default: "max" },
-  "anthropic/claude-sonnet-4-5": { efforts: ["high", "max"], default: "max" },
-  "anthropic/claude-sonnet-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
-  "anthropic/claude-opus-4-5": { efforts: ["high", "max"], default: "max" },
-  "anthropic/claude-opus-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
-  "anthropic/claude-opus-4-7": {
-    efforts: ["low", "medium", "high", "xhigh", "max"],
-    default: "high",
+export const MODEL_CATALOG = [
+  {
+    category: "Anthropic",
+    enabledByDefault: true,
+    models: [
+      {
+        id: "anthropic/claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        description: "Fast and efficient",
+        reasoning: { efforts: ["high", "max"], default: "max" },
+      },
+      {
+        id: "anthropic/claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        description: "Balanced performance",
+        reasoning: { efforts: ["high", "max"], default: "max" },
+      },
+      {
+        id: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        description: "Latest balanced, fast coding",
+        default: true,
+        reasoning: { efforts: ["low", "medium", "high", "max"], default: "high" },
+      },
+      {
+        id: "anthropic/claude-opus-4-5",
+        name: "Claude Opus 4.5",
+        description: "Most capable",
+        reasoning: { efforts: ["high", "max"], default: "max" },
+      },
+      {
+        id: "anthropic/claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        description: "Most capable, adaptive thinking",
+        reasoning: { efforts: ["low", "medium", "high", "max"], default: "high" },
+      },
+      {
+        id: "anthropic/claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        description: "Most capable, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        description: "Most capable, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-fable-5",
+        name: "Claude Fable 5",
+        description: "Most powerful, new tier above Opus",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+    ],
   },
-  "anthropic/claude-opus-4-8": {
-    efforts: ["low", "medium", "high", "xhigh", "max"],
-    default: "high",
+  {
+    category: "OpenAI",
+    enabledByDefault: true,
+    models: [
+      {
+        id: "openai/gpt-5.4",
+        name: "GPT 5.4",
+        description: "Flagship model",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh"],
+          default: undefined,
+        },
+      },
+      {
+        id: "openai/gpt-5.5",
+        name: "GPT 5.5",
+        description: "Latest flagship model",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh"],
+          default: undefined,
+        },
+      },
+      {
+        id: "openai/gpt-5.6-sol",
+        name: "GPT 5.6 Sol",
+        description: "Frontier model for complex professional work",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh"],
+          default: undefined,
+        },
+      },
+      {
+        id: "openai/gpt-5.6-terra",
+        name: "GPT 5.6 Terra",
+        description: "Balanced, cost-efficient everyday work",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh"],
+          default: undefined,
+        },
+      },
+      {
+        id: "openai/gpt-5.6-luna",
+        name: "GPT 5.6 Luna",
+        description: "Fast, cost-efficient high-volume workloads",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh"],
+          default: undefined,
+        },
+      },
+      {
+        id: "openai/gpt-5.3-codex",
+        name: "GPT 5.3 Codex",
+        description: "Latest codex",
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+      },
+      {
+        id: "openai/gpt-5.3-codex-spark",
+        name: "GPT 5.3 Codex Spark",
+        description: "Low-latency codex variant",
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+      },
+    ],
   },
-  "anthropic/claude-fable-5": {
-    efforts: ["low", "medium", "high", "xhigh", "max"],
-    default: "high",
+  {
+    category: "OpenCode Zen",
+    enabledByDefault: false,
+    models: [
+      { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
+      { id: "opencode/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
+      { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
+      { id: "opencode/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
+      { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
+      { id: "opencode/glm-5.1", name: "GLM 5.1", description: "Z.ai" },
+    ],
   },
-  "openai/gpt-5.2": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
-  "openai/gpt-5.4": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
-  "openai/gpt-5.5": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
-  "openai/gpt-5.2-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
-  "openai/gpt-5.3-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
-  "openai/gpt-5.3-codex-spark": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
-};
+  {
+    category: "Z.AI Coding Plan",
+    enabledByDefault: false,
+    models: [{ id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" }],
+  },
+  {
+    category: "DeepSeek",
+    enabledByDefault: false,
+    models: [
+      { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "Fast model" },
+      { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "Most capable" },
+    ],
+  },
+] as const satisfies readonly ModelCatalogGroup[];
+
+export type ValidModel = (typeof MODEL_CATALOG)[number]["models"][number]["id"];
+
+type CatalogModel = (typeof MODEL_CATALOG)[number]["models"][number];
+const MODEL_DEFINITIONS: readonly CatalogModel[] = MODEL_CATALOG.flatMap((group) => [
+  ...group.models,
+]);
+
+/** Valid model names supported by the system, in UI display order. */
+export const VALID_MODELS: ValidModel[] = MODEL_DEFINITIONS.map((model) => model.id);
+
+/** Default model to use when none is specified or valid. */
+const defaultModels = MODEL_DEFINITIONS.filter((model) => "default" in model && model.default);
+if (defaultModels.length !== 1) {
+  throw new Error("MODEL_CATALOG must define exactly one model with `default: true`");
+}
+export const DEFAULT_MODEL: ValidModel = defaultModels[0].id;
+
+/** Per-model reasoning configuration. Models omitted do not support reasoning controls. */
+export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningConfig>> =
+  Object.fromEntries(
+    MODEL_CATALOG.flatMap((group) =>
+      group.models.flatMap((model) =>
+        "reasoning" in model
+          ? [
+              [
+                model.id,
+                { efforts: [...model.reasoning.efforts], default: model.reasoning.default },
+              ],
+            ]
+          : []
+      )
+    )
+  );
 
 export interface ModelDisplayInfo {
   id: ValidModel;
@@ -100,106 +243,19 @@ export interface ModelCategory {
  * Model options grouped by provider, for use in UI dropdowns.
  */
 export const MODEL_OPTIONS: ModelCategory[] = [
-  {
-    category: "Anthropic",
-    models: [
-      {
-        id: "anthropic/claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        description: "Fast and efficient",
-      },
-      {
-        id: "anthropic/claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        description: "Balanced performance",
-      },
-      {
-        id: "anthropic/claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        description: "Latest balanced, fast coding",
-      },
-      {
-        id: "anthropic/claude-opus-4-5",
-        name: "Claude Opus 4.5",
-        description: "Most capable",
-      },
-      {
-        id: "anthropic/claude-opus-4-6",
-        name: "Claude Opus 4.6",
-        description: "Most capable, adaptive thinking",
-      },
-      {
-        id: "anthropic/claude-opus-4-7",
-        name: "Claude Opus 4.7",
-        description: "Most capable, adaptive thinking",
-      },
-      {
-        id: "anthropic/claude-opus-4-8",
-        name: "Claude Opus 4.8",
-        description: "Most capable, adaptive thinking",
-      },
-      {
-        id: "anthropic/claude-fable-5",
-        name: "Claude Fable 5",
-        description: "Most powerful, new tier above Opus",
-      },
-    ],
-  },
-  {
-    category: "OpenAI",
-    models: [
-      { id: "openai/gpt-5.2", name: "GPT 5.2", description: "400K context, fast" },
-      { id: "openai/gpt-5.4", name: "GPT 5.4", description: "Flagship model" },
-      { id: "openai/gpt-5.5", name: "GPT 5.5", description: "Latest flagship model" },
-      { id: "openai/gpt-5.2-codex", name: "GPT 5.2 Codex", description: "Optimized for code" },
-      { id: "openai/gpt-5.3-codex", name: "GPT 5.3 Codex", description: "Latest codex" },
-      {
-        id: "openai/gpt-5.3-codex-spark",
-        name: "GPT 5.3 Codex Spark",
-        description: "Low-latency codex variant",
-      },
-    ],
-  },
-  {
-    category: "OpenCode Zen",
-    models: [
-      { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
-      { id: "opencode/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
-      { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
-      { id: "opencode/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
-      { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
-      { id: "opencode/glm-5.1", name: "GLM 5.1", description: "Z.ai" },
-    ],
-  },
-  {
-    category: "DeepSeek",
-    models: [
-      { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "Fast model" },
-      { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "Most capable" },
-    ],
-  },
+  ...MODEL_CATALOG.map((group) => ({
+    category: group.category,
+    models: group.models.map(({ id, name, description }) => ({ id, name, description })),
+  })),
 ];
 
 /**
  * Models enabled by default when no preferences are stored.
- * Excludes zen models which must be opted into via settings.
+ * Excludes opt-in providers which must be enabled via settings.
  */
-export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
-  "anthropic/claude-haiku-4-5",
-  "anthropic/claude-sonnet-4-5",
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-opus-4-5",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-8",
-  "anthropic/claude-fable-5",
-  "openai/gpt-5.2",
-  "openai/gpt-5.4",
-  "openai/gpt-5.5",
-  "openai/gpt-5.2-codex",
-  "openai/gpt-5.3-codex",
-  "openai/gpt-5.3-codex-spark",
-];
+export const DEFAULT_ENABLED_MODELS: ValidModel[] = MODEL_CATALOG.filter(
+  (group) => group.enabledByDefault
+).flatMap((group) => group.models.map((model) => model.id));
 
 // === Normalization ===
 
@@ -224,6 +280,36 @@ export function normalizeModelId(modelId: string): string {
  */
 export function isValidModel(model: string): model is ValidModel {
   return VALID_MODELS.includes(normalizeModelId(model) as ValidModel);
+}
+
+/** Normalize a list to unique, canonical model IDs that exist in the current catalog. */
+export function normalizeValidModels(modelIds: readonly string[]): ValidModel[] {
+  const validModels = new Set<ValidModel>();
+  for (const modelId of modelIds) {
+    const normalized = normalizeModelId(modelId);
+    if (isValidModel(normalized)) validModels.add(normalized);
+  }
+  return [...validModels];
+}
+
+/** Resolve a desired model against the enabled catalog using a canonical fallback policy. */
+export function resolveEnabledModel(options: {
+  model?: string | null;
+  enabledModels?: readonly string[];
+  fallbackModel?: string | null;
+}): ValidModel {
+  const fallback = getValidModelOrDefault(options.fallbackModel);
+  const desired =
+    options.model && isValidModel(options.model)
+      ? (normalizeModelId(options.model) as ValidModel)
+      : fallback;
+  if (!options.enabledModels) return desired;
+
+  const enabledModels = normalizeValidModels(options.enabledModels);
+  const enabled = new Set(enabledModels);
+  if (enabled.has(desired)) return desired;
+  if (enabled.has(fallback)) return fallback;
+  return enabledModels[0] ?? fallback;
 }
 
 /**
@@ -266,7 +352,7 @@ export function isValidReasoningEffort(model: string, effort: string): boolean {
  * @example
  * extractProviderAndModel("anthropic/claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
  * extractProviderAndModel("claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
- * extractProviderAndModel("openai/gpt-5.2-codex") // { provider: "openai", model: "gpt-5.2-codex" }
+ * extractProviderAndModel("openai/gpt-5.3-codex") // { provider: "openai", model: "gpt-5.3-codex" }
  */
 export function extractProviderAndModel(modelId: string): { provider: string; model: string } {
   const normalized = normalizeModelId(modelId);

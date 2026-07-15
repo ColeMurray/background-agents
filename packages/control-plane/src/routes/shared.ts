@@ -2,6 +2,7 @@
  * Shared route primitives used by all route modules.
  */
 
+import { decodeRepositoryPathSegments } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
@@ -61,27 +62,47 @@ export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
-export type OptionalRepositoryContext = { repoOwner: string; repoName: string } | null;
-
-export class RepositoryContextValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RepositoryContextValidationError";
+/**
+ * max_age_seconds for the image-maintenance routes (repo + environment
+ * mark-stale/cleanup). Rejecting non-numbers matters: a null that fell
+ * through to `null * 1000 = 0` would mark every building row stale or delete
+ * every failed row.
+ */
+export async function parseMaxAgeMs(
+  request: Request,
+  defaultMs: number
+): Promise<number | Response> {
+  let body: { max_age_seconds?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    body = {};
   }
+
+  if (body.max_age_seconds === undefined) return defaultMs;
+  if (
+    typeof body.max_age_seconds !== "number" ||
+    !Number.isFinite(body.max_age_seconds) ||
+    body.max_age_seconds < 0
+  ) {
+    return error("max_age_seconds must be a non-negative number", 400);
+  }
+  return body.max_age_seconds * 1000;
 }
 
-export function normalizeOptionalRepositoryContext(
-  input: { repoOwner?: string | null; repoName?: string | null },
-  partialMessage = "repoOwner and repoName must be provided together"
-): OptionalRepositoryContext {
-  const repoOwner = input.repoOwner?.trim().toLowerCase() || null;
-  const repoName = input.repoName?.trim().toLowerCase() || null;
-
-  if ((repoOwner === null) !== (repoName === null)) {
-    throw new RepositoryContextValidationError(partialMessage);
+/**
+ * Raise from a route handler or helper to return an error response with a
+ * specific status. Mapped centrally in router.ts's dispatch catch to
+ * error(message, status), avoiding `| Response` plumbing in callers.
+ */
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "HttpError";
   }
-
-  return repoOwner && repoName ? { repoOwner, repoName } : null;
 }
 
 /**
@@ -125,17 +146,21 @@ export async function parseJsonBody<T>(request: Request): Promise<T | Response> 
 export function extractRepoParams(
   match: RegExpMatchArray
 ): { owner: string; name: string } | Response {
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
+  const encodedOwner = match.groups?.owner;
+  const encodedName = match.groups?.name;
+  if (!encodedOwner || !encodedName) {
     return error("Owner and name are required", 400);
   }
-  return { owner, name };
+  const repository = decodeRepositoryPathSegments(encodedOwner, encodedName);
+  if (!repository) {
+    return error("Owner and name must be valid repository path segments", 400);
+  }
+  return { owner: repository.repoOwner, name: repository.repoName };
 }
 
 /**
  * Resolve a repository via the SCM provider, returning the full
- * {@link RepositoryAccessResult} or an error Response.
+ * {@link RepositoryAccessResult} or raising an HttpError.
  *
  * Handles:
  * - Provider construction
@@ -149,14 +174,11 @@ export async function resolveRepoOrError(
   name: string,
   ctx: RequestContext,
   logger: Logger
-): Promise<RepositoryAccessResult | Response> {
+): Promise<RepositoryAccessResult> {
+  let resolved: RepositoryAccessResult | null = null;
   try {
     const provider = createRouteSourceControlProvider(env);
-    const resolved = await resolveInstalledRepo(provider, owner, name);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-    return resolved;
+    resolved = await resolveInstalledRepo(provider, owner, name);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     logger.error("Failed to resolve repository", {
@@ -168,6 +190,10 @@ export async function resolveRepoOrError(
     });
     const isConfigError =
       e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-    return error(isConfigError ? message : "Failed to resolve repository", 500);
+    throw new HttpError(isConfigError ? message : "Failed to resolve repository", 500);
   }
+  if (!resolved) {
+    throw new HttpError("Repository is not installed for the GitHub App", 404);
+  }
+  return resolved;
 }

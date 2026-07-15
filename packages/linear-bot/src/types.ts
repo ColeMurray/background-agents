@@ -2,13 +2,11 @@
  * Type definitions for the Linear bot.
  */
 
-import { z } from "zod";
-
 /**
  * Cloudflare Worker environment bindings.
  */
 export interface Env {
-  // KV namespace for config, OAuth tokens, and issue-to-session mapping
+  // KV namespace for config, runtime-token cache, and issue-to-session mapping
   LINEAR_KV: KVNamespace;
 
   // Service binding to control plane
@@ -36,24 +34,6 @@ export interface Env {
   LOG_LEVEL?: string;
 }
 
-// ─── OAuth Types ─────────────────────────────────────────────────────────────
-
-export const oauthTokenResponseSchema = z.object({
-  access_token: z.string(),
-  token_type: z.string(),
-  expires_in: z.number(),
-  refresh_token: z.string(),
-  scope: z.string().optional(),
-});
-export type OAuthTokenResponse = z.infer<typeof oauthTokenResponseSchema>;
-
-export const storedTokenDataSchema = z.object({
-  access_token: z.string(),
-  refresh_token: z.string(),
-  expires_at: z.number(),
-});
-export type StoredTokenData = z.infer<typeof storedTokenDataSchema>;
-
 // ─── Repo / Config Types ─────────────────────────────────────────────────────
 
 /**
@@ -67,10 +47,25 @@ export interface StaticRepoConfig {
 }
 
 /**
- * Static team→repo mapping stored in KV under "config:team-repos".
+ * An environment target with an optional label filter. References the stable
+ * `env_…` id, not the rename-able display name.
+ */
+export interface StaticEnvironmentConfig {
+  environmentId: string;
+  label?: string;
+}
+
+/**
+ * A mapping entry: a repository or a saved environment. Targets unify instead
+ * of migrate — repository entries never stop working; environments join them.
+ */
+export type StaticTargetConfig = StaticRepoConfig | StaticEnvironmentConfig;
+
+/**
+ * Static team→target mapping stored in KV under "config:team-repos".
  */
 export interface TeamRepoMapping {
-  [teamId: string]: StaticRepoConfig[];
+  [teamId: string]: StaticTargetConfig[];
 }
 
 /**
@@ -81,13 +76,15 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
+  Environment,
+  ListEnvironmentsResponse,
 } from "@open-inspect/shared";
 
 /**
- * Project→repo mapping stored in KV under "config:project-repos".
+ * Project→target mapping stored in KV under "config:project-repos".
  */
 export interface ProjectRepoMapping {
-  [projectId: string]: { owner: string; name: string };
+  [projectId: string]: { owner: string; name: string } | { environmentId: string };
 }
 
 /**
@@ -106,8 +103,11 @@ export interface IssueSession {
   sessionId: string;
   issueId: string;
   issueIdentifier: string;
-  repoOwner: string;
-  repoName: string;
+  /** Set for repository sessions; absent for environment sessions. */
+  repoOwner?: string;
+  repoName?: string;
+  /** Set for environment sessions. */
+  environmentId?: string;
   model: string;
   agentSessionId?: string;
   createdAt: number;
@@ -203,14 +203,16 @@ export interface AgentSessionWebhook {
   action: string;
   organizationId: string;
   webhookId: string;
-  appUserId?: string;
+  appUserId: string;
   agentSession: {
     id: string;
+    creatorId?: string | null;
     issue?: AgentSessionWebhookIssue;
-    comment?: { body: string };
+    comment?: { body: string; userId?: string };
     promptContext?: string;
   };
   agentActivity?: {
+    userId?: string;
     content?: {
       type?: string;
       body?: string;

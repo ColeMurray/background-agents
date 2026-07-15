@@ -2,15 +2,16 @@
 
 import { useMemo, useState } from "react";
 import type { AnalyticsDays } from "@open-inspect/shared";
+import { AnalyticsPullRequestCards } from "@/components/analytics/pull-request-cards";
+import { AnalyticsPullRequestChart } from "@/components/analytics/pull-request-chart";
+import { AnalyticsPullRequestRepoTable } from "@/components/analytics/pull-request-repo-table";
 import { AnalyticsRepoBarChart } from "@/components/analytics/repo-bar-chart";
 import { AnalyticsSummaryCards } from "@/components/analytics/summary-cards";
 import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-chart";
 import { AnalyticsUserTable } from "@/components/analytics/user-table";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon } from "@/components/ui/icons";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAnalyticsDashboard } from "@/hooks/use-analytics";
 import {
@@ -22,14 +23,13 @@ import {
   type AnalyticsSortDirection,
   type AnalyticsUserSortKey,
 } from "@/lib/analytics";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
 export default function AnalyticsPage() {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const [days, setDays] = useState<AnalyticsDays>(30);
   const [sortKey, setSortKey] = useState<AnalyticsUserSortKey>("sessions");
   const [sortDirection, setSortDirection] = useState<AnalyticsSortDirection>("desc");
-  const { summary, timeseries, repoBreakdown, userBreakdown, loading, error } =
+  const { summary, timeseries, repoBreakdown, userBreakdown, pullRequests, loading, error } =
     useAnalyticsDashboard(days);
   const userEntries = userBreakdown?.entries;
 
@@ -41,7 +41,8 @@ export default function AnalyticsPage() {
     summary ||
     timeseries?.series?.length ||
     repoBreakdown?.entries?.length ||
-    sortedUserEntries?.length
+    sortedUserEntries?.length ||
+    pullRequests
   );
 
   function handleSort(nextKey: AnalyticsUserSortKey) {
@@ -62,15 +63,7 @@ export default function AnalyticsPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
+            <CollapsedSidebarControls />
           </div>
         </header>
       )}
@@ -164,6 +157,30 @@ export default function AnalyticsPage() {
                 sortDirection={sortDirection}
                 onSort={handleSort}
               />
+
+              <div className="pt-2">
+                <h2 className="text-xl font-semibold text-foreground">Pull Requests</h2>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+                  Outcomes for pull requests created through the platform, including
+                  automation-created ones. Rates are computed over pull requests, not sessions —
+                  sessions that don&apos;t open a PR (Q&amp;A, research, debugging) are out of scope
+                  here by design.
+                </p>
+              </div>
+
+              <AnalyticsPullRequestCards
+                days={days}
+                pullRequests={pullRequests}
+                loading={loading}
+              />
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
+                <AnalyticsPullRequestChart
+                  timeseries={pullRequests?.timeseries}
+                  loading={loading}
+                />
+                <AnalyticsPullRequestRepoTable entries={pullRequests?.repos} loading={loading} />
+              </div>
             </>
           ) : null}
         </div>

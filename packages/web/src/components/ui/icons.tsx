@@ -323,6 +323,65 @@ export function GitPrIcon({ className }: IconProps) {
   );
 }
 
+export function GitMergeIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="18" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <path d="M6 21V9a9 9 0 0 0 9 9" />
+    </svg>
+  );
+}
+
+export function GitPrClosedIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="6" cy="6" r="3" />
+      <path d="M6 9v12" />
+      <path d="m21 3-6 6" />
+      <path d="m21 9-6-6" />
+      <path d="M18 11.5V15" />
+      <circle cx="18" cy="18" r="3" />
+    </svg>
+  );
+}
+
+export function GitPrDraftIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="18" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <path d="M18 6V5" />
+      <path d="M18 11v-1" />
+      <line x1="6" x2="6" y1="9" y2="21" />
+    </svg>
+  );
+}
+
 // --- Content & Files ---
 
 export function InspectIcon({ className }: IconProps) {

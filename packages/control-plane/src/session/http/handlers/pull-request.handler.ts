@@ -1,6 +1,17 @@
+import type { SessionArtifact } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
-import type { ParticipantRow, SessionRow } from "../../types";
+import {
+  preparePullRequestArtifactUpdate,
+  pullRequestSnapshotSchema,
+} from "../../pull-request-snapshot";
+import {
+  mapRepositoryTargetError,
+  resolveSessionRepositoryTarget,
+  type SessionRepositoryEntry,
+} from "../../repository-target";
+import type { UpdateArtifactData } from "../../repository";
+import type { ArtifactRow, ParticipantRow, SessionRow } from "../../types";
 import { z } from "zod";
 
 const createPrRequestSchema = z.object({
@@ -8,6 +19,8 @@ const createPrRequestSchema = z.object({
   body: z.string(),
   baseBranch: z.string().optional(),
   headBranch: z.string().optional(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
 });
 
 type CreatePrRequest = z.infer<typeof createPrRequestSchema>;
@@ -22,14 +35,23 @@ type ResolveAuthForPrResult =
 
 export interface PullRequestHandlerDeps {
   getSession: () => SessionRow | null;
+  getSessionRepositories: () => SessionRepositoryEntry[];
   getPromptingParticipantForPR: () => Promise<PromptingParticipantResult>;
   resolveAuthForPR: (participant: ParticipantRow) => Promise<ResolveAuthForPrResult>;
   getSessionUrl: (session: SessionRow) => string;
   createPullRequest: (input: CreatePullRequestInput) => Promise<CreatePullRequestResult>;
+  getArtifactById: (artifactId: string) => ArtifactRow | null;
+  updateArtifact: (artifactId: string, data: UpdateArtifactData) => void;
+  broadcastArtifactUpdated: (artifact: SessionArtifact) => void;
+  now: () => number;
+  /** Kicks off a background read-through refresh. */
+  triggerPullRequestRefresh: () => void;
 }
 
 export interface PullRequestHandler {
   createPr: (request: Request) => Promise<Response>;
+  pullRequestArtifactSnapshot: (request: Request, url: URL) => Promise<Response>;
+  refreshPullRequests: () => Response;
 }
 
 export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequestHandler {
@@ -59,6 +81,21 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         );
       }
 
+      // Membership is a security boundary (this route is reachable with
+      // sandbox auth): naming a repo outside the session is 403, an
+      // ambiguous or half-specified target is 400.
+      let target: SessionRepositoryEntry;
+      try {
+        target = resolveSessionRepositoryTarget(
+          { repoOwner: body.repoOwner, repoName: body.repoName },
+          deps.getSessionRepositories()
+        );
+      } catch (error) {
+        const mapped = mapRepositoryTargetError(error);
+        if (!mapped) throw error;
+        return Response.json({ error: mapped.error }, { status: mapped.status });
+      }
+
       const promptingParticipantResult = await deps.getPromptingParticipantForPR();
       if (!promptingParticipantResult.participant) {
         return Response.json(
@@ -73,9 +110,16 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         return Response.json({ error: authResolution.error }, { status: authResolution.status });
       }
 
+      // Base-branch defaulting happens in the service (requested > target
+      // repo's base branch > repo default), so the raw request value passes
+      // through untouched.
       const result = await deps.createPullRequest({
-        ...body,
-        baseBranch: body.baseBranch || session.base_branch || undefined,
+        title: body.title,
+        body: body.body,
+        baseBranch: body.baseBranch,
+        headBranch: body.headBranch,
+        repoOwner: target.repoOwner,
+        repoName: target.repoName,
         promptingUserId: promptingParticipant.user_id,
         promptingAuth: authResolution.auth,
         sessionUrl: deps.getSessionUrl(session),
@@ -90,6 +134,56 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         prUrl: result.prUrl,
         state: result.state,
       });
+    },
+
+    /**
+     * Transport shell for snapshot application (design §6): parse the
+     * request, resolve the artifact, compute the update via the canonical
+     * preparePullRequestArtifactUpdate, and perform the write + broadcast it
+     * prescribes. Stale and materially identical snapshots answer
+     * `{ applied: false }` — no write, no broadcast.
+     */
+    async pullRequestArtifactSnapshot(request: Request, url: URL): Promise<Response> {
+      const artifactId = url.searchParams.get("artifactId");
+      if (!artifactId) {
+        return Response.json({ error: "artifactId query parameter is required" }, { status: 400 });
+      }
+
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const parsed = pullRequestSnapshotSchema.safeParse(raw);
+      if (!parsed.success) {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const artifact = deps.getArtifactById(artifactId);
+      if (!artifact || artifact.type !== "pr") {
+        return Response.json({ error: "Pull request artifact not found" }, { status: 404 });
+      }
+
+      const artifactUpdate = preparePullRequestArtifactUpdate(artifact, parsed.data, deps.now());
+      if (!artifactUpdate) {
+        return Response.json({ applied: false });
+      }
+
+      deps.updateArtifact(artifact.id, artifactUpdate.update);
+      deps.broadcastArtifactUpdated(artifactUpdate.artifact);
+      return Response.json({ applied: true });
+    },
+
+    /**
+     * Manual sync (design §5.3): fire the read-through refresh in the
+     * background and return immediately — the endpoint never blocks on a
+     * provider read.
+     */
+    refreshPullRequests(): Response {
+      deps.triggerPullRequestRefresh();
+      return Response.json({ status: "refreshing" }, { status: 202 });
     },
   };
 }

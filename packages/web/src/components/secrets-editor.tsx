@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
+import { encodeRepositoryPathSegments } from "@open-inspect/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,27 +80,87 @@ function createRow(partial?: Partial<SecretRow>): SecretRow {
   };
 }
 
+type SecretsScope = "repo" | "global" | "environment";
+
+/**
+ * Everything scope-specific in one place: where the secrets live, when the
+ * scope is addressable, and the scope's copy. Adding a scope means adding a
+ * case here, not another conditional in the component body.
+ */
+interface SecretsScopePolicy {
+  apiBase: string;
+  ready: boolean;
+  description: string;
+  emptyStateText: string;
+  notReadyText: string;
+  /** Names the scope in the inherited-global override note; null hides the
+   *  inherited section entirely (the global scope inherits from nothing). */
+  overriddenByLabel: string | null;
+}
+
+function resolveScopePolicy(
+  scope: SecretsScope,
+  owner: string | undefined,
+  name: string | undefined,
+  environmentId: string | undefined
+): SecretsScopePolicy {
+  switch (scope) {
+    case "global":
+      return {
+        apiBase: "/api/secrets",
+        ready: true,
+        description: "Secrets apply to all repositories.",
+        emptyStateText: "No global secrets set.",
+        notReadyText: "",
+        overriddenByLabel: null,
+      };
+    case "environment":
+      return {
+        apiBase: `/api/environments/${environmentId}/secrets`,
+        ready: Boolean(environmentId),
+        description:
+          "Values are never shown after save. Secrets apply to sessions launched from this environment.",
+        emptyStateText: "No secrets set for this environment.",
+        notReadyText: "Select an environment to manage secrets.",
+        overriddenByLabel: "environment",
+      };
+    case "repo": {
+      const repoLabel = owner && name ? `${owner}/${name}` : "";
+      const repoPath =
+        owner && name ? encodeRepositoryPathSegments({ repoOwner: owner, repoName: name }) : "";
+      return {
+        apiBase: `/api/repos/${repoPath}/secrets`,
+        ready: Boolean(owner && name),
+        description: `Values are never shown after save. Secrets apply to ${repoLabel || "the selected repo"}.`,
+        emptyStateText: "No secrets set for this repo.",
+        notReadyText: "Select a repository to manage secrets.",
+        overriddenByLabel: "repo",
+      };
+    }
+  }
+}
+
 export function SecretsEditor({
   owner,
   name,
+  environmentId,
   disabled = false,
   scope = "repo",
 }: {
   owner?: string;
   name?: string;
+  /** Required for scope "environment". */
+  environmentId?: string;
   disabled?: boolean;
-  scope?: "repo" | "global";
+  scope?: SecretsScope;
 }) {
   const [rows, setRows] = useState<SecretRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
-  const isGlobal = scope === "global";
-  const ready = isGlobal || Boolean(owner && name);
-  const repoLabel = owner && name ? `${owner}/${name}` : "";
-
-  const apiBase = isGlobal ? "/api/secrets" : `/api/repos/${owner}/${name}/secrets`;
+  const scopePolicy = resolveScopePolicy(scope, owner, name, environmentId);
+  const { apiBase, ready } = scopePolicy;
 
   const {
     data: secretsData,
@@ -129,7 +190,9 @@ export function SecretsEditor({
   }, [fetchError]);
 
   const globalRows: GlobalSecretMeta[] =
-    !isGlobal && Array.isArray(secretsData?.globalSecrets) ? secretsData.globalSecrets : [];
+    scopePolicy.overriddenByLabel !== null && Array.isArray(secretsData?.globalSecrets)
+      ? secretsData.globalSecrets
+      : [];
 
   const existingKeySet = useMemo(() => {
     return new Set(rows.filter((row) => row.existing).map((row) => normalizeKey(row.key)));
@@ -339,16 +402,12 @@ export function SecretsEditor({
     }
   };
 
-  const descriptionText = isGlobal
-    ? "Secrets apply to all repositories."
-    : `Values are never shown after save. Secrets apply to ${repoLabel || "the selected repo"}.`;
-
   return (
     <div className="mt-4 rounded-md border border-border bg-background p-4">
       <div className="flex items-center justify-between mb-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">Secrets</h3>
-          <p className="text-xs text-muted-foreground">{descriptionText}</p>
+          <p className="text-xs text-muted-foreground">{scopePolicy.description}</p>
         </div>
         <Button
           type="button"
@@ -361,18 +420,14 @@ export function SecretsEditor({
         </Button>
       </div>
 
-      {!ready && (
-        <p className="text-xs text-muted-foreground">Select a repository to manage secrets.</p>
-      )}
+      {!ready && <p className="text-xs text-muted-foreground">{scopePolicy.notReadyText}</p>}
 
       {ready && (
         <>
           {loading && <p className="text-xs text-muted-foreground">Loading secrets...</p>}
 
           {!loading && rows.length === 0 && globalRows.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              {isGlobal ? "No global secrets set." : "No secrets set for this repo."}
-            </p>
+            <p className="text-xs text-muted-foreground">{scopePolicy.emptyStateText}</p>
           )}
 
           <div className="space-y-2">
@@ -435,8 +490,8 @@ export function SecretsEditor({
             ))}
           </div>
 
-          {/* Inherited global secrets (repo scope only) */}
-          {!isGlobal && globalRows.length > 0 && (
+          {/* Inherited global secrets (scopes that layer on top of global) */}
+          {globalRows.length > 0 && (
             <div className="mt-4">
               <p className="text-xs text-muted-foreground mb-2">Inherited from global scope</p>
               <div className="space-y-2">
@@ -459,7 +514,9 @@ export function SecretsEditor({
                         className="flex-1 min-w-[200px] h-auto px-2 py-1 text-xs"
                       />
                       {overridden && (
-                        <span className="text-xs text-muted-foreground">(overridden by repo)</span>
+                        <span className="text-xs text-muted-foreground">
+                          (overridden by {scopePolicy.overriddenByLabel})
+                        </span>
                       )}
                     </div>
                   );

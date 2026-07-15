@@ -1,12 +1,18 @@
 import type { Session } from "@open-inspect/shared";
+import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = 50;
+const COMMAND_MENU_SESSIONS_LIMIT = 100;
 export const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = "me";
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",
   limit: SESSIONS_PAGE_SIZE,
   offset: 0,
+});
+export const COMMAND_MENU_SESSIONS_KEY = buildSessionsPageKey({
+  excludeStatus: "archived",
+  limit: COMMAND_MENU_SESSIONS_LIMIT,
 });
 
 export interface SessionListResponse {
@@ -100,4 +106,14 @@ export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
 
 export function removeSessionFromList(sessions: Session[], sessionId: string) {
   return sessions.filter((session) => session.id !== sessionId);
+}
+
+export function buildSessionSearchValue(session: Session): string {
+  const repositoryLabels = session.repositories?.length
+    ? session.repositories.map((repository) =>
+        formatRepoLabel(repository.repoOwner, repository.repoName)
+      )
+    : [formatRepoLabel(session.repoOwner, session.repoName)];
+
+  return [session.id, session.title, ...repositoryLabels].filter(Boolean).join(" ");
 }

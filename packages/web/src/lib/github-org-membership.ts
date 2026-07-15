@@ -19,6 +19,10 @@ export type GitHubOrganizationAccessResult =
       reason: "not_member" | "unavailable";
     };
 
+function getMembershipState(data: unknown): unknown {
+  return data && typeof data === "object" ? (data as { state?: unknown }).state : undefined;
+}
+
 /**
  * Check whether a GitHub user access token belongs to at least one allowed
  * organization. This is the sole, asynchronous source of truth for org-based
@@ -84,17 +88,17 @@ export async function checkGitHubOrganizationAccess({
         continue;
       }
 
-      const membership = (await response.json()) as { state?: string | null };
-      if (membership.state === "active") {
+      const state = getMembershipState(await response.json());
+      if (state === "active") {
         return { allowed: true, reason: "active_membership", organization: org };
       }
 
-      if (membership.state === "pending") {
+      if (state === "pending") {
         // Expected non-active state (invited, not yet joined): deny, but this is
         // not an outage, so leave isUnavailable untouched (reads as not_member).
         console.info("[github-org-access] membership not active", {
           org,
-          state: membership.state,
+          state,
           ...getGitHubResponseDiagnostics(response, startedAt),
         });
       } else {
@@ -104,7 +108,7 @@ export async function checkGitHubOrganizationAccess({
         isUnavailable = true;
         console.warn("[github-org-access] membership response unusable state", {
           org,
-          state: membership.state ?? null,
+          state: state ?? null,
           ...getGitHubResponseDiagnostics(response, startedAt),
         });
       }

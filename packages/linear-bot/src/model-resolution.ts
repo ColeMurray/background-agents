@@ -2,7 +2,7 @@
  * Pure functions for resolving models and repos from configuration + labels.
  */
 
-import type { TeamRepoMapping, StaticRepoConfig } from "./types";
+import type { TeamRepoMapping, StaticTargetConfig } from "./types";
 import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
@@ -10,20 +10,22 @@ import {
 } from "@open-inspect/shared";
 
 /**
- * Resolve repo from static team mapping (legacy/override).
+ * Resolve a target (repository or environment) from the static team mapping:
+ * the first entry whose label matches an issue label, else the first
+ * label-less entry.
  */
-export function resolveStaticRepo(
+export function resolveStaticTarget(
   teamMapping: TeamRepoMapping,
   teamId: string,
   issueLabels?: string[]
-): StaticRepoConfig | null {
-  const repoConfigs = teamMapping[teamId];
-  if (!repoConfigs || repoConfigs.length === 0) return null;
+): StaticTargetConfig | null {
+  const targetConfigs = teamMapping[teamId];
+  if (!targetConfigs || targetConfigs.length === 0) return null;
 
   const labelSet = new Set((issueLabels || []).map((l) => l.toLowerCase()));
   return (
-    repoConfigs.find((r) => r.label && labelSet.has(r.label.toLowerCase())) ||
-    repoConfigs.find((r) => !r.label) ||
+    targetConfigs.find((t) => t.label && labelSet.has(t.label.toLowerCase())) ||
+    targetConfigs.find((t) => !t.label) ||
     null
   );
 }
@@ -37,10 +39,11 @@ const MODEL_LABEL_MAP: Record<string, string> = {
   "opus-4-8": "anthropic/claude-opus-4-8",
   fable: "anthropic/claude-fable-5",
   "fable-5": "anthropic/claude-fable-5",
-  "gpt-5.2": "openai/gpt-5.2",
   "gpt-5.4": "openai/gpt-5.4",
   "gpt-5.5": "openai/gpt-5.5",
-  "gpt-5.2-codex": "openai/gpt-5.2-codex",
+  "gpt-5.6-sol": "openai/gpt-5.6-sol",
+  "gpt-5.6-terra": "openai/gpt-5.6-terra",
+  "gpt-5.6-luna": "openai/gpt-5.6-luna",
   "gpt-5.3-codex": "openai/gpt-5.3-codex",
 };
 

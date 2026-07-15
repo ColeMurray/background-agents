@@ -9,7 +9,8 @@ This package provides the data plane for Open-Inspect:
 - **Sandboxes**: Isolated development environments running OpenCode
 - **Images**: Pre-built container images with all development tools
 - **Snapshots**: Filesystem snapshots for fast startup and session persistence
-- **Scheduler**: Image rebuilding infrastructure (currently disabled)
+- **Scheduler**: Cron-based rebuilds of prebuilt scope images — repositories and environments alike
+  (every 30 minutes)
 
 ## Architecture
 
@@ -57,7 +58,13 @@ Base image definition with:
 
 ### Scheduler (`src/scheduler/`)
 
-- **image_builder.py**: Image rebuild infrastructure (scheduling currently disabled)
+- **image_builder.py**: The `build_image` worker (spawned by `api_build_image`) plus the 30-minute
+  rebuild cron. A build clones every repository of its scope — a single repository or an
+  environment's ordered set — runs each setup script in position order, snapshots the filesystem,
+  and reports the result (per-repository SHAs + runtime version) back to the control plane.
+  `rebuild_images` runs one pass over all prebuild-enabled scope units from
+  `GET /image-builds/enabled`, rebuilding on fingerprint mismatch, runtime-floor violation, or
+  branch-tip drift, capped at `TRIGGER_CAP_PER_TICK` builds per tick across all units
 
 ## Usage
 
@@ -127,9 +134,10 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 |----------|--------|------|-------------|
 | `api-health` | GET | No | Health check |
 | `api-create-sandbox` | POST | Yes | Create a new sandbox |
-| `api-warm-sandbox` | POST | Yes | Pre-warm a sandbox |
 | `api-snapshot-sandbox` | POST | Yes | Take filesystem snapshot |
 | `api-restore-sandbox` | POST | Yes | Restore sandbox from snapshot |
+| `api-build-image` | POST | Yes | Spawn an async prebuilt-image build for a scope (repo or environment); results POST back to the control plane's `/image-builds/*` callbacks |
+| `api-delete-provider-image` | POST | Yes | Best-effort delete of a replaced provider image |
 
 ### Example: Create Sandbox
 

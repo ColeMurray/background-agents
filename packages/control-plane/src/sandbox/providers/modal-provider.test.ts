@@ -16,8 +16,8 @@ import type {
   RestoreSandboxResponse,
   SnapshotSandboxRequest,
   SnapshotSandboxResponse,
-  BuildRepoImageRequest,
-  BuildRepoImageResponse,
+  BuildImageRequest,
+  BuildImageResponse,
   DeleteProviderImageRequest,
   DeleteProviderImageResponse,
 } from "../client";
@@ -29,7 +29,7 @@ function createMockModalClient(
     createSandbox: (req: CreateSandboxRequest) => Promise<CreateSandboxResponse>;
     restoreSandbox: (req: RestoreSandboxRequest) => Promise<RestoreSandboxResponse>;
     snapshotSandbox: (req: SnapshotSandboxRequest) => Promise<SnapshotSandboxResponse>;
-    buildRepoImage: (req: BuildRepoImageRequest) => Promise<BuildRepoImageResponse>;
+    buildImage: (req: BuildImageRequest) => Promise<BuildImageResponse>;
     deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
 ): ModalClient {
@@ -55,8 +55,8 @@ function createMockModalClient(
         imageId: "image-123",
       })
     ),
-    buildRepoImage: vi.fn(
-      async (): Promise<BuildRepoImageResponse> => ({
+    buildImage: vi.fn(
+      async (): Promise<BuildImageResponse> => ({
         buildId: "build-123",
         status: "building",
       })
@@ -93,7 +93,6 @@ describe("ModalSandboxProvider", () => {
       expect(provider.name).toBe("modal");
       expect(provider.capabilities.supportsSnapshots).toBe(true);
       expect(provider.capabilities.supportsRestore).toBe(true);
-      expect(provider.capabilities.supportsWarm).toBe(true);
     });
   });
 
@@ -484,31 +483,33 @@ describe("ModalSandboxProvider", () => {
     });
   });
 
-  describe("repo image builds", () => {
-    it("triggers repo image builds through the Modal client", async () => {
+  describe("image builds", () => {
+    it("triggers image builds through the Modal client with scope fields", async () => {
       const client = createMockModalClient();
       const provider = new ModalSandboxProvider(client);
       const correlation = { request_id: "request-1", trace_id: "trace-1" };
 
-      const result = await provider.triggerRepoImageBuild({
+      const result = await provider.triggerImageBuild({
         buildId: "build-123",
-        repoOwner: "acme",
-        repoName: "repo",
-        defaultBranch: "develop",
-        callbackUrl: "https://worker.test/repo-images/build-complete",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
+        repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
+        callbackUrl: "https://worker.test/image-builds/build-complete",
+        failureCallbackUrl: "https://worker.test/image-builds/build-failed",
         userEnvVars: { FOO: "bar" },
         buildTimeoutMs: 1_800_000,
         correlation,
       });
 
       expect(result).toEqual({ buildId: "build-123", status: "building" });
-      expect(client.buildRepoImage).toHaveBeenCalledWith(
+      expect(client.buildImage).toHaveBeenCalledWith(
         {
-          repoOwner: "acme",
-          repoName: "repo",
-          defaultBranch: "develop",
+          scopeKind: "repo",
+          scopeId: "acme/repo",
           buildId: "build-123",
-          callbackUrl: "https://worker.test/repo-images/build-complete",
+          callbackUrl: "https://worker.test/image-builds/build-complete",
+          failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+          repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
           userEnvVars: { FOO: "bar" },
           buildTimeoutSeconds: 1800,
         },

@@ -11,7 +11,7 @@ import { bridgeFetch, extractError } from "./_bridge-client.js";
 export default tool({
   name: "spawn-task",
   description:
-    "Spawn a child coding task that runs in its own sandbox. The child inherits the current repository and works independently. Returns immediately with a task ID — use get-task-status to check progress later. Use this to parallelize work: delegate sub-tasks while you continue on the main task.",
+    "Spawn a child coding task in a separate sandbox. Work directly by default. Use only for substantial, self-contained work that can run independently and materially benefits from parallel execution. Do not use for routine exploration, simple edits, tests, sequential steps, or merely multi-part requests. The child inherits the repository, not conversation context. Returns a task ID; check progress with get-task-status.",
   args: {
     title: z.string().describe("Short title describing the child task (shown in the UI)."),
     prompt: z

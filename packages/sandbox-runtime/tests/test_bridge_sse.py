@@ -15,9 +15,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
-from sandbox_runtime.bridge import AgentBridge, OpenCodeIdentifier
+from sandbox_runtime.bridge import AgentBridge, OpenCodeIdentifier, SSEConnectionError
 from tests.conftest import MockResponse
 
 
@@ -39,6 +40,15 @@ class MockSSEResponse:
 
     async def __aexit__(self, *args):
         pass
+
+
+class DroppingMockSSEResponse(MockSSEResponse):
+    """SSE response that drops after yielding the configured events."""
+
+    async def aiter_text(self) -> AsyncIterator[str]:
+        async for event in super().aiter_text():
+            yield event
+        raise httpx.RemoteProtocolError("peer closed connection without complete body")
 
 
 class MockHttpClient:
@@ -165,6 +175,63 @@ class TestSSEParser:
 
 class TestSSEStreaming:
     """Tests for _stream_opencode_response_sse method."""
+
+    @pytest.mark.asyncio
+    async def test_transport_drop_preserves_final_output(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """A mid-stream transport drop should fetch final text before failing cleanly."""
+        http_client = bridge.http_client
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "text": "Partial",
+                    }
+                },
+            ),
+        ]
+        http_client.stream = lambda *args, **kwargs: DroppingMockSSEResponse(http_client.sse_events)
+        http_client.get_responses = [
+            MockResponse(
+                200,
+                [
+                    {
+                        "info": {
+                            "id": "oc-msg-1",
+                            "role": "assistant",
+                            "parentID": opencode_message_id,
+                        },
+                        "parts": [{"id": "part-1", "type": "text", "text": "Partial response"}],
+                    }
+                ],
+            )
+        ]
+
+        events = []
+        with pytest.raises(SSEConnectionError, match="OpenCode event stream disconnected"):
+            async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+                events.append(event)
+
+        token_events = [event for event in events if event["type"] == "token"]
+        assert token_events[-1]["content"] == "Partial response"
 
     @pytest.mark.asyncio
     async def test_text_streaming_with_delta(self, bridge: AgentBridge, opencode_message_id: str):

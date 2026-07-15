@@ -47,8 +47,16 @@ async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentUserId = parentSession?.userId ?? null;
+  const parentEnvironmentId = parentSession?.environmentId ?? null;
+  // Children inherit the parent's settings scope: its primary repo plus, for
+  // environment-launched parents, that environment's overrides (design §13.5).
   const childSandboxSettings = parentSession
-    ? await resolveSandboxSettings(env.DB, parentSession.repoOwner, parentSession.repoName)
+    ? await resolveSandboxSettings(
+        env.DB,
+        parentSession.repoOwner,
+        parentSession.repoName,
+        parentEnvironmentId
+      )
     : {};
   const maxConcurrentChildren =
     childSandboxSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
@@ -100,6 +108,8 @@ async function handleSpawnChild(
     return error("repoOwner and repoName must be provided together", 400);
   }
 
+  // Children pin to the parent's scalar repository, which for a multi-repo
+  // parent is its primary member — child sessions are single-repo by design.
   const parentRepoOwner = spawnContext.repoOwner?.toLowerCase() ?? null;
   const parentRepoName = spawnContext.repoName?.toLowerCase() ?? null;
   if (requestedRepoOwner || requestedRepoName) {
@@ -135,7 +145,8 @@ async function handleSpawnChild(
   const childCodeServerEnabled = await resolveCodeServerEnabled(
     env.DB,
     spawnContext.repoOwner,
-    spawnContext.repoName
+    spawnContext.repoName,
+    parentEnvironmentId
   );
 
   const input: SessionInitInput = {
@@ -143,6 +154,7 @@ async function handleSpawnChild(
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,
     repoId: spawnContext.repoId,
+    environmentId: parentEnvironmentId,
     branch:
       spawnContext.repoOwner && spawnContext.repoName ? (spawnContext.baseBranch ?? "main") : null,
     title: body.title,

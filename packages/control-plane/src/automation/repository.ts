@@ -1,45 +1,74 @@
-import type { AutomationRow } from "../db/automation-store";
+import type { AutomationRepositoryInsert } from "../db/automation-store";
 import type { Env } from "../types";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 
-export interface AutomationRepository {
+/** A repository resolved for one firing: access checked, branch defaulted. */
+export interface ResolvedAutomationRepository {
   repoOwner: string;
   repoName: string;
-  repoId: number | null;
+  // Access-checked at resolution, so always present (unlike the stored
+  // AutomationRepositoryInsert.repo_id, which can be null).
+  repoId: number;
   baseBranch: string;
 }
 
-export async function resolveAutomationRepository(
+/**
+ * Per-repository resolution outcome. `repository` is null when the SCM
+ * provider rejected (or errored on) the repo; `error` then carries the child
+ * run's failure_reason. `requested` preserves the selection row so a failed
+ * child still gets a repository snapshot.
+ */
+export interface AutomationRepositoryResolution {
+  requested: AutomationRepositoryInsert;
+  repository: ResolvedAutomationRepository | null;
+  error: string | null;
+}
+
+/**
+ * Resolve an automation's selected repositories concurrently at firing time.
+ * One inaccessible repository never blocks its siblings — it resolves to an
+ * error entry and the caller pre-fails that child run.
+ */
+export async function resolveAutomationRepositories(
   env: Env,
-  automation: AutomationRow,
+  repositories: AutomationRepositoryInsert[],
   sourceControlProvider?: SourceControlProvider
-): Promise<AutomationRepository | null> {
-  const repoOwner = automation.repo_owner?.trim() || null;
-  const repoName = automation.repo_name?.trim() || null;
-
-  if ((repoOwner === null) !== (repoName === null)) {
-    throw new Error("Automation repository must include repo_owner and repo_name together");
-  }
-
-  if (repoOwner === null || repoName === null) {
-    return null;
-  }
+): Promise<AutomationRepositoryResolution[]> {
+  if (repositories.length === 0) return [];
 
   const provider = sourceControlProvider ?? createSourceControlProviderFromEnv(env);
 
-  const access = await provider.checkRepositoryAccess({
-    owner: repoOwner,
-    name: repoName,
-  });
-
-  if (!access) {
-    throw new Error("Repository is not accessible for the configured SCM provider");
-  }
-
-  return {
-    repoOwner: access.repoOwner,
-    repoName: access.repoName,
-    repoId: access.repoId,
-    baseBranch: automation.base_branch?.trim() || access.defaultBranch || "main",
-  };
+  return Promise.all(
+    repositories.map(async (requested): Promise<AutomationRepositoryResolution> => {
+      try {
+        const access = await provider.checkRepositoryAccess({
+          owner: requested.repo_owner,
+          name: requested.repo_name,
+        });
+        if (!access) {
+          return {
+            requested,
+            repository: null,
+            error: "Repository is not accessible for the configured SCM provider",
+          };
+        }
+        return {
+          requested,
+          repository: {
+            repoOwner: access.repoOwner,
+            repoName: access.repoName,
+            repoId: access.repoId,
+            baseBranch: requested.base_branch?.trim() || access.defaultBranch || "main",
+          },
+          error: null,
+        };
+      } catch (e) {
+        return {
+          requested,
+          repository: null,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    })
+  );
 }

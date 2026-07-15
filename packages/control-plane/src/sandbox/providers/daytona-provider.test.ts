@@ -113,7 +113,6 @@ describe("DaytonaSandboxProvider", () => {
       expect(provider.capabilities).toEqual({
         supportsSnapshots: false,
         supportsRestore: false,
-        supportsWarm: false,
         supportsPersistentResume: true,
         supportsExplicitStop: true,
       });

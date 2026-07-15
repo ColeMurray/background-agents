@@ -4,32 +4,37 @@ import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { describeCron, getReasoningConfig } from "@open-inspect/shared";
-import { useSidebarContext } from "@/components/sidebar-layout";
-import { useAutomation, useAutomationRuns } from "@/hooks/use-automations";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
+import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
+import { useEnvironments } from "@/hooks/use-environments";
 import { RunHistory } from "@/components/automations/run-history";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { ConditionSummary } from "@/components/automations/condition-summary";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon, BackIcon, PencilIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { BackIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
-import { formatRepoLabel } from "@/lib/repo-label";
+import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 
-const RUNS_PAGE_SIZE = 20;
+const HISTORY_PAGE_SIZE = 20;
 
 export default function AutomationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
-  const [runsOffset, setRunsOffset] = useState(0);
+  const { environments } = useEnvironments();
+  // "Load more" grows the fetch limit rather than paging by offset: the
+  // endpoint returns newest-first, so a larger limit re-fetches the head plus
+  // the next page in one request. Fine at automation-history scale; revisit
+  // with real offset pagination if histories grow large.
+  const [extraHistoryLimit, setExtraHistoryLimit] = useState(0);
   const {
-    runs,
-    total: totalRuns,
-    loading: loadingRuns,
-    mutate: mutateRuns,
-  } = useAutomationRuns(id, RUNS_PAGE_SIZE + runsOffset, 0);
+    invocations,
+    total: totalInvocations,
+    loading: loadingInvocations,
+    mutate: mutateInvocations,
+  } = useAutomationInvocations(id, HISTORY_PAGE_SIZE + extraHistoryLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const reasoningLabel = automation
@@ -46,7 +51,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
         return;
       }
       mutate();
-      mutateRuns();
+      mutateInvocations();
     } catch (error) {
       console.error(`Failed to ${action} automation:`, error);
       setActionError(`Failed to ${action} automation`);
@@ -94,15 +99,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3 flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
+            <CollapsedSidebarControls />
             <Link
               href="/automations"
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
@@ -130,8 +127,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <AutomationStatusBadge automation={automation} />
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                {formatRepoLabel(automation.repoOwner, automation.repoName)}
-                {automation.baseBranch && ` · ${automation.baseBranch}`}
+                {formatAutomationTargetsLabel(automation, environments)}
+                {automation.repositories.length === 1 &&
+                  automation.environmentIds.length === 0 &&
+                  automation.repositories[0].baseBranch &&
+                  ` · ${automation.repositories[0].baseBranch}`}
               </p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
@@ -251,6 +251,41 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 automation.triggerConfig.conditions.length > 0 && (
                   <ConditionSummary conditions={automation.triggerConfig.conditions} />
                 )}
+              {automation.environmentIds.length > 0 && (
+                <div className="sm:col-span-2">
+                  <dt className="text-muted-foreground">Environments</dt>
+                  <dd className="text-foreground">
+                    <ul className="mt-1 space-y-0.5">
+                      {automation.environmentIds.map((environmentId) => (
+                        <li key={environmentId}>
+                          {environments.find((environment) => environment.id === environmentId)
+                            ?.name ?? environmentId}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              )}
+              {automation.repositories.length > 1 && (
+                <div className="sm:col-span-2">
+                  <dt className="text-muted-foreground">Repositories</dt>
+                  <dd className="text-foreground">
+                    <ul className="mt-1 space-y-0.5">
+                      {automation.repositories.map((repository) => (
+                        <li key={`${repository.repoOwner}/${repository.repoName}`}>
+                          {repository.repoOwner}/{repository.repoName}
+                          {repository.baseBranch && (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              · {repository.baseBranch}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt className="text-muted-foreground">Model</dt>
                 <dd className="text-foreground">{formatModelNameLower(automation.model)}</dd>
@@ -280,11 +315,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
           <div>
             <h2 className="text-lg font-medium text-foreground mb-3">Run History</h2>
             <RunHistory
-              runs={runs}
-              total={totalRuns}
-              loading={loadingRuns}
-              hasMore={runs.length < totalRuns}
-              onLoadMore={() => setRunsOffset((prev) => prev + RUNS_PAGE_SIZE)}
+              invocations={invocations}
+              total={totalInvocations}
+              loading={loadingInvocations}
+              hasMore={invocations.length < totalInvocations}
+              onLoadMore={() => setExtraHistoryLimit((prev) => prev + HISTORY_PAGE_SIZE)}
             />
           </div>
         </div>

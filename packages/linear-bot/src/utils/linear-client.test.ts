@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { exchangeCodeForToken, fetchUser, getOAuthToken } from "./linear-client";
+import { emitAgentActivity, fetchUser } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
-import type { Env } from "../types";
 
-const client: LinearApiClient = { accessToken: "test-token" };
+const client: LinearApiClient = {
+  accessToken: "test-token",
+  organizationId: "org-1",
+  renewAccessToken: vi.fn(async () => "renewed-token"),
+};
 
 function mockFetchResponse(data: unknown): void {
   vi.stubGlobal(
@@ -13,26 +16,6 @@ function mockFetchResponse(data: unknown): void {
       json: () => Promise.resolve(data),
     })
   );
-}
-
-function createEnv(overrides: Partial<Env> = {}): Env {
-  return {
-    LINEAR_KV: {
-      get: vi.fn(),
-      put: vi.fn(),
-    },
-    LINEAR_CLIENT_ID: "client-id",
-    LINEAR_CLIENT_SECRET: "client-secret",
-    WORKER_URL: "https://worker.example.com",
-    CONTROL_PLANE: { fetch: vi.fn() },
-    DEPLOYMENT_NAME: "test",
-    CONTROL_PLANE_URL: "https://control.example.com",
-    WEB_APP_URL: "https://web.example.com",
-    DEFAULT_MODEL: "claude-sonnet-4-5-20250929",
-    LINEAR_WEBHOOK_SECRET: "secret",
-    ANTHROPIC_API_KEY: "anthropic-key",
-    ...overrides,
-  } as unknown as Env;
 }
 
 describe("fetchUser", () => {
@@ -105,113 +88,21 @@ describe("fetchUser", () => {
   });
 });
 
-describe("exchangeCodeForToken", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
+describe("emitAgentActivity", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  it("parses a valid OAuth token response and stores token data", async () => {
-    const env = createEnv();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            access_token: "access-token",
-            token_type: "Bearer",
-            expires_in: 3600,
-            refresh_token: "refresh-token",
-            scope: "read,write",
-          }),
+  it("reports a failed terminal activity delivery", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
+
+    await expect(
+      emitAgentActivity(client, "agent-session-1", {
+        type: "response",
+        body: "Finished",
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            data: { viewer: { organization: { id: "org-1", name: "Test Org" } } },
-          }),
-      });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(exchangeCodeForToken(env, "oauth-code")).resolves.toEqual({
-      orgId: "org-1",
-      orgName: "Test Org",
-    });
-    expect(env.LINEAR_KV.put).toHaveBeenCalledWith(
-      "oauth:token:org-1",
-      expect.stringContaining("access-token")
-    );
-  });
-
-  it("rejects a partial OAuth token response", async () => {
-    const env = createEnv();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            access_token: "access-token",
-            token_type: "Bearer",
-            expires_in: 3600,
-          }),
-      })
-    );
-
-    await expect(exchangeCodeForToken(env, "oauth-code")).rejects.toThrow(
-      "Invalid Linear OAuth token response"
-    );
-    expect(env.LINEAR_KV.put).not.toHaveBeenCalled();
-  });
-});
-
-describe("getOAuthToken", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("returns null for malformed stored token data", async () => {
-    const env = createEnv({
-      LINEAR_KV: {
-        get: vi.fn().mockResolvedValue(JSON.stringify({ access_token: "access-token" })),
-        put: vi.fn(),
-      } as unknown as KVNamespace,
-    });
-
-    await expect(getOAuthToken(env, "org-1")).resolves.toBeNull();
-  });
-
-  it("returns null when a refresh response is malformed", async () => {
-    const env = createEnv({
-      LINEAR_KV: {
-        get: vi.fn().mockResolvedValue(
-          JSON.stringify({
-            access_token: "old-access-token",
-            refresh_token: "refresh-token",
-            expires_at: Date.now() - 1000,
-          })
-        ),
-        put: vi.fn(),
-      } as unknown as KVNamespace,
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ access_token: "new-access-token" }),
-      })
-    );
-
-    await expect(getOAuthToken(env, "org-1")).resolves.toBeNull();
-    expect(env.LINEAR_KV.put).not.toHaveBeenCalled();
+    ).resolves.toBe(false);
   });
 });

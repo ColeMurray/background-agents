@@ -201,6 +201,28 @@ describe("checkGitHubOrganizationAccess", () => {
     );
   });
 
+  it("flags a non-object membership response as unusable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify("active")));
+
+    await expect(
+      checkGitHubOrganizationAccess({
+        accessToken: "token",
+        allowedOrganizations: ["acme"],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      })
+    ).resolves.toEqual({ allowed: false, reason: "unavailable" });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-org-access] membership response unusable state",
+      expect.objectContaining({
+        org: "acme",
+        state: null,
+        elapsedMs: expect.any(Number),
+      })
+    );
+  });
+
   it("flags an unexpected membership state as unusable", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ state: "unknown" })));

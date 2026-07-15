@@ -36,6 +36,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    environment_id: null,
     created_at: 1000,
     updated_at: 2000,
     ...overrides,
@@ -50,6 +51,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: "octocat@example.com",
     scm_name: "The Octocat",
+    auth_name: null,
     role: "owner",
     scm_access_token_encrypted: "enc-access",
     scm_refresh_token_encrypted: "enc-refresh",
@@ -93,6 +95,7 @@ function createArtifact(overrides: Partial<ArtifactRow> = {}): ArtifactRow {
     url: "https://example.com/pr/1",
     metadata: null,
     created_at: 1,
+    updated_at: 1,
     ...overrides,
   };
 }

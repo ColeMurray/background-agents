@@ -28,6 +28,10 @@ vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: [], loading: false }),
 }));
 
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: () => ({ environments: [], loading: false }),
+}));
+
 vi.mock("@/hooks/use-branches", () => ({
   useBranches: () => ({ branches: [], loading: false }),
 }));
@@ -64,7 +68,7 @@ describe("NewAutomationPage template pre-fill", () => {
     expect(screen.getByDisplayValue("Find bugs")).toBeInTheDocument();
     expect(screen.getByDisplayValue(/Review the most recent commits/)).toBeInTheDocument();
     // Repository is intentionally not pre-filled.
-    expect(screen.getByText("Select repository")).toBeInTheDocument();
+    expect(screen.getByText("No repository")).toBeInTheDocument();
     // A hint tells the user the form was prefilled from a template.
     expect(screen.getByText(/prefilled from/i)).toBeInTheDocument();
   });
