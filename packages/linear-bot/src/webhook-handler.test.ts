@@ -411,7 +411,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(issueSession).not.toHaveProperty("environmentId");
   });
 
-  it("does not opt an automation-created session into the issue transition", async () => {
+  it("omits actor identity and issue transition for an automation-created session", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "config:project-repos": JSON.stringify({
@@ -421,10 +421,11 @@ describe("handleAgentSessionEvent environment targets", () => {
     const env = makeLinearBotEnv(kv);
     const fetchMock = stubControlPlane(env);
     const webhook = makeWebhook();
-    delete webhook.agentSession.creatorId;
+    webhook.agentSession.creatorId = null;
 
     await handleAgentSessionEvent(webhook, env, "trace-automation");
 
+    expect(createSessionBody(fetchMock)).not.toHaveProperty("actorUserId");
     expect(promptBody(fetchMock)).toMatchObject({
       callbackContext: { transitionIssueOnStart: false },
     });

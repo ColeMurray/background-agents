@@ -206,7 +206,7 @@ export interface AgentSessionWebhook {
   appUserId: string;
   agentSession: {
     id: string;
-    creatorId?: string;
+    creatorId?: string | null;
     issue?: AgentSessionWebhookIssue;
     comment?: { body: string; userId?: string };
     promptContext?: string;
