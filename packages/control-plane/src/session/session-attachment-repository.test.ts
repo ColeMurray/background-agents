@@ -67,12 +67,13 @@ describe("SessionAttachmentRepository", () => {
     ]);
   });
 
-  it("returns attachment totals excluding cleanup claims", () => {
+  it("returns attachment totals including cleanup claims", () => {
     const query = `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
-       FROM attachments WHERE cleanup_claimed_at IS NULL`;
+       FROM attachments`;
     mock.setRows(query, [{ count: 2, total_bytes: 3072 }]);
 
     expect(repository.getTotals()).toEqual({ count: 2, totalBytes: 3072 });
+    expect(mock.calls[0].query).not.toContain("cleanup_claimed_at");
   });
 
   it("finds only unreferenced, unclaimed attachments", () => {
