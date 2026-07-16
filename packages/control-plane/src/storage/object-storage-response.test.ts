@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ObjectStorage,
-  ObjectStorageMetadata,
-  ObjectStorageObject,
-} from "../storage/object-storage";
-import { parseByteRangeHeader, streamStoredMedia } from "./stream-stored-media";
+import type { ObjectStorage, ObjectStorageMetadata, ObjectStorageObject } from "./object-storage";
+import { parseByteRangeHeader, createObjectStorageResponse } from "./object-storage-response";
 
 function metadata(contentType = "image/png"): ObjectStorageMetadata {
   return {
@@ -38,20 +34,20 @@ function storage(overrides: Partial<ObjectStorage> = {}): ObjectStorage {
   };
 }
 
-function options(request: Request, mediaStorage: ObjectStorage) {
+function options(request: Request, objectStorage: ObjectStorage) {
   return {
     request,
-    storage: mediaStorage,
-    objectKey: "objects/media",
+    storage: objectStorage,
+    objectKey: "objects/example",
     isAllowedContentType: (contentType: string) => contentType === "image/png",
     notFound: () => Response.json({ error: "missing" }, { status: 404 }),
     invalidMetadata: () => Response.json({ error: "invalid" }, { status: 500 }),
   };
 }
 
-describe("streamStoredMedia", () => {
-  it("streams a full object with canonical headers", async () => {
-    const response = await streamStoredMedia(
+describe("createObjectStorageResponse", () => {
+  it("creates a full-object response with canonical headers", async () => {
+    const response = await createObjectStorageResponse(
       options(new Request("https://example.test"), storage())
     );
 
@@ -62,26 +58,26 @@ describe("streamStoredMedia", () => {
   });
 
   it("uses the same flow for byte ranges", async () => {
-    const mediaStorage = storage();
-    const response = await streamStoredMedia(
+    const objectStorage = storage();
+    const response = await createObjectStorageResponse(
       options(
         new Request("https://example.test", { headers: { Range: "bytes=2-5" } }),
-        mediaStorage
+        objectStorage
       )
     );
 
     expect(response.status).toBe(206);
     expect(response.headers.get("Content-Range")).toBe("bytes 2-5/10");
     expect(response.headers.get("Content-Length")).toBe("4");
-    expect(mediaStorage.get).toHaveBeenCalledWith("objects/media", {
+    expect(objectStorage.get).toHaveBeenCalledWith("objects/example", {
       range: { offset: 2, length: 4 },
     });
   });
 
   it("rejects disallowed stored metadata", async () => {
-    const mediaStorage = storage({ get: vi.fn(async () => object("application/octet-stream")) });
-    const response = await streamStoredMedia(
-      options(new Request("https://example.test"), mediaStorage)
+    const objectStorage = storage({ get: vi.fn(async () => object("application/octet-stream")) });
+    const response = await createObjectStorageResponse(
+      options(new Request("https://example.test"), objectStorage)
     );
 
     expect(response.status).toBe(500);

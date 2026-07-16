@@ -31,7 +31,7 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import { SessionAttachmentError, resolveSessionAttachments } from "./session-attachments";
+import { SessionAttachmentError, resolveSessionAttachments } from "./session-attachment-resolver";
 
 interface PromptMessageData {
   content: string;

@@ -6,7 +6,7 @@ import {
   type RecordAttachmentCommand,
   type SessionAttachmentCommand,
   type SessionAttachmentMutationResult,
-} from "../session-attachment-contracts";
+} from "../session-attachment-protocol";
 import type { ObjectStorage } from "../../storage/object-storage";
 import type { SessionRuntimeClient } from "../runtime-client";
 

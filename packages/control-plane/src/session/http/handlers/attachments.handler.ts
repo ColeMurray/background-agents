@@ -7,7 +7,7 @@ import {
 } from "../../../media";
 import type { SessionAttachmentRepository } from "../../session-attachment-repository";
 import type { SessionRow } from "../../types";
-import { sessionAttachmentCommandSchema } from "../../session-attachment-contracts";
+import { sessionAttachmentCommandSchema } from "../../session-attachment-protocol";
 
 export interface AttachmentsHandlerDeps {
   repository: Pick<

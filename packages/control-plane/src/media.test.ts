@@ -49,7 +49,7 @@ describe("media helpers", () => {
     });
   });
 
-  it("builds session-scoped session attachment object keys", () => {
+  it("builds session attachment object keys", () => {
     expect(buildSessionAttachmentObjectKey("session-1", "attachment-1")).toBe(
       "sessions/session-1/attachments/attachment-1"
     );

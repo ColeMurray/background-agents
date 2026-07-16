@@ -27,12 +27,12 @@ import {
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   sessionAttachmentRequestExceedsLimit,
 } from "../media";
+import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage";
 import { createMediaObjectStorage } from "../storage/object-storage";
+import { createObjectStorageResponse } from "../storage/object-storage-response";
 import type { Env } from "../types";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
-import { streamStoredMedia } from "./stream-stored-media";
-import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage";
 
 const logger = createLogger("router:session-attachments");
 
@@ -137,7 +137,7 @@ async function handleAttachmentGet(
   const storage = createMediaObjectStorage(env);
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
 
-  return streamStoredMedia({
+  return createObjectStorageResponse({
     request,
     storage,
     objectKey,

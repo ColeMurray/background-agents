@@ -1,7 +1,7 @@
 import type { Logger } from "../../../logger";
 import type { EnqueuePromptRequest, MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
-import { SessionAttachmentError } from "../../session-attachments";
+import { SessionAttachmentError } from "../../session-attachment-resolver";
 
 /**
  * Valid event types for filtering.

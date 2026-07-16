@@ -1,12 +1,12 @@
 import { createLogger } from "../logger";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
 import { createMediaObjectStorage } from "../storage/object-storage";
+import { createObjectStorageResponse } from "../storage/object-storage-response";
 import type { ArtifactResponse, Env } from "../types";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
-import { streamStoredMedia } from "./stream-stored-media";
-export { parseByteRangeHeader } from "./stream-stored-media";
+export { parseByteRangeHeader } from "../storage/object-storage-response";
 
 const logger = createLogger("router:session-media");
 
@@ -43,7 +43,7 @@ async function handleMediaGet(
     return error("Media artifact not found", 404);
   }
 
-  return streamStoredMedia({
+  return createObjectStorageResponse({
     request,
     storage,
     objectKey: artifact.url,

@@ -1,6 +1,6 @@
-import type { ObjectStorage, ObjectStorageMetadata } from "../storage/object-storage";
+import type { ObjectStorage, ObjectStorageMetadata } from "./object-storage";
 
-export interface StreamStoredMediaOptions {
+export interface ObjectStorageResponseOptions {
   request: Request;
   storage: ObjectStorage;
   objectKey: string;
@@ -10,8 +10,10 @@ export interface StreamStoredMediaOptions {
   invalidMetadata: (contentType: string | null) => Response;
 }
 
-/** Canonical GET/range/metadata flow for objects stored in the media bucket. */
-export async function streamStoredMedia(options: StreamStoredMediaOptions): Promise<Response> {
+/** Create an HTTP response for a stored object, including byte-range support. */
+export async function createObjectStorageResponse(
+  options: ObjectStorageResponseOptions
+): Promise<Response> {
   const rangeHeader = options.request.headers.get("Range");
   if (rangeHeader) {
     const head = await options.storage.head(options.objectKey);
@@ -24,7 +26,7 @@ export async function streamStoredMedia(options: StreamStoredMediaOptions): Prom
     });
     if (!object) return options.notFound();
 
-    const headers = buildMediaHeaders(head, options);
+    const headers = buildObjectHeaders(head, options);
     if (headers instanceof Response) return headers;
     headers.set("Content-Range", `bytes ${range.start}-${range.end}/${head.size}`);
     headers.set("Content-Length", String(range.length));
@@ -33,15 +35,15 @@ export async function streamStoredMedia(options: StreamStoredMediaOptions): Prom
 
   const object = await options.storage.get(options.objectKey);
   if (!object) return options.notFound();
-  const headers = buildMediaHeaders(object, options);
+  const headers = buildObjectHeaders(object, options);
   if (headers instanceof Response) return headers;
   headers.set("Content-Length", String(object.size));
   return new Response(object.body, { headers });
 }
 
-function buildMediaHeaders(
+function buildObjectHeaders(
   source: ObjectStorageMetadata,
-  options: StreamStoredMediaOptions
+  options: ObjectStorageResponseOptions
 ): Headers | Response {
   const headers = new Headers();
   source.writeHttpMetadata(headers);
