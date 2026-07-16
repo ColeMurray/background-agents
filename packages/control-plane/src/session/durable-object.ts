@@ -61,6 +61,7 @@ import type {
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { resolveParticipantName } from "./participant-name";
 import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
@@ -145,6 +146,7 @@ type BoundarySchema<T> = {
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
+  private attachmentRepository: SessionAttachmentRepository;
   private initialized = false;
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
@@ -221,8 +223,11 @@ export class SessionDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.repository = new SessionRepository(this.sql, (closure) =>
-      ctx.storage.transactionSync(closure)
+    this.attachmentRepository = new SessionAttachmentRepository(this.sql);
+    this.repository = new SessionRepository(
+      this.sql,
+      (closure) => ctx.storage.transactionSync(closure),
+      this.attachmentRepository
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
@@ -339,6 +344,7 @@ export class SessionDO extends DurableObject<Env> {
         ctx: this.ctx,
         log: this.log,
         repository: this.repository,
+        attachmentRepository: this.attachmentRepository,
         wsManager: this.wsManager,
         participantService: this.participantService,
         callbackService: this.callbackService,
@@ -449,7 +455,7 @@ export class SessionDO extends DurableObject<Env> {
   private get uploadsHandler(): UploadsHandler {
     if (!this._uploadsHandler) {
       this._uploadsHandler = createUploadsHandler({
-        repository: this.repository,
+        repository: this.attachmentRepository,
         getSession: () => this.getSession(),
         getLog: () => this.log,
       });

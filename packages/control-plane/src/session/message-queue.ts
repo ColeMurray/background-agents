@@ -20,7 +20,11 @@ import type {
 } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SessionRow, ParticipantRow, SandboxCommand } from "./types";
-import { UploadClaimConflictError, type SessionRepository } from "./repository";
+import type { SessionRepository } from "./repository";
+import {
+  AttachmentClaimConflictError,
+  type SessionAttachmentRepository,
+} from "./session-attachment-repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -41,6 +45,7 @@ interface MessageQueueDeps {
   ctx: DurableObjectState;
   log: Logger;
   repository: SessionRepository;
+  attachmentRepository: SessionAttachmentRepository;
   wsManager: SessionWebSocketManager;
   participantService: ParticipantService;
   callbackService: CallbackNotificationService;
@@ -400,7 +405,10 @@ export class SessionMessageQueue {
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
-    const resolvedAttachments = resolvePromptAttachments(data.attachments, this.deps.repository);
+    const resolvedAttachments = resolvePromptAttachments(
+      data.attachments,
+      this.deps.attachmentRepository
+    );
     const attachments = resolvedAttachments?.attachments;
     const messageId = generateId();
     const now = Date.now();
@@ -421,7 +429,7 @@ export class SessionMessageQueue {
     );
 
     try {
-      this.deps.repository.createMessageWithUploads(
+      this.deps.repository.createMessageWithAttachments(
         {
           id: messageId,
           authorId: data.participant.id,
@@ -434,10 +442,10 @@ export class SessionMessageQueue {
           status: "pending",
           createdAt: now,
         },
-        resolvedAttachments?.uploadIds ?? []
+        resolvedAttachments?.attachmentIds ?? []
       );
     } catch (error) {
-      if (error instanceof UploadClaimConflictError) {
+      if (error instanceof AttachmentClaimConflictError) {
         throw new PromptAttachmentError(
           "One or more uploads are missing, expired, or already used"
         );

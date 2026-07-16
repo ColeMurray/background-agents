@@ -5,18 +5,14 @@ import {
   PROMPT_UPLOAD_UNREFERENCED_TTL_MS,
   PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS,
 } from "../../../media";
-import type { SessionRepository } from "../../repository";
+import type { SessionAttachmentRepository } from "../../session-attachment-repository";
 import type { SessionRow } from "../../types";
 import { uploadCommandSchema } from "../../upload-contracts";
 
 export interface UploadsHandlerDeps {
   repository: Pick<
-    SessionRepository,
-    | "createUpload"
-    | "getUploadTotals"
-    | "claimStaleUnreferencedUploads"
-    | "acknowledgeUploadCleanup"
-    | "releaseUploadCleanupClaims"
+    SessionAttachmentRepository,
+    "create" | "getTotals" | "claimStale" | "acknowledgeCleanup" | "releaseCleanupClaims"
   >;
   getSession: () => SessionRow | null;
   getLog: () => Logger;
@@ -54,11 +50,11 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         return Response.json({ error: "Invalid upload command" }, { status: 400 });
       }
       if (command.data.action === "complete_cleanup") {
-        deps.repository.acknowledgeUploadCleanup(
+        deps.repository.acknowledgeCleanup(
           command.data.acknowledgedUploadIds,
           command.data.cleanupClaimedAt
         );
-        deps.repository.releaseUploadCleanupClaims(
+        deps.repository.releaseCleanupClaims(
           command.data.releasedUploadIds,
           command.data.cleanupClaimedAt
         );
@@ -67,7 +63,7 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
       const record = command.data;
 
       const timestamp = now();
-      const stale = deps.repository.claimStaleUnreferencedUploads(
+      const stale = deps.repository.claimStale(
         timestamp - PROMPT_UPLOAD_UNREFERENCED_TTL_MS,
         timestamp,
         timestamp - PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS
@@ -87,7 +83,7 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         });
       }
 
-      const totals = deps.repository.getUploadTotals();
+      const totals = deps.repository.getTotals();
       if (totals.count >= PROMPT_UPLOAD_LIMIT_PER_SESSION) {
         return Response.json(
           { error: `Session upload limit of ${PROMPT_UPLOAD_LIMIT_PER_SESSION} files exceeded` },
@@ -98,7 +94,7 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         return Response.json({ error: "Session upload storage limit exceeded" }, { status: 429 });
       }
 
-      deps.repository.createUpload({
+      deps.repository.create({
         id: record.uploadId,
         mimeType: record.mimeType,
         sizeBytes: record.sizeBytes,

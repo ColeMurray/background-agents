@@ -178,7 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
 import { createLogger } from "../logger";
-import type { SqlStorage } from "./repository";
+import type { SqlStorage } from "./sql-storage";
 
 const schemaLog = createLogger("schema");
 

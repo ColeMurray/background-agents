@@ -5,12 +5,12 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { SessionRepository } from "./repository";
 import {
-  SessionRepository,
-  UploadClaimConflictError,
-  type SqlStorage,
-  type SqlResult,
-} from "./repository";
+  AttachmentClaimConflictError,
+  SessionAttachmentRepository,
+} from "./session-attachment-repository";
+import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and returns configurable data.
@@ -74,7 +74,11 @@ describe("SessionRepository", () => {
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(mock.sql, (closure) => closure());
+    repo = new SessionRepository(
+      mock.sql,
+      (closure) => closure(),
+      new SessionAttachmentRepository(mock.sql)
+    );
   });
 
   // === SESSION ===
@@ -651,7 +655,7 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("createMessageWithUploads", () => {
+  describe("createMessageWithAttachments", () => {
     const message = {
       id: "msg-1",
       authorId: "p-1",
@@ -663,13 +667,17 @@ describe("SessionRepository", () => {
 
     it("claims every upload and creates the message in one transaction", () => {
       let transactions = 0;
-      repo = new SessionRepository(mock.sql, (closure) => {
-        transactions += 1;
-        return closure();
-      });
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
       mock.setDefaultRowsWritten(2);
 
-      repo.createMessageWithUploads(message, ["up-1", "up-2"]);
+      repo.createMessageWithAttachments(message, ["up-1", "up-2"]);
 
       expect(transactions).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE uploads SET message_id");
@@ -680,28 +688,10 @@ describe("SessionRepository", () => {
     it("fails before creating the message when not every upload can be claimed", () => {
       mock.setDefaultRowsWritten(1);
 
-      expect(() => repo.createMessageWithUploads(message, ["up-1", "up-2"])).toThrow(
-        UploadClaimConflictError
+      expect(() => repo.createMessageWithAttachments(message, ["up-1", "up-2"])).toThrow(
+        AttachmentClaimConflictError
       );
       expect(mock.calls).toHaveLength(1);
-    });
-  });
-
-  describe("upload cleanup leases", () => {
-    it("acknowledges only rows claimed by the matching cleanup attempt", () => {
-      repo.acknowledgeUploadCleanup(["up-1", "up-2"], 1234);
-
-      expect(mock.calls[0].query).toContain("cleanup_claimed_at = ?");
-      expect(mock.calls[0].query).toContain("message_id IS NULL");
-      expect(mock.calls[0].params).toEqual(["up-1", "up-2", 1234]);
-    });
-
-    it("releases only rows claimed by the matching cleanup attempt", () => {
-      repo.releaseUploadCleanupClaims(["up-1", "up-2"], 1234);
-
-      expect(mock.calls[0].query).toContain("cleanup_claimed_at = ?");
-      expect(mock.calls[0].query).toContain("message_id IS NULL");
-      expect(mock.calls[0].params).toEqual(["up-1", "up-2", 1234]);
     });
   });
 

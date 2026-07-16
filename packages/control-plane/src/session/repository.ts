@@ -1,8 +1,9 @@
 /**
- * SessionRepository - Database operations for Session Durable Objects.
+ * SessionRepository - Core session aggregate persistence.
  *
- * Consolidates all SQL operations from SessionDO into a single class
- * to enable unit testing via mock injection and reduce coupling.
+ * Feature-specific persistence can live in focused repositories that share
+ * the same session-local SQL store. Cross-repository transactions remain
+ * coordinated here when they also create or update core session records.
  */
 
 import type {
@@ -12,7 +13,6 @@ import type {
   EventRow,
   ArtifactRow,
   SandboxRow,
-  UploadRow,
 } from "./types";
 import type {
   SessionStatus,
@@ -31,6 +31,8 @@ import {
   type EventTimelineCursor,
 } from "./event-cursor";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
+import type { SessionAttachmentRepository } from "./session-attachment-repository";
+import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -172,17 +174,6 @@ export interface CreateMessageData {
 }
 
 /**
- * Data for creating an upload record (user prompt attachment).
- */
-export interface CreateUploadData {
-  id: string;
-  mimeType: string;
-  sizeBytes: number;
-  objectKey: string;
-  createdAt: number;
-}
-
-/**
  * Data for creating an event.
  * Note: type is string because sandbox sends additional event types
  * beyond those defined in EventType (e.g., 'heartbeat', 'execution_complete').
@@ -276,31 +267,13 @@ export interface ResumeSandboxData {
 }
 
 /**
- * SqlStorage interface matching Cloudflare's SqlStorage.
- * Used to allow mock injection for testing.
- */
-export interface SqlStorage {
-  exec(query: string, ...params: unknown[]): SqlResult;
-}
-
-export class UploadClaimConflictError extends Error {}
-
-type TransactionSync = <T>(closure: () => T) => T;
-
-export interface SqlResult {
-  toArray(): unknown[];
-  one(): unknown;
-  readonly rowsRead?: number;
-  readonly rowsWritten?: number;
-}
-
-/**
- * SessionRepository encapsulates all database operations for a session.
+ * Core database operations for a session Durable Object.
  */
 export class SessionRepository {
   constructor(
     private readonly sql: SqlStorage,
-    private readonly transactionSync: TransactionSync
+    private readonly transactionSync: TransactionSync,
+    private readonly attachments: Pick<SessionAttachmentRepository, "claimForMessage">
   ) {}
 
   private rows<T>(result: SqlResult): T[] {
@@ -806,104 +779,12 @@ export class SessionRepository {
     );
   }
 
-  // === UPLOADS (user prompt attachments in the media bucket) ===
-
-  createUpload(data: CreateUploadData): void {
-    this.sql.exec(
-      `INSERT INTO uploads (id, mime_type, size_bytes, object_key, message_id, created_at)
-       VALUES (?, ?, ?, ?, NULL, ?)`,
-      data.id,
-      data.mimeType,
-      data.sizeBytes,
-      data.objectKey,
-      data.createdAt
-    );
-  }
-
-  getUploadTotals(): { count: number; totalBytes: number } {
-    const result = this.sql.exec(
-      `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
-       FROM uploads WHERE cleanup_claimed_at IS NULL`
-    );
-    const rows = result.toArray() as Array<{ count: number; total_bytes: number }>;
-    return { count: rows[0]?.count ?? 0, totalBytes: rows[0]?.total_bytes ?? 0 };
-  }
-
-  getUnreferencedUploads(uploadIds: string[]): UploadRow[] {
-    if (uploadIds.length === 0) return [];
-    const placeholders = uploadIds.map(() => "?").join(", ");
-    const result = this.sql.exec(
-      `SELECT * FROM uploads
-       WHERE id IN (${placeholders}) AND message_id IS NULL AND cleanup_claimed_at IS NULL`,
-      ...uploadIds
-    );
-    return result.toArray() as unknown as UploadRow[];
-  }
-
-  /** Persist a message and claim all referenced uploads in one SQLite transaction. */
-  createMessageWithUploads(data: CreateMessageData, uploadIds: string[]): void {
+  /** Persist a message and claim all referenced attachments in one SQLite transaction. */
+  createMessageWithAttachments(data: CreateMessageData, attachmentIds: string[]): void {
     this.transactionSync(() => {
-      if (uploadIds.length > 0) {
-        const placeholders = uploadIds.map(() => "?").join(", ");
-        const claimed = this.sql.exec(
-          `UPDATE uploads SET message_id = ?
-           WHERE id IN (${placeholders}) AND message_id IS NULL AND cleanup_claimed_at IS NULL`,
-          data.id,
-          ...uploadIds
-        );
-        claimed.toArray();
-        if (claimed.rowsWritten !== uploadIds.length) {
-          throw new UploadClaimConflictError("One or more uploads could not be claimed");
-        }
-      }
+      this.attachments.claimForMessage(data.id, attachmentIds);
       this.createMessage(data);
     });
-  }
-
-  /** Claim stale records without losing ownership before fallible object deletion. */
-  claimStaleUnreferencedUploads(
-    cutoff: number,
-    claimedAt: number,
-    claimExpiredBefore: number
-  ): UploadRow[] {
-    const result = this.sql.exec(
-      `SELECT * FROM uploads
-       WHERE message_id IS NULL AND created_at < ?
-         AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at < ?)`,
-      cutoff,
-      claimExpiredBefore
-    );
-    const stale = result.toArray() as unknown as UploadRow[];
-    if (stale.length === 0) return [];
-    const placeholders = stale.map(() => "?").join(", ");
-    this.sql.exec(
-      `UPDATE uploads SET cleanup_claimed_at = ? WHERE id IN (${placeholders})`,
-      claimedAt,
-      ...stale.map((upload) => upload.id)
-    );
-    return stale.map((upload) => ({ ...upload, cleanup_claimed_at: claimedAt }));
-  }
-
-  acknowledgeUploadCleanup(uploadIds: string[], claimedAt: number): void {
-    if (uploadIds.length === 0) return;
-    const placeholders = uploadIds.map(() => "?").join(", ");
-    this.sql.exec(
-      `DELETE FROM uploads
-       WHERE id IN (${placeholders}) AND cleanup_claimed_at = ? AND message_id IS NULL`,
-      ...uploadIds,
-      claimedAt
-    );
-  }
-
-  releaseUploadCleanupClaims(uploadIds: string[], claimedAt: number): void {
-    if (uploadIds.length === 0) return;
-    const placeholders = uploadIds.map(() => "?").join(", ");
-    this.sql.exec(
-      `UPDATE uploads SET cleanup_claimed_at = NULL
-       WHERE id IN (${placeholders}) AND message_id IS NULL AND cleanup_claimed_at = ?`,
-      ...uploadIds,
-      claimedAt
-    );
   }
 
   updateMessageToProcessing(messageId: string, startedAt: number): void {

@@ -17,11 +17,11 @@ function buildHandler(options?: {
   stale?: UploadRow[];
 }) {
   const repository = {
-    createUpload: vi.fn(),
-    getUploadTotals: vi.fn(() => options?.totals ?? { count: 0, totalBytes: 0 }),
-    claimStaleUnreferencedUploads: vi.fn(() => options?.stale ?? []),
-    acknowledgeUploadCleanup: vi.fn(),
-    releaseUploadCleanupClaims: vi.fn(),
+    create: vi.fn(),
+    getTotals: vi.fn(() => options?.totals ?? { count: 0, totalBytes: 0 }),
+    claimStale: vi.fn(() => options?.stale ?? []),
+    acknowledgeCleanup: vi.fn(),
+    releaseCleanupClaims: vi.fn(),
   };
 
   const handler = createUploadsHandler({
@@ -57,7 +57,7 @@ describe("createUploadsHandler", () => {
     const response = await handler.recordUpload(uploadRequest(VALID_BODY));
 
     expect(response.status).toBe(404);
-    expect(repository.createUpload).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -75,7 +75,7 @@ describe("createUploadsHandler", () => {
     const response = await handler.recordUpload(uploadRequest(body));
 
     expect(response.status).toBe(400);
-    expect(repository.createUpload).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
   });
 
   it("rejects when the per-session file count cap is reached", async () => {
@@ -86,8 +86,8 @@ describe("createUploadsHandler", () => {
     const response = await handler.recordUpload(uploadRequest(VALID_BODY));
 
     expect(response.status).toBe(429);
-    expect(repository.createUpload).not.toHaveBeenCalled();
-    expect(repository.claimStaleUnreferencedUploads).toHaveBeenCalledWith(
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(repository.claimStale).toHaveBeenCalledWith(
       NOW - PROMPT_UPLOAD_UNREFERENCED_TTL_MS,
       NOW,
       NOW - PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS
@@ -102,7 +102,7 @@ describe("createUploadsHandler", () => {
     const response = await handler.recordUpload(uploadRequest(VALID_BODY));
 
     expect(response.status).toBe(429);
-    expect(repository.createUpload).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
   });
 
   it("prunes stale uploads before enforcing quota totals", async () => {
@@ -117,11 +117,11 @@ describe("createUploadsHandler", () => {
     };
     const { handler, repository } = buildHandler({ stale: [staleUpload] });
     const order: string[] = [];
-    repository.claimStaleUnreferencedUploads.mockImplementation(() => {
+    repository.claimStale.mockImplementation(() => {
       order.push("claim");
       return [staleUpload];
     });
-    repository.getUploadTotals.mockImplementation(() => {
+    repository.getTotals.mockImplementation(() => {
       order.push("totals");
       return { count: PROMPT_UPLOAD_LIMIT_PER_SESSION - 1, totalBytes: 0 };
     });
@@ -130,7 +130,7 @@ describe("createUploadsHandler", () => {
 
     expect(response.status).toBe(200);
     expect(order).toEqual(["claim"]);
-    expect(repository.getUploadTotals).not.toHaveBeenCalled();
+    expect(repository.getTotals).not.toHaveBeenCalled();
     expect(await response.json()).toEqual({
       status: "cleanup_required",
       cleanupClaimedAt: NOW,
@@ -144,7 +144,7 @@ describe("createUploadsHandler", () => {
     const response = await handler.recordUpload(uploadRequest(VALID_BODY));
 
     expect(response.status).toBe(200);
-    expect(repository.createUpload).toHaveBeenCalledWith({
+    expect(repository.create).toHaveBeenCalledWith({
       id: "up-1",
       mimeType: "image/png",
       sizeBytes: 1024,
@@ -166,7 +166,7 @@ describe("createUploadsHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(repository.acknowledgeUploadCleanup).toHaveBeenCalledWith(["old-1"], NOW);
-    expect(repository.releaseUploadCleanupClaims).toHaveBeenCalledWith(["old-2"], NOW);
+    expect(repository.acknowledgeCleanup).toHaveBeenCalledWith(["old-1"], NOW);
+    expect(repository.releaseCleanupClaims).toHaveBeenCalledWith(["old-2"], NOW);
   });
 });

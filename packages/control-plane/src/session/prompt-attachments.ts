@@ -3,16 +3,16 @@ import {
   type PromptAttachment,
   type ResolvedPromptAttachment,
 } from "@open-inspect/shared";
-import type { SessionRepository } from "./repository";
+import type { SessionAttachmentRepository } from "./session-attachment-repository";
 
 export class PromptAttachmentError extends Error {}
 
 export interface ResolvedPromptAttachments {
   attachments: ResolvedPromptAttachment[];
-  uploadIds: string[];
+  attachmentIds: string[];
 }
 
-type PromptAttachmentRepository = Pick<SessionRepository, "getUnreferencedUploads">;
+type PromptAttachmentRepository = Pick<SessionAttachmentRepository, "getUnreferenced">;
 
 /** Resolve client references against canonical, unclaimed upload rows. */
 export function resolvePromptAttachments(
@@ -21,15 +21,15 @@ export function resolvePromptAttachments(
 ): ResolvedPromptAttachments | undefined {
   if (!attachments || attachments.length === 0) return undefined;
 
-  const uploadIds = attachments.map((attachment) => attachment.uploadId);
-  if (new Set(uploadIds).size !== uploadIds.length) {
+  const attachmentIds = attachments.map((attachment) => attachment.uploadId);
+  if (new Set(attachmentIds).size !== attachmentIds.length) {
     throw new PromptAttachmentError("An upload can only be attached once per message");
   }
 
   const uploads = new Map(
-    repository.getUnreferencedUploads(uploadIds).map((upload) => [upload.id, upload] as const)
+    repository.getUnreferenced(attachmentIds).map((upload) => [upload.id, upload] as const)
   );
-  if (uploads.size !== uploadIds.length) {
+  if (uploads.size !== attachmentIds.length) {
     throw new PromptAttachmentError("One or more uploads are missing, expired, or already used");
   }
 
@@ -49,5 +49,5 @@ export function resolvePromptAttachments(
     };
   });
 
-  return { attachments: resolved, uploadIds };
+  return { attachments: resolved, attachmentIds };
 }

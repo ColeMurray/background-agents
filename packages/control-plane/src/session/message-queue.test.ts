@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionMessageQueue } from "./message-queue";
-import { UploadClaimConflictError } from "./repository";
+import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { ClientInfo, Env, ServerMessage } from "../types";
 import type { MessageRow, ParticipantRow, SessionRow, UploadRow } from "./types";
 
@@ -87,8 +87,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 
 function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | null }) {
   const repository = {
-    createMessageWithUploads: vi.fn(),
-    getUnreferencedUploads: vi.fn((): UploadRow[] => []),
+    createMessageWithAttachments: vi.fn(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
@@ -98,6 +97,10 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
+  };
+
+  const attachmentRepository = {
+    getUnreferenced: vi.fn((): UploadRow[] => []),
   };
 
   const wsManager = {
@@ -133,6 +136,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
       child: vi.fn(),
     },
     repository: repository as never,
+    attachmentRepository: attachmentRepository as never,
     wsManager: wsManager as never,
     participantService: participantService as never,
     callbackService: callbackService as never,
@@ -150,6 +154,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
   return {
     queue,
     repository,
+    attachmentRepository,
     wsManager,
     participantService,
     broadcast,
@@ -171,7 +176,7 @@ describe("SessionMessageQueue", () => {
       expect.anything(),
       expect.objectContaining({ code: "NOT_SUBSCRIBED" })
     );
-    expect(h.repository.createMessageWithUploads).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     expect(h.setSessionStatus).not.toHaveBeenCalled();
   });
 
@@ -197,7 +202,7 @@ describe("SessionMessageQueue", () => {
 
   it("stores attachments and embeds content-free metadata in the user_message event", async () => {
     const h = buildQueue();
-    h.repository.getUnreferencedUploads.mockReturnValue([
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
       {
         id: "up-1",
         mime_type: "image/png",
@@ -219,7 +224,7 @@ describe("SessionMessageQueue", () => {
       ],
     });
 
-    expect(h.repository.createMessageWithUploads).toHaveBeenCalledWith(
+    expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: JSON.stringify([
           { name: "shot.png", uploadId: "up-1", mimeType: "image/png" },
@@ -243,7 +248,7 @@ describe("SessionMessageQueue", () => {
 
   it("rejects a prompt when its upload loses the atomic claim race", async () => {
     const h = buildQueue();
-    h.repository.getUnreferencedUploads.mockReturnValue([
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
       {
         id: "up-1",
         mime_type: "image/png",
@@ -254,8 +259,8 @@ describe("SessionMessageQueue", () => {
         created_at: 1,
       },
     ]);
-    h.repository.createMessageWithUploads.mockImplementation(() => {
-      throw new UploadClaimConflictError("already claimed");
+    h.repository.createMessageWithAttachments.mockImplementation(() => {
+      throw new AttachmentClaimConflictError("already claimed");
     });
 
     await h.queue.handlePromptMessage({} as WebSocket, {
@@ -279,7 +284,7 @@ describe("SessionMessageQueue", () => {
       attachments: [{ name: "missing.png", uploadId: "missing" }],
     });
 
-    expect(h.repository.createMessageWithUploads).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     expect(h.wsManager.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
@@ -288,7 +293,7 @@ describe("SessionMessageQueue", () => {
 
   it("does not disguise upload storage failures as invalid user input", async () => {
     const h = buildQueue();
-    h.repository.getUnreferencedUploads.mockImplementation(() => {
+    h.attachmentRepository.getUnreferenced.mockImplementation(() => {
       throw new Error("database unavailable");
     });
 
@@ -307,7 +312,7 @@ describe("SessionMessageQueue", () => {
 
   it("rejects upload rows with unsupported image metadata", async () => {
     const h = buildQueue();
-    h.repository.getUnreferencedUploads.mockReturnValue([
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
       {
         id: "up-invalid",
         mime_type: "application/pdf",
@@ -324,7 +329,7 @@ describe("SessionMessageQueue", () => {
       attachments: [{ name: "document.pdf", uploadId: "up-invalid" }],
     });
 
-    expect(h.repository.createMessageWithUploads).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     expect(h.wsManager.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, MIGRATIONS, SCHEMA_SQL } from "./schema";
-import type { SqlStorage, SqlResult } from "./repository";
+import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
