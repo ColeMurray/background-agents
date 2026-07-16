@@ -36,7 +36,7 @@ notification controls and safety notes are covered near the end.
 | Pick the repository         | Let Open-Inspect infer it, or choose from a dropdown when it is unsure     |
 | Set personal defaults       | Use the Slack app's **Home** tab for model, reasoning effort, and branch   |
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
-| Review generated media      | Uploaded charts, screenshots, and small recordings appear in the thread    |
+| Review generated media      | Optionally attach charts, screenshots, and small recordings to the thread  |
 | Ask the agent to post Slack | Enable agent notifications, then explicitly ask the agent to post to Slack |
 | Auto-trigger from a channel | Opt-in: watch a channel so matching messages start an automation           |
 
@@ -46,10 +46,11 @@ Open-Inspect does not use slash commands today. In channels, it normally respond
 **automation** from non-mention messages that match conditions you configure; it is disabled by
 default and must be enabled by an operator.
 
-When an agent registers a generated PNG, JPEG, WebP, or MP4 as a session artifact, Open-Inspect
-attaches it to the completion thread for quick review. Delivery is bounded to five files, 10 MiB per
-file, and 25 MiB total per completion. Additional or oversized media remains available through
-**View Session**. Files merely written into the repository are not uploaded automatically.
+All completion replies are delivered asynchronously through a Cloudflare Queue. When an operator
+sets `slack_media_delivery_enabled = true`, Open-Inspect also attaches generated PNG, JPEG, WebP, or
+MP4 session artifacts to the completion thread. Delivery is bounded to five files, 10 MiB per file,
+and 25 MiB total per completion. Additional or oversized media remains available through **View
+Session**. Files merely written into the repository are not uploaded automatically.
 
 ---
 
@@ -158,8 +159,8 @@ When the agent finishes, Slack receives a completion reply with:
 - A **View Session** button
 
 If the agent created a manual-PR branch and no PR artifact is already present, Slack may also show a
-**Create PR** button. Screenshots and detailed event logs stay in the web session instead of being
-expanded into the Slack completion reply.
+**Create PR** button. Detailed event logs stay in the web session. Generated media is attached only
+when the operator enables media delivery; it always remains available through **View Session**.
 
 ---
 

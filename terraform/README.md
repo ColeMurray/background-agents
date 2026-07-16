@@ -70,6 +70,7 @@ brew install node@22
      - Workers KV Storage: **Edit**
      - Workers R2 Storage: **Edit**
      - D1: **Edit**
+     - Queues: **Edit**
    - If you manage Cloudflare routes/custom domains through Terraform, also add:
      - Workers Routes: **Edit**
 
@@ -472,6 +473,7 @@ variables.
    - `Workers KV Storage: Edit`
    - `Workers R2 Storage: Edit`
    - `D1: Edit`
+   - `Queues: Edit`
    - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
 ## Adding New Environments

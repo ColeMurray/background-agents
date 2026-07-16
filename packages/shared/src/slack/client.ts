@@ -31,8 +31,7 @@ export interface ExternalUploadUrlOptions {
 }
 
 export interface CompleteExternalUploadOptions {
-  fileId: string;
-  title?: string;
+  files: Array<{ id: string; title?: string }>;
   channelId: string;
   threadTs: string;
   signal?: AbortSignal;
@@ -145,7 +144,7 @@ export function completeExternalUpload(
     token,
     "files.completeUploadExternal",
     {
-      files: [{ id: options.fileId, title: options.title }],
+      files: options.files,
       channel_id: options.channelId,
       thread_ts: options.threadTs,
     },

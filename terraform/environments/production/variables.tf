@@ -220,6 +220,12 @@ variable "slack_triggers_enabled" {
   default     = false
 }
 
+variable "slack_media_delivery_enabled" {
+  description = "Attach generated media to queued Slack completions. Text completion remains enabled when false."
+  type        = bool
+  default     = false
+}
+
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string

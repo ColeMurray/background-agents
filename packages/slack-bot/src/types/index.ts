@@ -2,6 +2,8 @@
  * Type definitions for the Slack bot.
  */
 
+import type { SlackCompletionJob } from "../completion/job";
+
 /**
  * Cloudflare Worker environment bindings.
  */
@@ -11,6 +13,9 @@ export interface Env {
 
   // Service binding to control plane
   CONTROL_PLANE: Fetcher;
+
+  // Durable completion handoff. All Slack completion callbacks enqueue here.
+  SLACK_COMPLETION_QUEUE: Queue<SlackCompletionJob>;
 
   // Environment variables
   DEPLOYMENT_NAME: string;
@@ -25,6 +30,8 @@ export interface Env {
    * default — any other value (or unset) disables the feature entirely.
    */
   SLACK_TRIGGERS_ENABLED?: string;
+  /** Media kill switch. Text completions continue through the Queue when disabled. */
+  SLACK_MEDIA_DELIVERY_ENABLED?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;

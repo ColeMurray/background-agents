@@ -2,35 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { computeHmacHex } from "@open-inspect/shared";
 import { callbacksRouter } from "./callbacks";
-import { extractAgentResponse } from "./completion/extractor";
-import { deliverMediaArtifacts } from "./completion/media-upload";
-import type * as ExtractorModule from "./completion/extractor";
-import type * as MediaUploadModule from "./completion/media-upload";
 import type { Env } from "./types";
-
-// The automation-complete post path reuses the interactive completion path, which
-// fetches the agent's response from the control-plane. Stub that extraction so the
-// handler test asserts the in-thread post + reaction clear without reconstructing
-// the event-fetch protocol.
-vi.mock("./completion/extractor", async (importOriginal) => {
-  const actual = await importOriginal<typeof ExtractorModule>();
-  return { ...actual, extractAgentResponse: vi.fn() };
-});
-
-vi.mock("./completion/media-upload", async (importOriginal) => {
-  const actual = await importOriginal<typeof MediaUploadModule>();
-  return { ...actual, deliverMediaArtifacts: vi.fn() };
-});
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     SLACK_KV: {} as KVNamespace,
+    SLACK_COMPLETION_QUEUE: { send: vi.fn(async () => {}) } as unknown as Queue,
     CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
     WEB_APP_URL: "https://app.test",
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
     CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
+    SLACK_MEDIA_DELIVERY_ENABLED: "true",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
@@ -315,7 +299,6 @@ async function postCallback(path: string, payload: unknown, env = makeEnv(), ctx
 describe("POST /callbacks/complete", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(deliverMediaArtifacts).mockReset();
   });
 
   function completeCallbackData(overrides: Record<string, unknown> = {}) {
@@ -352,15 +335,13 @@ describe("POST /callbacks/complete", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("accepts signed completion payloads without stripping unknown signed fields", async () => {
-    vi.mocked(extractAgentResponse).mockResolvedValue({
-      textContent: "All set.",
-      toolCalls: [],
-      artifacts: [],
-      mediaArtifacts: [],
-      success: true,
+  it("awaits durable enqueue and strips callback-only fields", async () => {
+    const pending = createDeferred<void>();
+    const env = makeEnv({
+      SLACK_COMPLETION_QUEUE: {
+        send: vi.fn(() => pending.promise),
+      } as unknown as Queue,
     });
-    const fetchMock = okFetchMock();
     const payload = await signPayload(
       completeCallbackData({
         extraTopLevel: "preserve-me",
@@ -374,77 +355,54 @@ describe("POST /callbacks/complete", () => {
         },
       })
     );
-    const { response, ctx } = await postCallback("/callbacks/complete", payload);
+    let settled = false;
+    const responsePromise = postCallback("/callbacks/complete", payload, env).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    pending.resolve();
+    const { response, ctx } = await responsePromise;
 
     expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    const post = slackCall(fetchMock, "chat.postMessage");
-    expect(post).toBeDefined();
-    expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(env.SLACK_COMPLETION_QUEUE.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: 1,
+        source: "session",
+        sessionId: "session-1",
+        messageId: "message-1",
+        channel: "C123",
+        threadTs: "111.222",
+        traceId: "trace-1",
+      }),
+      { contentType: "json" }
+    );
+    const queued = vi.mocked(env.SLACK_COMPLETION_QUEUE.send).mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(queued).not.toHaveProperty("signature");
+    expect(queued).not.toHaveProperty("extraTopLevel");
   });
 
-  it("delivers extracted media into the completion thread", async () => {
-    const mediaArtifact = {
-      id: "image-1",
-      type: "screenshot" as const,
-      mimeType: "image/png",
-      sizeBytes: 123,
-      caption: "Revenue chart",
-    };
-    vi.mocked(extractAgentResponse).mockResolvedValue({
-      textContent: "Generated the chart.",
-      toolCalls: [],
-      artifacts: [],
-      mediaArtifacts: [mediaArtifact],
-      success: true,
+  it("returns 503 when enqueue fails", async () => {
+    const env = makeEnv({
+      SLACK_COMPLETION_QUEUE: {
+        send: vi.fn(async () => {
+          throw new Error("queue unavailable");
+        }),
+      } as unknown as Queue,
     });
-    vi.mocked(deliverMediaArtifacts).mockResolvedValue({
-      uploaded: 1,
-      failed: 0,
-      omitted: 0,
-      alreadyDelivered: 0,
-    });
-    okFetchMock();
     const payload = await signPayload(completeCallbackData());
 
-    const { ctx } = await postCallback("/callbacks/complete", payload);
-    await flushWaitUntil(ctx);
+    const { response, ctx } = await postCallback("/callbacks/complete", payload, env);
 
-    expect(deliverMediaArtifacts).toHaveBeenCalledWith({
-      env: expect.any(Object),
-      sessionId: "session-1",
-      messageId: "message-1",
-      channel: "C123",
-      threadTs: "111.222",
-      artifacts: [mediaArtifact],
-      traceId: "trace-1",
-    });
-  });
-
-  it("does not report already delivered media as unavailable", async () => {
-    vi.mocked(extractAgentResponse).mockResolvedValue({
-      textContent: "Generated the chart.",
-      toolCalls: [],
-      artifacts: [],
-      mediaArtifacts: [{ id: "image-1", type: "screenshot" }],
-      success: true,
-    });
-    vi.mocked(deliverMediaArtifacts).mockResolvedValue({
-      uploaded: 0,
-      failed: 0,
-      omitted: 0,
-      alreadyDelivered: 1,
-    });
-    const fetchMock = okFetchMock();
-    const payload = await signPayload(completeCallbackData());
-
-    const { ctx } = await postCallback("/callbacks/complete", payload);
-    await flushWaitUntil(ctx);
-
-    expect(
-      fetchMock.mock.calls.filter(([input]) => String(input).includes("chat.postMessage"))
-    ).toHaveLength(1);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "completion enqueue failed" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 });
 
@@ -457,6 +415,11 @@ describe("POST /callbacks/automation-complete", () => {
     return {
       channel: "C123",
       reactionMessageTs: "111.222",
+      sessionId: "session-9",
+      messageId: "msg-9",
+      success: true,
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
       ...overrides,
     };
   }
@@ -476,64 +439,33 @@ describe("POST /callbacks/automation-complete", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("clears the reaction without posting when the run carries no session coordinates", async () => {
-    // No sessionId/messageId (e.g. version skew) — falls back to a reaction clear.
-    const fetchMock = okFetchMock();
-    const payload = await signPayload(completeData());
+  it("rejects payloads without complete session coordinates", async () => {
+    const { sessionId: _, messageId: __, ...incomplete } = completeData();
+    const payload = await signPayload(incomplete);
     const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
 
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    expect(slackCall(fetchMock, "chat.postMessage")).toBeUndefined();
-    const reaction = slackCall(fetchMock, "reactions.remove");
-    expect(reaction).toBeDefined();
-    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("posts the agent result in-thread and clears the reaction", async () => {
-    vi.mocked(extractAgentResponse).mockResolvedValue({
-      textContent: "Fixed the bug and opened a PR.",
-      toolCalls: [],
-      artifacts: [],
-      mediaArtifacts: [],
-      success: true,
-    });
-    const fetchMock = okFetchMock();
-    const payload = await signPayload(
-      completeData({
+  it("enqueues the same completion job shape without waitUntil", async () => {
+    const env = makeEnv();
+    const payload = await signPayload(completeData());
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload, env);
+
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(env.SLACK_COMPLETION_QUEUE.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "automation",
         sessionId: "session-9",
         messageId: "msg-9",
-        success: true,
-        repoFullName: "acme/app",
-        model: "anthropic/claude-haiku-4-5",
-      })
+        channel: "C123",
+        threadTs: "111.222",
+        reactionMessageTs: "111.222",
+      }),
+      { contentType: "json" }
     );
-    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
-
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    // The agent's response is posted into the triggering message's thread.
-    const post = slackCall(fetchMock, "chat.postMessage");
-    expect(post).toBeDefined();
-    expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
-    expect(JSON.stringify(post!.body)).toContain("Fixed the bug");
-
-    // ...and the eyes reaction is still cleared.
-    const reaction = slackCall(fetchMock, "reactions.remove");
-    expect(reaction).toBeDefined();
-    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
-  });
-
-  it("does not crash when clearing the reaction throws", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
-    const payload = await signPayload(completeData());
-    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
-
-    expect(response.status).toBe(200);
-    // The fire-and-forget handler must swallow the throw, not reject in waitUntil.
-    await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
   });
 });
 

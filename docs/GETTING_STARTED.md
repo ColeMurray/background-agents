@@ -107,6 +107,7 @@ cd packages/modal-infra && uv sync --frozen && cd -
      - Account | Workers KV Storage | Edit (should be included with template)
      - Account | Workers R2 Storage | Edit (should be included with template)
      - Account | D1 | Edit
+     - Account | Queues | Edit
    - Set "Account Resources" to include your account
    - Set "Zone Resources" to include all zones from your account
    - Click "Continue to summary" and "Update token"
@@ -482,6 +483,8 @@ google_client_secret = ""
 enable_slack_bot     = false
 slack_bot_token      = ""
 slack_signing_secret = ""
+# Optional: attach generated media to queued completion replies
+slack_media_delivery_enabled = false
 
 # GitHub Bot (set enable_github_bot = true to deploy the webhook worker)
 enable_github_bot      = false
@@ -1056,12 +1059,14 @@ If the bot doesn't see the original message when tagged in a thread reply:
 
 ### Slack completion does not attach generated media
 
-1. Verify the bot has the `files:write` scope and reinstall the app after adding it.
-2. Confirm the agent registered the image or video as a session artifact; repository files are not
+1. Set `slack_media_delivery_enabled = true` and run `terraform apply`. Text-only completion replies
+   always use the queue; this flag controls only media attachment.
+2. Verify the bot has the `files:write` scope and reinstall the app after adding it.
+3. Confirm the agent registered the image or video as a session artifact; repository files are not
    uploaded automatically.
-3. Check that the file is PNG, JPEG, WebP, or MP4 and no larger than 10 MiB. A completion attaches
+4. Check that the file is PNG, JPEG, WebP, or MP4 and no larger than 10 MiB. A completion attaches
    at most five files and 25 MiB total; other media remains available through **View Session**.
-4. Check Slack workspace policies for disabled uploads, prohibited file types, or exhausted storage.
+5. Check Slack workspace policies for disabled uploads, prohibited file types, or exhausted storage.
 
 ### GitHub bot not responding to webhooks
 

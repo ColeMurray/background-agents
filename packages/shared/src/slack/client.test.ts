@@ -100,7 +100,7 @@ describe("external file uploads", () => {
     ).resolves.toEqual({ ok: false, error: "network_error" });
   });
 
-  it("completes and shares an upload in the parent thread", async () => {
+  it("completes and shares uploads in the parent thread", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -109,8 +109,10 @@ describe("external file uploads", () => {
 
     const signal = AbortSignal.timeout(1_000);
     const result = await completeExternalUpload("xoxb-token", {
-      fileId: "F123",
-      title: "Revenue chart",
+      files: [
+        { id: "F123", title: "Revenue chart" },
+        { id: "F456", title: "Forecast video" },
+      ],
       channelId: "C123",
       threadTs: "111.222",
       signal,
@@ -121,7 +123,10 @@ describe("external file uploads", () => {
     expect(url).toBe("https://slack.com/api/files.completeUploadExternal");
     expect(init?.signal).toBe(signal);
     expect(JSON.parse(String(init?.body))).toEqual({
-      files: [{ id: "F123", title: "Revenue chart" }],
+      files: [
+        { id: "F123", title: "Revenue chart" },
+        { id: "F456", title: "Forecast video" },
+      ],
       channel_id: "C123",
       thread_ts: "111.222",
     });

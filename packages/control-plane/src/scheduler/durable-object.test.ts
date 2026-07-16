@@ -1743,6 +1743,7 @@ describe("SchedulerDO", () => {
             automationId: "auto-1",
             runId: "run-1",
             sessionId: "sess-1",
+            messageId: "msg-1",
             success: true,
           }),
         })
@@ -1771,6 +1772,7 @@ describe("SchedulerDO", () => {
             automationId: "auto-1",
             runId: "run-1",
             sessionId: "sess-1",
+            messageId: "msg-1",
             success: true,
           }),
         })
@@ -1797,6 +1799,7 @@ describe("SchedulerDO", () => {
             automationId: "auto-1",
             runId: "run-1",
             sessionId: "sess-1",
+            messageId: "msg-1",
             success: true,
           }),
         })
@@ -1817,6 +1820,7 @@ describe("SchedulerDO", () => {
             automationId: "auto-1",
             runId: "run-1",
             sessionId: "sess-1",
+            messageId: "msg-1",
             success: "true",
           }),
         })
@@ -1825,6 +1829,26 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(400);
       expect(mockStore.getRunById).not.toHaveBeenCalled();
       expect(mockStore.updateRun).not.toHaveBeenCalled();
+    });
+
+    it("requires a message id for run-complete callbacks", async () => {
+      const scheduler = createSchedulerDO();
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-1",
+            runId: "run-1",
+            sessionId: "sess-1",
+            success: true,
+          }),
+        })
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockStore.getRunById).not.toHaveBeenCalled();
     });
 
     it("reads slack coordinates from the invocation and labels from the run snapshot", async () => {
@@ -1969,6 +1993,7 @@ describe("SchedulerDO", () => {
             automationId: "auto-1",
             runId: "run-1",
             sessionId: "sess-1",
+            messageId: "msg-1",
             success: false,
             error: "Sandbox crashed",
           }),
@@ -2001,6 +2026,7 @@ describe("SchedulerDO", () => {
             automationId: "auto-1",
             runId: "run-1",
             sessionId: "sess-1",
+            messageId: "msg-1",
             success: true,
           }),
         })
@@ -2028,6 +2054,7 @@ describe("SchedulerDO", () => {
             automationId: "auto-1",
             runId: "run-1",
             sessionId: "sess-1",
+            messageId: "msg-1",
             success: false,
             error: "Third failure",
           }),
@@ -2050,6 +2077,7 @@ describe("SchedulerDO", () => {
               automationId: "auto-1",
               runId: "run-1",
               sessionId: "sess-1",
+              messageId: "msg-1",
               success: false,
               error: "Sandbox crashed",
             }),
