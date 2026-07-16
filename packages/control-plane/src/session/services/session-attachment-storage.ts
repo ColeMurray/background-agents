@@ -19,9 +19,21 @@ export interface SessionAttachmentRecord {
   objectKey: string;
 }
 
-export type StoreSessionAttachmentResult =
-  | { ok: true }
-  | { ok: false; status: number; error: string };
+export type SessionAttachmentStorageErrorReason =
+  | "session_not_found"
+  | "quota_exceeded"
+  | "registry_unavailable"
+  | "cleanup_failed";
+
+export class SessionAttachmentStorageError extends Error {
+  constructor(
+    readonly reason: SessionAttachmentStorageErrorReason,
+    message: string
+  ) {
+    super(message);
+    this.name = "SessionAttachmentStorageError";
+  }
+}
 
 /** Coordinates attachment persistence across R2 and the session Durable Object. */
 export class SessionAttachmentStorageService {
@@ -32,34 +44,22 @@ export class SessionAttachmentStorageService {
     private readonly log: Logger
   ) {}
 
-  async store(
-    bytes: Uint8Array,
-    record: SessionAttachmentRecord
-  ): Promise<StoreSessionAttachmentResult> {
-    const result = await this.register(record);
-    if (!result.ok) return result;
+  async store(bytes: Uint8Array, record: SessionAttachmentRecord): Promise<void> {
+    await this.register(record);
 
     // Register first so every failed or ambiguous storage outcome remains
     // discoverable through the normal stale-attachment cleanup protocol.
     await this.storage.put(record.objectKey, bytes, { contentType: record.mimeType });
-    return { ok: true };
   }
 
-  private async register(record: SessionAttachmentRecord): Promise<StoreSessionAttachmentResult> {
+  private async register(record: SessionAttachmentRecord): Promise<void> {
     const command: RecordAttachmentCommand = { action: "record", ...record };
     for (let attempt = 0; attempt < MAX_REGISTRATION_ATTEMPTS; attempt += 1) {
       const response = await this.sendCommand(command);
-      if (!response.ok) return this.registrationError(response);
+      if (!response.ok) await this.throwRegistrationError(response);
 
       const result = await this.parseMutationResult(response);
-      if (!result) {
-        return {
-          ok: false,
-          status: 502,
-          error: "Attachment registry returned an invalid response",
-        };
-      }
-      if (result.status === "ok") return { ok: true };
+      if (result.status === "ok") return;
 
       const cleanup = await this.deleteClaimedObjects(result.staleAttachments);
       const completion = await this.sendCommand({
@@ -68,24 +68,25 @@ export class SessionAttachmentStorageService {
         acknowledgedAttachmentIds: cleanup.acknowledgedAttachmentIds,
         releasedAttachmentIds: cleanup.releasedAttachmentIds,
       });
-      if (!completion.ok) return this.registrationError(completion);
+      if (!completion.ok) await this.throwRegistrationError(completion);
       const completionResult = await this.parseMutationResult(completion);
-      if (!completionResult || completionResult.status !== "ok") {
-        return {
-          ok: false,
-          status: 502,
-          error: "Attachment registry returned an invalid response",
-        };
+      if (completionResult.status !== "ok") {
+        throw new SessionAttachmentStorageError(
+          "registry_unavailable",
+          "Attachment registry returned an invalid response"
+        );
       }
       if (cleanup.releasedAttachmentIds.length > 0) {
-        return {
-          ok: false,
-          status: 503,
-          error: "Failed to clean up expired attachments; please retry",
-        };
+        throw new SessionAttachmentStorageError(
+          "cleanup_failed",
+          "Failed to clean up expired attachments; please retry"
+        );
       }
     }
-    return { ok: false, status: 503, error: "Attachment cleanup did not converge; please retry" };
+    throw new SessionAttachmentStorageError(
+      "cleanup_failed",
+      "Attachment cleanup did not converge; please retry"
+    );
   }
 
   private sendCommand(command: SessionAttachmentCommand): Promise<Response> {
@@ -96,18 +97,20 @@ export class SessionAttachmentStorageService {
     });
   }
 
-  private async parseMutationResult(
-    response: Response
-  ): Promise<SessionAttachmentMutationResult | null> {
+  private async parseMutationResult(response: Response): Promise<SessionAttachmentMutationResult> {
     try {
       const result = sessionAttachmentMutationResultSchema.safeParse(await response.json());
-      return result.success ? result.data : null;
+      if (result.success) return result.data;
     } catch {
-      return null;
+      // Use the same domain failure for malformed JSON and invalid payloads.
     }
+    throw new SessionAttachmentStorageError(
+      "registry_unavailable",
+      "Attachment registry returned an invalid response"
+    );
   }
 
-  private async registrationError(response: Response): Promise<StoreSessionAttachmentResult> {
+  private async throwRegistrationError(response: Response): Promise<never> {
     let message = response.status === 404 ? "Session not found" : "Failed to record attachment";
     try {
       const body: unknown = await response.json();
@@ -123,7 +126,13 @@ export class SessionAttachmentStorageService {
     } catch {
       // Keep the status-based fallback.
     }
-    return { ok: false, status: response.status, error: message };
+    const reason: SessionAttachmentStorageErrorReason =
+      response.status === 404
+        ? "session_not_found"
+        : response.status === 429
+          ? "quota_exceeded"
+          : "registry_unavailable";
+    throw new SessionAttachmentStorageError(reason, message);
   }
 
   private async deleteClaimedObjects(

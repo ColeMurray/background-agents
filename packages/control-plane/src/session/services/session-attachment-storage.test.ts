@@ -44,9 +44,7 @@ describe("SessionAttachmentStorageService", () => {
   it("registers and then stores an attachment", async () => {
     const h = buildService([Response.json({ status: "ok" })]);
 
-    await expect(h.store(Uint8Array.from([1, 2, 3]))).resolves.toEqual({
-      ok: true,
-    });
+    await expect(h.store(Uint8Array.from([1, 2, 3]))).resolves.toBeUndefined();
 
     expect(h.storage.put).toHaveBeenCalledWith(RECORD.objectKey, expect.any(Uint8Array), {
       contentType: "image/png",
@@ -61,17 +59,20 @@ describe("SessionAttachmentStorageService", () => {
     expect(h.storage.delete).not.toHaveBeenCalled();
   });
 
-  it("does not store an object when registration is rejected", async () => {
-    const h = buildService([Response.json({ error: "Quota exceeded" }, { status: 429 })]);
+  it.each([
+    [404, "Session not found", "session_not_found"],
+    [429, "Quota exceeded", "quota_exceeded"],
+    [500, "Registry failed", "registry_unavailable"],
+  ] as const)(
+    "classifies a rejected registration without storing the object: %s",
+    async (status, message, reason) => {
+      const h = buildService([Response.json({ error: message }, { status })]);
 
-    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
-      ok: false,
-      status: 429,
-      error: "Quota exceeded",
-    });
-    expect(h.storage.put).not.toHaveBeenCalled();
-    expect(h.storage.delete).not.toHaveBeenCalled();
-  });
+      await expect(h.store(Uint8Array.from([1]))).rejects.toMatchObject({ reason, message });
+      expect(h.storage.put).not.toHaveBeenCalled();
+      expect(h.storage.delete).not.toHaveBeenCalled();
+    }
+  );
 
   it("does not store an object when registration throws", async () => {
     const h = buildService([new Error("runtime unavailable")]);
@@ -84,10 +85,9 @@ describe("SessionAttachmentStorageService", () => {
   it("rejects without storing when the registry response is malformed", async () => {
     const h = buildService([new Response("not-json")]);
 
-    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
-      ok: false,
-      status: 502,
-      error: "Attachment registry returned an invalid response",
+    await expect(h.store(Uint8Array.from([1]))).rejects.toMatchObject({
+      reason: "registry_unavailable",
+      message: "Attachment registry returned an invalid response",
     });
     expect(h.storage.put).not.toHaveBeenCalled();
   });
@@ -114,7 +114,7 @@ describe("SessionAttachmentStorageService", () => {
       Response.json({ status: "ok" }),
     ]);
 
-    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({ ok: true });
+    await expect(h.store(Uint8Array.from([1]))).resolves.toBeUndefined();
     expect(h.storage.delete).toHaveBeenCalledWith("sessions/session-1/attachments/old-1");
     expect(JSON.parse(h.fetch.mock.calls[1][2]?.body as string)).toEqual({
       action: "complete_cleanup",
@@ -147,10 +147,9 @@ describe("SessionAttachmentStorageService", () => {
       if (key.endsWith("/old-1")) throw new Error("R2 unavailable");
     });
 
-    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
-      ok: false,
-      status: 503,
-      error: "Failed to clean up expired attachments; please retry",
+    await expect(h.store(Uint8Array.from([1]))).rejects.toMatchObject({
+      reason: "cleanup_failed",
+      message: "Failed to clean up expired attachments; please retry",
     });
     expect(JSON.parse(h.fetch.mock.calls[1][2]?.body as string)).toEqual({
       action: "complete_cleanup",
@@ -173,10 +172,9 @@ describe("SessionAttachmentStorageService", () => {
       Response.json({ status: "cleanup_required", cleanupClaimedAt: 1000, staleAttachments: [] }),
     ]);
 
-    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
-      ok: false,
-      status: 502,
-      error: "Attachment registry returned an invalid response",
+    await expect(h.store(Uint8Array.from([1]))).rejects.toMatchObject({
+      reason: "registry_unavailable",
+      message: "Attachment registry returned an invalid response",
     });
     expect(h.storage.put).not.toHaveBeenCalled();
   });

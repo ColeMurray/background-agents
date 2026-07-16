@@ -27,7 +27,10 @@ import {
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   sessionAttachmentRequestExceedsLimit,
 } from "../media";
-import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage";
+import {
+  SessionAttachmentStorageError,
+  SessionAttachmentStorageService,
+} from "../session/services/session-attachment-storage";
 import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
 import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
@@ -45,6 +48,19 @@ function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
   const headers = new Headers();
   metadata.writeHttpMetadata(headers);
   return headers.get("Content-Type");
+}
+
+function attachmentStorageErrorResponse(cause: SessionAttachmentStorageError): Response {
+  switch (cause.reason) {
+    case "session_not_found":
+      return error(cause.message, 404);
+    case "quota_exceeded":
+      return error(cause.message, 429);
+    case "registry_unavailable":
+      return error(cause.message, 502);
+    case "cleanup_failed":
+      return error(cause.message, 503);
+  }
 }
 
 async function handleAttachmentPost(
@@ -110,13 +126,19 @@ async function handleAttachmentPost(
       trace_id: ctx.trace_id,
     })
   );
-  const stored = await attachmentStorage.store(bytes, {
-    attachmentId,
-    mimeType: detected.mimeType,
-    sizeBytes: bytes.byteLength,
-    objectKey,
-  });
-  if (!stored.ok) return error(stored.error, stored.status);
+  try {
+    await attachmentStorage.store(bytes, {
+      attachmentId,
+      mimeType: detected.mimeType,
+      sizeBytes: bytes.byteLength,
+      objectKey,
+    });
+  } catch (cause) {
+    if (cause instanceof SessionAttachmentStorageError) {
+      return attachmentStorageErrorResponse(cause);
+    }
+    throw cause;
+  }
 
   logger.info("attachments.stored", {
     session_id: sessionId,
