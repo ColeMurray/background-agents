@@ -232,7 +232,13 @@ describe("createMessagesHandler", () => {
           source: "web",
           model: null,
           reasoning_effort: null,
-          attachments: null,
+          attachments: JSON.stringify([
+            {
+              name: "screenshot.png",
+              attachmentId: "attachment-1",
+              mimeType: "image/png",
+            },
+          ]),
           callback_context: null,
           status: "completed",
           error_message: null,
@@ -254,6 +260,13 @@ describe("createMessagesHandler", () => {
           authorId: "p1",
           content: "hello",
           source: "web",
+          attachments: [
+            {
+              name: "screenshot.png",
+              attachmentId: "attachment-1",
+              mimeType: "image/png",
+            },
+          ],
           status: "completed",
           createdAt: 1000,
           startedAt: 1100,
@@ -262,6 +275,37 @@ describe("createMessagesHandler", () => {
       ],
       cursor: "1000",
       hasMore: false,
+    });
+  });
+
+  it("includes null attachments when a message has none", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listMessages).mockReturnValue({
+      messages: [
+        {
+          id: "m1",
+          author_id: "p1",
+          content: "hello",
+          source: "web",
+          model: null,
+          reasoning_effort: null,
+          attachments: null,
+          callback_context: null,
+          status: "completed",
+          error_message: null,
+          created_at: 1000,
+          started_at: null,
+          completed_at: null,
+        },
+      ],
+      cursor: "1000",
+      hasMore: false,
+    });
+
+    const response = handler.listMessages(new URL("http://internal/internal/messages"));
+
+    await expect(response.json()).resolves.toMatchObject({
+      messages: [{ attachments: null }],
     });
   });
 

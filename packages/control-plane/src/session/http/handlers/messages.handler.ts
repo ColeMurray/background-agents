@@ -1,3 +1,4 @@
+import { resolvedSessionAttachmentsSchema } from "@open-inspect/shared";
 import type { Logger } from "../../../logger";
 import type { EnqueuePromptRequest, MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
@@ -115,6 +116,9 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
           authorId: message.author_id,
           content: message.content,
           source: message.source,
+          attachments: message.attachments
+            ? resolvedSessionAttachmentsSchema.parse(JSON.parse(message.attachments))
+            : null,
           status: message.status,
           createdAt: message.created_at,
           startedAt: message.started_at,
