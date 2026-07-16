@@ -87,9 +87,10 @@ async function slackFetch<T>(
 function slackGet<T>(
   token: string,
   endpoint: string,
-  query?: Record<string, string>
+  query?: Record<string, string>,
+  signal?: AbortSignal
 ): Promise<SlackEnvelope<T>> {
-  return slackFetch<T>(token, endpoint, "GET", query ? { query } : undefined);
+  return slackFetch<T>(token, endpoint, "GET", query ? { query, signal } : { signal });
 }
 
 function slackPost<T>(
@@ -105,13 +106,13 @@ export function getExternalUploadUrl(
   token: string,
   options: ExternalUploadUrlOptions
 ): Promise<SlackEnvelope<{ upload_url: string; file_id: string }>> {
-  return slackPost(
+  return slackGet(
     token,
     "files.getUploadURLExternal",
     {
       filename: options.filename,
-      length: options.length,
-      alt_txt: options.altText,
+      length: String(options.length),
+      ...(options.altText ? { alt_txt: options.altText } : {}),
     },
     options.signal
   );

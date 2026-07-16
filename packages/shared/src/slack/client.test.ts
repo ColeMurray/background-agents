@@ -55,14 +55,13 @@ describe("external file uploads", () => {
       file_id: "F123",
     });
     const [url, init] = fetchSpy.mock.calls[0]!;
-    expect(url).toBe("https://slack.com/api/files.getUploadURLExternal");
+    expect(url).toBe(
+      "https://slack.com/api/files.getUploadURLExternal?filename=chart.png&length=1234&alt_txt=Revenue+chart"
+    );
+    expect(init?.method).toBe("GET");
     expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer xoxb-token");
     expect(init?.signal).toBe(signal);
-    expect(JSON.parse(String(init?.body))).toEqual({
-      filename: "chart.png",
-      length: 1234,
-      alt_txt: "Revenue chart",
-    });
+    expect(init?.body).toBeUndefined();
   });
 
   it("uploads raw bytes without forwarding Slack authorization", async () => {
