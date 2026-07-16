@@ -165,7 +165,7 @@ async function stageArtifact(
     attemptedBytes + sizeBytes > SLACK_MEDIA_MAX_TOTAL_BYTES
   ) {
     await cancelBody(response.body);
-    log.info("slack.media.delivery", { ...base, outcome: "skipped", size_bytes: sizeBytes });
+    log.info("slack.media.delivery", { ...base, outcome: "omitted", size_bytes: sizeBytes });
     return { kind: "omitted" };
   }
 

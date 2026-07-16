@@ -18,7 +18,7 @@
 #   - Workers KV Storage: Edit
 #   - Workers R2 Storage: Edit
 #   - D1: Edit
-#   - Queues: Edit
+#   - Queues: Edit (required when enable_slack_bot = true)
 # Optional if you manage Cloudflare routes/custom domains:
 #   - Workers Routes: Edit
 # Create at: https://dash.cloudflare.com/profile/api-tokens
@@ -175,6 +175,7 @@ enable_slack_bot = false
 
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
+# Requires the Slack bot scope files:write and an app reinstall before enabling.
 slack_media_delivery_enabled = false
 
 # Linear Agent (Optional)

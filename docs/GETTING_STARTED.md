@@ -107,7 +107,7 @@ cd packages/modal-infra && uv sync --frozen && cd -
      - Account | Workers KV Storage | Edit (should be included with template)
      - Account | Workers R2 Storage | Edit (should be included with template)
      - Account | D1 | Edit
-     - Account | Queues | Edit
+     - Account | Queues | Edit (required when `enable_slack_bot = true`)
    - Set "Account Resources" to include your account
    - Set "Zone Resources" to include all zones from your account
    - Click "Continue to summary" and "Update token"
@@ -327,13 +327,31 @@ Skip this step if you don't need Slack integration.
    - `groups:read`
    - `im:history`
    - `im:read`
-   - `files:write`
+   - `files:write` (only when enabling generated-media attachments)
    - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
 > **Important**: If you update bot token scopes later, you must **reinstall the app** to your
 > workspace for the new permissions to take effect.
+
+### Upgrade an Existing Slack Deployment
+
+Queued delivery applies to every Slack completion, including text-only replies. Before the first
+`terraform apply` after upgrading:
+
+1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
+   this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
+2. Leave `slack_media_delivery_enabled` unset or `false`. Its default is `false`, so the upgrade
+   moves text completions onto the queue without changing the existing Slack app permissions.
+3. Run `terraform apply` and verify a text completion. If the token lacks Queue access, the apply
+   fails while provisioning the new resources; grant the permission and rerun the apply.
+4. To enable media later, add the Slack bot scope `files:write`, reinstall the app once for the
+   workspace, update `slack_bot_token` if Slack issued a replacement, set
+   `slack_media_delivery_enabled = true`, and apply again.
+
+No individual Slack user needs to reauthorize the app. Teams with `enable_slack_bot = false` do not
+create the Queue resources.
 
 ### Get Signing Secret
 
@@ -483,7 +501,8 @@ google_client_secret = ""
 enable_slack_bot     = false
 slack_bot_token      = ""
 slack_signing_secret = ""
-# Optional: attach generated media to queued completion replies
+# Optional: attach generated media to queued completion replies. Requires the
+# Slack bot scope files:write and app reinstall before changing this to true.
 slack_media_delivery_enabled = false
 
 # GitHub Bot (set enable_github_bot = true to deploy the webhook worker)

@@ -70,7 +70,7 @@ brew install node@22
      - Workers KV Storage: **Edit**
      - Workers R2 Storage: **Edit**
      - D1: **Edit**
-     - Queues: **Edit**
+     - Queues: **Edit** (required when the Slack bot is enabled)
    - If you manage Cloudflare routes/custom domains through Terraform, also add:
      - Workers Routes: **Edit**
 
@@ -116,8 +116,13 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 - Signing Secret
 
 The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
-`groups:history`, `groups:read`, `im:history`, `im:read`, `files:write`, and `reactions:write`.
-Reinstall the app after changing scopes.
+`groups:history`, `groups:read`, `im:history`, `im:read`, and `reactions:write`. Generated-media
+attachments additionally require `files:write`. Reinstall the app after changing scopes.
+
+When upgrading an existing Slack deployment, add **Queues: Edit** to the Cloudflare API token before
+running `terraform apply`. Leave `slack_media_delivery_enabled = false` for the initial apply; text
+completions move to the Queue without requiring Slack reauthorization. Add `files:write`, reinstall
+the Slack app, and enable the variable only when the workspace is ready for media attachments.
 
 ## Quick Start
 
@@ -473,7 +478,7 @@ variables.
    - `Workers KV Storage: Edit`
    - `Workers R2 Storage: Edit`
    - `D1: Edit`
-   - `Queues: Edit`
+   - `Queues: Edit` if the Slack bot is enabled
    - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
 ## Adding New Environments
