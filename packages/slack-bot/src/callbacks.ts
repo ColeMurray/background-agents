@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { Env } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText, truncateError } from "./completion/blocks";
+import { deliverMediaArtifacts } from "./completion/media-upload";
 import { createLogger } from "./logger";
 import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity-status";
 
@@ -477,10 +478,46 @@ async function handleCompletionCallback(
     // Build and post completion message
     const blocks = buildCompletionBlocks(sessionId, agentResponse, context, env.WEB_APP_URL);
 
-    await postMessage(env.SLACK_BOT_TOKEN, context.channel, getFallbackText(agentResponse), {
-      thread_ts: context.threadTs,
-      blocks,
-    });
+    const postResult = await postMessage(
+      env.SLACK_BOT_TOKEN,
+      context.channel,
+      getFallbackText(agentResponse),
+      {
+        thread_ts: context.threadTs,
+        blocks,
+      }
+    );
+    if (!postResult.ok) {
+      log.warn("slack.completion.post", {
+        ...base,
+        outcome: "error",
+        slack_error: postResult.error,
+        retry_after: postResult.retryAfter,
+      });
+    }
+
+    const mediaArtifacts = agentResponse.mediaArtifacts ?? [];
+    if (mediaArtifacts.length > 0) {
+      const mediaResult = await deliverMediaArtifacts({
+        env,
+        sessionId,
+        messageId: payload.messageId,
+        channel: context.channel,
+        threadTs: context.threadTs,
+        artifacts: mediaArtifacts,
+        traceId,
+      });
+
+      if (mediaResult.failed > 0 || mediaResult.skipped > 0) {
+        const unavailable = mediaResult.failed + mediaResult.skipped;
+        await postMessage(
+          env.SLACK_BOT_TOKEN,
+          context.channel,
+          `${unavailable} media artifact${unavailable === 1 ? " is" : "s are"} available in the session but could not be attached here.`,
+          { thread_ts: context.threadTs }
+        );
+      }
+    }
 
     if (context.reactionMessageTs) {
       await clearThinkingReaction(env, context.channel, context.reactionMessageTs, traceId);
@@ -492,6 +529,7 @@ async function handleCompletionCallback(
       agent_success: payload.success,
       tool_call_count: agentResponse.toolCalls.length,
       artifact_count: agentResponse.artifacts.length,
+      media_artifact_count: mediaArtifacts.length,
       has_text: Boolean(agentResponse.textContent),
       duration_ms: Date.now() - startTime,
     });

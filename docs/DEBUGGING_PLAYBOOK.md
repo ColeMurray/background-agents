@@ -253,10 +253,21 @@ Dashboards and alerts must migrate `image_build.start`, `image_build.success`, a
 
 #### Callback (`component: "callback"`)
 
-| Event               | Level       | Key Fields                                                                                                             | Description                   |
-| ------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `http.request`      | info, warn  | `trace_id`, `http_method`, `http_path`, `http_status`, `session_id`, `message_id`, `outcome`, `duration_ms`            | One per /callbacks/complete   |
-| `callback.complete` | info, error | `trace_id`, `session_id`, `message_id`, `channel`, `agent_success`, `tool_call_count`, `artifact_count`, `duration_ms` | Completion callback processed |
+| Event               | Level       | Key Fields                                                                                                                                     | Description                   |
+| ------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `http.request`      | info, warn  | `trace_id`, `http_method`, `http_path`, `http_status`, `session_id`, `message_id`, `outcome`, `duration_ms`                                    | One per /callbacks/complete   |
+| `callback.complete` | info, error | `trace_id`, `session_id`, `message_id`, `channel`, `agent_success`, `tool_call_count`, `artifact_count`, `media_artifact_count`, `duration_ms` | Completion callback processed |
+
+#### Completion Media (`component: "completion-media"`)
+
+| Event                         | Level | Key Fields                                                                                       | Description                        |
+| ----------------------------- | ----- | ------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| `slack.media.fetch`           | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `artifact_type`, `http_status`, `outcome` | Protected media retrieval failed   |
+| `slack.media.get_upload_url`  | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `slack_error`, `outcome`                  | Slack upload ticket request failed |
+| `slack.media.upload_bytes`    | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `slack_error`, `outcome`                  | Byte upload failed                 |
+| `slack.media.complete_upload` | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `slack_error`, `outcome`                  | Slack file sharing failed          |
+| `slack.media.delivery`        | info  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `size_bytes`, `slack_file_id`, `outcome`  | Media attached or skipped          |
+| `slack.media.idempotency`     | warn  | `artifact_id`, `outcome`, `error`                                                                | Upload marker operation failed     |
 
 #### Extractor (`component: "extractor"`)
 

@@ -86,6 +86,7 @@ export type {
   ListArtifactsResponse,
   ToolCallSummary,
   ArtifactInfo,
+  MediaArtifactInfo,
   AgentResponse,
 } from "./artifacts";
 

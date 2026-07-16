@@ -326,6 +326,7 @@ Skip this step if you don't need Slack integration.
    - `groups:read`
    - `im:history`
    - `im:read`
+   - `files:write`
    - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
@@ -1052,6 +1053,15 @@ If the bot doesn't see the original message when tagged in a thread reply:
    check these scopes and that the bot is invited to the target channel.
 3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
    take effect.
+
+### Slack completion does not attach generated media
+
+1. Verify the bot has the `files:write` scope and reinstall the app after adding it.
+2. Confirm the agent registered the image or video as a session artifact; repository files are not
+   uploaded automatically.
+3. Check that the file is PNG, JPEG, WebP, or MP4 and no larger than 10 MiB. A completion attaches
+   at most five files and 25 MiB total; other media remains available through **View Session**.
+4. Check Slack workspace policies for disabled uploads, prohibited file types, or exhausted storage.
 
 ### GitHub bot not responding to webhooks
 

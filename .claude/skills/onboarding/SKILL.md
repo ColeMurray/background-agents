@@ -177,7 +177,8 @@ Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
 2. OAuth & Permissions → Add scopes: `app_mentions:read`, `chat:write`, `channels:history`,
-   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `reactions:write`
+   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `files:write`,
+   `reactions:write`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL

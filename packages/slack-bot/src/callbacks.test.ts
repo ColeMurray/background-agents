@@ -3,7 +3,9 @@ import { Hono } from "hono";
 import { computeHmacHex } from "@open-inspect/shared";
 import { callbacksRouter } from "./callbacks";
 import { extractAgentResponse } from "./completion/extractor";
+import { deliverMediaArtifacts } from "./completion/media-upload";
 import type * as ExtractorModule from "./completion/extractor";
+import type * as MediaUploadModule from "./completion/media-upload";
 import type { Env } from "./types";
 
 // The automation-complete post path reuses the interactive completion path, which
@@ -13,6 +15,11 @@ import type { Env } from "./types";
 vi.mock("./completion/extractor", async (importOriginal) => {
   const actual = await importOriginal<typeof ExtractorModule>();
   return { ...actual, extractAgentResponse: vi.fn() };
+});
+
+vi.mock("./completion/media-upload", async (importOriginal) => {
+  const actual = await importOriginal<typeof MediaUploadModule>();
+  return { ...actual, deliverMediaArtifacts: vi.fn() };
 });
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
@@ -308,6 +315,7 @@ async function postCallback(path: string, payload: unknown, env = makeEnv(), ctx
 describe("POST /callbacks/complete", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(deliverMediaArtifacts).mockReset();
   });
 
   function completeCallbackData(overrides: Record<string, unknown> = {}) {
@@ -349,6 +357,7 @@ describe("POST /callbacks/complete", () => {
       textContent: "All set.",
       toolCalls: [],
       artifacts: [],
+      mediaArtifacts: [],
       success: true,
     });
     const fetchMock = okFetchMock();
@@ -373,6 +382,39 @@ describe("POST /callbacks/complete", () => {
     const post = slackCall(fetchMock, "chat.postMessage");
     expect(post).toBeDefined();
     expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
+  });
+
+  it("delivers extracted media into the completion thread", async () => {
+    const mediaArtifact = {
+      id: "image-1",
+      type: "screenshot" as const,
+      mimeType: "image/png",
+      sizeBytes: 123,
+      caption: "Revenue chart",
+    };
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      textContent: "Generated the chart.",
+      toolCalls: [],
+      artifacts: [],
+      mediaArtifacts: [mediaArtifact],
+      success: true,
+    });
+    vi.mocked(deliverMediaArtifacts).mockResolvedValue({ uploaded: 1, failed: 0, skipped: 0 });
+    okFetchMock();
+    const payload = await signPayload(completeCallbackData());
+
+    const { ctx } = await postCallback("/callbacks/complete", payload);
+    await flushWaitUntil(ctx);
+
+    expect(deliverMediaArtifacts).toHaveBeenCalledWith({
+      env: expect.any(Object),
+      sessionId: "session-1",
+      messageId: "message-1",
+      channel: "C123",
+      threadTs: "111.222",
+      artifacts: [mediaArtifact],
+      traceId: "trace-1",
+    });
   });
 });
 
@@ -424,6 +466,7 @@ describe("POST /callbacks/automation-complete", () => {
       textContent: "Fixed the bug and opened a PR.",
       toolCalls: [],
       artifacts: [],
+      mediaArtifacts: [],
       success: true,
     });
     const fetchMock = okFetchMock();

@@ -177,10 +177,20 @@ export interface ArtifactInfo {
   metadata?: Record<string, unknown> | null;
 }
 
+/** Message-scoped media that can be fetched from the protected media endpoint. */
+export interface MediaArtifactInfo {
+  id: string;
+  type: "screenshot" | "video";
+  mimeType?: string;
+  sizeBytes?: number;
+  caption?: string;
+}
+
 export interface AgentResponse {
   textContent: string;
   toolCalls: ToolCallSummary[];
   artifacts: ArtifactInfo[];
+  mediaArtifacts: MediaArtifactInfo[];
   success: boolean;
   error?: string;
 }

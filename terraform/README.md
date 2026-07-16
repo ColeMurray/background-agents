@@ -114,6 +114,10 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 - Bot OAuth Token (`xoxb-...`)
 - Signing Secret
 
+The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
+`groups:history`, `groups:read`, `im:history`, `im:read`, `files:write`, and `reactions:write`.
+Reinstall the app after changing scopes.
+
 ## Quick Start
 
 ### 1. Configure Variables

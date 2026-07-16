@@ -14,6 +14,7 @@ const BASE_RESPONSE: AgentResponse = {
   textContent: "Done.",
   toolCalls: [],
   artifacts: [],
+  mediaArtifacts: [],
   success: true,
 };
 

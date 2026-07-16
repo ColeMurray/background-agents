@@ -19,9 +19,22 @@ const SLACK_API_BASE = "https://slack.com/api";
  * string (Slack's `error` field, or one of the synthesized values
  * `network_error` / `invalid_response` / `http_<status>` / `ratelimited`).
  */
-export type SlackEnvelope<T = Record<string, never>> =
+export type SlackEnvelope<T = object> =
   | ({ ok: true } & T)
   | { ok: false; error: string; retryAfter?: number };
+
+export interface ExternalUploadUrlOptions {
+  filename: string;
+  length: number;
+  altText?: string;
+}
+
+export interface CompleteExternalUploadOptions {
+  fileId: string;
+  title?: string;
+  channelId: string;
+  threadTs: string;
+}
 
 async function slackFetch<T>(
   token: string,
@@ -84,6 +97,45 @@ function slackPost<T>(
   body?: Record<string, unknown>
 ): Promise<SlackEnvelope<T>> {
   return slackFetch<T>(token, endpoint, "POST", body ? { body } : undefined);
+}
+
+export function getExternalUploadUrl(
+  token: string,
+  options: ExternalUploadUrlOptions
+): Promise<SlackEnvelope<{ upload_url: string; file_id: string }>> {
+  return slackPost(token, "files.getUploadURLExternal", {
+    filename: options.filename,
+    length: options.length,
+    alt_txt: options.altText,
+  });
+}
+
+export async function uploadToExternalUrl(
+  uploadUrl: string,
+  body: RequestInit["body"],
+  contentType: string
+): Promise<SlackEnvelope> {
+  try {
+    const response = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body,
+    });
+    return response.ok ? { ok: true } : { ok: false, error: `http_${response.status}` };
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+}
+
+export function completeExternalUpload(
+  token: string,
+  options: CompleteExternalUploadOptions
+): Promise<SlackEnvelope<{ files: Array<{ id: string; title?: string }> }>> {
+  return slackPost(token, "files.completeUploadExternal", {
+    files: [{ id: options.fileId, title: options.title }],
+    channel_id: options.channelId,
+    thread_ts: options.threadTs,
+  });
 }
 
 /**

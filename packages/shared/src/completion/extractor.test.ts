@@ -12,7 +12,7 @@ describe("completion artifact type narrowing", () => {
     expect(toArtifactType("video")).toBe("video");
   });
 
-  it("omits video artifacts from completion artifact summaries like screenshots", () => {
+  it("keeps video artifacts out of public completion artifact links", () => {
     expect(toEventArtifactInfo({ artifactType: "video", url: "sessions/s1/media/a1.mp4" })).toBe(
       null
     );
@@ -90,9 +90,106 @@ describe("buildAgentResponseFromEvents", () => {
           metadata: { head: "fix" },
         },
       ],
+      mediaArtifacts: [],
       success: true,
       error: undefined,
     });
+  });
+
+  it("extracts and deduplicates message-scoped media alongside linked artifacts", () => {
+    const response = buildAgentResponseFromEvents([
+      {
+        id: "artifact:image",
+        type: "artifact",
+        data: {
+          artifactType: "screenshot",
+          artifactId: "image-1",
+          url: "sessions/s1/media/image-1.png",
+          metadata: {
+            mimeType: "image/png",
+            sizeBytes: 1234,
+            caption: "Revenue by month",
+          },
+        },
+        messageId: "msg-1",
+        createdAt: 10,
+      },
+      {
+        id: "artifact:image-duplicate",
+        type: "artifact",
+        data: {
+          artifactType: "screenshot",
+          artifactId: "image-1",
+          url: "sessions/s1/media/image-1.png",
+        },
+        messageId: "msg-1",
+        createdAt: 11,
+      },
+      {
+        id: "artifact:pr",
+        type: "artifact",
+        data: {
+          artifactType: "pr",
+          url: "https://example.com/pull/1",
+          metadata: { number: 1 },
+        },
+        messageId: "msg-1",
+        createdAt: 12,
+      },
+      {
+        id: "artifact:video",
+        type: "artifact",
+        data: {
+          artifactType: "video",
+          artifactId: "video-1",
+          url: "sessions/s1/media/video-1.mp4",
+          metadata: { mimeType: "video/mp4", sizeBytes: 4321, caption: "Demo" },
+        },
+        messageId: "msg-1",
+        createdAt: 13,
+      },
+    ]);
+
+    expect(response.artifacts).toEqual([
+      {
+        type: "pr",
+        url: "https://example.com/pull/1",
+        label: "PR #1",
+      },
+    ]);
+    expect(response.mediaArtifacts).toEqual([
+      {
+        id: "image-1",
+        type: "screenshot",
+        mimeType: "image/png",
+        sizeBytes: 1234,
+        caption: "Revenue by month",
+      },
+      {
+        id: "video-1",
+        type: "video",
+        mimeType: "video/mp4",
+        sizeBytes: 4321,
+        caption: "Demo",
+      },
+    ]);
+  });
+
+  it("ignores media events without a downloadable artifact id", () => {
+    const response = buildAgentResponseFromEvents([
+      {
+        id: "artifact:legacy",
+        type: "artifact",
+        data: {
+          artifactType: "screenshot",
+          url: "sessions/s1/media/legacy.png",
+        },
+        messageId: "msg-1",
+        createdAt: 1,
+      },
+    ]);
+
+    expect(response.mediaArtifacts).toEqual([]);
   });
 
   it("uses the explicit default success only when completion success is absent", () => {
