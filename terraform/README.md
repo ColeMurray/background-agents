@@ -212,6 +212,17 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
+# Islo (only if SANDBOX_PROVIDER=islo)
+ISLO_API_KEY
+ISLO_BASE_SNAPSHOT # Optional; enables Terraform-managed optimized snapshot
+ISLO_BASE_IMAGE # Optional; defaults to ghcr.io/islo-labs/background-agents-runtime:stable
+ISLO_BASE_URL # Optional
+ISLO_LIFECYCLE_ENABLED # Optional; defaults to true
+ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS # Optional; defaults to 3600
+ISLO_LIFECYCLE_PAUSE_AFTER_SECONDS # Optional; defaults to 0/unset
+ISLO_LIFECYCLE_DELETE_AFTER_SECONDS # Optional; defaults to 0/unset
+ISLO_LIFECYCLE_AUTO_RESUME # Optional; "", never, or on_activity
+
 # GitHub OAuth App
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET

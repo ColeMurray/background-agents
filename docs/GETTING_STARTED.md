@@ -15,11 +15,11 @@ This guide walks you through deploying your own instance of Open-Inspect using T
 
 Open-Inspect uses Terraform to automate deployment across multiple cloud providers:
 
-| Provider                                                            | Purpose                          | What Terraform Creates                                                                                     |
-| ------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **Cloudflare**                                                      | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                       |
-| **Vercel** _or_ **Cloudflare Workers**                              | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                          |
-| **Modal**, **Daytona**, **Vercel Sandboxes**, _or_ **OpenComputer** | Sandbox execution infrastructure | Modal app deployment, Daytona API config, Vercel Sandbox API config, _or_ OpenComputer template/API config |
+| Provider                                                                      | Purpose                          | What Terraform Creates                                                                                                                   |
+| ----------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cloudflare**                                                                | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                                                     |
+| **Vercel** _or_ **Cloudflare Workers**                                        | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                                                        |
+| **Modal**, **Daytona**, **Vercel Sandboxes**, **OpenComputer**, _or_ **Islo** | Sandbox execution infrastructure | Modal app deployment, Daytona API config, Vercel Sandbox API config, OpenComputer template/API config, _or_ Islo snapshot build/metadata |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -44,6 +44,7 @@ Create accounts on these services before continuing:
 | [Daytona](https://app.daytona.io) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
+| [Islo](https://islo.dev) _(optional)_                     | Sandbox infrastructure when `sandbox_provider = "islo"`         |
 | [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
 | [Anthropic](https://console.anthropic.com)                | Claude API                                                      |
 | [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
@@ -225,6 +226,44 @@ for the full runtime, snapshot, and resource configuration model.
 
 For the full template build and runtime details, see
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md).
+
+### Islo
+
+> Only required when `sandbox_provider = "islo"`.
+
+1. Create an [Islo](https://islo.dev) account.
+2. Create an API key for non-interactive use. The Islo docs describe API key auth via
+   `ISLO_API_KEY`.
+3. Set `sandbox_provider = "islo"` in `terraform.tfvars`.
+4. Set `islo_api_key` in `terraform.tfvars`.
+5. Leave `islo_base_snapshot` empty to create sandboxes directly from `islo_base_image`, which
+   defaults to `ghcr.io/islo-labs/background-agents-runtime:stable`. This maintained Islo image
+   includes the Background Agents sandbox runtime, OpenCode, code-server, ttyd, browser tooling, and
+   credential helper expected by the control plane.
+6. Optionally set `islo_base_snapshot` to a named snapshot if you want Terraform to build an
+   optimized base snapshot from `packages/islo-infra`, starting from the generic public Islo runner
+   image and baking in the repo-local `packages/sandbox-runtime`.
+
+The control plane calls Islo directly from Cloudflare Workers. Islo provides the sandbox compute; no
+Modal deployment is required when `sandbox_provider = "islo"`. Islo sandboxes default to an Islo
+provider-native lifecycle policy of `pause_after_idle = 3600` seconds. Set
+`islo_lifecycle_enabled = false` to omit the lifecycle policy, or tune the `islo_lifecycle_*`
+variables in Terraform.
+
+After deployment, run the manual live smoke from the control-plane package:
+
+```bash
+ISLO_SMOKE_CONTROL_PLANE_URL=https://<control-plane-worker> \
+ISLO_SMOKE_SEED_GLOBAL_SECRET=true \
+ANTHROPIC_API_KEY=sk-ant-... \
+npm run smoke:islo -w @open-inspect/control-plane
+```
+
+The smoke creates a no-repository session, subscribes over WebSocket, sends a prompt, and waits for
+the sandbox bridge to emit output and `execution_complete.success = true`. To avoid writing a global
+secret, omit `ISLO_SMOKE_SEED_GLOBAL_SECRET=true` and preconfigure `ANTHROPIC_API_KEY` in Settings >
+Secrets. Run it once with `islo_base_snapshot = ""` to verify image-only creation, and again with a
+snapshot or ready repo image configured to verify the snapshot path.
 
 ### Anthropic
 
@@ -442,7 +481,7 @@ modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
-# Sandbox provider: "modal" (default), "daytona", or "vercel"
+# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "islo"
 # sandbox_provider          = "modal"
 
 # Daytona (only required when sandbox_provider = "daytona")
@@ -457,6 +496,10 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # vercel_base_snapshot_id   = "snapshot_xxxxx" # Optional manual override; skips managed snapshot builds
 # vercel_sandbox_runtime    = "node24"
 # vercel_snapshot_expiration_ms = 0
+
+# Islo (only required when sandbox_provider = "islo")
+# islo_api_key       = "your-islo-api-key"
+# islo_base_snapshot = "open-inspect-runtime"
 
 # GitHub App (used for both OAuth and repository access)
 github_client_id     = "Iv1.abc123..."           # From GitHub App settings
@@ -821,7 +864,7 @@ curl https://open-inspect-control-plane-{deployment_name}.YOUR-SUBDOMAIN.workers
 # Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
 MODAL_WORKSPACE_SLUG="YOUR-WORKSPACE" # or "YOUR-WORKSPACE-YOUR-MODAL-WEB-SUFFIX"
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
-# Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
+# Daytona, Vercel, OpenComputer, and Islo use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Web app (should return 200)
 # Vercel:
@@ -863,7 +906,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `MODAL_WORKSPACE`                | Modal workspace name                                                                        |
 | `MODAL_ENVIRONMENT`              | Modal environment name (defaults to `main`)                                                 |
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`   | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
-| `SANDBOX_PROVIDER`               | `modal`, `daytona`, or `vercel`                                                             |
+| `SANDBOX_PROVIDER`               | `modal`, `daytona`, `vercel`, `opencomputer`, or `islo`                                     |
 | `DAYTONA_API_URL`                | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_API_KEY`                | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_BASE_SNAPSHOT`          | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
@@ -875,6 +918,9 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_SANDBOX_RUNTIME`         | Optional Vercel Sandbox runtime (defaults to `node24`)                                      |
 | `VERCEL_SNAPSHOT_EXPIRATION_MS`  | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)       |
 | `VERCEL_SANDBOX_API_BASE_URL`    | Optional advanced Vercel Sandbox API base URL override                                      |
+| `ISLO_API_KEY`                   | Islo API key _(only if `sandbox_provider = "islo"`)_                                        |
+| `ISLO_BASE_SNAPSHOT`             | Islo base snapshot name _(only if `sandbox_provider = "islo"`)_                             |
+| `ISLO_BASE_URL`                  | Optional Islo API base URL                                                                  |
 | `GH_OAUTH_CLIENT_ID`             | GitHub App OAuth client ID                                                                  |
 | `GH_OAUTH_CLIENT_SECRET`         | GitHub App OAuth client secret                                                              |
 | `GOOGLE_CLIENT_ID`               | Google OAuth client ID (only if Google login enabled; pair with `GOOGLE_CLIENT_SECRET`)     |
@@ -1063,11 +1109,12 @@ If the bot doesn't see the original message when tagged in a thread reply:
 5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
-### "Model not found" errors (Daytona or Vercel provider)
+### "Model not found" errors (Daytona, Vercel, or Islo provider)
 
-If sessions fail with "Model not found" when using `sandbox_provider = "daytona"` or
-`sandbox_provider = "vercel"`, the required LLM API key is likely missing. Unlike Modal (which
-injects keys automatically), these providers require you to add them as global secrets:
+If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`,
+`sandbox_provider = "vercel"`, or `sandbox_provider = "islo"`, the required LLM API key is likely
+missing. Unlike Modal (which injects keys automatically), these providers require you to add them as
+global secrets:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown

@@ -161,3 +161,20 @@ class TestSessionTerminatedError:
         with pytest.raises(SessionTerminatedError) as exc_info:
             raise SessionTerminatedError("Wrapped") from original
         assert exc_info.value.__cause__ is original
+
+
+class TestWebSocketUrl:
+    """Tests for the bridge WebSocket URL contract."""
+
+    def test_includes_url_encoded_sandbox_id_in_query(self):
+        bridge = AgentBridge(
+            sandbox_id="sandbox/name with spaces",
+            session_id="test-session",
+            control_plane_url="https://example.com",
+            auth_token="test-token",
+        )
+
+        assert (
+            bridge.ws_url
+            == "wss://example.com/sessions/test-session/ws?type=sandbox&sandbox_id=sandbox%2Fname%20with%20spaces"
+        )

@@ -65,13 +65,13 @@ repository, re-import it or update the environment secret directly.
 Use global secrets for keys that every session needs regardless of which repository it runs against.
 The most common example:
 
-| Key                 | Description                                                                                                                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona** or **Vercel** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
-| `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                                                                                |
-| `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                                    |
+| Key                 | Description                                                                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona**, **Vercel**, or **Islo** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
+| `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                                                                                           |
+| `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                                               |
 
-> **Daytona and Vercel sandbox users**: If you plan to use Claude models, you must add
+> **Daytona, Vercel, and Islo sandbox users**: If you plan to use Claude models, you must add
 > `ANTHROPIC_API_KEY` as a global secret after deploying. Without it, Claude sessions will fail with
 > "Model not found." See [Getting Started](GETTING_STARTED.md) for details.
 
@@ -133,8 +133,10 @@ matters for multi-repository sessions, where several repositories' secrets fold 
 Certain keys are reserved for system use and cannot be set as secrets:
 
 `PYTHONUNBUFFERED`, `SANDBOX_ID`, `CONTROL_PLANE_URL`, `SANDBOX_AUTH_TOKEN`, `REPO_OWNER`,
-`REPO_NAME`, `GITHUB_APP_TOKEN`, `SESSION_CONFIG`, `RESTORED_FROM_SNAPSHOT`,
-`OPENCODE_CONFIG_CONTENT`, `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `PWD`, `LANG`
+`REPO_NAME`, `GITHUB_APP_TOKEN`, `SESSION_CONFIG`, `RESTORED_FROM_SNAPSHOT`, `FROM_REPO_IMAGE`,
+`REPO_IMAGE_SHA`, `IMAGE_BUILD_MODE`, `OI_REPO_IMAGE_PROVIDER_SESSION_ID`, `OI_REPO_IMAGE_BUILD_ID`,
+`OI_REPO_IMAGE_CALLBACK_URL`, `OI_REPO_IMAGE_CALLBACK_TOKEN`, `OPENCODE_CONFIG_CONTENT`, `PATH`,
+`HOME`, `USER`, `SHELL`, `TERM`, `PWD`, `LANG`
 
 If you try to save a reserved key, the UI will show a validation error.
 
@@ -166,16 +168,16 @@ from it, even after you rotate the secret. Two guidelines:
 
 ## Common Examples
 
-| Key                          | Scope  | Purpose                                                      |
-| ---------------------------- | ------ | ------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona or Vercel sandboxes) |
-| `DEEPSEEK_API_KEY`           | Global | DeepSeek API access                                          |
-| `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                  |
-| `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
-| `OPENAI_OAUTH_ACCOUNT_ID`    | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
-| `DATABASE_URL`               | Repo   | Database connection string                                   |
-| `AWS_ACCESS_KEY_ID`          | Repo   | AWS credentials for a specific project                       |
-| `STRIPE_SECRET_KEY`          | Repo   | Stripe API key for a specific project                        |
+| Key                          | Scope  | Purpose                                                             |
+| ---------------------------- | ------ | ------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona, Vercel, or Islo sandboxes) |
+| `DEEPSEEK_API_KEY`           | Global | DeepSeek API access                                                 |
+| `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                         |
+| `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))               |
+| `OPENAI_OAUTH_ACCOUNT_ID`    | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))               |
+| `DATABASE_URL`               | Repo   | Database connection string                                          |
+| `AWS_ACCESS_KEY_ID`          | Repo   | AWS credentials for a specific project                              |
+| `STRIPE_SECRET_KEY`          | Repo   | Stripe API key for a specific project                               |
 
 ---
 
@@ -184,8 +186,8 @@ from it, even after you rotate the secret. Two guidelines:
 ### "Model not found" errors
 
 If you see "Model not found" errors, add the API key for your selected model provider as a global
-secret in Settings. For Claude on Daytona or Vercel, add `ANTHROPIC_API_KEY`. For DeepSeek, add
-`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`.
+secret in Settings. For Claude on Daytona, Vercel, or Islo, add `ANTHROPIC_API_KEY`. For DeepSeek,
+add `DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`.
 
 ### Secret not appearing in sandbox
 

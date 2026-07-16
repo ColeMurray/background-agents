@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, NoReturn
+from urllib.parse import quote
 
 import httpx
 import websockets
@@ -299,7 +300,8 @@ class AgentBridge:
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
         url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
-        return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
+        sandbox_id = quote(self.sandbox_id, safe="")
+        return f"{url}/sessions/{self.session_id}/ws?type=sandbox&sandbox_id={sandbox_id}"
 
     @staticmethod
     def _redact_git_stderr(stderr_text: str, push_url: str, redacted_push_url: str) -> str:
@@ -456,7 +458,6 @@ class AgentBridge:
         """
         additional_headers = {
             "Authorization": f"Bearer {self.auth_token}",
-            "X-Sandbox-ID": self.sandbox_id,
         }
 
         try:

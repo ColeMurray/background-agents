@@ -137,6 +137,23 @@ export class ImageBuildPlanner {
           },
         };
       }
+      case "islo": {
+        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+        return {
+          plan: {
+            ...basePlan,
+            provider: "islo",
+            callbackMode: "provider_session",
+            callbackToken: bearerAuth.token,
+            cloneAuth,
+          },
+          callbackAuth: {
+            type: "bearer_token",
+            tokenHash: bearerAuth.tokenHash,
+            expiresAt: bearerAuth.expiresAt,
+          },
+        };
+      }
       default: {
         const exhaustive: never = this.provider;
         throw new Error(`Unsupported image build provider: ${String(exhaustive)}`);

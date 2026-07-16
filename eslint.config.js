@@ -91,6 +91,19 @@ export default tseslint.config(
     },
   },
 
+  // Islo infra bootstrap scripts run in Node.js
+  {
+    files: ["packages/islo-infra/**/*.js"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        Blob: "readonly",
+        FormData: "readonly",
+        URL: "readonly",
+      },
+    },
+  },
+
   // Cloudflare Workers specific config
   {
     files: ["packages/control-plane/**/*.ts"],

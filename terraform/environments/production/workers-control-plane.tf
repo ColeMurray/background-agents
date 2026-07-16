@@ -84,6 +84,51 @@ module "control_plane_worker" {
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
     ] : [],
+    local.use_islo_backend ? [
+      { name = "ISLO_BASE_IMAGE", value = var.islo_base_image },
+      { name = "ISLO_VCPUS", value = tostring(var.islo_vcpus) },
+      { name = "ISLO_MEMORY_MB", value = tostring(var.islo_memory_mb) },
+      { name = "ISLO_DISK_GB", value = tostring(var.islo_disk_gb) },
+      { name = "ISLO_WORKDIR", value = var.islo_workdir },
+      { name = "ISLO_LIFECYCLE_ENABLED", value = tostring(var.islo_lifecycle_enabled) },
+      {
+        name  = "ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS",
+        value = tostring(var.islo_lifecycle_pause_after_idle_seconds),
+      },
+    ] : [],
+    local.use_islo_backend && var.islo_base_snapshot != "" ? [
+      { name = "ISLO_BASE_SNAPSHOT", value = var.islo_base_snapshot },
+    ] : [],
+    local.use_islo_backend && var.islo_base_url != "" ? [
+      { name = "ISLO_BASE_URL", value = var.islo_base_url },
+    ] : [],
+    local.use_islo_backend && var.islo_start_command != "" ? [
+      { name = "ISLO_START_COMMAND", value = var.islo_start_command },
+    ] : [],
+    local.use_islo_backend && var.islo_start_user != "" ? [
+      { name = "ISLO_START_USER", value = var.islo_start_user },
+    ] : [],
+    local.use_islo_backend && var.islo_gateway_profile != "" ? [
+      { name = "ISLO_GATEWAY_PROFILE", value = var.islo_gateway_profile },
+    ] : [],
+    local.use_islo_backend && var.islo_share_ttl_seconds > 0 ? [
+      { name = "ISLO_SHARE_TTL_SECONDS", value = tostring(var.islo_share_ttl_seconds) },
+    ] : [],
+    local.use_islo_backend && var.islo_lifecycle_pause_after_seconds > 0 ? [
+      {
+        name  = "ISLO_LIFECYCLE_PAUSE_AFTER_SECONDS",
+        value = tostring(var.islo_lifecycle_pause_after_seconds),
+      },
+    ] : [],
+    local.use_islo_backend && var.islo_lifecycle_delete_after_seconds > 0 ? [
+      {
+        name  = "ISLO_LIFECYCLE_DELETE_AFTER_SECONDS",
+        value = tostring(var.islo_lifecycle_delete_after_seconds),
+      },
+    ] : [],
+    local.use_islo_backend && var.islo_lifecycle_auto_resume != "" ? [
+      { name = "ISLO_LIFECYCLE_AUTO_RESUME", value = var.islo_lifecycle_auto_resume },
+    ] : [],
     local.use_opencomputer_backend ? [
       { name = "OPENCOMPUTER_API_URL", value = var.opencomputer_api_url },
       # Pinned template when provided, otherwise the Terraform-managed base snapshot.
@@ -130,6 +175,9 @@ module "control_plane_worker" {
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
     ] : [],
+    local.use_islo_backend ? [
+      { name = "ISLO_API_KEY", value = var.islo_api_key },
+    ] : [],
     local.use_opencomputer_backend ? [
       { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
@@ -166,6 +214,7 @@ module "control_plane_worker" {
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.islo_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
   ]

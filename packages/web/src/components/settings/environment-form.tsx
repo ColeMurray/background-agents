@@ -229,7 +229,7 @@ export function EnvironmentForm({
         ) : (
           <p className="text-xs text-muted-foreground">
             Prebuilt images are only available when <code>SANDBOX_PROVIDER=modal</code>,{" "}
-            <code>vercel</code>, or <code>opencomputer</code>.
+            <code>vercel</code>, <code>opencomputer</code>, or <code>islo</code>.
           </p>
         )}
       </div>

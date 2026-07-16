@@ -1,11 +1,13 @@
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import type { Env } from "../types";
+import { IsloImageBuildAdapter } from "./islo-adapter";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ImageBuildProvider } from "./model";
 import { OpenComputerImageBuildAdapter } from "./opencomputer-adapter";
 import type {
   AnyImageBuildAdapter,
   ImageBuildAdapter,
+  IsloImageBuildPlan,
   ModalImageBuildPlan,
   OpenComputerImageBuildPlan,
   VercelImageBuildPlan,
@@ -22,6 +24,7 @@ export interface ImageBuildAdapterFactory {
   create(provider: "modal"): ImageBuildAdapter<ModalImageBuildPlan>;
   create(provider: "vercel"): ImageBuildAdapter<VercelImageBuildPlan>;
   create(provider: "opencomputer"): ImageBuildAdapter<OpenComputerImageBuildPlan>;
+  create(provider: "islo"): ImageBuildAdapter<IsloImageBuildPlan>;
   create(provider: ImageBuildProvider): AnyImageBuildAdapter;
 }
 
@@ -35,6 +38,7 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
   create(provider: "modal"): ImageBuildAdapter<ModalImageBuildPlan>;
   create(provider: "vercel"): ImageBuildAdapter<VercelImageBuildPlan>;
   create(provider: "opencomputer"): ImageBuildAdapter<OpenComputerImageBuildPlan>;
+  create(provider: "islo"): ImageBuildAdapter<IsloImageBuildPlan>;
   create(provider: ImageBuildProvider): AnyImageBuildAdapter {
     switch (provider) {
       case "modal":
@@ -45,6 +49,8 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
         return new OpenComputerImageBuildAdapter(
           createSandboxProviderFromEnv(this.env, "opencomputer")
         );
+      case "islo":
+        return new IsloImageBuildAdapter(createSandboxProviderFromEnv(this.env, "islo"));
     }
   }
 }

@@ -364,6 +364,149 @@ variable "daytona_target" {
   default     = ""
 }
 
+variable "islo_api_key" {
+  description = "API key for Islo sandbox compute"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "islo" || length(var.islo_api_key) > 0
+    error_message = "islo_api_key must be set when sandbox_provider = 'islo'."
+  }
+}
+
+variable "islo_base_url" {
+  description = "Optional Islo API base URL. Leave empty to use https://api.islo.dev."
+  type        = string
+  default     = ""
+}
+
+variable "islo_base_snapshot" {
+  description = "Optional named Islo snapshot used for optimized sandbox creation. Leave empty to create from islo_base_image."
+  type        = string
+  default     = ""
+}
+
+variable "islo_base_image" {
+  description = "Background Agents runtime image for Islo sandboxes when islo_base_snapshot is empty."
+  type        = string
+  default     = "ghcr.io/islo-labs/background-agents-runtime:stable"
+}
+
+variable "islo_vcpus" {
+  description = "Number of vCPUs for Islo sandboxes"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.islo_vcpus > 0 && floor(var.islo_vcpus) == var.islo_vcpus
+    error_message = "islo_vcpus must be a positive integer."
+  }
+}
+
+variable "islo_memory_mb" {
+  description = "Memory in MB for Islo sandboxes"
+  type        = number
+  default     = 4096
+
+  validation {
+    condition     = var.islo_memory_mb > 0 && floor(var.islo_memory_mb) == var.islo_memory_mb
+    error_message = "islo_memory_mb must be a positive integer."
+  }
+}
+
+variable "islo_disk_gb" {
+  description = "Disk size in GB for Islo sandboxes"
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.islo_disk_gb > 0 && floor(var.islo_disk_gb) == var.islo_disk_gb
+    error_message = "islo_disk_gb must be a positive integer."
+  }
+}
+
+variable "islo_workdir" {
+  description = "Working directory for Islo sandbox runtime commands"
+  type        = string
+  default     = "/workspace"
+}
+
+variable "islo_start_command" {
+  description = "Command to start the Open-Inspect runtime in Islo. Use a JSON string array or shell command."
+  type        = string
+  default     = ""
+}
+
+variable "islo_start_user" {
+  description = "Optional user to run the Islo runtime start command as"
+  type        = string
+  default     = ""
+}
+
+variable "islo_gateway_profile" {
+  description = "Optional Islo gateway profile name or ID"
+  type        = string
+  default     = ""
+}
+
+variable "islo_share_ttl_seconds" {
+  description = "Optional TTL in seconds for Islo share URLs"
+  type        = number
+  default     = 0
+}
+
+variable "islo_lifecycle_enabled" {
+  description = "Whether to pass Islo lifecycle policy at sandbox creation time."
+  type        = bool
+  default     = true
+}
+
+variable "islo_lifecycle_pause_after_idle_seconds" {
+  description = "Pause Islo sandboxes after this many idle seconds when lifecycle is enabled."
+  type        = number
+  default     = 3600
+
+  validation {
+    condition     = var.islo_lifecycle_pause_after_idle_seconds > 0 && floor(var.islo_lifecycle_pause_after_idle_seconds) == var.islo_lifecycle_pause_after_idle_seconds
+    error_message = "islo_lifecycle_pause_after_idle_seconds must be a positive integer."
+  }
+}
+
+variable "islo_lifecycle_pause_after_seconds" {
+  description = "Optional absolute pause policy for Islo sandboxes in seconds. 0 means unset."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.islo_lifecycle_pause_after_seconds >= 0 && floor(var.islo_lifecycle_pause_after_seconds) == var.islo_lifecycle_pause_after_seconds
+    error_message = "islo_lifecycle_pause_after_seconds must be a non-negative integer."
+  }
+}
+
+variable "islo_lifecycle_delete_after_seconds" {
+  description = "Optional absolute delete policy for Islo sandboxes in seconds. 0 means unset."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.islo_lifecycle_delete_after_seconds >= 0 && floor(var.islo_lifecycle_delete_after_seconds) == var.islo_lifecycle_delete_after_seconds
+    error_message = "islo_lifecycle_delete_after_seconds must be a non-negative integer."
+  }
+}
+
+variable "islo_lifecycle_auto_resume" {
+  description = "Optional Islo auto_resume policy. Valid values: empty, never, on_activity."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "never", "on_activity"], var.islo_lifecycle_auto_resume)
+    error_message = "islo_lifecycle_auto_resume must be empty, never, or on_activity."
+  }
+}
+
 variable "opencomputer_api_url" {
   description = "Base URL for the OpenComputer REST API (e.g. https://api.opencomputer.dev)"
   type        = string
@@ -457,13 +600,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', or 'opencomputer'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', or 'islo'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel", "opencomputer"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', or 'opencomputer'."
+    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "islo"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', or 'islo'."
   }
 }
 

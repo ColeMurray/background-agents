@@ -99,6 +99,21 @@ opencomputer_api_url = "https://app.opencomputer.dev/api"
 opencomputer_api_key = ""
 opencomputer_template = ""
 
+# Islo API
+# Only required when sandbox_provider = "islo"
+# Leave islo_base_snapshot empty to create directly from the maintained Islo
+# Background Agents runtime image.
+# If set, Terraform builds/updates that optimized base snapshot from packages/islo-infra.
+islo_api_key       = ""        # Requires sandbox permissions; snapshot permissions if using snapshots/repo images
+islo_base_snapshot = ""        # Optional named Islo snapshot optimization
+islo_base_image    = "ghcr.io/islo-labs/background-agents-runtime:stable"
+# islo_base_url    = ""        # Optional Islo API base URL
+# islo_lifecycle_enabled = true
+# islo_lifecycle_pause_after_idle_seconds = 3600
+# islo_lifecycle_pause_after_seconds = 0
+# islo_lifecycle_delete_after_seconds = 0
+# islo_lifecycle_auto_resume = "" # "", "never", or "on_activity"
+
 # =============================================================================
 # GitHub App Credentials
 # =============================================================================
@@ -234,6 +249,7 @@ nextauth_secret = ""
 # - "daytona": direct Daytona REST API integration with stop/start resume
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
 # - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
+# - "islo": direct Islo API integration with image, snapshot, and repo-image sandboxes
 sandbox_provider = "modal"
 
 # Platform for the web app deployment
