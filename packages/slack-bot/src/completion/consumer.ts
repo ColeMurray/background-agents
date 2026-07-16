@@ -31,6 +31,7 @@ export async function consumeSlackCompletions(
         error: error instanceof Error ? error : new Error(String(error)),
       });
     }
+    // Processing may already have produced Slack side effects. Retrying here can duplicate them.
     message.ack();
   }
 }

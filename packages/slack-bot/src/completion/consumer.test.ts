@@ -83,7 +83,7 @@ describe("consumeSlackCompletions", () => {
     expect(input.message.ack).toHaveBeenCalledOnce();
   });
 
-  it("acknowledges isolated processing errors", async () => {
+  it("acknowledges processing errors instead of risking duplicate Slack side effects", async () => {
     vi.mocked(processSlackCompletion).mockRejectedValue(new Error("unexpected"));
     const input = batch(job());
 

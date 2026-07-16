@@ -131,6 +131,18 @@ describe("external file uploads", () => {
       thread_ts: "111.222",
     });
   });
+
+  it("normalizes finalization network failures instead of rejecting", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("offline"));
+
+    await expect(
+      completeExternalUpload("xoxb-token", {
+        files: [{ id: "F123", title: "Revenue chart" }],
+        channelId: "C123",
+        threadTs: "111.222",
+      })
+    ).resolves.toEqual({ ok: false, error: "network_error" });
+  });
 });
 
 describe("postMessage", () => {

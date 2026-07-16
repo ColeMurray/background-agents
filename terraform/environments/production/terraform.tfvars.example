@@ -18,6 +18,7 @@
 #   - Workers KV Storage: Edit
 #   - Workers R2 Storage: Edit
 #   - D1: Edit
+#   - Queues: Edit
 # Optional if you manage Cloudflare routes/custom domains:
 #   - Workers Routes: Edit
 # Create at: https://dash.cloudflare.com/profile/api-tokens

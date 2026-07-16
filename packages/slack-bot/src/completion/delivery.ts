@@ -85,6 +85,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
         slack_error: postResult.error,
         retry_after: postResult.retryAfter,
       });
+      // A network error can be ambiguous; replaying the job may duplicate a Slack completion.
       return;
     }
 
