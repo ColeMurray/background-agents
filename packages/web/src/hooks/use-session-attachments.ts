@@ -18,7 +18,9 @@ const IMAGE_MIME_TYPES: ReadonlySet<string> = new Set(SESSION_ATTACHMENT_IMAGE_M
 
 export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES].join(",");
 export const DEFAULT_ATTACHMENT_ONLY_MESSAGE = "See the attached files.";
+export const SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
 const ATTACHMENTS_CHANGED_DURING_UPLOAD = "Attachments changed during upload; please retry";
+const ATTACHMENT_UPLOAD_TIMED_OUT = "Attachment upload timed out; please retry";
 
 function isSupportedImage(file: File): boolean {
   return IMAGE_MIME_TYPES.has(file.type);
@@ -142,6 +144,7 @@ export function useSessionAttachments() {
       if (pending.length === 0) return [];
       const revision = attachmentsRevisionRef.current;
       const controller = new AbortController();
+      let uploadTimedOut = false;
       activeUploadRef.current = controller;
 
       const assertCurrent = () => {
@@ -170,11 +173,20 @@ export function useSessionAttachments() {
 
           const formData = new FormData();
           formData.append("file", pendingAttachment.file, pendingAttachment.file.name || "image");
-          const response = await fetch(`/api/sessions/${sessionId}/attachments`, {
-            method: "POST",
-            body: formData,
-            signal: controller.signal,
-          });
+          const timeoutId = window.setTimeout(() => {
+            uploadTimedOut = true;
+            controller.abort();
+          }, SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS);
+          let response: Response;
+          try {
+            response = await fetch(`/api/sessions/${sessionId}/attachments`, {
+              method: "POST",
+              body: formData,
+              signal: controller.signal,
+            });
+          } finally {
+            window.clearTimeout(timeoutId);
+          }
           assertCurrent();
           if (!response.ok) {
             const data = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -193,8 +205,9 @@ export function useSessionAttachments() {
         assertCurrent();
         return uploaded;
       } catch (error) {
-        const normalizedError =
-          controller.signal.aborted || attachmentsRevisionRef.current !== revision
+        const normalizedError = uploadTimedOut
+          ? new Error(ATTACHMENT_UPLOAD_TIMED_OUT)
+          : controller.signal.aborted || attachmentsRevisionRef.current !== revision
             ? new Error(ATTACHMENTS_CHANGED_DURING_UPLOAD)
             : error;
         const message =

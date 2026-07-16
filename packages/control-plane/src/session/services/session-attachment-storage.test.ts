@@ -51,7 +51,9 @@ describe("SessionAttachmentStorageService", () => {
     });
     expect(JSON.parse(h.fetch.mock.calls[0][2]?.body as string)).toEqual({
       action: "record",
-      ...RECORD,
+      attachmentId: RECORD.attachmentId,
+      mimeType: RECORD.mimeType,
+      sizeBytes: RECORD.sizeBytes,
     });
     expect(h.fetch.mock.invocationCallOrder[0]).toBeLessThan(
       h.storage.put.mock.invocationCallOrder[0]
@@ -124,7 +126,9 @@ describe("SessionAttachmentStorageService", () => {
     });
     expect(JSON.parse(h.fetch.mock.calls[2][2]?.body as string)).toEqual({
       action: "record",
-      ...RECORD,
+      attachmentId: RECORD.attachmentId,
+      mimeType: RECORD.mimeType,
+      sizeBytes: RECORD.sizeBytes,
     });
     expect(h.storage.delete.mock.invocationCallOrder[0]).toBeLessThan(
       h.fetch.mock.invocationCallOrder[1]

@@ -3,10 +3,14 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
-import { useSessionAttachments } from "./use-session-attachments";
+import {
+  SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS,
+  useSessionAttachments,
+} from "./use-session-attachments";
 
 describe("useSessionAttachments", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -127,5 +131,40 @@ describe("useSessionAttachments", () => {
       await expect(uploadPromise).rejects.toThrow("Attachments changed during upload");
     });
     expect(result.current.attachments).toEqual([]);
+  });
+
+  it("aborts an upload that exceeds the per-file timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted", "AbortError"));
+          });
+        });
+      })
+    );
+    const { result } = renderHook(() => useSessionAttachments());
+    act(() => {
+      result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]);
+    });
+
+    let uploadPromise!: ReturnType<typeof result.current.uploadAll>;
+    act(() => {
+      uploadPromise = result.current.uploadAll("session-1");
+    });
+    const rejection = expect(uploadPromise).rejects.toThrow(
+      "Attachment upload timed out; please retry"
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS);
+    });
+    await rejection;
+
+    expect(result.current.isUploading).toBe(false);
+    expect(result.current.attachmentError).toBe("Attachment upload timed out; please retry");
   });
 });

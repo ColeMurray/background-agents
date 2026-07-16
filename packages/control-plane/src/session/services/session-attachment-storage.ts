@@ -53,7 +53,12 @@ export class SessionAttachmentStorageService {
   }
 
   private async register(record: SessionAttachmentRecord): Promise<void> {
-    const command: RecordAttachmentCommand = { action: "record", ...record };
+    const command: RecordAttachmentCommand = {
+      action: "record",
+      attachmentId: record.attachmentId,
+      mimeType: record.mimeType,
+      sizeBytes: record.sizeBytes,
+    };
     for (let attempt = 0; attempt < MAX_REGISTRATION_ATTEMPTS; attempt += 1) {
       const response = await this.sendCommand(command);
       if (!response.ok) await this.throwRegistrationError(response);

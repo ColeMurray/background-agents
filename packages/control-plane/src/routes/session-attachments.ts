@@ -25,6 +25,7 @@ import {
   isMultipartFile,
   isSupportedSessionAttachmentMimeType,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
+  SESSION_ATTACHMENT_MAX_REQUEST_BYTES,
   sessionAttachmentRequestExceedsLimit,
 } from "../media";
 import {
@@ -43,6 +44,32 @@ import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
+
+async function readAttachmentRequestBody(request: Request): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array();
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > SESSION_ATTACHMENT_MAX_REQUEST_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
 
 function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
   const headers = new Headers();
@@ -75,9 +102,18 @@ async function handleAttachmentPost(
     return error("Attachment request is too large", 413);
   }
 
+  const requestBody = await readAttachmentRequestBody(request);
+  if (!requestBody) {
+    return error("Attachment request is too large", 413);
+  }
+
   let formData: FormData;
   try {
-    formData = await request.formData();
+    formData = await new Request(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: requestBody,
+    }).formData();
   } catch {
     return error("Invalid multipart form data", 400);
   }

@@ -196,8 +196,13 @@ export class SessionDO extends DurableObject<Env> {
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
-    recordAttachment: (request) =>
-      this.attachmentsHandler.recordAttachment(request, this.getSession() !== null),
+    recordAttachment: (request) => {
+      const session = this.getSession();
+      return this.attachmentsHandler.recordAttachment(
+        request,
+        session ? this.getPublicSessionId(session) : null
+      );
+    },
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),

@@ -6,6 +6,32 @@ import { WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "@/lib/session-attachme
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 
+async function readAttachmentRequestBody(request: Request): Promise<ArrayBuffer | null> {
+  if (!request.body) return new ArrayBuffer(0);
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body.buffer;
+}
+
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -29,8 +55,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   try {
     // Forward the raw body so the original multipart boundary stays intact.
-    const body = await request.arrayBuffer();
-    if (body.byteLength > WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES) {
+    const body = await readAttachmentRequestBody(request);
+    if (!body) {
       return NextResponse.json({ error: "Attachment is too large" }, { status: 413 });
     }
 

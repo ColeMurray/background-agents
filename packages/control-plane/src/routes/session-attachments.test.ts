@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "../media";
 import type { Env } from "../types";
 import { sessionAttachmentRoutes } from "./session-attachments";
 import type { RequestContext } from "./shared";
@@ -45,6 +46,21 @@ function attachmentUploadRequest(): Request {
   });
 }
 
+function oversizedStreamingUploadRequest(): Request {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(SESSION_ATTACHMENT_MAX_REQUEST_BYTES + 1));
+      controller.close();
+    },
+  });
+  return new Request("https://test.local/sessions/session-1/attachments", {
+    method: "POST",
+    headers: { "Content-Type": "multipart/form-data; boundary=test" },
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+}
+
 function getUploadRoute() {
   const path = "/sessions/session-1/attachments";
   const route = sessionAttachmentRoutes.find(
@@ -57,6 +73,23 @@ function getUploadRoute() {
 }
 
 describe("session attachment routes", () => {
+  it("bounds streamed requests when Content-Length is unavailable", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { env, put } = createEnv(fetch);
+    const { route, match } = getUploadRoute();
+
+    const response = await route.handler(
+      oversizedStreamingUploadRequest(),
+      env,
+      match,
+      createContext()
+    );
+
+    expect(response.status).toBe(413);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it.each([
     [404, "Session not found", 404],
     [429, "Quota exceeded", 429],

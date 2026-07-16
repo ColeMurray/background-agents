@@ -10,7 +10,6 @@ export const recordAttachmentCommandSchema = z
     attachmentId: sessionAttachmentIdSchema,
     mimeType: sessionAttachmentMimeTypeSchema,
     sizeBytes: z.number().int().positive().max(SESSION_ATTACHMENT_IMAGE_MAX_BYTES),
-    objectKey: objectKeySchema,
   })
   .strict();
 

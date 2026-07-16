@@ -360,6 +360,8 @@ function UserMessageAttachments({
             src={`/api/sessions/${sessionId}/attachments/${attachment.attachmentId}`}
             alt={attachment.name}
             title={attachment.name}
+            loading="lazy"
+            decoding="async"
             className="max-h-48 max-w-full border border-border object-contain"
           />
         );

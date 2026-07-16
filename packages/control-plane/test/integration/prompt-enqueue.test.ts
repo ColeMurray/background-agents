@@ -102,7 +102,6 @@ describe("POST /internal/prompt", () => {
         attachmentId,
         mimeType: "image/png",
         sizeBytes: 1024,
-        objectKey: `sessions/test/attachments/${attachmentId}`,
       }),
     });
     expect(uploadResponse.status).toBe(200);

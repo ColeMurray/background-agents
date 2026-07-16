@@ -1,5 +1,6 @@
 import type { Logger } from "../../../logger";
 import {
+  buildSessionAttachmentObjectKey,
   SESSION_ATTACHMENT_LIMIT_PER_SESSION,
   SESSION_ATTACHMENT_TOTAL_BYTES_PER_SESSION,
   SESSION_ATTACHMENT_UNREFERENCED_TTL_MS,
@@ -22,8 +23,8 @@ export class AttachmentsHandler {
     private readonly now: () => number = Date.now
   ) {}
 
-  async recordAttachment(request: Request, sessionExists: boolean): Promise<Response> {
-    if (!sessionExists) {
+  async recordAttachment(request: Request, sessionId: string | null): Promise<Response> {
+    if (!sessionId) {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
@@ -88,7 +89,7 @@ export class AttachmentsHandler {
       id: record.attachmentId,
       mimeType: record.mimeType,
       sizeBytes: record.sizeBytes,
-      objectKey: record.objectKey,
+      objectKey: buildSessionAttachmentObjectKey(sessionId, record.attachmentId),
       createdAt: timestamp,
     });
 
