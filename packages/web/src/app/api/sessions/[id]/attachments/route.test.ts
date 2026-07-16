@@ -14,10 +14,10 @@ vi.mock("@/lib/control-plane", () => ({
 
 import { getServerSession } from "next-auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-import { WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES } from "@/lib/prompt-attachment-limits";
+import { WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "@/lib/session-attachment-limits";
 import { POST } from "./route";
 
-describe("session upload API route", () => {
+describe("session attachment API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
@@ -25,11 +25,11 @@ describe("session upload API route", () => {
 
   it("rejects multipart requests above the portable web limit before proxying", async () => {
     const response = await POST(
-      new Request("http://localhost/api/sessions/session-1/uploads", {
+      new Request("http://localhost/api/sessions/session-1/attachments", {
         method: "POST",
         headers: {
           "Content-Type": "multipart/form-data; boundary=test",
-          "Content-Length": String(WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES + 1),
+          "Content-Length": String(WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES + 1),
         },
         body: "oversized",
       }),

@@ -1,7 +1,7 @@
 "use client";
 
 import { XIcon } from "@/components/ui/icons";
-import type { PendingAttachment } from "@/hooks/use-prompt-attachments";
+import type { PendingAttachment } from "@/hooks/use-session-attachments";
 
 function AttachmentPreview({
   attachment,

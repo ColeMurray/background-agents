@@ -6,9 +6,9 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-  resolvedPromptAttachmentsSchema,
-  type PromptAttachment,
-  type ResolvedPromptAttachment,
+  resolvedSessionAttachmentsSchema,
+  type SessionAttachmentReference,
+  type ResolvedSessionAttachment,
 } from "@open-inspect/shared";
 import type {
   ClientInfo,
@@ -31,13 +31,13 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import { PromptAttachmentError, resolvePromptAttachments } from "./prompt-attachments";
+import { SessionAttachmentError, resolveSessionAttachments } from "./session-attachments";
 
 interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: PromptAttachment[];
+  attachments?: SessionAttachmentReference[];
 }
 
 interface MessageQueueDeps {
@@ -72,7 +72,7 @@ interface EnqueuePromptCoreData {
   source: MessageSource;
   model?: string;
   reasoningEffort?: string;
-  attachments?: PromptAttachment[];
+  attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
 }
 
@@ -111,7 +111,7 @@ export class SessionMessageQueue {
         attachments: data.attachments,
       });
     } catch (error) {
-      if (!(error instanceof PromptAttachmentError)) throw error;
+      if (!(error instanceof SessionAttachmentError)) throw error;
       this.deps.wsManager.send(ws, {
         type: "error",
         code: "INVALID_ATTACHMENTS",
@@ -309,7 +309,7 @@ export class SessionMessageQueue {
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
 
-  private parseStoredAttachments(value: string | null): ResolvedPromptAttachment[] | undefined {
+  private parseStoredAttachments(value: string | null): ResolvedSessionAttachment[] | undefined {
     if (!value) return undefined;
     let raw: unknown;
     try {
@@ -318,7 +318,7 @@ export class SessionMessageQueue {
       this.deps.log.error("prompt.invalid_stored_attachments");
       return undefined;
     }
-    const parsed = resolvedPromptAttachmentsSchema.safeParse(raw);
+    const parsed = resolvedSessionAttachmentsSchema.safeParse(raw);
     if (!parsed.success) {
       this.deps.log.error("prompt.invalid_stored_attachments");
       return undefined;
@@ -331,7 +331,7 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: ResolvedPromptAttachment[]
+    attachments?: ResolvedSessionAttachment[]
   ): void {
     // Metadata only — base64 payloads would bloat the events table and every
     // broadcast, and DO SQLite rows cap at 2 MB.
@@ -405,7 +405,7 @@ export class SessionMessageQueue {
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
-    const resolvedAttachments = resolvePromptAttachments(
+    const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
       this.deps.attachmentRepository
     );
@@ -446,8 +446,8 @@ export class SessionMessageQueue {
       );
     } catch (error) {
       if (error instanceof AttachmentClaimConflictError) {
-        throw new PromptAttachmentError(
-          "One or more uploads are missing, expired, or already used"
+        throw new SessionAttachmentError(
+          "One or more attachments are missing, expired, or already used"
         );
       }
       throw error;

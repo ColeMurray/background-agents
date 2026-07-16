@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-import { WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES } from "@/lib/prompt-attachment-limits";
+import { WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "@/lib/session-attachment-limits";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 
@@ -23,18 +23,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const contentLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(contentLength) && contentLength > WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES) {
     return NextResponse.json({ error: "Attachment is too large" }, { status: 413 });
   }
 
   try {
     // Forward the raw body so the original multipart boundary stays intact.
     const body = await request.arrayBuffer();
-    if (body.byteLength > WEB_PROMPT_UPLOAD_MAX_REQUEST_BYTES) {
+    if (body.byteLength > WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES) {
       return NextResponse.json({ error: "Attachment is too large" }, { status: 413 });
     }
 
-    const response = await controlPlaneFetch(`/sessions/${sessionId}/uploads`, {
+    const response = await controlPlaneFetch(`/sessions/${sessionId}/attachments`, {
       method: "POST",
       body,
       headers: { "Content-Type": contentType },

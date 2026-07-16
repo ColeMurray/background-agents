@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { promptAttachmentsSchema } from "./prompt-attachments";
+import { sessionAttachmentReferencesSchema } from "./session-attachments";
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
@@ -9,7 +9,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     content: z.string(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
-    attachments: promptAttachmentsSchema.optional(),
+    attachments: sessionAttachmentReferencesSchema.optional(),
   }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),

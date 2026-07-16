@@ -4,35 +4,38 @@ import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
-const UPLOAD_ID_PATTERN = /^[A-Za-z0-9-]+$/;
+const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 
 export async function GET(
   request: Request,
-  { params }: { params: Promise<{ id: string; uploadId: string }> }
+  { params }: { params: Promise<{ id: string; attachmentId: string }> }
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { id: sessionId, uploadId } = await params;
+  const { id: sessionId, attachmentId } = await params;
   if (!SESSION_ID_PATTERN.test(sessionId)) {
     return NextResponse.json({ error: "Invalid session ID" }, { status: 400 });
   }
-  if (!UPLOAD_ID_PATTERN.test(uploadId)) {
-    return NextResponse.json({ error: "Invalid upload ID" }, { status: 400 });
+  if (!ATTACHMENT_ID_PATTERN.test(attachmentId)) {
+    return NextResponse.json({ error: "Invalid attachment ID" }, { status: 400 });
   }
 
   try {
     const range = request.headers.get("Range");
-    const uploadPath = `/sessions/${sessionId}/uploads/${uploadId}`;
+    const attachmentPath = `/sessions/${sessionId}/attachments/${attachmentId}`;
     const response = range
-      ? await controlPlaneFetch(uploadPath, { headers: { Range: range } })
-      : await controlPlaneFetch(uploadPath);
+      ? await controlPlaneFetch(attachmentPath, { headers: { Range: range } })
+      : await controlPlaneFetch(attachmentPath);
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Failed to fetch upload: ${errorText}`);
-      return NextResponse.json({ error: "Failed to fetch upload" }, { status: response.status });
+      console.error(`Failed to fetch attachment: ${errorText}`);
+      return NextResponse.json(
+        { error: "Failed to fetch attachment" },
+        { status: response.status }
+      );
     }
 
     const headers = new Headers({
@@ -58,7 +61,7 @@ export async function GET(
       headers,
     });
   } catch (error) {
-    console.error("Failed to fetch upload:", error);
-    return NextResponse.json({ error: "Failed to fetch upload" }, { status: 500 });
+    console.error("Failed to fetch attachment:", error);
+    return NextResponse.json({ error: "Failed to fetch attachment" }, { status: 500 });
   }
 }

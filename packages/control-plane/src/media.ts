@@ -1,6 +1,6 @@
 import {
-  PROMPT_IMAGE_MIME_TYPES,
-  type PromptImageMimeType,
+  SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  type SessionAttachmentMimeType,
   type VideoArtifactMetadata,
 } from "@open-inspect/shared";
 
@@ -12,16 +12,16 @@ export const VIDEO_MAX_DURATION_MS = 90_000;
 export const VIDEO_TIMESTAMP_TOLERANCE_MS = 1_000;
 
 // User-attached prompt images (attached in the chat composer).
-export const PROMPT_UPLOAD_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const SESSION_ATTACHMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 // Allows multipart boundaries and headers while rejecting oversized requests
 // before request.formData() buffers them when Content-Length is available.
-export const PROMPT_UPLOAD_MAX_REQUEST_BYTES = PROMPT_UPLOAD_IMAGE_MAX_BYTES + 128 * 1024;
-export const PROMPT_UPLOAD_LIMIT_PER_SESSION = 100;
-export const PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION = 500 * 1024 * 1024;
-// Uploads never referenced by a prompt after this long are pruned (R2 object +
-// record) the next time the session records an upload.
-export const PROMPT_UPLOAD_UNREFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
-export const PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS = 5 * 60 * 1000;
+export const SESSION_ATTACHMENT_MAX_REQUEST_BYTES = SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 128 * 1024;
+export const SESSION_ATTACHMENT_LIMIT_PER_SESSION = 100;
+export const SESSION_ATTACHMENT_TOTAL_BYTES_PER_SESSION = 500 * 1024 * 1024;
+// Attachments never referenced by a message after this long are pruned (R2
+// object + record) the next time the session records an attachment.
+export const SESSION_ATTACHMENT_UNREFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
+export const SESSION_ATTACHMENT_CLEANUP_CLAIM_TTL_MS = 5 * 60 * 1000;
 
 const SCREENSHOT_EXTENSIONS = {
   "image/png": "png",
@@ -102,29 +102,35 @@ export function detectVideoFileType(bytes: Uint8Array): VideoFileType | null {
   return null;
 }
 
-export type PromptUploadFileType = {
-  mimeType: PromptImageMimeType;
+export type SessionAttachmentFileType = {
+  mimeType: SessionAttachmentMimeType;
   extension: string;
 };
 
-const PROMPT_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set(PROMPT_IMAGE_MIME_TYPES);
+const SESSION_ATTACHMENT_MIME_TYPES: ReadonlySet<string> = new Set(
+  SESSION_ATTACHMENT_IMAGE_MIME_TYPES
+);
 
-export function isSupportedPromptUploadMimeType(value: string): value is PromptImageMimeType {
-  return PROMPT_UPLOAD_MIME_TYPES.has(value);
+export function isSupportedSessionAttachmentMimeType(
+  value: string
+): value is SessionAttachmentMimeType {
+  return SESSION_ATTACHMENT_MIME_TYPES.has(value);
 }
 
-export function promptUploadRequestExceedsLimit(request: Request): boolean {
+export function sessionAttachmentRequestExceedsLimit(request: Request): boolean {
   const raw = request.headers.get("Content-Length");
   if (!raw || !/^\d+$/.test(raw)) return false;
-  return Number(raw) > PROMPT_UPLOAD_MAX_REQUEST_BYTES;
+  return Number(raw) > SESSION_ATTACHMENT_MAX_REQUEST_BYTES;
 }
 
 /**
  * Detect user-attached prompt images by magic bytes. This is intentionally
- * separate from the agent screenshot/recording detectors: prompt uploads do
+ * separate from the agent screenshot/recording detectors: session attachments do
  * not support videos in the initial attachment release.
  */
-export function detectPromptUploadFileType(bytes: Uint8Array): PromptUploadFileType | null {
+export function detectSessionAttachmentFileType(
+  bytes: Uint8Array
+): SessionAttachmentFileType | null {
   const image = detectScreenshotFileType(bytes);
   if (image) {
     return { mimeType: image.mimeType, extension: image.extension };
@@ -143,8 +149,8 @@ export function detectPromptUploadFileType(bytes: Uint8Array): PromptUploadFileT
   return null;
 }
 
-export function buildPromptUploadObjectKey(sessionId: string, uploadId: string): string {
-  return `sessions/${sessionId}/uploads/${uploadId}`;
+export function buildSessionAttachmentObjectKey(sessionId: string, attachmentId: string): string {
+  return `sessions/${sessionId}/attachments/${attachmentId}`;
 }
 
 export function buildMediaObjectKey(

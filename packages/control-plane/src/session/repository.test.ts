@@ -680,7 +680,7 @@ describe("SessionRepository", () => {
       repo.createMessageWithAttachments(message, ["up-1", "up-2"]);
 
       expect(transactions).toBe(1);
-      expect(mock.calls[0].query).toContain("UPDATE uploads SET message_id");
+      expect(mock.calls[0].query).toContain("UPDATE attachments SET message_id");
       expect(mock.calls[0].params).toEqual(["msg-1", "up-1", "up-2"]);
       expect(mock.calls[1].query).toContain("INSERT INTO messages");
     });

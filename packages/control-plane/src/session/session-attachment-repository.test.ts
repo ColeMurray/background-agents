@@ -53,23 +53,23 @@ describe("SessionAttachmentRepository", () => {
       id: "up-1",
       mimeType: "image/png",
       sizeBytes: 1024,
-      objectKey: "sessions/session-1/uploads/up-1",
+      objectKey: "sessions/session-1/attachments/up-1",
       createdAt: 1000,
     });
 
-    expect(mock.calls[0].query).toContain("INSERT INTO uploads");
+    expect(mock.calls[0].query).toContain("INSERT INTO attachments");
     expect(mock.calls[0].params).toEqual([
       "up-1",
       "image/png",
       1024,
-      "sessions/session-1/uploads/up-1",
+      "sessions/session-1/attachments/up-1",
       1000,
     ]);
   });
 
   it("returns attachment totals excluding cleanup claims", () => {
     const query = `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
-       FROM uploads WHERE cleanup_claimed_at IS NULL`;
+       FROM attachments WHERE cleanup_claimed_at IS NULL`;
     mock.setRows(query, [{ count: 2, total_bytes: 3072 }]);
 
     expect(repository.getTotals()).toEqual({ count: 2, totalBytes: 3072 });
@@ -88,7 +88,7 @@ describe("SessionAttachmentRepository", () => {
 
     repository.claimForMessage("msg-1", ["up-1", "up-2"]);
 
-    expect(mock.calls[0].query).toContain("UPDATE uploads SET message_id");
+    expect(mock.calls[0].query).toContain("UPDATE attachments SET message_id");
     expect(mock.calls[0].params).toEqual(["msg-1", "up-1", "up-2"]);
   });
 
@@ -101,7 +101,7 @@ describe("SessionAttachmentRepository", () => {
   });
 
   it("claims stale attachment records with a cleanup lease", () => {
-    const query = `SELECT * FROM uploads
+    const query = `SELECT * FROM attachments
        WHERE message_id IS NULL AND created_at < ?
          AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at < ?)`;
     mock.setRows(query, [
@@ -109,7 +109,7 @@ describe("SessionAttachmentRepository", () => {
         id: "up-1",
         mime_type: "image/png",
         size_bytes: 100,
-        object_key: "sessions/session-1/uploads/up-1",
+        object_key: "sessions/session-1/attachments/up-1",
         message_id: null,
         cleanup_claimed_at: null,
         created_at: 1,

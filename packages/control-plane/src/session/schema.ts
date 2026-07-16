@@ -19,7 +19,7 @@ const SESSION_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_repos
   PRIMARY KEY (repo_owner, repo_name)
 )`;
 
-const UPLOADS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS uploads (
+const ATTACHMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
   mime_type TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
@@ -121,10 +121,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
   updated_at INTEGER NOT NULL                       -- last content change (PR lifecycle updates)
 );
 
--- User prompt attachments stored in the media bucket (chat composer uploads).
--- message_id is set once a prompt references the upload; unreferenced rows are
+-- User session attachments stored in the media bucket (chat composer attachments).
+-- message_id is set once a message references the attachment; unreferenced rows are
 -- pruned (with their R2 objects) after a TTL.
-${UPLOADS_TABLE_SQL};
+${ATTACHMENTS_TABLE_SQL};
 
 -- Sandbox state
 CREATE TABLE IF NOT EXISTS sandbox (
@@ -458,8 +458,8 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 35,
-    description: "Create uploads table",
-    run: UPLOADS_TABLE_SQL,
+    description: "Create attachments table",
+    run: ATTACHMENTS_TABLE_SQL,
   },
 ];
 

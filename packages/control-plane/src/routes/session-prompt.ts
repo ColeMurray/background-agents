@@ -1,8 +1,8 @@
 import {
-  MAX_PROMPT_ATTACHMENTS,
-  promptAttachmentsSchema,
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  sessionAttachmentReferencesSchema,
   type CallbackContext,
-  type PromptAttachment,
+  type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
@@ -14,12 +14,15 @@ import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
-function validateAttachments(raw: unknown): PromptAttachment[] | Response | undefined {
+function validateAttachments(raw: unknown): SessionAttachmentReference[] | Response | undefined {
   if (raw === undefined) return undefined;
-  const result = promptAttachmentsSchema.safeParse(raw);
+  const result = sessionAttachmentReferencesSchema.safeParse(raw);
   if (!result.success) {
-    if (Array.isArray(raw) && raw.length > MAX_PROMPT_ATTACHMENTS) {
-      return error(`You can attach up to ${MAX_PROMPT_ATTACHMENTS} files per message`, 400);
+    if (Array.isArray(raw) && raw.length > MAX_SESSION_ATTACHMENTS_PER_MESSAGE) {
+      return error(
+        `You can attach up to ${MAX_SESSION_ATTACHMENTS_PER_MESSAGE} files per message`,
+        400
+      );
     }
     return error("Invalid attachments", 400);
   }

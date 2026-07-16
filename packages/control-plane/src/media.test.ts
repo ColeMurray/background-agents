@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMediaObjectKey,
-  buildPromptUploadObjectKey,
-  detectPromptUploadFileType,
+  buildSessionAttachmentObjectKey,
+  detectSessionAttachmentFileType,
   detectScreenshotFileType,
   detectVideoFileType,
-  isSupportedPromptUploadMimeType,
-  PROMPT_UPLOAD_MAX_REQUEST_BYTES,
-  promptUploadRequestExceedsLimit,
+  isSupportedSessionAttachmentMimeType,
+  SESSION_ATTACHMENT_MAX_REQUEST_BYTES,
+  sessionAttachmentRequestExceedsLimit,
   isSupportedScreenshotMimeType,
   isSupportedVideoMimeType,
   parseDimensions,
@@ -49,71 +49,71 @@ describe("media helpers", () => {
     });
   });
 
-  it("builds session-scoped prompt upload object keys", () => {
-    expect(buildPromptUploadObjectKey("session-1", "upload-1")).toBe(
-      "sessions/session-1/uploads/upload-1"
+  it("builds session-scoped session attachment object keys", () => {
+    expect(buildSessionAttachmentObjectKey("session-1", "attachment-1")).toBe(
+      "sessions/session-1/attachments/attachment-1"
     );
   });
 
-  it("accepts only image prompt upload mime types", () => {
+  it("accepts only image session attachment mime types", () => {
     for (const mimeType of ["image/png", "image/jpeg", "image/webp", "image/gif"]) {
-      expect(isSupportedPromptUploadMimeType(mimeType)).toBe(true);
+      expect(isSupportedSessionAttachmentMimeType(mimeType)).toBe(true);
     }
-    expect(isSupportedPromptUploadMimeType("video/mp4")).toBe(false);
-    expect(isSupportedPromptUploadMimeType("video/quicktime")).toBe(false);
-    expect(isSupportedPromptUploadMimeType("video/webm")).toBe(false);
-    expect(isSupportedPromptUploadMimeType("application/pdf")).toBe(false);
-    expect(isSupportedPromptUploadMimeType("image/svg+xml")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("video/mp4")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("video/quicktime")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("video/webm")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("application/pdf")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("image/svg+xml")).toBe(false);
   });
 
-  it("rejects oversized prompt upload requests before multipart buffering", () => {
+  it("rejects oversized session attachment requests before multipart buffering", () => {
     expect(
-      promptUploadRequestExceedsLimit(
+      sessionAttachmentRequestExceedsLimit(
         new Request("https://example.test", {
-          headers: { "Content-Length": String(PROMPT_UPLOAD_MAX_REQUEST_BYTES + 1) },
+          headers: { "Content-Length": String(SESSION_ATTACHMENT_MAX_REQUEST_BYTES + 1) },
         })
       )
     ).toBe(true);
     expect(
-      promptUploadRequestExceedsLimit(
+      sessionAttachmentRequestExceedsLimit(
         new Request("https://example.test", {
-          headers: { "Content-Length": String(PROMPT_UPLOAD_MAX_REQUEST_BYTES) },
+          headers: { "Content-Length": String(SESSION_ATTACHMENT_MAX_REQUEST_BYTES) },
         })
       )
     ).toBe(false);
   });
 
-  it("detects prompt upload images including gif", () => {
+  it("detects session attachment images including gif", () => {
     const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
-    expect(detectPromptUploadFileType(png)).toEqual({
+    expect(detectSessionAttachmentFileType(png)).toEqual({
       mimeType: "image/png",
       extension: "png",
     });
 
     const gif89 = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01]);
-    expect(detectPromptUploadFileType(gif89)).toEqual({
+    expect(detectSessionAttachmentFileType(gif89)).toEqual({
       mimeType: "image/gif",
       extension: "gif",
     });
 
     const gif87 = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01]);
-    expect(detectPromptUploadFileType(gif87)?.mimeType).toBe("image/gif");
+    expect(detectSessionAttachmentFileType(gif87)?.mimeType).toBe("image/gif");
   });
 
-  it("rejects video prompt uploads", () => {
-    expect(detectPromptUploadFileType(MP4_SIGNATURE)).toBeNull();
+  it("rejects video session attachments", () => {
+    expect(detectSessionAttachmentFileType(MP4_SIGNATURE)).toBeNull();
     const mov = Uint8Array.from([
       0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20,
     ]);
-    expect(detectPromptUploadFileType(mov)).toBeNull();
+    expect(detectSessionAttachmentFileType(mov)).toBeNull();
 
     const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x01]);
-    expect(detectPromptUploadFileType(webm)).toBeNull();
+    expect(detectSessionAttachmentFileType(webm)).toBeNull();
   });
 
-  it("rejects unsupported prompt upload bytes", () => {
-    expect(detectPromptUploadFileType(Uint8Array.from([0x25, 0x50, 0x44, 0x46]))).toBeNull();
-    expect(detectPromptUploadFileType(new Uint8Array(0))).toBeNull();
+  it("rejects unsupported session attachment bytes", () => {
+    expect(detectSessionAttachmentFileType(Uint8Array.from([0x25, 0x50, 0x44, 0x46]))).toBeNull();
+    expect(detectSessionAttachmentFileType(new Uint8Array(0))).toBeNull();
   });
 
   it("parses required video metadata", () => {

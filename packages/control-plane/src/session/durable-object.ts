@@ -17,7 +17,7 @@ import {
   resolveAppName,
   sandboxEventSchema,
   timingSafeEqual,
-  type PromptAttachment,
+  type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
@@ -97,7 +97,10 @@ import {
   type ChildSessionsHandler,
 } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
-import { createUploadsHandler, type UploadsHandler } from "./http/handlers/uploads.handler";
+import {
+  createAttachmentsHandler,
+  type AttachmentsHandler,
+} from "./http/handlers/attachments.handler";
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
@@ -172,8 +175,8 @@ export class SessionDO extends DurableObject<Env> {
   private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox handler (lazily initialized)
   private _sandboxHandler: SandboxHandler | null = null;
-  // Uploads handler (lazily initialized)
-  private _uploadsHandler: UploadsHandler | null = null;
+  // Session attachments handler (lazily initialized)
+  private _attachmentsHandler: AttachmentsHandler | null = null;
   // WebSocket token handler (lazily initialized)
   private _wsTokenHandler: WsTokenHandler | null = null;
   // Session lifecycle handler (lazily initialized)
@@ -196,7 +199,7 @@ export class SessionDO extends DurableObject<Env> {
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
-    recordUpload: (request) => this.uploadsHandler.recordUpload(request),
+    recordAttachment: (request) => this.attachmentsHandler.recordAttachment(request),
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
@@ -452,16 +455,16 @@ export class SessionDO extends DurableObject<Env> {
     return this._sandboxHandler;
   }
 
-  private get uploadsHandler(): UploadsHandler {
-    if (!this._uploadsHandler) {
-      this._uploadsHandler = createUploadsHandler({
+  private get attachmentsHandler(): AttachmentsHandler {
+    if (!this._attachmentsHandler) {
+      this._attachmentsHandler = createAttachmentsHandler({
         repository: this.attachmentRepository,
         getSession: () => this.getSession(),
         getLog: () => this.log,
       });
     }
 
-    return this._uploadsHandler;
+    return this._attachmentsHandler;
   }
 
   private get wsTokenHandler(): WsTokenHandler {
@@ -1404,7 +1407,7 @@ export class SessionDO extends DurableObject<Env> {
       content: string;
       model?: string;
       reasoningEffort?: string;
-      attachments?: PromptAttachment[];
+      attachments?: SessionAttachmentReference[];
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, data);

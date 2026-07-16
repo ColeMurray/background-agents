@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { recordSchema } from "./artifacts";
 import { gitSyncStatusSchema, type EventType } from "./statuses";
-import { resolvedPromptAttachmentsSchema } from "./prompt-attachments";
+import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 
 export interface AgentEvent {
   id: string;
@@ -167,8 +167,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
       })
       .optional(),
     // Attachment metadata only — never inline content, which would bloat the
-    // events table and every broadcast. uploadId lets clients stream uploads.
-    attachments: resolvedPromptAttachmentsSchema.optional(),
+    // events table and every broadcast. attachmentId lets clients stream attachments.
+    attachments: resolvedSessionAttachmentsSchema.optional(),
   }),
 ]);
 

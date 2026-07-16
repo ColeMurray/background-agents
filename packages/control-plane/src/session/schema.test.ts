@@ -243,9 +243,9 @@ describe("applyMigrations", () => {
     expect(backfill).toBeDefined();
   });
 
-  it("creates the final uploads schema in its single unshipped migration", () => {
+  it("creates the final attachments schema in its single unshipped migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 35);
-    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS uploads");
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");
     expect(migration?.run).toContain("cleanup_claimed_at INTEGER");
     expect(migration?.run).not.toContain("kind TEXT");
   });

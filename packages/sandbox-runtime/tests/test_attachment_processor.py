@@ -1,4 +1,4 @@
-"""Tests for bounded prompt attachment processing."""
+"""Tests for bounded session attachment processing."""
 
 import asyncio
 from typing import Any
@@ -7,9 +7,9 @@ import pytest
 
 from sandbox_runtime.attachment_processor import (
     AttachmentProcessor,
-    HydratedPromptImage,
-    PromptImageAttachment,
-    parse_prompt_image_attachments,
+    HydratedSessionAttachment,
+    ResolvedSessionAttachment,
+    parse_session_image_attachments,
 )
 
 
@@ -35,40 +35,40 @@ def processor() -> AttachmentProcessor:
     )
 
 
-async def test_upload_is_hydrated_to_base64(
+async def test_attachment_is_hydrated_to_base64(
     processor: AttachmentProcessor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[str] = []
 
-    async def download(upload_id: str) -> bytes:
-        calls.append(upload_id)
+    async def download(attachment_id: str) -> bytes:
+        calls.append(attachment_id)
         return b"ABC"
 
-    monkeypatch.setattr(processor, "_download_upload_bytes", download)
+    monkeypatch.setattr(processor, "_download_attachment_bytes", download)
 
     result = await processor.process(
-        [{"name": "shot.png", "mimeType": "image/png", "uploadId": "up-1"}]
+        [{"name": "shot.png", "mimeType": "image/png", "attachmentId": "up-1"}]
     )
 
     assert result == [{"name": "shot.png", "mimeType": "image/png", "content": "QUJD"}]
     assert calls == ["up-1"]
 
 
-async def test_invalid_upload_id_is_rejected(processor: AttachmentProcessor) -> None:
-    assert await processor._download_upload_bytes("../admin") is None
+async def test_invalid_attachment_id_is_rejected(processor: AttachmentProcessor) -> None:
+    assert await processor._download_attachment_bytes("../admin") is None
 
 
-def test_untyped_prompt_attachments_are_validated() -> None:
-    parsed, rejected = parse_prompt_image_attachments(
+def test_untyped_session_attachments_are_validated() -> None:
+    parsed, rejected = parse_session_image_attachments(
         [
-            {"name": "shot.png", "mimeType": "image/png", "uploadId": "up-1"},
+            {"name": "shot.png", "mimeType": "image/png", "attachmentId": "up-1"},
             {"name": "remote.png", "mimeType": "image/png", "url": "https://example.com"},
-            {"name": "video.mp4", "mimeType": "video/mp4", "uploadId": "up-2"},
+            {"name": "video.mp4", "mimeType": "video/mp4", "attachmentId": "up-2"},
             "invalid",
         ]
     )
 
-    assert parsed == [{"name": "shot.png", "mimeType": "image/png", "uploadId": "up-1"}]
+    assert parsed == [{"name": "shot.png", "mimeType": "image/png", "attachmentId": "up-1"}]
     assert rejected == 3
 
 
@@ -78,7 +78,7 @@ async def test_processing_concurrency_is_bounded(
     active = 0
     peak = 0
 
-    async def hydrate(attachment: PromptImageAttachment) -> HydratedPromptImage:
+    async def hydrate(attachment: ResolvedSessionAttachment) -> HydratedSessionAttachment:
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -90,9 +90,9 @@ async def test_processing_concurrency_is_bounded(
             "content": "QQ==",
         }
 
-    monkeypatch.setattr(processor, "_hydrate_image_upload", hydrate)
-    attachments: list[PromptImageAttachment] = [
-        {"name": f"{index}.png", "mimeType": "image/png", "uploadId": f"up-{index}"}
+    monkeypatch.setattr(processor, "_hydrate_attachment", hydrate)
+    attachments: list[ResolvedSessionAttachment] = [
+        {"name": f"{index}.png", "mimeType": "image/png", "attachmentId": f"up-{index}"}
         for index in range(6)
     ]
 

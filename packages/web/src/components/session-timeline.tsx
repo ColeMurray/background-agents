@@ -356,8 +356,8 @@ function UserMessageAttachments({
       {attachments.map((attachment, index) => {
         return (
           <img
-            key={`${attachment.uploadId}-${index}`}
-            src={`/api/sessions/${sessionId}/uploads/${attachment.uploadId}`}
+            key={`${attachment.attachmentId}-${index}`}
+            src={`/api/sessions/${sessionId}/attachments/${attachment.attachmentId}`}
             alt={attachment.name}
             title={attachment.name}
             className="max-h-48 max-w-full border border-border object-contain"

@@ -18,7 +18,7 @@ export interface SessionInternalRouteHandlers {
   stop: SessionInternalRouteHandler;
   sandboxEvent: SessionInternalRouteHandler;
   createMediaArtifact: SessionInternalRouteHandler;
-  recordUpload: SessionInternalRouteHandler;
+  recordAttachment: SessionInternalRouteHandler;
   listParticipants: SessionInternalRouteHandler;
   addParticipant: SessionInternalRouteHandler;
   listEvents: SessionInternalRouteHandler;
@@ -59,7 +59,7 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.createMediaArtifact,
       handler: handlers.createMediaArtifact,
     },
-    { method: "POST", path: SessionInternalPaths.uploads, handler: handlers.recordUpload },
+    { method: "POST", path: SessionInternalPaths.attachments, handler: handlers.recordAttachment },
     {
       method: "GET",
       path: SessionInternalPaths.participants,

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { promptAttachmentsSchema } from "@open-inspect/shared";
+import { sessionAttachmentReferencesSchema } from "@open-inspect/shared";
 import { z } from "zod";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
@@ -11,7 +11,7 @@ const promptRequestSchema = z
     content: z.string().min(1),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
-    attachments: promptAttachmentsSchema.optional(),
+    attachments: sessionAttachmentReferencesSchema.optional(),
   })
   .strict();
 

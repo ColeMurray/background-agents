@@ -9,7 +9,7 @@ import { ModelIcon, PaperclipIcon, SendIcon, StopIcon } from "@/components/ui/ic
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
-import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-prompt-attachments";
+import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-attachments";
 import type { Artifact } from "@/types/session";
 
 type SessionPromptComposerProps = {

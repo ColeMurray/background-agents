@@ -2,13 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
 import type { ObjectStorage } from "../storage/object-storage";
 import type { SessionRuntimeClient } from "../session/runtime-client";
-import { PromptUploadCoordinator, type PromptUploadRecord } from "./prompt-upload-coordinator";
+import {
+  SessionAttachmentCoordinator,
+  type SessionAttachmentRecord,
+} from "./session-attachment-coordinator";
 
-const RECORD: PromptUploadRecord = {
-  uploadId: "up-1",
+const RECORD: SessionAttachmentRecord = {
+  attachmentId: "up-1",
   mimeType: "image/png",
   sizeBytes: 3,
-  objectKey: "sessions/session-1/uploads/up-1",
+  objectKey: "sessions/session-1/attachments/up-1",
 };
 
 function buildCoordinator(responses: Array<Response | Error>) {
@@ -32,15 +35,15 @@ function buildCoordinator(responses: Array<Response | Error>) {
     error: vi.fn(),
     child: () => log,
   };
-  const coordinator = new PromptUploadCoordinator(runtime, storage, "session-1", log, {
+  const coordinator = new SessionAttachmentCoordinator(runtime, storage, "session-1", log, {
     requestId: "request-1",
     traceId: "trace-1",
   });
   return { coordinator, fetch, storage, log };
 }
 
-describe("PromptUploadCoordinator", () => {
-  it("registers and then stores an upload", async () => {
+describe("SessionAttachmentCoordinator", () => {
+  it("registers and then stores an attachment", async () => {
     const h = buildCoordinator([Response.json({ status: "ok" })]);
 
     await expect(h.coordinator.store(Uint8Array.from([1, 2, 3]), RECORD)).resolves.toEqual({
@@ -88,12 +91,12 @@ describe("PromptUploadCoordinator", () => {
     await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
       ok: false,
       status: 502,
-      error: "Upload registry returned an invalid response",
+      error: "Attachment registry returned an invalid response",
     });
     expect(h.storage.put).not.toHaveBeenCalled();
   });
 
-  it("leaves a discoverable upload record when object storage fails", async () => {
+  it("leaves a discoverable attachment record when object storage fails", async () => {
     const h = buildCoordinator([Response.json({ status: "ok" })]);
     h.storage.put.mockRejectedValue(new Error("R2 unavailable"));
 
@@ -109,19 +112,21 @@ describe("PromptUploadCoordinator", () => {
       Response.json({
         status: "cleanup_required",
         cleanupClaimedAt: 1000,
-        staleUploads: [{ uploadId: "old-1", objectKey: "sessions/session-1/uploads/old-1" }],
+        staleAttachments: [
+          { attachmentId: "old-1", objectKey: "sessions/session-1/attachments/old-1" },
+        ],
       }),
       Response.json({ status: "ok" }),
       Response.json({ status: "ok" }),
     ]);
 
     await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({ ok: true });
-    expect(h.storage.delete).toHaveBeenCalledWith("sessions/session-1/uploads/old-1");
+    expect(h.storage.delete).toHaveBeenCalledWith("sessions/session-1/attachments/old-1");
     expect(JSON.parse(h.fetch.mock.calls[1][2]?.body as string)).toEqual({
       action: "complete_cleanup",
       cleanupClaimedAt: 1000,
-      acknowledgedUploadIds: ["old-1"],
-      releasedUploadIds: [],
+      acknowledgedAttachmentIds: ["old-1"],
+      releasedAttachmentIds: [],
     });
     expect(JSON.parse(h.fetch.mock.calls[2][2]?.body as string)).toEqual({
       action: "record",
@@ -133,12 +138,14 @@ describe("PromptUploadCoordinator", () => {
     expect(h.fetch.mock.invocationCallOrder[1]).toBeLessThan(h.fetch.mock.invocationCallOrder[2]);
   });
 
-  it("releases failed stale deletions and rejects the new upload", async () => {
+  it("releases failed stale deletions and rejects the new attachment", async () => {
     const h = buildCoordinator([
       Response.json({
         status: "cleanup_required",
         cleanupClaimedAt: 1000,
-        staleUploads: [{ uploadId: "old-1", objectKey: "sessions/session-1/uploads/old-1" }],
+        staleAttachments: [
+          { attachmentId: "old-1", objectKey: "sessions/session-1/attachments/old-1" },
+        ],
       }),
       Response.json({ status: "ok" }),
     ]);
@@ -149,13 +156,13 @@ describe("PromptUploadCoordinator", () => {
     await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
       ok: false,
       status: 503,
-      error: "Failed to clean up expired uploads; please retry",
+      error: "Failed to clean up expired attachments; please retry",
     });
     expect(JSON.parse(h.fetch.mock.calls[1][2]?.body as string)).toEqual({
       action: "complete_cleanup",
       cleanupClaimedAt: 1000,
-      acknowledgedUploadIds: [],
-      releasedUploadIds: ["old-1"],
+      acknowledgedAttachmentIds: [],
+      releasedAttachmentIds: ["old-1"],
     });
     expect(h.storage.put).not.toHaveBeenCalled();
   });
@@ -165,15 +172,17 @@ describe("PromptUploadCoordinator", () => {
       Response.json({
         status: "cleanup_required",
         cleanupClaimedAt: 1000,
-        staleUploads: [{ uploadId: "old-1", objectKey: "sessions/session-1/uploads/old-1" }],
+        staleAttachments: [
+          { attachmentId: "old-1", objectKey: "sessions/session-1/attachments/old-1" },
+        ],
       }),
-      Response.json({ status: "cleanup_required", cleanupClaimedAt: 1000, staleUploads: [] }),
+      Response.json({ status: "cleanup_required", cleanupClaimedAt: 1000, staleAttachments: [] }),
     ]);
 
     await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
       ok: false,
       status: 502,
-      error: "Upload registry returned an invalid response",
+      error: "Attachment registry returned an invalid response",
     });
     expect(h.storage.put).not.toHaveBeenCalled();
   });

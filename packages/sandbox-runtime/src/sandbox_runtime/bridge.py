@@ -31,8 +31,8 @@ from websockets.exceptions import InvalidStatus
 
 from .attachment_processor import (
     AttachmentProcessor,
-    HydratedPromptImage,
-    parse_prompt_image_attachments,
+    HydratedSessionAttachment,
+    parse_session_image_attachments,
 )
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .log_config import configure_logging, get_logger
@@ -743,7 +743,7 @@ class AgentBridge:
             if not self.opencode_session_id:
                 await self._create_opencode_session()
 
-            prompt_attachments, rejected_attachments = parse_prompt_image_attachments(
+            session_attachments, rejected_attachments = parse_session_image_attachments(
                 raw_attachments
             )
             if rejected_attachments:
@@ -755,7 +755,7 @@ class AgentBridge:
                 await self._send_media_warning(
                     f"{rejected_attachments} invalid attachment(s) were skipped."
                 )
-            attachments = await self.attachment_processor.process(prompt_attachments)
+            attachments = await self.attachment_processor.process(session_attachments)
 
             had_error = False
             error_message = None
@@ -959,7 +959,7 @@ class AgentBridge:
         model: str | None,
         opencode_message_id: str | None = None,
         reasoning_effort: str | None = None,
-        attachments: list[HydratedPromptImage] | None = None,
+        attachments: list[HydratedSessionAttachment] | None = None,
     ) -> dict[str, Any]:
         """Build request body for OpenCode prompt requests.
 
@@ -1066,7 +1066,7 @@ class AgentBridge:
         content: str,
         model: str | None = None,
         reasoning_effort: str | None = None,
-        attachments: list[HydratedPromptImage] | None = None,
+        attachments: list[HydratedSessionAttachment] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 

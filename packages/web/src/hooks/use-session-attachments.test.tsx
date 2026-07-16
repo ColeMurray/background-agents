@@ -2,10 +2,10 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WEB_PROMPT_IMAGE_MAX_BYTES } from "@/lib/prompt-attachment-limits";
-import { usePromptAttachments } from "./use-prompt-attachments";
+import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
+import { useSessionAttachments } from "./use-session-attachments";
 
-describe("usePromptAttachments", () => {
+describe("useSessionAttachments", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -13,7 +13,7 @@ describe("usePromptAttachments", () => {
 
   it("rejects video files before creating a preview", () => {
     const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:video");
-    const { result } = renderHook(() => usePromptAttachments());
+    const { result } = renderHook(() => useSessionAttachments());
 
     act(() => {
       result.current.addFiles([new File(["video"], "demo.mp4", { type: "video/mp4" })]);
@@ -24,13 +24,13 @@ describe("usePromptAttachments", () => {
     expect(createObjectURL).not.toHaveBeenCalled();
   });
 
-  it("rejects images above the portable web upload limit", () => {
+  it("rejects images above the portable web request limit", () => {
     const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
-    const { result } = renderHook(() => usePromptAttachments());
+    const { result } = renderHook(() => useSessionAttachments());
 
     act(() => {
       result.current.addFiles([
-        new File([new Uint8Array(WEB_PROMPT_IMAGE_MAX_BYTES + 1)], "large.png", {
+        new File([new Uint8Array(WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 1)], "large.png", {
           type: "image/png",
         }),
       ]);
@@ -43,7 +43,7 @@ describe("usePromptAttachments", () => {
     expect(createObjectURL).not.toHaveBeenCalled();
   });
 
-  it("reuses successful upload IDs when a later file fails and the user retries", async () => {
+  it("reuses successful attachment IDs when a later file fails and the user retries", async () => {
     vi.spyOn(URL, "createObjectURL")
       .mockReturnValueOnce("blob:first")
       .mockReturnValueOnce("blob:second");
@@ -51,15 +51,15 @@ describe("usePromptAttachments", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        Response.json({ uploadId: "up-1", mimeType: "image/png" }, { status: 201 })
+        Response.json({ attachmentId: "up-1", mimeType: "image/png" }, { status: 201 })
       )
       .mockResolvedValueOnce(Response.json({ error: "temporary failure" }, { status: 503 }))
       .mockResolvedValueOnce(
-        Response.json({ uploadId: "up-2", mimeType: "image/png" }, { status: 201 })
+        Response.json({ attachmentId: "up-2", mimeType: "image/png" }, { status: 201 })
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const { result } = renderHook(() => usePromptAttachments());
+    const { result } = renderHook(() => useSessionAttachments());
     act(() => {
       result.current.addFiles([
         new File(["first"], "first.png", { type: "image/png" }),
@@ -76,12 +76,12 @@ describe("usePromptAttachments", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(uploaded.map((attachment) => attachment.uploadId)).toEqual(["up-1", "up-2"]);
+    expect(uploaded.map((attachment) => attachment.attachmentId)).toEqual(["up-1", "up-2"]);
   });
 
   it("enforces the attachment limit across back-to-back additions", () => {
     vi.spyOn(URL, "createObjectURL").mockImplementation((file) => `blob:${file}`);
-    const { result } = renderHook(() => usePromptAttachments());
+    const { result } = renderHook(() => useSessionAttachments());
     const files = Array.from(
       { length: 8 },
       (_, index) => new File([String(index)], `${index}.png`, { type: "image/png" })
@@ -109,7 +109,7 @@ describe("usePromptAttachments", () => {
           })
       )
     );
-    const { result } = renderHook(() => usePromptAttachments());
+    const { result } = renderHook(() => useSessionAttachments());
     act(() => {
       result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]);
     });
@@ -120,7 +120,7 @@ describe("usePromptAttachments", () => {
     });
     act(() => {
       result.current.removeAttachment(result.current.attachments[0].id);
-      resolveUpload(Response.json({ uploadId: "up-1" }, { status: 201 }));
+      resolveUpload(Response.json({ attachmentId: "up-1" }, { status: 201 }));
     });
 
     await act(async () => {

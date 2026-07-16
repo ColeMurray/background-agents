@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionMessageQueue } from "./message-queue";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { ClientInfo, Env, ServerMessage } from "../types";
-import type { MessageRow, ParticipantRow, SessionRow, UploadRow } from "./types";
+import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -100,7 +100,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
   };
 
   const attachmentRepository = {
-    getUnreferenced: vi.fn((): UploadRow[] => []),
+    getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };
 
   const wsManager = {
@@ -207,7 +207,7 @@ describe("SessionMessageQueue", () => {
         id: "up-1",
         mime_type: "image/png",
         size_bytes: 100,
-        object_key: "sessions/sess-1/uploads/up-1",
+        object_key: "sessions/sess-1/attachments/up-1",
         message_id: null,
         cleanup_claimed_at: null,
         created_at: 1,
@@ -219,7 +219,7 @@ describe("SessionMessageQueue", () => {
       attachments: [
         {
           name: "shot.png",
-          uploadId: "up-1",
+          attachmentId: "up-1",
         },
       ],
     });
@@ -227,7 +227,7 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: JSON.stringify([
-          { name: "shot.png", uploadId: "up-1", mimeType: "image/png" },
+          { name: "shot.png", attachmentId: "up-1", mimeType: "image/png" },
         ]),
       }),
       ["up-1"]
@@ -237,12 +237,12 @@ describe("SessionMessageQueue", () => {
       type: "sandbox_event",
       event: expect.objectContaining({
         type: "user_message",
-        attachments: [{ name: "shot.png", mimeType: "image/png", uploadId: "up-1" }],
+        attachments: [{ name: "shot.png", mimeType: "image/png", attachmentId: "up-1" }],
       }),
     });
     const storedEvent = JSON.parse(h.repository.createEvent.mock.calls[0][0].data as string);
     expect(storedEvent.attachments).toEqual([
-      { name: "shot.png", mimeType: "image/png", uploadId: "up-1" },
+      { name: "shot.png", mimeType: "image/png", attachmentId: "up-1" },
     ]);
   });
 
@@ -253,7 +253,7 @@ describe("SessionMessageQueue", () => {
         id: "up-1",
         mime_type: "image/png",
         size_bytes: 100,
-        object_key: "sessions/sess-1/uploads/up-1",
+        object_key: "sessions/sess-1/attachments/up-1",
         message_id: null,
         cleanup_claimed_at: null,
         created_at: 1,
@@ -265,7 +265,7 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.handlePromptMessage({} as WebSocket, {
       content: "look",
-      attachments: [{ name: "shot.png", uploadId: "up-1" }],
+      attachments: [{ name: "shot.png", attachmentId: "up-1" }],
     });
 
     expect(h.wsManager.send).toHaveBeenCalledWith(
@@ -281,7 +281,7 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.handlePromptMessage({} as WebSocket, {
       content: "look",
-      attachments: [{ name: "missing.png", uploadId: "missing" }],
+      attachments: [{ name: "missing.png", attachmentId: "missing" }],
     });
 
     expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
@@ -291,7 +291,7 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("does not disguise upload storage failures as invalid user input", async () => {
+  it("does not disguise attachment storage failures as invalid user input", async () => {
     const h = buildQueue();
     h.attachmentRepository.getUnreferenced.mockImplementation(() => {
       throw new Error("database unavailable");
@@ -300,7 +300,7 @@ describe("SessionMessageQueue", () => {
     await expect(
       h.queue.handlePromptMessage({} as WebSocket, {
         content: "look",
-        attachments: [{ name: "shot.png", uploadId: "up-1" }],
+        attachments: [{ name: "shot.png", attachmentId: "up-1" }],
       })
     ).rejects.toThrow("database unavailable");
 
@@ -310,14 +310,14 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("rejects upload rows with unsupported image metadata", async () => {
+  it("rejects attachment rows with unsupported image metadata", async () => {
     const h = buildQueue();
     h.attachmentRepository.getUnreferenced.mockReturnValue([
       {
         id: "up-invalid",
         mime_type: "application/pdf",
         size_bytes: 100,
-        object_key: "sessions/sess-1/uploads/up-invalid",
+        object_key: "sessions/sess-1/attachments/up-invalid",
         message_id: null,
         cleanup_claimed_at: null,
         created_at: 1,
@@ -326,7 +326,7 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.handlePromptMessage({} as WebSocket, {
       content: "watch this",
-      attachments: [{ name: "document.pdf", uploadId: "up-invalid" }],
+      attachments: [{ name: "document.pdf", attachmentId: "up-invalid" }],
     });
 
     expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
@@ -334,7 +334,7 @@ describe("SessionMessageQueue", () => {
       expect.anything(),
       expect.objectContaining({
         code: "INVALID_ATTACHMENTS",
-        message: "Upload is not a supported image",
+        message: "Attachment is not a supported image",
       })
     );
   });

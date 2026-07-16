@@ -14,7 +14,7 @@ import { APP_NAME } from "@/lib/site-config";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
-  type PromptAttachment,
+  type SessionAttachmentReference,
   type ModelCategory,
 } from "@open-inspect/shared";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
@@ -23,8 +23,8 @@ import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import {
   ATTACHMENT_ACCEPT,
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
-  usePromptAttachments,
-} from "@/hooks/use-prompt-attachments";
+  useSessionAttachments,
+} from "@/hooks/use-session-attachments";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import {
   useSessionTargetPicker,
@@ -49,7 +49,7 @@ export default function Home() {
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
-  const promptAttachments = usePromptAttachments();
+  const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
@@ -210,7 +210,7 @@ export default function Home() {
   };
 
   const handleAddFiles = (files: Iterable<File>) => {
-    promptAttachments.addFiles(files);
+    sessionAttachments.addFiles(files);
     if (!pendingSessionId && !isCreatingSession && isLaunchable) {
       createSessionForWarming();
     }
@@ -218,8 +218,8 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitInFlightRef.current || promptAttachments.isUploading || loadingEnabledModels) return;
-    const hasAttachments = promptAttachments.attachments.length > 0;
+    if (submitInFlightRef.current || sessionAttachments.isUploading || loadingEnabledModels) return;
+    const hasAttachments = sessionAttachments.attachments.length > 0;
     if (!prompt.trim() && !hasAttachments) return;
     if (!isLaunchable) {
       setError(
@@ -245,10 +245,10 @@ export default function Home() {
         return;
       }
 
-      let attachments: PromptAttachment[] | undefined;
+      let attachments: SessionAttachmentReference[] | undefined;
       if (hasAttachments) {
         try {
-          attachments = await promptAttachments.uploadAll(sessionId);
+          attachments = await sessionAttachments.uploadAll(sessionId);
         } catch {
           return;
         }
@@ -266,7 +266,7 @@ export default function Home() {
       });
 
       if (res.ok) {
-        promptAttachments.clearAttachments();
+        sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         router.push(`/session/${sessionId}`);
       } else {
@@ -293,11 +293,11 @@ export default function Home() {
       prompt={prompt}
       handlePromptChange={handlePromptChange}
       attachments={{
-        items: promptAttachments.attachments,
-        error: promptAttachments.attachmentError,
-        isUploading: promptAttachments.isUploading,
+        items: sessionAttachments.attachments,
+        error: sessionAttachments.attachmentError,
+        isUploading: sessionAttachments.isUploading,
         onAdd: handleAddFiles,
-        onRemove: promptAttachments.removeAttachment,
+        onRemove: sessionAttachments.removeAttachment,
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}
@@ -333,7 +333,7 @@ function HomeContent({
   prompt: string;
   handlePromptChange: (value: string) => void;
   attachments: {
-    items: ReturnType<typeof usePromptAttachments>["attachments"];
+    items: ReturnType<typeof useSessionAttachments>["attachments"];
     error: string | null;
     isUploading: boolean;
     onAdd: (files: Iterable<File>) => void;

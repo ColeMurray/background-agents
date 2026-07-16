@@ -13,7 +13,7 @@ import { initialSessionSocketState, sessionSocketReducer } from "@/lib/session-s
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
-  PromptAttachment,
+  SessionAttachmentReference,
   ParticipantPresence,
   ServerMessage,
   SessionState,
@@ -54,7 +54,7 @@ interface UseSessionSocketReturn {
     content: string,
     model?: string,
     reasoningEffort?: string,
-    attachments?: PromptAttachment[]
+    attachments?: SessionAttachmentReference[]
   ) => Promise<boolean>;
   stopExecution: () => void;
   sendTyping: () => void;
@@ -182,7 +182,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       content: string,
       model?: string,
       reasoningEffort?: string,
-      attachments?: PromptAttachment[]
+      attachments?: SessionAttachmentReference[]
     ): Promise<boolean> => {
       if (!isOpen()) {
         console.error("WebSocket not connected");

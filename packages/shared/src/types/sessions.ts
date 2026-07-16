@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ResolvedPromptAttachment } from "./prompt-attachments";
+import type { ResolvedSessionAttachment } from "./session-attachments";
 import {
   sandboxStatusSchema,
   sessionStatusSchema,
@@ -79,7 +79,7 @@ export interface SessionMessage {
   authorId: string;
   content: string;
   source: MessageSource;
-  attachments: ResolvedPromptAttachment[] | null;
+  attachments: ResolvedSessionAttachment[] | null;
   status: MessageStatus;
   createdAt: number;
   startedAt: number | null;

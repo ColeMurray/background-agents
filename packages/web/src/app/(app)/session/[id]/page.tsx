@@ -24,14 +24,14 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
-  type PromptAttachment,
+  type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
-  usePromptAttachments,
-} from "@/hooks/use-prompt-attachments";
+  useSessionAttachments,
+} from "@/hooks/use-session-attachments";
 import type { ComboboxGroup } from "@/components/ui/combobox";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
@@ -89,7 +89,7 @@ function SessionPageContent() {
   } = useModelSelection(sessionState);
   const {
     prompt,
-    promptAttachments,
+    sessionAttachments,
     inputRef,
     isSubmitting,
     handleSubmit,
@@ -268,7 +268,7 @@ function SessionPageContent() {
         prompt={{
           value: prompt,
           isProcessing,
-          draftLocked: isSubmitting || promptAttachments.isUploading,
+          draftLocked: isSubmitting || sessionAttachments.isUploading,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,
@@ -276,11 +276,11 @@ function SessionPageContent() {
           onStopExecution: stopExecution,
         }}
         attachments={{
-          items: promptAttachments.attachments,
-          error: promptAttachments.attachmentError,
-          isUploading: promptAttachments.isUploading,
-          onAdd: promptAttachments.addFiles,
-          onRemove: promptAttachments.removeAttachment,
+          items: sessionAttachments.attachments,
+          error: sessionAttachments.attachmentError,
+          isUploading: sessionAttachments.isUploading,
+          onAdd: sessionAttachments.addFiles,
+          onRemove: sessionAttachments.removeAttachment,
         }}
         model={{
           selectedModel,
@@ -457,7 +457,7 @@ function usePromptInput(
 ) {
   const [prompt, setPrompt] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const promptAttachments = usePromptAttachments();
+  const sessionAttachments = useSessionAttachments();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
@@ -473,13 +473,13 @@ function usePromptInput(
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const hasAttachments = promptAttachments.attachments.length > 0;
+    const hasAttachments = sessionAttachments.attachments.length > 0;
     if (
       submitInFlightRef.current ||
       (!prompt.trim() && !hasAttachments) ||
       isProcessing ||
       loadingEnabledModels ||
-      promptAttachments.isUploading
+      sessionAttachments.isUploading
     ) {
       return;
     }
@@ -487,10 +487,10 @@ function usePromptInput(
     submitInFlightRef.current = true;
     setIsSubmitting(true);
     try {
-      let attachments: PromptAttachment[] | undefined;
+      let attachments: SessionAttachmentReference[] | undefined;
       if (hasAttachments) {
         try {
-          attachments = await promptAttachments.uploadAll(sessionId);
+          attachments = await sessionAttachments.uploadAll(sessionId);
         } catch {
           return;
         }
@@ -507,7 +507,7 @@ function usePromptInput(
       if (!accepted) return;
 
       setPrompt("");
-      promptAttachments.clearAttachments();
+      sessionAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top
       mutate(isUnarchivedSessionListKey);
     } finally {
@@ -537,7 +537,7 @@ function usePromptInput(
 
   return {
     prompt,
-    promptAttachments,
+    sessionAttachments,
     inputRef,
     isSubmitting,
     handleSubmit,

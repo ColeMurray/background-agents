@@ -51,7 +51,7 @@ describe("session prompt API route", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content: "Look",
-          attachments: [{ name: "shot.png", uploadId: "upload-1" }],
+          attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
         }),
       }) as never,
       { params: Promise.resolve({ id: "session-1" }) }
@@ -67,7 +67,7 @@ describe("session prompt API route", () => {
       content: "Look",
       authorId: "user-1",
       source: "web",
-      attachments: [{ name: "shot.png", uploadId: "upload-1" }],
+      attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
     });
   });
 });

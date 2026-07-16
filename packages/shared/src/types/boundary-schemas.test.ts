@@ -234,7 +234,7 @@ describe("boundary schemas", () => {
         attachments: [
           {
             name: "error.png",
-            uploadId: "upload-1",
+            attachmentId: "attachment-1",
           },
         ],
       });
@@ -262,7 +262,7 @@ describe("boundary schemas", () => {
         content: "Compare these",
         attachments: Array.from({ length: 7 }, (_, index) => ({
           name: `${index}.png`,
-          uploadId: `upload-${index}`,
+          attachmentId: `upload-${index}`,
         })),
       });
 
@@ -271,8 +271,8 @@ describe("boundary schemas", () => {
 
     it("bounds attachment identifiers and names", () => {
       for (const attachment of [
-        { name: "shot.png", uploadId: "../upload" },
-        { name: "x".repeat(256), uploadId: "upload-1" },
+        { name: "shot.png", attachmentId: "../upload" },
+        { name: "x".repeat(256), attachmentId: "attachment-1" },
       ]) {
         expect(
           clientMessageSchema.safeParse({

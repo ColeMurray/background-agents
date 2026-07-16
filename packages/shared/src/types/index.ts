@@ -6,20 +6,20 @@
  */
 
 export {
-  MAX_PROMPT_ATTACHMENTS,
-  PROMPT_IMAGE_MIME_TYPES,
-  promptImageMimeTypeSchema,
-  promptUploadIdSchema,
-  promptAttachmentSchema,
-  promptAttachmentsSchema,
-  resolvedPromptAttachmentSchema,
-  resolvedPromptAttachmentsSchema,
-} from "./prompt-attachments";
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  sessionAttachmentMimeTypeSchema,
+  sessionAttachmentIdSchema,
+  sessionAttachmentReferenceSchema,
+  sessionAttachmentReferencesSchema,
+  resolvedSessionAttachmentSchema,
+  resolvedSessionAttachmentsSchema,
+} from "./session-attachments";
 export type {
-  PromptImageMimeType,
-  PromptAttachment,
-  ResolvedPromptAttachment,
-} from "./prompt-attachments";
+  SessionAttachmentMimeType,
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
+} from "./session-attachments";
 
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
