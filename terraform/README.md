@@ -116,13 +116,12 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 - Signing Secret
 
 The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
-`groups:history`, `groups:read`, `im:history`, `im:read`, and `reactions:write`. Generated-media
-attachments additionally require `files:write`. Reinstall the app after changing scopes.
+`groups:history`, `groups:read`, `im:history`, `im:read`, `files:write`, and `reactions:write`.
+Reinstall the app after changing scopes.
 
 When upgrading an existing Slack deployment, add **Queues: Edit** to the Cloudflare API token before
-running `terraform apply`. Leave `slack_media_delivery_enabled = false` for the initial apply; text
-completions move to the Queue without requiring Slack reauthorization. Add `files:write`, reinstall
-the Slack app, and enable the variable only when the workspace is ready for media attachments.
+running `terraform apply`. Add `files:write`, reinstall the Slack app, and update the deployed bot
+token if Slack issued a replacement before deploying this version.
 
 ## Quick Start
 

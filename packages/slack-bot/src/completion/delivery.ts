@@ -90,7 +90,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
     }
 
     const mediaArtifacts = agentResponse.mediaArtifacts ?? [];
-    if (env.SLACK_MEDIA_DELIVERY_ENABLED === "true" && mediaArtifacts.length > 0) {
+    if (mediaArtifacts.length > 0) {
       const mediaResult = await deliverMediaArtifacts({
         env,
         sessionId: job.sessionId,

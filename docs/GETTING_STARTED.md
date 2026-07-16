@@ -327,7 +327,7 @@ Skip this step if you don't need Slack integration.
    - `groups:read`
    - `im:history`
    - `im:read`
-   - `files:write` (only when enabling generated-media attachments)
+   - `files:write`
    - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
@@ -342,13 +342,11 @@ Queued delivery applies to every Slack completion, including text-only replies. 
 
 1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
    this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
-2. Leave `slack_media_delivery_enabled` unset or `false`. Its default is `false`, so the upgrade
-   moves text completions onto the queue without changing the existing Slack app permissions.
-3. Run `terraform apply` and verify a text completion. If the token lacks Queue access, the apply
-   fails while provisioning the new resources; grant the permission and rerun the apply.
-4. To enable media later, add the Slack bot scope `files:write`, reinstall the app once for the
-   workspace, update `slack_bot_token` if Slack issued a replacement, set
-   `slack_media_delivery_enabled = true`, and apply again.
+2. Add the Slack bot scope `files:write`, reinstall the app once for the workspace, and update
+   `slack_bot_token` if Slack issued a replacement.
+3. Run `terraform apply`, then verify a text completion and a generated-media attachment. If the
+   token lacks Queue access, the apply fails while provisioning the new resources; grant the
+   permission and rerun the apply.
 
 No individual Slack user needs to reauthorize the app. Teams with `enable_slack_bot = false` do not
 create the Queue resources.
@@ -501,9 +499,6 @@ google_client_secret = ""
 enable_slack_bot     = false
 slack_bot_token      = ""
 slack_signing_secret = ""
-# Optional: attach generated media to queued completion replies. Requires the
-# Slack bot scope files:write and app reinstall before changing this to true.
-slack_media_delivery_enabled = false
 
 # GitHub Bot (set enable_github_bot = true to deploy the webhook worker)
 enable_github_bot      = false
@@ -1078,14 +1073,12 @@ If the bot doesn't see the original message when tagged in a thread reply:
 
 ### Slack completion does not attach generated media
 
-1. Set `slack_media_delivery_enabled = true` and run `terraform apply`. Text-only completion replies
-   always use the queue; this flag controls only media attachment.
-2. Verify the bot has the `files:write` scope and reinstall the app after adding it.
-3. Confirm the agent registered the image or video as a session artifact; repository files are not
+1. Verify the bot has the `files:write` scope and reinstall the app after adding it.
+2. Confirm the agent registered the image or video as a session artifact; repository files are not
    uploaded automatically.
-4. Check that the file is PNG, JPEG, WebP, or MP4 and no larger than 10 MiB. A completion attaches
+3. Check that the file is PNG, JPEG, WebP, or MP4 and no larger than 10 MiB. A completion attaches
    at most five files and 25 MiB total; other media remains available through **View Session**.
-5. Check Slack workspace policies for disabled uploads, prohibited file types, or exhausted storage.
+4. Check Slack workspace policies for disabled uploads, prohibited file types, or exhausted storage.
 
 ### GitHub bot not responding to webhooks
 

@@ -14,7 +14,6 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     WEB_APP_URL: "https://app.test",
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
     CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
-    SLACK_MEDIA_DELIVERY_ENABLED: "true",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",

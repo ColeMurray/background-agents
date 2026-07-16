@@ -27,7 +27,6 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     WEB_APP_URL: "https://app.test",
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
     CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
-    SLACK_MEDIA_DELIVERY_ENABLED: "true",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
@@ -98,14 +97,17 @@ describe("processSlackCompletion", () => {
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("reactions.remove");
   });
 
-  it("keeps text completion and reaction cleanup when media is disabled", async () => {
-    vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
+  it("skips media delivery when the response has no media artifacts", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      ...successfulAgentResponse(),
+      mediaArtifacts: [],
+    });
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(Response.json({ ok: true, channel: "C123", ts: "333.444" }))
       .mockResolvedValueOnce(Response.json({ ok: true }));
 
-    await processSlackCompletion(job(), makeEnv({ SLACK_MEDIA_DELIVERY_ENABLED: "false" }));
+    await processSlackCompletion(job(), makeEnv());
 
     expect(deliverMediaArtifacts).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);

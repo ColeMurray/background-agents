@@ -74,8 +74,6 @@ module "slack_bot_worker" {
     # Kill switch for Slack channel-message triggers; the bot only ingests/
     # forwards channel messages when this is exactly "true" (dark by default).
     { name = "SLACK_TRIGGERS_ENABLED", value = var.slack_triggers_enabled ? "true" : "false" },
-    # Media can be disabled independently while queued text completions continue.
-    { name = "SLACK_MEDIA_DELIVERY_ENABLED", value = var.slack_media_delivery_enabled ? "true" : "false" },
   ]
 
   secrets = [

@@ -175,8 +175,6 @@ enable_slack_bot = false
 
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
-# Requires the Slack bot scope files:write and an app reinstall before enabling.
-slack_media_delivery_enabled = false
 
 # Linear Agent (Optional)
 # Create an OAuth Application at: https://linear.app/settings/api/applications/new

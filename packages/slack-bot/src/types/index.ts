@@ -30,8 +30,6 @@ export interface Env {
    * default — any other value (or unset) disables the feature entirely.
    */
   SLACK_TRIGGERS_ENABLED?: string;
-  /** Media kill switch. Text completions continue through the Queue when disabled. */
-  SLACK_MEDIA_DELIVERY_ENABLED?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;
