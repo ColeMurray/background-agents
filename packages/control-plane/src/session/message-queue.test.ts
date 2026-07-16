@@ -286,6 +286,25 @@ describe("SessionMessageQueue", () => {
     );
   });
 
+  it("does not disguise upload storage failures as invalid user input", async () => {
+    const h = buildQueue();
+    h.repository.getUnreferencedUploads.mockImplementation(() => {
+      throw new Error("database unavailable");
+    });
+
+    await expect(
+      h.queue.handlePromptMessage({} as WebSocket, {
+        content: "look",
+        attachments: [{ name: "shot.png", uploadId: "up-1" }],
+      })
+    ).rejects.toThrow("database unavailable");
+
+    expect(h.wsManager.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
+    );
+  });
+
   it("rejects upload rows with unsupported image metadata", async () => {
     const h = buildQueue();
     h.repository.getUnreferencedUploads.mockReturnValue([

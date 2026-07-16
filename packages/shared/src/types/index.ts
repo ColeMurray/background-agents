@@ -14,14 +14,15 @@ export {
   promptAttachmentsSchema,
   resolvedPromptAttachmentSchema,
   resolvedPromptAttachmentsSchema,
-  clientMessageSchema,
-} from "./websocket";
+} from "./prompt-attachments";
 export type {
   PromptImageMimeType,
   PromptAttachment,
   ResolvedPromptAttachment,
-  ClientMessage,
-} from "./websocket";
+} from "./prompt-attachments";
+
+export { clientMessageSchema } from "./websocket";
+export type { ClientMessage } from "./websocket";
 
 export { sessionStatusSchema } from "./statuses";
 export type {

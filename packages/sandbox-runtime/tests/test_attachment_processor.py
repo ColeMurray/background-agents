@@ -9,6 +9,7 @@ from sandbox_runtime.attachment_processor import (
     AttachmentProcessor,
     HydratedPromptImage,
     PromptImageAttachment,
+    parse_prompt_image_attachments,
 )
 
 
@@ -55,6 +56,20 @@ async def test_upload_is_hydrated_to_base64(
 
 async def test_invalid_upload_id_is_rejected(processor: AttachmentProcessor) -> None:
     assert await processor._download_upload_bytes("../admin") is None
+
+
+def test_untyped_prompt_attachments_are_validated() -> None:
+    parsed, rejected = parse_prompt_image_attachments(
+        [
+            {"name": "shot.png", "mimeType": "image/png", "uploadId": "up-1"},
+            {"name": "remote.png", "mimeType": "image/png", "url": "https://example.com"},
+            {"name": "video.mp4", "mimeType": "video/mp4", "uploadId": "up-2"},
+            "invalid",
+        ]
+    )
+
+    assert parsed == [{"name": "shot.png", "mimeType": "image/png", "uploadId": "up-1"}]
+    assert rejected == 3
 
 
 async def test_processing_concurrency_is_bounded(

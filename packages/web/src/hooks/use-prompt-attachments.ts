@@ -18,6 +18,7 @@ const IMAGE_MIME_TYPES: ReadonlySet<string> = new Set(PROMPT_IMAGE_MIME_TYPES);
 
 export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES].join(",");
 export const DEFAULT_ATTACHMENT_ONLY_MESSAGE = "See the attached files.";
+const ATTACHMENTS_CHANGED_DURING_UPLOAD = "Attachments changed during upload; please retry";
 
 function isSupportedImage(file: File): boolean {
   return IMAGE_MIME_TYPES.has(file.type);
@@ -38,6 +39,8 @@ export function usePromptAttachments() {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const attachmentsRef = useRef<PendingAttachment[]>([]);
+  const attachmentsRevisionRef = useRef(0);
+  const activeUploadRef = useRef<AbortController | null>(null);
   const uploadedByIdRef = useRef(
     new Map<string, { sessionId: string; attachment: PromptAttachment }>()
   );
@@ -84,7 +87,11 @@ export function usePromptAttachments() {
     }
 
     if (additions.length > 0) {
-      setAttachments((prev) => [...prev, ...additions]);
+      const next = [...current, ...additions];
+      attachmentsRevisionRef.current += 1;
+      activeUploadRef.current?.abort();
+      attachmentsRef.current = next;
+      setAttachments(next);
     }
 
     if (errors.length > 0) {
@@ -94,24 +101,29 @@ export function usePromptAttachments() {
 
   const removeAttachment = useCallback((id: string) => {
     setAttachmentError(null);
-    setAttachments((prev) => {
-      const removed = prev.find((attachment) => attachment.id === id);
-      if (removed) {
-        URL.revokeObjectURL(removed.previewUrl);
-        uploadedByIdRef.current.delete(removed.id);
-      }
-      return prev.filter((attachment) => attachment.id !== id);
-    });
+    const current = attachmentsRef.current;
+    const removed = current.find((attachment) => attachment.id === id);
+    if (!removed) return;
+
+    URL.revokeObjectURL(removed.previewUrl);
+    uploadedByIdRef.current.delete(removed.id);
+    attachmentsRevisionRef.current += 1;
+    activeUploadRef.current?.abort();
+    const next = current.filter((attachment) => attachment.id !== id);
+    attachmentsRef.current = next;
+    setAttachments(next);
   }, []);
 
   const clearAttachments = useCallback(() => {
-    setAttachments((prev) => {
-      for (const attachment of prev) {
-        URL.revokeObjectURL(attachment.previewUrl);
-      }
-      uploadedByIdRef.current.clear();
-      return [];
-    });
+    const current = attachmentsRef.current;
+    for (const attachment of current) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+    uploadedByIdRef.current.clear();
+    attachmentsRevisionRef.current += 1;
+    activeUploadRef.current?.abort();
+    attachmentsRef.current = [];
+    setAttachments([]);
   }, []);
 
   /**
@@ -120,14 +132,33 @@ export function usePromptAttachments() {
    * pending list is left intact so the user can retry.
    */
   const uploadAll = useCallback(async (sessionId: string): Promise<PromptAttachment[]> => {
-    const pending = attachmentsRef.current;
+    if (activeUploadRef.current) {
+      throw new Error("Attachment upload is already in progress");
+    }
+    const pending = [...attachmentsRef.current];
     if (pending.length === 0) return [];
+    const revision = attachmentsRevisionRef.current;
+    const controller = new AbortController();
+    activeUploadRef.current = controller;
+
+    const assertCurrent = () => {
+      const current = attachmentsRef.current;
+      if (
+        controller.signal.aborted ||
+        attachmentsRevisionRef.current !== revision ||
+        current.length !== pending.length ||
+        current.some((attachment, index) => attachment.id !== pending[index]?.id)
+      ) {
+        throw new Error(ATTACHMENTS_CHANGED_DURING_UPLOAD);
+      }
+    };
 
     setIsUploading(true);
     setAttachmentError(null);
     try {
       const uploaded: PromptAttachment[] = [];
       for (const pendingAttachment of pending) {
+        assertCurrent();
         const cached = uploadedByIdRef.current.get(pendingAttachment.id);
         if (cached?.sessionId === sessionId) {
           uploaded.push(cached.attachment);
@@ -139,7 +170,9 @@ export function usePromptAttachments() {
         const response = await fetch(`/api/sessions/${sessionId}/uploads`, {
           method: "POST",
           body: formData,
+          signal: controller.signal,
         });
+        assertCurrent();
         if (!response.ok) {
           const data = (await response.json().catch(() => null)) as { error?: string } | null;
           throw new Error(data?.error || `Failed to upload ${pendingAttachment.file.name}`);
@@ -154,12 +187,21 @@ export function usePromptAttachments() {
         uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });
         uploaded.push(attachment);
       }
+      assertCurrent();
       return uploaded;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to upload attachments";
+      const normalizedError =
+        controller.signal.aborted || attachmentsRevisionRef.current !== revision
+          ? new Error(ATTACHMENTS_CHANGED_DURING_UPLOAD)
+          : error;
+      const message =
+        normalizedError instanceof Error ? normalizedError.message : "Failed to upload attachments";
       setAttachmentError(message);
-      throw error;
+      throw normalizedError;
     } finally {
+      if (activeUploadRef.current === controller) {
+        activeUploadRef.current = null;
+      }
       setIsUploading(false);
     }
   }, []);

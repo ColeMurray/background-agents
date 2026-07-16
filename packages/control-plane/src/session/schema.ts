@@ -461,21 +461,6 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Create uploads table",
     run: UPLOADS_TABLE_SQL,
   },
-  {
-    id: 36,
-    description: "Add retryable cleanup claims to uploads",
-    run: `ALTER TABLE uploads ADD COLUMN cleanup_claimed_at INTEGER`,
-  },
-  {
-    id: 37,
-    description: "Remove obsolete upload kind discriminator",
-    run: (sql) => {
-      const columns = sql.exec(`PRAGMA table_info(uploads)`).toArray() as Array<{ name: string }>;
-      if (columns.some((column) => column.name === "kind")) {
-        sql.exec(`ALTER TABLE uploads DROP COLUMN kind`);
-      }
-    },
-  },
 ];
 
 /**

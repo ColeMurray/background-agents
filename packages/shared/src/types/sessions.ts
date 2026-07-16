@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ResolvedPromptAttachment } from "./websocket";
+import type { ResolvedPromptAttachment } from "./prompt-attachments";
 import {
   sandboxStatusSchema,
   sessionStatusSchema,

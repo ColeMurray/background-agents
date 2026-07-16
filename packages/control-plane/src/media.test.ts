@@ -6,6 +6,8 @@ import {
   detectScreenshotFileType,
   detectVideoFileType,
   isSupportedPromptUploadMimeType,
+  PROMPT_UPLOAD_MAX_REQUEST_BYTES,
+  promptUploadRequestExceedsLimit,
   isSupportedScreenshotMimeType,
   isSupportedVideoMimeType,
   parseDimensions,
@@ -62,6 +64,23 @@ describe("media helpers", () => {
     expect(isSupportedPromptUploadMimeType("video/webm")).toBe(false);
     expect(isSupportedPromptUploadMimeType("application/pdf")).toBe(false);
     expect(isSupportedPromptUploadMimeType("image/svg+xml")).toBe(false);
+  });
+
+  it("rejects oversized prompt upload requests before multipart buffering", () => {
+    expect(
+      promptUploadRequestExceedsLimit(
+        new Request("https://example.test", {
+          headers: { "Content-Length": String(PROMPT_UPLOAD_MAX_REQUEST_BYTES + 1) },
+        })
+      )
+    ).toBe(true);
+    expect(
+      promptUploadRequestExceedsLimit(
+        new Request("https://example.test", {
+          headers: { "Content-Length": String(PROMPT_UPLOAD_MAX_REQUEST_BYTES) },
+        })
+      )
+    ).toBe(false);
   });
 
   it("detects prompt upload images including gif", () => {

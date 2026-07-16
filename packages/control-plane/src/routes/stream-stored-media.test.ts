@@ -4,7 +4,7 @@ import type {
   ObjectStorageMetadata,
   ObjectStorageObject,
 } from "../storage/object-storage";
-import { streamStoredMedia } from "./stream-stored-media";
+import { parseByteRangeHeader, streamStoredMedia } from "./stream-stored-media";
 
 function metadata(contentType = "image/png"): ObjectStorageMetadata {
   return {
@@ -85,5 +85,22 @@ describe("streamStoredMedia", () => {
     );
 
     expect(response.status).toBe(500);
+  });
+
+  it.each(["bytes=0x2-5", "bytes=1e2-", "bytes=+1-5", "bytes=-0x2"])(
+    "rejects non-decimal range syntax: %s",
+    (rangeHeader) => {
+      const result = parseByteRangeHeader(rangeHeader, 10);
+
+      expect(result).toBeInstanceOf(Response);
+      expect((result as Response).status).toBe(416);
+    }
+  );
+
+  it.each([
+    ["bytes=2-", { start: 2, end: 9, length: 8 }],
+    ["bytes=-3", { start: 7, end: 9, length: 3 }],
+  ])("continues to support valid open-ended ranges: %s", (rangeHeader, expected) => {
+    expect(parseByteRangeHeader(rangeHeader, 10)).toEqual(expected);
   });
 });

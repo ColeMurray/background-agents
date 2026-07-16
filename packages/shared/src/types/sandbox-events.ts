@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { recordSchema } from "./artifacts";
 import { gitSyncStatusSchema, type EventType } from "./statuses";
-import { resolvedPromptAttachmentsSchema } from "./websocket";
+import { resolvedPromptAttachmentsSchema } from "./prompt-attachments";
 
 export interface AgentEvent {
   id: string;

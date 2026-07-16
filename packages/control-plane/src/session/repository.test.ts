@@ -687,6 +687,24 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("upload cleanup leases", () => {
+    it("acknowledges only rows claimed by the matching cleanup attempt", () => {
+      repo.acknowledgeUploadCleanup(["up-1", "up-2"], 1234);
+
+      expect(mock.calls[0].query).toContain("cleanup_claimed_at = ?");
+      expect(mock.calls[0].query).toContain("message_id IS NULL");
+      expect(mock.calls[0].params).toEqual(["up-1", "up-2", 1234]);
+    });
+
+    it("releases only rows claimed by the matching cleanup attempt", () => {
+      repo.releaseUploadCleanupClaims(["up-1", "up-2"], 1234);
+
+      expect(mock.calls[0].query).toContain("cleanup_claimed_at = ?");
+      expect(mock.calls[0].query).toContain("message_id IS NULL");
+      expect(mock.calls[0].params).toEqual(["up-1", "up-2", 1234]);
+    });
+  });
+
   describe("updateMessageToProcessing", () => {
     it("changes status and sets startedAt", () => {
       repo.updateMessageToProcessing("msg-1", 2000);

@@ -108,39 +108,4 @@ describe("SessionDO Durable Object", () => {
       expect(ids).toEqual(MIGRATIONS.map((migration) => migration.id));
     });
   });
-
-  it("migrates the obsolete upload kind column without losing rows", async () => {
-    const id = env.SESSION.newUniqueId();
-    const stub = env.SESSION.get(id);
-
-    await stub.fetch("http://internal/internal/init", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionName: "test-session-upload-kind-migration",
-        repoOwner: "acme",
-        repoName: "api",
-        userId: "user-4",
-      }),
-    });
-
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      const sql = instance.ctx.storage.sql;
-      sql.exec(`ALTER TABLE uploads ADD COLUMN kind TEXT NOT NULL DEFAULT 'image'`);
-      sql.exec(
-        `INSERT INTO uploads (id, mime_type, size_bytes, object_key, message_id, created_at)
-         VALUES ('up-1', 'image/png', 1, 'sessions/test/uploads/up-1', NULL, 1)`
-      );
-
-      const migration = MIGRATIONS.find((entry) => entry.id === 37);
-      if (!migration || typeof migration.run !== "function") {
-        throw new Error("Upload kind migration is missing");
-      }
-      migration.run(sql);
-
-      const columns = sql.exec(`PRAGMA table_info(uploads)`).toArray() as Array<{ name: string }>;
-      expect(columns.map((column) => column.name)).not.toContain("kind");
-      expect(sql.exec(`SELECT id FROM uploads`).toArray()).toEqual([{ id: "up-1" }]);
-    });
-  });
 });

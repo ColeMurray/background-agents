@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import {
@@ -19,7 +19,8 @@ import type {
   SessionState,
 } from "@open-inspect/shared";
 
-const PROMPT_SUBSCRIPTION_RETRY_DELAY_MS = 500;
+const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
+const PROMPT_ACK_TIMEOUT_MS = 15_000;
 const HISTORY_PAGE_SIZE = 200;
 
 interface Message {
@@ -54,7 +55,7 @@ interface UseSessionSocketReturn {
     model?: string,
     reasoningEffort?: string,
     attachments?: PromptAttachment[]
-  ) => void;
+  ) => Promise<boolean>;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
@@ -76,6 +77,27 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   // Buffers streamed assistant text in a ref so token events (which arrive at
   // high frequency) don't re-render; the text is appended on completion.
   const pendingTextRef = useRef<PendingAssistantText | null>(null);
+  const subscriptionWaitersRef = useRef(new Set<(subscribed: boolean) => void>());
+  const pendingPromptRef = useRef<{
+    resolve: (accepted: boolean) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
+  const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
+    for (const resolve of subscriptionWaitersRef.current) {
+      resolve(subscribed);
+    }
+    subscriptionWaitersRef.current.clear();
+  }, []);
+
+  const settlePendingPrompt = useCallback((accepted: boolean) => {
+    const pending = pendingPromptRef.current;
+    if (!pending) return;
+
+    clearTimeout(pending.timeout);
+    pendingPromptRef.current = null;
+    pending.resolve(accepted);
+  }, []);
 
   const handleMessage = useCallback(
     (message: ServerMessage) => {
@@ -94,6 +116,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       if (message.type === "subscribed") {
         console.log("WebSocket subscribed to session");
         subscribedRef.current = true;
+        settleSubscriptionWaiters(true);
         pendingTextRef.current = null;
         if (message.spawnError && message.state.sandboxStatus === "failed") {
           console.error("Sandbox spawn error:", message.spawnError);
@@ -102,6 +125,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         console.error("Sandbox error:", message.error);
       } else if (message.type === "error") {
         console.error("Session error:", message);
+        settlePendingPrompt(false);
+      } else if (message.type === "prompt_queued") {
+        settlePendingPrompt(true);
       }
 
       dispatch({ type: "server_message", message });
@@ -109,13 +135,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         mutate(key);
       }
     },
-    [sessionId]
+    [sessionId, settlePendingPrompt, settleSubscriptionWaiters]
   );
 
   const handleClose = useCallback(() => {
     subscribedRef.current = false;
+    settleSubscriptionWaiters(false);
+    settlePendingPrompt(false);
     dispatch({ type: "socket_closed" });
-  }, []);
+  }, [settlePendingPrompt, settleSubscriptionWaiters]);
 
   const transport = useSessionTransport(sessionId, {
     onMessage: handleMessage,
@@ -123,26 +151,57 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   });
   const { isOpen, send } = transport;
 
+  useEffect(
+    () => () => {
+      settleSubscriptionWaiters(false);
+      settlePendingPrompt(false);
+    },
+    [settlePendingPrompt, settleSubscriptionWaiters]
+  );
+
+  const waitForSubscription = useCallback((): Promise<boolean> => {
+    if (subscribedRef.current) return Promise.resolve(true);
+    if (!isOpen()) return Promise.resolve(false);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (subscribed: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        subscriptionWaitersRef.current.delete(finish);
+        resolve(subscribed);
+      };
+      const timeout = setTimeout(() => finish(false), PROMPT_SUBSCRIPTION_TIMEOUT_MS);
+      subscriptionWaitersRef.current.add(finish);
+    });
+  }, [isOpen]);
+
   const sendPrompt = useCallback(
-    (
+    async (
       content: string,
       model?: string,
       reasoningEffort?: string,
       attachments?: PromptAttachment[]
-    ) => {
+    ): Promise<boolean> => {
       if (!isOpen()) {
         console.error("WebSocket not connected");
-        return;
+        return false;
       }
 
-      if (!subscribedRef.current) {
-        console.error("Not subscribed yet, waiting...");
-        // Retry after a short delay
-        setTimeout(
-          () => sendPrompt(content, model, reasoningEffort, attachments),
-          PROMPT_SUBSCRIPTION_RETRY_DELAY_MS
-        );
-        return;
+      if (pendingPromptRef.current) {
+        console.error("A prompt is already waiting for acknowledgement");
+        return false;
+      }
+
+      if (!(await waitForSubscription()) || !isOpen()) {
+        console.error("WebSocket subscription unavailable");
+        return false;
+      }
+
+      if (pendingPromptRef.current) {
+        console.error("A prompt is already waiting for acknowledgement");
+        return false;
       }
 
       console.log("Sending prompt", {
@@ -152,23 +211,26 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         attachmentsCount: attachments?.length ?? 0,
       });
 
-      // Optimistically set isProcessing for immediate feedback
-      // Server will confirm with processing_status message
-      dispatch({ type: "prompt_sent" });
-
       // Note: user_message event is NOT inserted optimistically here.
       // The server writes a user_message event to the events table and broadcasts it
       // to all clients (including the sender), which handles both display and multiplayer.
 
-      send({
-        type: "prompt",
-        content,
-        model, // Include model for per-message model switching
-        reasoningEffort,
-        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      return new Promise<boolean>((resolve) => {
+        const timeout = setTimeout(() => {
+          settlePendingPrompt(false);
+        }, PROMPT_ACK_TIMEOUT_MS);
+        pendingPromptRef.current = { resolve, timeout };
+
+        send({
+          type: "prompt",
+          content,
+          model, // Include model for per-message model switching
+          reasoningEffort,
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        });
       });
     },
-    [isOpen, send]
+    [isOpen, send, settlePendingPrompt, waitForSubscription]
   );
 
   const stopExecution = useCallback(() => {

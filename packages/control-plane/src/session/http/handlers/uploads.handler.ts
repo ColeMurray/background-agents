@@ -54,8 +54,14 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         return Response.json({ error: "Invalid upload command" }, { status: 400 });
       }
       if (command.data.action === "complete_cleanup") {
-        deps.repository.acknowledgeUploadCleanup(command.data.acknowledgedUploadIds);
-        deps.repository.releaseUploadCleanupClaims(command.data.releasedUploadIds);
+        deps.repository.acknowledgeUploadCleanup(
+          command.data.acknowledgedUploadIds,
+          command.data.cleanupClaimedAt
+        );
+        deps.repository.releaseUploadCleanupClaims(
+          command.data.releasedUploadIds,
+          command.data.cleanupClaimedAt
+        );
         return Response.json({ status: "ok" });
       }
       const record = command.data;
@@ -73,6 +79,7 @@ export function createUploadsHandler(deps: UploadsHandlerDeps): UploadsHandler {
         });
         return Response.json({
           status: "cleanup_required",
+          cleanupClaimedAt: timestamp,
           staleUploads: stale.map((upload) => ({
             uploadId: upload.id,
             objectKey: upload.object_key,

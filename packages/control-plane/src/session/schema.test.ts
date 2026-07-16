@@ -243,22 +243,10 @@ describe("applyMigrations", () => {
     expect(backfill).toBeDefined();
   });
 
-  it("removes the obsolete upload kind column only when it exists", () => {
-    const migration = MIGRATIONS.find((entry) => entry.id === 37);
-    expect(migration).toBeDefined();
-    expect(typeof migration?.run).toBe("function");
-
-    mock.setData("PRAGMA table_info(uploads)", [{ name: "id" }, { name: "kind" }]);
-    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
-    expect(mock.calls.some((call) => call.query === "ALTER TABLE uploads DROP COLUMN kind")).toBe(
-      true
-    );
-
-    mock.calls.length = 0;
-    mock.setData("PRAGMA table_info(uploads)", [{ name: "id" }, { name: "mime_type" }]);
-    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
-    expect(mock.calls.some((call) => call.query === "ALTER TABLE uploads DROP COLUMN kind")).toBe(
-      false
-    );
+  it("creates the final uploads schema in its single unshipped migration", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 35);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS uploads");
+    expect(migration?.run).toContain("cleanup_claimed_at INTEGER");
+    expect(migration?.run).not.toContain("kind TEXT");
   });
 });

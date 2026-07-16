@@ -29,7 +29,11 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
-from .attachment_processor import AttachmentProcessor, HydratedPromptImage
+from .attachment_processor import (
+    AttachmentProcessor,
+    HydratedPromptImage,
+    parse_prompt_image_attachments,
+)
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .log_config import configure_logging, get_logger
 from .repo_config import find_repo_entry, load_repo_manifest
@@ -714,7 +718,7 @@ class AgentBridge:
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
-        attachments = cmd.get("attachments")
+        raw_attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
@@ -739,7 +743,19 @@ class AgentBridge:
             if not self.opencode_session_id:
                 await self._create_opencode_session()
 
-            attachments = await self.attachment_processor.process(attachments)
+            prompt_attachments, rejected_attachments = parse_prompt_image_attachments(
+                raw_attachments
+            )
+            if rejected_attachments:
+                self.log.warn(
+                    "prompt.invalid_attachments",
+                    message_id=message_id,
+                    rejected_count=rejected_attachments,
+                )
+                await self._send_media_warning(
+                    f"{rejected_attachments} invalid attachment(s) were skipped."
+                )
+            attachments = await self.attachment_processor.process(prompt_attachments)
 
             had_error = False
             error_message = None

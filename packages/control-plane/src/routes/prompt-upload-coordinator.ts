@@ -37,18 +37,13 @@ export class PromptUploadCoordinator {
   ) {}
 
   async store(bytes: Uint8Array, record: PromptUploadRecord): Promise<StorePromptUploadResult> {
-    await this.storage.put(record.objectKey, bytes, { contentType: record.mimeType });
+    const result = await this.register(record);
+    if (!result.ok) return result;
 
-    try {
-      const result = await this.register(record);
-      if (!result.ok) {
-        await this.deleteUnregisteredObject(record);
-      }
-      return result;
-    } catch (error) {
-      await this.deleteUnregisteredObject(record);
-      throw error;
-    }
+    // Register first so every failed or ambiguous storage outcome remains
+    // discoverable through the normal stale-upload cleanup protocol.
+    await this.storage.put(record.objectKey, bytes, { contentType: record.mimeType });
+    return { ok: true };
   }
 
   private async register(record: PromptUploadRecord): Promise<StorePromptUploadResult> {
@@ -66,6 +61,7 @@ export class PromptUploadCoordinator {
       const cleanup = await this.deleteClaimedObjects(result.staleUploads);
       const completion = await this.sendCommand({
         action: "complete_cleanup",
+        cleanupClaimedAt: result.cleanupClaimedAt,
         acknowledgedUploadIds: cleanup.acknowledgedUploadIds,
         releasedUploadIds: cleanup.releasedUploadIds,
       });
@@ -119,21 +115,6 @@ export class PromptUploadCoordinator {
       // Keep the status-based fallback.
     }
     return { ok: false, status: response.status, error: message };
-  }
-
-  private async deleteUnregisteredObject(record: PromptUploadRecord): Promise<void> {
-    try {
-      await this.storage.delete(record.objectKey);
-    } catch (error) {
-      this.log.error("uploads.cleanup_failed", {
-        session_id: this.sessionId,
-        upload_id: record.uploadId,
-        object_key: record.objectKey,
-        request_id: this.context.requestId,
-        trace_id: this.context.traceId,
-        error: error instanceof Error ? error : String(error),
-      });
-    }
   }
 
   private async deleteClaimedObjects(

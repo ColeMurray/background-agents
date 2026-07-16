@@ -73,15 +73,20 @@ export function parseByteRangeHeader(
   const parts = rangeHeader.slice("bytes=".length).trim().split("-");
   if (parts.length !== 2) return unsatisfied();
   const [startRaw, endRaw] = parts;
+  const isUnsignedDecimal = (value: string) => /^\d+$/.test(value);
 
   let start: number;
   let end: number;
   if (startRaw === "") {
+    if (!isUnsignedDecimal(endRaw)) return unsatisfied();
     const suffixLength = Number(endRaw);
     if (!Number.isInteger(suffixLength) || suffixLength <= 0) return unsatisfied();
     start = Math.max(size - suffixLength, 0);
     end = size - 1;
   } else {
+    if (!isUnsignedDecimal(startRaw) || (endRaw !== "" && !isUnsignedDecimal(endRaw))) {
+      return unsatisfied();
+    }
     start = Number(startRaw);
     end = endRaw === "" ? size - 1 : Number(endRaw);
   }

@@ -24,6 +24,7 @@ type SessionPromptComposerProps = {
   prompt: {
     value: string;
     isProcessing: boolean;
+    draftLocked: boolean;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
     onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -54,10 +55,10 @@ export function SessionPromptComposer({
 }: SessionPromptComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
-  const sendDisabled = !hasContent || prompt.isProcessing || attachments.isUploading;
-  // While an upload is in flight the draft must not change, or the set that
-  // gets sent could diverge from what was uploaded.
-  const attachmentsLocked = attachments.isUploading;
+  const sendDisabled = !hasContent || prompt.isProcessing || prompt.draftLocked;
+  // Keep the complete draft stable while its attachments upload and until
+  // the server confirms that the matching prompt was queued.
+  const attachmentsLocked = prompt.draftLocked;
   const {
     isDraggingOver,
     handleFileInputChange,
@@ -105,6 +106,7 @@ export function SessionPromptComposer({
               onChange={prompt.onChange}
               onKeyDown={prompt.onKeyDown}
               onPaste={handlePaste}
+              disabled={prompt.draftLocked}
               placeholder={
                 prompt.isProcessing ? "Type your next message..." : "Ask or build anything"
               }
@@ -177,7 +179,7 @@ export function SessionPromptComposer({
                 items={model.items}
                 direction="up"
                 dropdownWidth="w-56"
-                disabled={prompt.isProcessing}
+                disabled={prompt.isProcessing || prompt.draftLocked}
                 triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
               >
                 <ModelIcon className="w-3.5 h-3.5" />
@@ -191,7 +193,7 @@ export function SessionPromptComposer({
                 selectedModel={model.selectedModel}
                 reasoningEffort={model.reasoningEffort}
                 onSelect={model.onReasoningEffortChange}
-                disabled={prompt.isProcessing}
+                disabled={prompt.isProcessing || prompt.draftLocked}
               />
             </div>
 

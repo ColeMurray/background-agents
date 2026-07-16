@@ -87,16 +87,23 @@ function SessionPageContent() {
     modelItems,
     loadingEnabledModels,
   } = useModelSelection(sessionState);
-  const { prompt, promptAttachments, inputRef, handleSubmit, handleInputChange, handleKeyDown } =
-    usePromptInput(
-      sessionId,
-      isProcessing,
-      sendPrompt,
-      sendTyping,
-      selectedModel,
-      reasoningEffort,
-      loadingEnabledModels
-    );
+  const {
+    prompt,
+    promptAttachments,
+    inputRef,
+    isSubmitting,
+    handleSubmit,
+    handleInputChange,
+    handleKeyDown,
+  } = usePromptInput(
+    sessionId,
+    isProcessing,
+    sendPrompt,
+    sendTyping,
+    selectedModel,
+    reasoningEffort,
+    loadingEnabledModels
+  );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
 
@@ -261,6 +268,7 @@ function SessionPageContent() {
         prompt={{
           value: prompt,
           isProcessing,
+          draftLocked: isSubmitting || promptAttachments.isUploading,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,
@@ -448,6 +456,7 @@ function usePromptInput(
   loadingEnabledModels: boolean
 ) {
   const [prompt, setPrompt] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const promptAttachments = usePromptAttachments();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -476,6 +485,7 @@ function usePromptInput(
     }
 
     submitInFlightRef.current = true;
+    setIsSubmitting(true);
     try {
       let attachments: PromptAttachment[] | undefined;
       if (hasAttachments) {
@@ -488,18 +498,21 @@ function usePromptInput(
 
       // Drop any queued typing indicator — the prompt supersedes it
       clearTypingTimeout();
-      sendPrompt(
+      const accepted = await sendPrompt(
         prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
         selectedModel,
         reasoningEffort,
         attachments
       );
+      if (!accepted) return;
+
       setPrompt("");
       promptAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top
       mutate(isUnarchivedSessionListKey);
     } finally {
       submitInFlightRef.current = false;
+      setIsSubmitting(false);
     }
   };
 
@@ -522,5 +535,13 @@ function usePromptInput(
     }, 300);
   };
 
-  return { prompt, promptAttachments, inputRef, handleSubmit, handleInputChange, handleKeyDown };
+  return {
+    prompt,
+    promptAttachments,
+    inputRef,
+    isSubmitting,
+    handleSubmit,
+    handleInputChange,
+    handleKeyDown,
+  };
 }

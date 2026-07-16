@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   PROMPT_UPLOAD_LIMIT_PER_SESSION,
+  PROMPT_UPLOAD_IMAGE_MAX_BYTES,
   PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION,
   PROMPT_UPLOAD_UNREFERENCED_TTL_MS,
   PROMPT_UPLOAD_CLEANUP_CLAIM_TTL_MS,
@@ -66,6 +67,7 @@ describe("createUploadsHandler", () => {
     ["missing mimeType", { ...VALID_BODY, mimeType: "" }],
     ["non-positive size", { ...VALID_BODY, sizeBytes: 0 }],
     ["non-integer size", { ...VALID_BODY, sizeBytes: 1.5 }],
+    ["oversized upload", { ...VALID_BODY, sizeBytes: PROMPT_UPLOAD_IMAGE_MAX_BYTES + 1 }],
     ["missing objectKey", { ...VALID_BODY, objectKey: "" }],
   ])("rejects %s with 400", async (_label, body) => {
     const { handler, repository } = buildHandler();
@@ -131,30 +133,25 @@ describe("createUploadsHandler", () => {
     expect(repository.getUploadTotals).not.toHaveBeenCalled();
     expect(await response.json()).toEqual({
       status: "cleanup_required",
+      cleanupClaimedAt: NOW,
       staleUploads: [{ uploadId: "old-1", objectKey: "sessions/sess-1/uploads/old-1" }],
     });
   });
 
-  it("records the upload and returns pruned stale object keys", async () => {
-    const staleUpload: UploadRow = {
-      id: "old-1",
-      mime_type: "image/jpeg",
-      size_bytes: 5_000_000,
-      object_key: "sessions/sess-1/uploads/old-1",
-      message_id: null,
-      cleanup_claimed_at: NOW,
-      created_at: NOW - PROMPT_UPLOAD_UNREFERENCED_TTL_MS - 1,
-    };
-    const { handler, repository } = buildHandler({ stale: [staleUpload] });
+  it("records a valid upload", async () => {
+    const { handler, repository } = buildHandler();
 
     const response = await handler.recordUpload(uploadRequest(VALID_BODY));
 
     expect(response.status).toBe(200);
-    expect(repository.createUpload).not.toHaveBeenCalled();
-    expect(await response.json()).toEqual({
-      status: "cleanup_required",
-      staleUploads: [{ uploadId: "old-1", objectKey: "sessions/sess-1/uploads/old-1" }],
+    expect(repository.createUpload).toHaveBeenCalledWith({
+      id: "up-1",
+      mimeType: "image/png",
+      sizeBytes: 1024,
+      objectKey: "sessions/sess-1/uploads/up-1",
+      createdAt: NOW,
     });
+    expect(await response.json()).toEqual({ status: "ok" });
   });
 
   it("acknowledges successful cleanup and releases failed claims", async () => {
@@ -162,13 +159,14 @@ describe("createUploadsHandler", () => {
     const response = await handler.recordUpload(
       uploadRequest({
         action: "complete_cleanup",
+        cleanupClaimedAt: NOW,
         acknowledgedUploadIds: ["old-1"],
         releasedUploadIds: ["old-2"],
       })
     );
 
     expect(response.status).toBe(200);
-    expect(repository.acknowledgeUploadCleanup).toHaveBeenCalledWith(["old-1"]);
-    expect(repository.releaseUploadCleanupClaims).toHaveBeenCalledWith(["old-2"]);
+    expect(repository.acknowledgeUploadCleanup).toHaveBeenCalledWith(["old-1"], NOW);
+    expect(repository.releaseUploadCleanupClaims).toHaveBeenCalledWith(["old-2"], NOW);
   });
 });

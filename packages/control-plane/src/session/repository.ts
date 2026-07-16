@@ -884,22 +884,25 @@ export class SessionRepository {
     return stale.map((upload) => ({ ...upload, cleanup_claimed_at: claimedAt }));
   }
 
-  acknowledgeUploadCleanup(uploadIds: string[]): void {
+  acknowledgeUploadCleanup(uploadIds: string[], claimedAt: number): void {
     if (uploadIds.length === 0) return;
     const placeholders = uploadIds.map(() => "?").join(", ");
     this.sql.exec(
-      `DELETE FROM uploads WHERE id IN (${placeholders}) AND cleanup_claimed_at IS NOT NULL`,
-      ...uploadIds
+      `DELETE FROM uploads
+       WHERE id IN (${placeholders}) AND cleanup_claimed_at = ? AND message_id IS NULL`,
+      ...uploadIds,
+      claimedAt
     );
   }
 
-  releaseUploadCleanupClaims(uploadIds: string[]): void {
+  releaseUploadCleanupClaims(uploadIds: string[], claimedAt: number): void {
     if (uploadIds.length === 0) return;
     const placeholders = uploadIds.map(() => "?").join(", ");
     this.sql.exec(
       `UPDATE uploads SET cleanup_claimed_at = NULL
-       WHERE id IN (${placeholders}) AND message_id IS NULL`,
-      ...uploadIds
+       WHERE id IN (${placeholders}) AND message_id IS NULL AND cleanup_claimed_at = ?`,
+      ...uploadIds,
+      claimedAt
     );
   }
 

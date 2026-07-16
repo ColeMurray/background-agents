@@ -27,11 +27,7 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import {
-  PromptAttachmentError,
-  resolvePromptAttachments,
-  type ResolvedPromptAttachments,
-} from "./prompt-attachments";
+import { PromptAttachmentError, resolvePromptAttachments } from "./prompt-attachments";
 
 interface PromptMessageData {
   content: string;
@@ -64,6 +60,22 @@ interface StopExecutionOptions {
   suppressStatusReconcile?: boolean;
 }
 
+interface EnqueuePromptCoreData {
+  participant: ParticipantRow;
+  userId: string;
+  content: string;
+  source: MessageSource;
+  model?: string;
+  reasoningEffort?: string;
+  attachments?: PromptAttachment[];
+  callbackContext?: Record<string, unknown>;
+}
+
+interface EnqueuedPrompt {
+  messageId: string;
+  position: number;
+}
+
 export class SessionMessageQueue {
   constructor(private readonly deps: MessageQueueDeps) {}
 
@@ -78,86 +90,30 @@ export class SessionMessageQueue {
       return;
     }
 
-    let resolvedAttachments: ResolvedPromptAttachments | undefined;
+    let enqueued: EnqueuedPrompt;
     try {
-      resolvedAttachments = resolvePromptAttachments(data.attachments, this.deps.repository);
-    } catch (error) {
-      this.deps.wsManager.send(ws, {
-        type: "error",
-        code: "INVALID_ATTACHMENTS",
-        message: error instanceof Error ? error.message : "Invalid attachments",
-      });
-      return;
-    }
-
-    const messageId = generateId();
-    const now = Date.now();
-
-    let participant = this.deps.participantService.getByUserId(client.userId);
-    if (!participant) {
-      participant = this.deps.participantService.create(client.userId, client.name);
-    }
-
-    let messageModel: string | null = null;
-    if (data.model) {
-      if (isValidModel(data.model)) {
-        messageModel = data.model;
-      } else {
-        this.deps.log.warn("Invalid message model, ignoring override", { model: data.model });
+      let participant = this.deps.participantService.getByUserId(client.userId);
+      if (!participant) {
+        participant = this.deps.participantService.create(client.userId, client.name);
       }
-    }
-
-    const effectiveModelForEffort = messageModel || this.deps.getSession()?.model || DEFAULT_MODEL;
-    const messageReasoningEffort = this.deps.validateReasoningEffort(
-      effectiveModelForEffort,
-      data.reasoningEffort
-    );
-
-    const attachments = resolvedAttachments?.attachments;
-    try {
-      this.deps.repository.createMessageWithUploads(
-        {
-          id: messageId,
-          authorId: participant.id,
-          content: data.content,
-          source: "web",
-          model: messageModel,
-          reasoningEffort: messageReasoningEffort,
-          attachments: attachments ? JSON.stringify(attachments) : null,
-          status: "pending",
-          createdAt: now,
-        },
-        resolvedAttachments?.uploadIds ?? []
-      );
+      enqueued = await this.enqueuePromptCore({
+        participant,
+        userId: client.userId,
+        content: data.content,
+        source: "web",
+        model: data.model,
+        reasoningEffort: data.reasoningEffort,
+        attachments: data.attachments,
+      });
     } catch (error) {
-      if (!(error instanceof UploadClaimConflictError)) throw error;
+      if (!(error instanceof PromptAttachmentError)) throw error;
       this.deps.wsManager.send(ws, {
         type: "error",
         code: "INVALID_ATTACHMENTS",
-        message: "One or more uploads are missing, expired, or already used",
+        message: error.message,
       });
       return;
     }
-
-    await this.deps.setSessionStatus("active");
-
-    this.writeUserMessageEvent(participant, data.content, messageId, now, attachments);
-
-    const position = this.deps.repository.getPendingOrProcessingCount();
-
-    this.deps.log.info("prompt.enqueue", {
-      event: "prompt.enqueue",
-      message_id: messageId,
-      source: "web",
-      author_id: participant.id,
-      user_id: client.userId,
-      model: messageModel,
-      reasoning_effort: messageReasoningEffort,
-      content_length: data.content.length,
-      has_attachments: !!attachments?.length,
-      attachments_count: attachments?.length ?? 0,
-      queue_position: position,
-    });
 
     if (this.deps.env.DB) {
       const store = new SessionIndexStore(this.deps.env.DB);
@@ -177,9 +133,9 @@ export class SessionMessageQueue {
 
     this.deps.wsManager.send(ws, {
       type: "prompt_queued",
-      messageId,
-      position,
-    } as ServerMessage);
+      messageId: enqueued.messageId,
+      position: enqueued.position,
+    });
 
     await this.processMessageQueue();
   }
@@ -399,8 +355,6 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
-    const resolvedAttachments = resolvePromptAttachments(data.attachments, this.deps.repository);
-    const attachments = resolvedAttachments?.attachments;
     let participant = this.deps.participantService.getByUserId(data.authorId);
     if (!participant) {
       participant = this.deps.participantService.create(
@@ -429,6 +383,25 @@ export class SessionMessageQueue {
       participant = this.deps.repository.getParticipantById(participant.id) ?? participant;
     }
 
+    const enqueued = await this.enqueuePromptCore({
+      participant,
+      userId: data.authorId,
+      content: data.content,
+      source: data.source as MessageSource,
+      model: data.model,
+      reasoningEffort: data.reasoningEffort,
+      attachments: data.attachments,
+      callbackContext: data.callbackContext,
+    });
+
+    await this.processMessageQueue();
+
+    return { messageId: enqueued.messageId, status: "queued" };
+  }
+
+  private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
+    const resolvedAttachments = resolvePromptAttachments(data.attachments, this.deps.repository);
+    const attachments = resolvedAttachments?.attachments;
     const messageId = generateId();
     const now = Date.now();
 
@@ -437,7 +410,7 @@ export class SessionMessageQueue {
       if (isValidModel(data.model)) {
         messageModel = data.model;
       } else {
-        this.deps.log.warn("Invalid message model in enqueue, ignoring", { model: data.model });
+        this.deps.log.warn("Invalid message model, ignoring override", { model: data.model });
       }
     }
 
@@ -451,9 +424,9 @@ export class SessionMessageQueue {
       this.deps.repository.createMessageWithUploads(
         {
           id: messageId,
-          authorId: participant.id,
+          authorId: data.participant.id,
           content: data.content,
-          source: data.source as MessageSource,
+          source: data.source,
           model: messageModel,
           reasoningEffort: messageReasoningEffort,
           attachments: attachments ? JSON.stringify(attachments) : null,
@@ -473,28 +446,24 @@ export class SessionMessageQueue {
     }
 
     await this.deps.setSessionStatus("active");
+    this.writeUserMessageEvent(data.participant, data.content, messageId, now, attachments);
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now, attachments);
-
-    const queuePosition = this.deps.repository.getPendingOrProcessingCount();
-
+    const position = this.deps.repository.getPendingOrProcessingCount();
     this.deps.log.info("prompt.enqueue", {
       event: "prompt.enqueue",
       message_id: messageId,
       source: data.source,
-      author_id: participant.id,
-      user_id: data.authorId,
+      author_id: data.participant.id,
+      user_id: data.userId,
       model: messageModel,
       reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
       has_attachments: !!attachments?.length,
       attachments_count: attachments?.length ?? 0,
       has_callback_context: !!data.callbackContext,
-      queue_position: queuePosition,
+      queue_position: position,
     });
 
-    await this.processMessageQueue();
-
-    return { messageId, status: "queued" };
+    return { messageId, position };
   }
 }

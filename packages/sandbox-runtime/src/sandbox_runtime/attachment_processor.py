@@ -4,7 +4,7 @@ import asyncio
 import base64
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal, Protocol, TypedDict
+from typing import Any, Literal, Protocol, TypedDict, cast
 
 import httpx
 
@@ -18,6 +18,8 @@ class MediaLogger(Protocol):
 
 
 PromptImageMimeType = Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
+PROMPT_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+MAX_PROMPT_ATTACHMENTS = 6
 
 
 class PromptImageAttachment(TypedDict):
@@ -39,6 +41,44 @@ class OpenCodeFilePart(TypedDict):
     mime: str
     filename: str
     url: str
+
+
+def parse_prompt_image_attachments(
+    value: object,
+) -> tuple[list[PromptImageAttachment] | None, int]:
+    """Validate the untyped WebSocket attachment boundary and count rejected entries."""
+    if value is None:
+        return None, 0
+    if not isinstance(value, list):
+        return [], 1
+
+    parsed: list[PromptImageAttachment] = []
+    rejected = max(len(value) - MAX_PROMPT_ATTACHMENTS, 0)
+    for item in value[:MAX_PROMPT_ATTACHMENTS]:
+        if not isinstance(item, dict):
+            rejected += 1
+            continue
+        upload_id = item.get("uploadId")
+        name = item.get("name")
+        mime_type = item.get("mimeType")
+        if (
+            not isinstance(upload_id, str)
+            or re.fullmatch(r"[A-Za-z0-9-]{1,128}", upload_id) is None
+            or not isinstance(name, str)
+            or not 1 <= len(name) <= 255
+            or not isinstance(mime_type, str)
+            or mime_type not in PROMPT_IMAGE_MIME_TYPES
+        ):
+            rejected += 1
+            continue
+        parsed.append(
+            {
+                "uploadId": upload_id,
+                "name": name,
+                "mimeType": cast(PromptImageMimeType, mime_type),
+            }
+        )
+    return parsed, rejected
 
 
 class AttachmentProcessor:

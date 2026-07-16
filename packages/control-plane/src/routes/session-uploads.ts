@@ -25,6 +25,7 @@ import {
   isMultipartFile,
   isSupportedPromptUploadMimeType,
   PROMPT_UPLOAD_IMAGE_MAX_BYTES,
+  promptUploadRequestExceedsLimit,
 } from "../media";
 import { createMediaObjectStorage } from "../storage/object-storage";
 import type { Env } from "../types";
@@ -43,6 +44,9 @@ async function handleUploadPost(
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
+  if (promptUploadRequestExceedsLimit(request)) {
+    return error("Attachment request is too large", 413);
+  }
 
   let formData: FormData;
   try {

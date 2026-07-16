@@ -67,7 +67,9 @@ describe("usePromptAttachments", () => {
       ]);
     });
 
-    await expect(result.current.uploadAll("session-1")).rejects.toThrow("temporary failure");
+    await act(async () => {
+      await expect(result.current.uploadAll("session-1")).rejects.toThrow("temporary failure");
+    });
     let uploaded = [] as Awaited<ReturnType<typeof result.current.uploadAll>>;
     await act(async () => {
       uploaded = await result.current.uploadAll("session-1");
@@ -75,5 +77,55 @@ describe("usePromptAttachments", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(uploaded.map((attachment) => attachment.uploadId)).toEqual(["up-1", "up-2"]);
+  });
+
+  it("enforces the attachment limit across back-to-back additions", () => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation((file) => `blob:${file}`);
+    const { result } = renderHook(() => usePromptAttachments());
+    const files = Array.from(
+      { length: 8 },
+      (_, index) => new File([String(index)], `${index}.png`, { type: "image/png" })
+    );
+
+    act(() => {
+      result.current.addFiles(files.slice(0, 4));
+      result.current.addFiles(files.slice(4));
+    });
+
+    expect(result.current.attachments).toHaveLength(6);
+    expect(result.current.attachmentError).toBe("You can attach up to 6 files per message");
+  });
+
+  it("does not return an attachment removed during upload", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    let resolveUpload!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveUpload = resolve;
+          })
+      )
+    );
+    const { result } = renderHook(() => usePromptAttachments());
+    act(() => {
+      result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]);
+    });
+
+    let uploadPromise!: ReturnType<typeof result.current.uploadAll>;
+    act(() => {
+      uploadPromise = result.current.uploadAll("session-1");
+    });
+    act(() => {
+      result.current.removeAttachment(result.current.attachments[0].id);
+      resolveUpload(Response.json({ uploadId: "up-1" }, { status: 201 }));
+    });
+
+    await act(async () => {
+      await expect(uploadPromise).rejects.toThrow("Attachments changed during upload");
+    });
+    expect(result.current.attachments).toEqual([]);
   });
 });

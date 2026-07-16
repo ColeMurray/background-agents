@@ -13,6 +13,9 @@ export const VIDEO_TIMESTAMP_TOLERANCE_MS = 1_000;
 
 // User-attached prompt images (attached in the chat composer).
 export const PROMPT_UPLOAD_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+// Allows multipart boundaries and headers while rejecting oversized requests
+// before request.formData() buffers them when Content-Length is available.
+export const PROMPT_UPLOAD_MAX_REQUEST_BYTES = PROMPT_UPLOAD_IMAGE_MAX_BYTES + 128 * 1024;
 export const PROMPT_UPLOAD_LIMIT_PER_SESSION = 100;
 export const PROMPT_UPLOAD_TOTAL_BYTES_PER_SESSION = 500 * 1024 * 1024;
 // Uploads never referenced by a prompt after this long are pruned (R2 object +
@@ -108,6 +111,12 @@ const PROMPT_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set(PROMPT_IMAGE_MIME_
 
 export function isSupportedPromptUploadMimeType(value: string): value is PromptImageMimeType {
   return PROMPT_UPLOAD_MIME_TYPES.has(value);
+}
+
+export function promptUploadRequestExceedsLimit(request: Request): boolean {
+  const raw = request.headers.get("Content-Length");
+  if (!raw || !/^\d+$/.test(raw)) return false;
+  return Number(raw) > PROMPT_UPLOAD_MAX_REQUEST_BYTES;
 }
 
 /**
