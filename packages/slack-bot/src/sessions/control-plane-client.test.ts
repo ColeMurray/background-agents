@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
-import {
-  CONTROL_PLANE_REQUEST_TIMEOUT_MS,
-  createSession,
-  sendPrompt,
-} from "./control-plane-client";
+import { createSession, sendPrompt } from "./control-plane-client";
+import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 function makeEnv(fetch: ReturnType<typeof vi.fn>): Env {
   return {
@@ -50,7 +47,7 @@ describe("control plane client timeouts", () => {
     controller.abort(new DOMException("Timed out", "TimeoutError"));
 
     await expect(result).resolves.toBeNull();
-    expect(timeoutSpy).toHaveBeenCalledWith(CONTROL_PLANE_REQUEST_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(OUTBOUND_REQUEST_TIMEOUT_MS);
     expect(fetch.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 
@@ -68,7 +65,7 @@ describe("control plane client timeouts", () => {
     controller.abort(new DOMException("Timed out", "TimeoutError"));
 
     await expect(result).resolves.toEqual({ ok: false, reason: "transient" });
-    expect(timeoutSpy).toHaveBeenCalledWith(CONTROL_PLANE_REQUEST_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(OUTBOUND_REQUEST_TIMEOUT_MS);
     expect(fetch.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 

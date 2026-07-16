@@ -382,7 +382,9 @@ export function toEventMediaArtifactInfo(data: Record<string, unknown>): MediaAr
       : undefined;
   const mimeType = typeof metadata?.mimeType === "string" ? metadata.mimeType : undefined;
   const sizeBytes =
-    typeof metadata?.sizeBytes === "number" && Number.isFinite(metadata.sizeBytes)
+    typeof metadata?.sizeBytes === "number" &&
+    Number.isSafeInteger(metadata.sizeBytes) &&
+    metadata.sizeBytes > 0
       ? metadata.sizeBytes
       : undefined;
   const caption = typeof metadata?.caption === "string" ? metadata.caption : undefined;

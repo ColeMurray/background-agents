@@ -27,6 +27,7 @@ export interface ExternalUploadUrlOptions {
   filename: string;
   length: number;
   altText?: string;
+  signal?: AbortSignal;
 }
 
 export interface CompleteExternalUploadOptions {
@@ -34,13 +35,14 @@ export interface CompleteExternalUploadOptions {
   title?: string;
   channelId: string;
   threadTs: string;
+  signal?: AbortSignal;
 }
 
 async function slackFetch<T>(
   token: string,
   endpoint: string,
   method: "GET" | "POST",
-  init?: { query?: Record<string, string>; body?: Record<string, unknown> }
+  init?: { query?: Record<string, string>; body?: Record<string, unknown>; signal?: AbortSignal }
 ): Promise<SlackEnvelope<T>> {
   const url = init?.query
     ? `${SLACK_API_BASE}/${endpoint}?${new URLSearchParams(init.query).toString()}`
@@ -57,7 +59,7 @@ async function slackFetch<T>(
 
   let response: Response;
   try {
-    response = await fetch(url, { method, headers, body });
+    response = await fetch(url, { method, headers, body, signal: init?.signal });
   } catch {
     return { ok: false, error: "network_error" };
   }
@@ -94,32 +96,40 @@ function slackGet<T>(
 function slackPost<T>(
   token: string,
   endpoint: string,
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<SlackEnvelope<T>> {
-  return slackFetch<T>(token, endpoint, "POST", body ? { body } : undefined);
+  return slackFetch<T>(token, endpoint, "POST", body ? { body, signal } : { signal });
 }
 
 export function getExternalUploadUrl(
   token: string,
   options: ExternalUploadUrlOptions
 ): Promise<SlackEnvelope<{ upload_url: string; file_id: string }>> {
-  return slackPost(token, "files.getUploadURLExternal", {
-    filename: options.filename,
-    length: options.length,
-    alt_txt: options.altText,
-  });
+  return slackPost(
+    token,
+    "files.getUploadURLExternal",
+    {
+      filename: options.filename,
+      length: options.length,
+      alt_txt: options.altText,
+    },
+    options.signal
+  );
 }
 
 export async function uploadToExternalUrl(
   uploadUrl: string,
   body: RequestInit["body"],
-  contentType: string
+  contentType: string,
+  signal?: AbortSignal
 ): Promise<SlackEnvelope> {
   try {
     const response = await fetch(uploadUrl, {
       method: "POST",
       headers: { "Content-Type": contentType },
       body,
+      signal,
     });
     return response.ok ? { ok: true } : { ok: false, error: `http_${response.status}` };
   } catch {
@@ -131,11 +141,16 @@ export function completeExternalUpload(
   token: string,
   options: CompleteExternalUploadOptions
 ): Promise<SlackEnvelope<{ files: Array<{ id: string; title?: string }> }>> {
-  return slackPost(token, "files.completeUploadExternal", {
-    files: [{ id: options.fileId, title: options.title }],
-    channel_id: options.channelId,
-    thread_ts: options.threadTs,
-  });
+  return slackPost(
+    token,
+    "files.completeUploadExternal",
+    {
+      files: [{ id: options.fileId, title: options.title }],
+      channel_id: options.channelId,
+      thread_ts: options.threadTs,
+    },
+    options.signal
+  );
 }
 
 /**

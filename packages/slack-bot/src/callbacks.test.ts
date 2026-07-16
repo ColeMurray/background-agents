@@ -399,7 +399,12 @@ describe("POST /callbacks/complete", () => {
       mediaArtifacts: [mediaArtifact],
       success: true,
     });
-    vi.mocked(deliverMediaArtifacts).mockResolvedValue({ uploaded: 1, failed: 0, skipped: 0 });
+    vi.mocked(deliverMediaArtifacts).mockResolvedValue({
+      uploaded: 1,
+      failed: 0,
+      omitted: 0,
+      alreadyDelivered: 0,
+    });
     okFetchMock();
     const payload = await signPayload(completeCallbackData());
 
@@ -415,6 +420,31 @@ describe("POST /callbacks/complete", () => {
       artifacts: [mediaArtifact],
       traceId: "trace-1",
     });
+  });
+
+  it("does not report already delivered media as unavailable", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      textContent: "Generated the chart.",
+      toolCalls: [],
+      artifacts: [],
+      mediaArtifacts: [{ id: "image-1", type: "screenshot" }],
+      success: true,
+    });
+    vi.mocked(deliverMediaArtifacts).mockResolvedValue({
+      uploaded: 0,
+      failed: 0,
+      omitted: 0,
+      alreadyDelivered: 1,
+    });
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(completeCallbackData());
+
+    const { ctx } = await postCallback("/callbacks/complete", payload);
+    await flushWaitUntil(ctx);
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("chat.postMessage"))
+    ).toHaveLength(1);
   });
 });
 

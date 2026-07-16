@@ -192,6 +192,27 @@ describe("buildAgentResponseFromEvents", () => {
     expect(response.mediaArtifacts).toEqual([]);
   });
 
+  it("omits invalid media sizes from extracted metadata", () => {
+    for (const sizeBytes of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const response = buildAgentResponseFromEvents([
+        {
+          id: `artifact:${sizeBytes}`,
+          type: "artifact",
+          data: {
+            artifactType: "screenshot",
+            artifactId: `image-${sizeBytes}`,
+            url: "sessions/s1/media/image.png",
+            metadata: { sizeBytes },
+          },
+          messageId: "msg-1",
+          createdAt: 1,
+        },
+      ]);
+
+      expect(response.mediaArtifacts[0]).not.toHaveProperty("sizeBytes");
+    }
+  });
+
   it("uses the explicit default success only when completion success is absent", () => {
     expect(buildAgentResponseFromEvents([], [], { defaultSuccess: true }).success).toBe(true);
     expect(

@@ -41,10 +41,12 @@ describe("external file uploads", () => {
       })
     );
 
+    const signal = AbortSignal.timeout(1_000);
     const result = await getExternalUploadUrl("xoxb-token", {
       filename: "chart.png",
       length: 1234,
       altText: "Revenue chart",
+      signal,
     });
 
     expect(result).toEqual({
@@ -55,6 +57,7 @@ describe("external file uploads", () => {
     const [url, init] = fetchSpy.mock.calls[0]!;
     expect(url).toBe("https://slack.com/api/files.getUploadURLExternal");
     expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer xoxb-token");
+    expect(init?.signal).toBe(signal);
     expect(JSON.parse(String(init?.body))).toEqual({
       filename: "chart.png",
       length: 1234,
@@ -68,10 +71,12 @@ describe("external file uploads", () => {
       .mockResolvedValueOnce(new Response("OK", { status: 200 }));
     const body = new Blob(["chart-bytes"], { type: "image/png" });
 
+    const signal = AbortSignal.timeout(1_000);
     const result = await uploadToExternalUrl(
       "https://files.slack.com/upload/v1/ticket",
       body,
-      "image/png"
+      "image/png",
+      signal
     );
 
     expect(result).toEqual({ ok: true });
@@ -79,6 +84,7 @@ describe("external file uploads", () => {
     expect(init?.method).toBe("POST");
     expect(init?.body).toBe(body);
     expect(init?.headers).toEqual({ "Content-Type": "image/png" });
+    expect(init?.signal).toBe(signal);
   });
 
   it("normalizes raw upload HTTP and network failures", async () => {
@@ -101,16 +107,19 @@ describe("external file uploads", () => {
         jsonResponse({ ok: true, files: [{ id: "F123", title: "Revenue chart" }] })
       );
 
+    const signal = AbortSignal.timeout(1_000);
     const result = await completeExternalUpload("xoxb-token", {
       fileId: "F123",
       title: "Revenue chart",
       channelId: "C123",
       threadTs: "111.222",
+      signal,
     });
 
     expect(result.ok).toBe(true);
     const [url, init] = fetchSpy.mock.calls[0]!;
     expect(url).toBe("https://slack.com/api/files.completeUploadExternal");
+    expect(init?.signal).toBe(signal);
     expect(JSON.parse(String(init?.body))).toEqual({
       files: [{ id: "F123", title: "Revenue chart" }],
       channel_id: "C123",

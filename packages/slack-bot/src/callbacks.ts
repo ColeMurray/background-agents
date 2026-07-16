@@ -508,8 +508,8 @@ async function handleCompletionCallback(
         traceId,
       });
 
-      if (mediaResult.failed > 0 || mediaResult.skipped > 0) {
-        const unavailable = mediaResult.failed + mediaResult.skipped;
+      if (mediaResult.failed > 0 || mediaResult.omitted > 0) {
+        const unavailable = mediaResult.failed + mediaResult.omitted;
         await postMessage(
           env.SLACK_BOT_TOKEN,
           context.channel,

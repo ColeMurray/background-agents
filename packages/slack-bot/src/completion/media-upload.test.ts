@@ -69,11 +69,12 @@ describe("deliverMediaArtifacts", () => {
       traceId: "trace-1",
     });
 
-    expect(result).toEqual({ uploaded: 1, failed: 0, skipped: 0 });
+    expect(result).toEqual({ uploaded: 1, failed: 0, omitted: 0, alreadyDelivered: 0 });
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
       "https://internal/sessions/session-1/media/image-1",
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: expect.any(String) }),
+        signal: expect.any(AbortSignal),
       })
     );
     expect(slackFetch.mock.calls[1]?.[0]).toBe("https://files.slack.com/upload/v1/ticket");
@@ -107,7 +108,8 @@ describe("deliverMediaArtifacts", () => {
       artifacts,
     });
 
-    expect(result.skipped).toBe(3);
+    expect(result.omitted).toBe(2);
+    expect(result.alreadyDelivered).toBe(1);
     expect(result.failed).toBe(SLACK_MEDIA_MAX_FILES_PER_COMPLETION - 1);
   });
 
@@ -123,7 +125,7 @@ describe("deliverMediaArtifacts", () => {
       artifacts: [IMAGE],
     });
 
-    expect(result).toEqual({ uploaded: 0, failed: 1, skipped: 0 });
+    expect(result).toEqual({ uploaded: 0, failed: 1, omitted: 0, alreadyDelivered: 0 });
     expect(env.SLACK_KV.delete).toHaveBeenCalledWith(
       "completion-media:v1:session-1:message-1:image-1"
     );
@@ -141,7 +143,7 @@ describe("deliverMediaArtifacts", () => {
       artifacts: [{ ...IMAGE, sizeBytes: 11 * 1024 * 1024 }],
     });
 
-    expect(result).toEqual({ uploaded: 0, failed: 0, skipped: 1 });
+    expect(result).toEqual({ uploaded: 0, failed: 0, omitted: 1, alreadyDelivered: 0 });
     expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
   });
 
@@ -158,6 +160,6 @@ describe("deliverMediaArtifacts", () => {
         threadTs: "111.222",
         artifacts: [IMAGE],
       })
-    ).resolves.toEqual({ uploaded: 0, failed: 1, skipped: 0 });
+    ).resolves.toEqual({ uploaded: 0, failed: 1, omitted: 0, alreadyDelivered: 0 });
   });
 });

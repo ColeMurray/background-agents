@@ -7,6 +7,7 @@ import {
 } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
+import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 export const SLACK_MEDIA_MAX_FILES_PER_COMPLETION = 5;
 export const SLACK_MEDIA_MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -27,7 +28,8 @@ const EXTENSIONS: Record<string, string> = {
 export interface MediaDeliveryResult {
   uploaded: number;
   failed: number;
-  skipped: number;
+  omitted: number;
+  alreadyDelivered: number;
 }
 
 interface DeliverMediaArtifactsInput {
@@ -47,7 +49,8 @@ export async function deliverMediaArtifacts(
   const result: MediaDeliveryResult = {
     uploaded: 0,
     failed: 0,
-    skipped: input.artifacts.length - selected.length,
+    omitted: input.artifacts.length - selected.length,
+    alreadyDelivered: 0,
   };
   let deliveredBytes = 0;
 
@@ -64,7 +67,7 @@ export async function deliverMediaArtifacts(
       });
     }
     if (existingMarker) {
-      result.skipped += 1;
+      result.alreadyDelivered += 1;
       continue;
     }
 
@@ -73,7 +76,7 @@ export async function deliverMediaArtifacts(
       (artifact.sizeBytes > SLACK_MEDIA_MAX_FILE_BYTES ||
         deliveredBytes + artifact.sizeBytes > SLACK_MEDIA_MAX_TOTAL_BYTES)
     ) {
-      result.skipped += 1;
+      result.omitted += 1;
       continue;
     }
 
@@ -99,7 +102,7 @@ export async function deliverMediaArtifacts(
       delivery = { ok: false };
     }
     if (!delivery.ok) {
-      result[delivery.skipped ? "skipped" : "failed"] += 1;
+      result[delivery.omitted ? "omitted" : "failed"] += 1;
       try {
         await input.env.SLACK_KV.delete(key);
       } catch {
@@ -130,7 +133,7 @@ async function deliverOne(
   input: DeliverMediaArtifactsInput,
   artifact: MediaArtifactInfo,
   deliveredBytes: number
-): Promise<{ ok: true; sizeBytes: number } | { ok: false; skipped?: boolean }> {
+): Promise<{ ok: true; sizeBytes: number } | { ok: false; omitted?: boolean }> {
   const base = {
     trace_id: input.traceId,
     session_id: input.sessionId,
@@ -141,7 +144,7 @@ async function deliverOne(
   const headers = await buildInternalAuthHeaders(input.env.INTERNAL_CALLBACK_SECRET, input.traceId);
   const response = await input.env.CONTROL_PLANE.fetch(
     `https://internal/sessions/${encodeURIComponent(input.sessionId)}/media/${encodeURIComponent(artifact.id)}`,
-    { headers }
+    { headers, signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
   );
   if (!response.ok || !response.body) {
     log.warn("slack.media.fetch", { ...base, outcome: "error", http_status: response.status });
@@ -160,7 +163,7 @@ async function deliverOne(
     deliveredBytes + sizeBytes > SLACK_MEDIA_MAX_TOTAL_BYTES
   ) {
     log.info("slack.media.delivery", { ...base, outcome: "skipped", size_bytes: sizeBytes });
-    return { ok: false, skipped: true };
+    return { ok: false, omitted: true };
   }
 
   const title = artifact.caption?.trim() || `${artifact.type} ${artifact.id}`;
@@ -168,6 +171,7 @@ async function deliverOne(
     filename: `artifact-${artifact.id}.${extension}`,
     length: sizeBytes,
     altText: title.slice(0, ALT_TEXT_LIMIT),
+    signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
   });
   if (!ticket.ok) {
     log.warn("slack.media.get_upload_url", {
@@ -178,7 +182,12 @@ async function deliverOne(
     return { ok: false };
   }
 
-  const upload = await uploadToExternalUrl(ticket.upload_url, response.body, mimeType);
+  const upload = await uploadToExternalUrl(
+    ticket.upload_url,
+    response.body,
+    mimeType,
+    AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS)
+  );
   if (!upload.ok) {
     log.warn("slack.media.upload_bytes", { ...base, outcome: "error", slack_error: upload.error });
     return { ok: false };
@@ -189,6 +198,7 @@ async function deliverOne(
     title,
     channelId: input.channel,
     threadTs: input.threadTs,
+    signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
   });
   if (!complete.ok) {
     log.warn("slack.media.complete_upload", {
