@@ -97,10 +97,7 @@ import {
   type ChildSessionsHandler,
 } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
-import {
-  createAttachmentsHandler,
-  type AttachmentsHandler,
-} from "./http/handlers/attachments.handler";
+import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
@@ -199,7 +196,8 @@ export class SessionDO extends DurableObject<Env> {
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
-    recordAttachment: (request) => this.attachmentsHandler.recordAttachment(request),
+    recordAttachment: (request) =>
+      this.attachmentsHandler.recordAttachment(request, this.getSession() !== null),
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
@@ -457,11 +455,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get attachmentsHandler(): AttachmentsHandler {
     if (!this._attachmentsHandler) {
-      this._attachmentsHandler = createAttachmentsHandler({
-        repository: this.attachmentRepository,
-        getSession: () => this.getSession(),
-        getLog: () => this.log,
-      });
+      this._attachmentsHandler = new AttachmentsHandler(this.attachmentRepository, this.log);
     }
 
     return this._attachmentsHandler;

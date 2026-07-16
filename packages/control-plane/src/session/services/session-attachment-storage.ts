@@ -23,19 +23,13 @@ export type StoreSessionAttachmentResult =
   | { ok: true }
   | { ok: false; status: number; error: string };
 
-interface SessionAttachmentStorageContext {
-  requestId?: string;
-  traceId?: string;
-}
-
 /** Coordinates attachment persistence across R2 and the session Durable Object. */
 export class SessionAttachmentStorageService {
   constructor(
     private readonly runtime: SessionRuntimeClient,
     private readonly storage: ObjectStorage,
     private readonly sessionId: string,
-    private readonly log: Logger,
-    private readonly context: SessionAttachmentStorageContext
+    private readonly log: Logger
   ) {}
 
   async store(
@@ -150,8 +144,6 @@ export class SessionAttachmentStorageService {
       session_id: this.sessionId,
       deleted: acknowledgedAttachmentIds.length,
       failed: releasedAttachmentIds.length,
-      request_id: this.context.requestId,
-      trace_id: this.context.traceId,
     });
     return { acknowledgedAttachmentIds, releasedAttachmentIds };
   }

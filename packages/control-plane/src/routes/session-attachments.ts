@@ -28,13 +28,24 @@ import {
   sessionAttachmentRequestExceedsLimit,
 } from "../media";
 import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage";
-import { createMediaObjectStorage } from "../storage/object-storage";
+import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
 import type { Env } from "../types";
-import { createStoredObjectResponse } from "./responses/stored-object-response";
+import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
+import {
+  createPartialStoredObjectResponse,
+  createRangeNotSatisfiableResponse,
+  createStoredObjectResponse,
+} from "./responses/stored-object-response";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
+
+function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
+  const headers = new Headers();
+  metadata.writeHttpMetadata(headers);
+  return headers.get("Content-Type");
+}
 
 async function handleAttachmentPost(
   request: Request,
@@ -93,11 +104,11 @@ async function handleAttachmentPost(
     ctx.sessionRuntime,
     storage,
     sessionId,
-    logger,
-    {
-      requestId: ctx.request_id,
-      traceId: ctx.trace_id,
-    }
+    logger.child({
+      session_id: sessionId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    })
   );
   const stored = await attachmentStorage.store(bytes, {
     attachmentId,
@@ -136,24 +147,45 @@ async function handleAttachmentGet(
 
   const storage = createMediaObjectStorage(env);
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
+  const rangeHeader = request.headers.get("Range");
+  let body: ReadableStream;
+  let metadata: ObjectStorageMetadata;
+  let range: ByteRange | null = null;
 
-  return createStoredObjectResponse({
-    request,
-    storage,
-    objectKey,
-    isAllowedContentType: isSupportedSessionAttachmentMimeType,
-    notFound: () => error("Attachment not found", 404),
-    invalidMetadata: (contentType) => {
-      logger.error("attachments.invalid_metadata", {
-        session_id: sessionId,
-        attachment_id: attachmentId,
-        content_type: contentType,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return error("Attachment is invalid", 500);
-    },
-  });
+  if (rangeHeader) {
+    const head = await storage.head(objectKey);
+    if (!head) return error("Attachment not found", 404);
+    range = parseByteRangeHeader(rangeHeader, head.size);
+    if (!range) return createRangeNotSatisfiableResponse(head.size);
+
+    const object = await storage.get(objectKey, {
+      range: { offset: range.start, length: range.length },
+    });
+    if (!object) return error("Attachment not found", 404);
+    body = object.body;
+    metadata = head;
+  } else {
+    const object = await storage.get(objectKey);
+    if (!object) return error("Attachment not found", 404);
+    body = object.body;
+    metadata = object;
+  }
+
+  const contentType = getStoredContentType(metadata);
+  if (!contentType || !isSupportedSessionAttachmentMimeType(contentType)) {
+    logger.error("attachments.invalid_metadata", {
+      session_id: sessionId,
+      attachment_id: attachmentId,
+      content_type: contentType,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Attachment is invalid", 500);
+  }
+
+  return range
+    ? createPartialStoredObjectResponse(body, metadata, contentType, range)
+    : createStoredObjectResponse(body, metadata, contentType);
 }
 
 export const sessionAttachmentRoutes: Route[] = [

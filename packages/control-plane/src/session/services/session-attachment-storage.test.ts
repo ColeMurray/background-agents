@@ -35,18 +35,16 @@ function buildService(responses: Array<Response | Error>) {
     error: vi.fn(),
     child: () => log,
   };
-  const service = new SessionAttachmentStorageService(runtime, storage, "session-1", log, {
-    requestId: "request-1",
-    traceId: "trace-1",
-  });
-  return { service, fetch, storage, log };
+  const service = new SessionAttachmentStorageService(runtime, storage, "session-1", log);
+  const store = (bytes: Uint8Array) => service.store(bytes, RECORD);
+  return { fetch, storage, log, store };
 }
 
 describe("SessionAttachmentStorageService", () => {
   it("registers and then stores an attachment", async () => {
     const h = buildService([Response.json({ status: "ok" })]);
 
-    await expect(h.service.store(Uint8Array.from([1, 2, 3]), RECORD)).resolves.toEqual({
+    await expect(h.store(Uint8Array.from([1, 2, 3]))).resolves.toEqual({
       ok: true,
     });
 
@@ -66,7 +64,7 @@ describe("SessionAttachmentStorageService", () => {
   it("does not store an object when registration is rejected", async () => {
     const h = buildService([Response.json({ error: "Quota exceeded" }, { status: 429 })]);
 
-    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
       ok: false,
       status: 429,
       error: "Quota exceeded",
@@ -78,9 +76,7 @@ describe("SessionAttachmentStorageService", () => {
   it("does not store an object when registration throws", async () => {
     const h = buildService([new Error("runtime unavailable")]);
 
-    await expect(h.service.store(Uint8Array.from([1]), RECORD)).rejects.toThrow(
-      "runtime unavailable"
-    );
+    await expect(h.store(Uint8Array.from([1]))).rejects.toThrow("runtime unavailable");
     expect(h.storage.put).not.toHaveBeenCalled();
     expect(h.storage.delete).not.toHaveBeenCalled();
   });
@@ -88,7 +84,7 @@ describe("SessionAttachmentStorageService", () => {
   it("rejects without storing when the registry response is malformed", async () => {
     const h = buildService([new Response("not-json")]);
 
-    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
       ok: false,
       status: 502,
       error: "Attachment registry returned an invalid response",
@@ -100,7 +96,7 @@ describe("SessionAttachmentStorageService", () => {
     const h = buildService([Response.json({ status: "ok" })]);
     h.storage.put.mockRejectedValue(new Error("R2 unavailable"));
 
-    await expect(h.service.store(Uint8Array.from([1]), RECORD)).rejects.toThrow("R2 unavailable");
+    await expect(h.store(Uint8Array.from([1]))).rejects.toThrow("R2 unavailable");
     expect(h.fetch).toHaveBeenCalledTimes(1);
     expect(h.storage.delete).not.toHaveBeenCalled();
   });
@@ -118,7 +114,7 @@ describe("SessionAttachmentStorageService", () => {
       Response.json({ status: "ok" }),
     ]);
 
-    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({ ok: true });
+    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({ ok: true });
     expect(h.storage.delete).toHaveBeenCalledWith("sessions/session-1/attachments/old-1");
     expect(JSON.parse(h.fetch.mock.calls[1][2]?.body as string)).toEqual({
       action: "complete_cleanup",
@@ -151,7 +147,7 @@ describe("SessionAttachmentStorageService", () => {
       if (key.endsWith("/old-1")) throw new Error("R2 unavailable");
     });
 
-    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
       ok: false,
       status: 503,
       error: "Failed to clean up expired attachments; please retry",
@@ -177,7 +173,7 @@ describe("SessionAttachmentStorageService", () => {
       Response.json({ status: "cleanup_required", cleanupClaimedAt: 1000, staleAttachments: [] }),
     ]);
 
-    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.store(Uint8Array.from([1]))).resolves.toEqual({
       ok: false,
       status: 502,
       error: "Attachment registry returned an invalid response",

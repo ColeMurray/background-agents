@@ -6,13 +6,13 @@ import {
   SESSION_ATTACHMENT_UNREFERENCED_TTL_MS,
   SESSION_ATTACHMENT_CLEANUP_CLAIM_TTL_MS,
 } from "../../../media";
-import type { SessionRow, SessionAttachmentRow } from "../../types";
-import { createAttachmentsHandler } from "./attachments.handler";
+import type { SessionAttachmentRow } from "../../types";
+import { AttachmentsHandler } from "./attachments.handler";
 
 const NOW = 1_000_000_000;
 
 function buildHandler(options?: {
-  session?: SessionRow | null;
+  sessionExists?: boolean;
   totals?: { count: number; totalBytes: number };
   stale?: SessionAttachmentRow[];
 }) {
@@ -24,15 +24,14 @@ function buildHandler(options?: {
     releaseCleanupClaims: vi.fn(),
   };
 
-  const handler = createAttachmentsHandler({
-    repository,
-    getSession: () =>
-      options && "session" in options ? options.session! : ({ id: "sess-1" } as SessionRow),
-    getLog: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }) as never,
-    now: () => NOW,
-  });
+  const sessionExists = options?.sessionExists ?? true;
+  const handler = new AttachmentsHandler(
+    repository as never,
+    { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+    () => NOW
+  );
 
-  return { handler, repository };
+  return { handler, repository, sessionExists };
 }
 
 function uploadRequest(body: unknown): Request {
@@ -50,11 +49,11 @@ const VALID_BODY = {
   objectKey: "sessions/sess-1/attachments/up-1",
 };
 
-describe("createAttachmentsHandler", () => {
+describe("AttachmentsHandler", () => {
   it("returns 404 when the session is not initialized", async () => {
-    const { handler, repository } = buildHandler({ session: null });
+    const { handler, repository, sessionExists } = buildHandler({ sessionExists: false });
 
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY));
+    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionExists);
 
     expect(response.status).toBe(404);
     expect(repository.create).not.toHaveBeenCalled();
@@ -70,20 +69,20 @@ describe("createAttachmentsHandler", () => {
     ["oversized upload", { ...VALID_BODY, sizeBytes: SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 1 }],
     ["missing objectKey", { ...VALID_BODY, objectKey: "" }],
   ])("rejects %s with 400", async (_label, body) => {
-    const { handler, repository } = buildHandler();
+    const { handler, repository, sessionExists } = buildHandler();
 
-    const response = await handler.recordAttachment(uploadRequest(body));
+    const response = await handler.recordAttachment(uploadRequest(body), sessionExists);
 
     expect(response.status).toBe(400);
     expect(repository.create).not.toHaveBeenCalled();
   });
 
   it("rejects when the per-session file count cap is reached", async () => {
-    const { handler, repository } = buildHandler({
+    const { handler, repository, sessionExists } = buildHandler({
       totals: { count: SESSION_ATTACHMENT_LIMIT_PER_SESSION, totalBytes: 0 },
     });
 
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY));
+    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionExists);
 
     expect(response.status).toBe(429);
     expect(repository.create).not.toHaveBeenCalled();
@@ -95,11 +94,11 @@ describe("createAttachmentsHandler", () => {
   });
 
   it("rejects when the upload would exceed the per-session byte cap", async () => {
-    const { handler, repository } = buildHandler({
+    const { handler, repository, sessionExists } = buildHandler({
       totals: { count: 1, totalBytes: SESSION_ATTACHMENT_TOTAL_BYTES_PER_SESSION - 512 },
     });
 
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY));
+    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionExists);
 
     expect(response.status).toBe(429);
     expect(repository.create).not.toHaveBeenCalled();
@@ -115,7 +114,7 @@ describe("createAttachmentsHandler", () => {
       cleanup_claimed_at: NOW,
       created_at: NOW - SESSION_ATTACHMENT_UNREFERENCED_TTL_MS - 1,
     };
-    const { handler, repository } = buildHandler({ stale: [staleAttachment] });
+    const { handler, repository, sessionExists } = buildHandler({ stale: [staleAttachment] });
     const order: string[] = [];
     repository.claimStale.mockImplementation(() => {
       order.push("claim");
@@ -126,7 +125,7 @@ describe("createAttachmentsHandler", () => {
       return { count: SESSION_ATTACHMENT_LIMIT_PER_SESSION - 1, totalBytes: 0 };
     });
 
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY));
+    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionExists);
 
     expect(response.status).toBe(200);
     expect(order).toEqual(["claim"]);
@@ -139,9 +138,9 @@ describe("createAttachmentsHandler", () => {
   });
 
   it("records a valid upload", async () => {
-    const { handler, repository } = buildHandler();
+    const { handler, repository, sessionExists } = buildHandler();
 
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY));
+    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionExists);
 
     expect(response.status).toBe(200);
     expect(repository.create).toHaveBeenCalledWith({
@@ -155,14 +154,15 @@ describe("createAttachmentsHandler", () => {
   });
 
   it("acknowledges successful cleanup and releases failed claims", async () => {
-    const { handler, repository } = buildHandler();
+    const { handler, repository, sessionExists } = buildHandler();
     const response = await handler.recordAttachment(
       uploadRequest({
         action: "complete_cleanup",
         cleanupClaimedAt: NOW,
         acknowledgedAttachmentIds: ["old-1"],
         releasedAttachmentIds: ["old-2"],
-      })
+      }),
+      sessionExists
     );
 
     expect(response.status).toBe(200);
