@@ -50,18 +50,21 @@ export async function handleTargetSelection(
     blocks: buildWorkingMessageBlocks(label),
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
-  const sessionResult = await startSessionAndSendPrompt(
-    env,
+  const sessionResult = await startSessionAndSendPrompt(env, {
     target,
     channel,
-    threadKey,
-    message,
+    threadTs: threadKey,
+    messageText: message,
     userId,
+    // The original message ts isn't persisted with the pending request, so
+    // the "Working on..." ack — or the interaction message when the ack post
+    // fails — marks where interim thread context resumes.
+    messageTs: ackTs ?? messageTs,
     previousMessages,
     channelName,
     channelDescription,
-    traceId
-  );
+    traceId,
+  });
   if (!sessionResult) return;
 
   await deletePendingRequest(env, channel, threadKey);

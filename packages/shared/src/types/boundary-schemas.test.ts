@@ -233,15 +233,55 @@ describe("boundary schemas", () => {
         reasoningEffort: "high",
         attachments: [
           {
-            type: "file",
-            name: "error.log",
-            content: "stack trace",
-            mimeType: "text/plain",
+            name: "error.png",
+            attachmentId: "attachment-1",
           },
         ],
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("rejects inline and remote attachment sources", () => {
+      for (const attachment of [
+        { name: "inline.png", content: "aGVsbG8=" },
+        { name: "remote.png", url: "https://example.com/remote.png" },
+      ]) {
+        const result = clientMessageSchema.safeParse({
+          type: "prompt",
+          content: "Look",
+          attachments: [attachment],
+        });
+        expect(result.success).toBe(false);
+      }
+    });
+
+    it("rejects prompts with more than six attachments", () => {
+      const result = clientMessageSchema.safeParse({
+        type: "prompt",
+        content: "Compare these",
+        attachments: Array.from({ length: 7 }, (_, index) => ({
+          name: `${index}.png`,
+          attachmentId: `upload-${index}`,
+        })),
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("bounds attachment identifiers and names", () => {
+      for (const attachment of [
+        { name: "shot.png", attachmentId: "../upload" },
+        { name: "x".repeat(256), attachmentId: "attachment-1" },
+      ]) {
+        expect(
+          clientMessageSchema.safeParse({
+            type: "prompt",
+            content: "Look",
+            attachments: [attachment],
+          }).success
+        ).toBe(false);
+      }
     });
 
     it("rejects a malformed partial subscribe message", () => {

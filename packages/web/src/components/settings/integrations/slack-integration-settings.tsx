@@ -5,8 +5,10 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   DEFAULT_MENTIONS_POLICY,
+  encodeRepositoryPathSegments,
   MAX_SLACK_ROUTING_RULES,
   MODEL_OPTIONS,
+  parseRepositoryFullName,
   type EnrichedRepository,
   type Environment,
   type ListEnvironmentsResponse,
@@ -398,10 +400,11 @@ function RepoOverridesSection({
 
   const handleAdd = async () => {
     if (!addingRepo) return;
-    const [owner, name] = addingRepo.split("/");
+    const repository = parseRepositoryFullName(addingRepo);
+    if (!repository) return;
 
     try {
-      const res = await fetch(`/api/integration-settings/slack/repos/${owner}/${name}`, {
+      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: {} }),
@@ -472,14 +475,15 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   }, [entry.settings, dirty, saving]);
 
   const handleSave = async () => {
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
     setSaving(true);
-    const [owner, name] = entry.repo.split("/");
     const settings: SlackRepoSettings = {};
     if (mode === "on") settings.agentNotificationsEnabled = true;
     if (mode === "off") settings.agentNotificationsEnabled = false;
 
     try {
-      const res = await fetch(`/api/integration-settings/slack/repos/${owner}/${name}`, {
+      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings }),
@@ -500,9 +504,10 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   };
 
   const handleDelete = async () => {
-    const [owner, name] = entry.repo.split("/");
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
     try {
-      const res = await fetch(`/api/integration-settings/slack/repos/${owner}/${name}`, {
+      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
         method: "DELETE",
       });
       if (res.ok) {

@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { automationRoutes } from "./automations";
-import { resolveRepoOrError, type RequestContext } from "./shared";
+import { HttpError, resolveRepoOrError, type RequestContext } from "./shared";
 import type { Env } from "../types";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -277,6 +277,61 @@ describe("automation route handlers", () => {
         ],
         expect.any(Number)
       );
+    });
+
+    it("does not write partial data when repository resolution fails", async () => {
+      vi.mocked(resolveRepoOrError).mockImplementation(async (_env, owner, name) => {
+        if (name === "api") {
+          throw new HttpError("Repository is not installed for the GitHub App", 404);
+        }
+        return {
+          repoId: 12345,
+          repoOwner: owner,
+          repoName: name,
+          defaultBranch: "main",
+        };
+      });
+
+      await expect(
+        callRoute("POST", "/automations", {
+          body: {
+            ...validBody,
+            repositories: [
+              { repoOwner: "acme", repoName: "web-app" },
+              { repoOwner: "acme", repoName: "api" },
+            ],
+          },
+        })
+      ).rejects.toMatchObject({
+        status: 404,
+        message: "Repository is not installed for the GitHub App",
+      });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(mockStore.bindRepositoryInserts).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("reports repository resolution failures in input order", async () => {
+      vi.mocked(resolveRepoOrError).mockImplementation(
+        (_env, _owner, name) =>
+          new Promise((_, reject) => {
+            const delay = name === "first" ? 5 : 0;
+            setTimeout(() => reject(new HttpError(`failed ${name}`, 404)), delay);
+          })
+      );
+
+      await expect(
+        callRoute("POST", "/automations", {
+          body: {
+            ...validBody,
+            repositories: [
+              { repoOwner: "acme", repoName: "first" },
+              { repoOwner: "acme", repoName: "second" },
+            ],
+          },
+        })
+      ).rejects.toMatchObject({ message: "failed first" });
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("rejects duplicate repositories in the list", async () => {

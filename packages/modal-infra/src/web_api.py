@@ -401,6 +401,12 @@ async def api_restore_sandbox(
             session_config.get("repo_owner") if isinstance(session_config, dict) else None,
             session_config.get("repo_name") if isinstance(session_config, dict) else None,
         )
+        if isinstance(session_config, dict):
+            session_config = {
+                **session_config,
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
+            }
 
         manager = SandboxManager()
         clone_token = resolve_clone_token() if repo_owner and repo_name else None

@@ -5,12 +5,45 @@ import {
   MAX_AUTOMATION_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
+  decodeRepositoryPathSegments,
+  encodeRepositoryPathSegments,
+  formatRepositoryFullName,
+  parseRepositoryFullName,
   prArtifactBelongsToRepo,
   sandboxEventSchema,
   serverMessageSchema,
   sessionRepositoriesInputSchema,
   toRepositoryRef,
 } from "./index";
+
+describe("repository full names", () => {
+  it("round-trips a repository with a nested owner namespace", () => {
+    const repository = { repoOwner: "group/subgroup", repoName: "web" };
+
+    expect(parseRepositoryFullName(formatRepositoryFullName(repository))).toEqual(repository);
+  });
+
+  it("encodes nested owners as one API path segment", () => {
+    expect(encodeRepositoryPathSegments({ repoOwner: "group/subgroup", repoName: "web app" })).toBe(
+      "group%2Fsubgroup/web%20app"
+    );
+  });
+
+  it("decodes a canonical repository API path", () => {
+    expect(decodeRepositoryPathSegments("group%2Fsubgroup", "web%20app")).toEqual({
+      repoOwner: "group/subgroup",
+      repoName: "web app",
+    });
+  });
+
+  it.each([
+    ["group", "web%2Fapi"],
+    ["group%2F%2Fsubgroup", "web"],
+    ["group%ZZsubgroup", "web"],
+  ])("rejects a non-canonical repository API path (%s/%s)", (owner, name) => {
+    expect(decodeRepositoryPathSegments(owner, name)).toBeNull();
+  });
+});
 
 describe("MAX_TARGET_REPOSITORIES aliases", () => {
   it("keeps automation and session caps as the same constant", () => {

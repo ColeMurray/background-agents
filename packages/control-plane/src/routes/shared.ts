@@ -2,6 +2,7 @@
  * Shared route primitives used by all route modules.
  */
 
+import { decodeRepositoryPathSegments } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
@@ -145,12 +146,16 @@ export async function parseJsonBody<T>(request: Request): Promise<T | Response> 
 export function extractRepoParams(
   match: RegExpMatchArray
 ): { owner: string; name: string } | Response {
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
+  const encodedOwner = match.groups?.owner;
+  const encodedName = match.groups?.name;
+  if (!encodedOwner || !encodedName) {
     return error("Owner and name are required", 400);
   }
-  return { owner, name };
+  const repository = decodeRepositoryPathSegments(encodedOwner, encodedName);
+  if (!repository) {
+    return error("Owner and name must be valid repository path segments", 400);
+  }
+  return { owner: repository.repoOwner, name: repository.repoName };
 }
 
 /**

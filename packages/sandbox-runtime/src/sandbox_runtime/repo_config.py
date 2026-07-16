@@ -5,7 +5,7 @@ The supervisor derives the repository list once from SESSION_CONFIG
 writes it to REPO_MANIFEST_FILE_PATH. Every other consumer — the bridge's
 push targeting and the JS create-pull-request tool — reads that manifest
 instead of re-deriving the ``/workspace/<repo_name>`` convention, so the
-checkout layout has exactly one owner.
+checkout layout has exactly one authority.
 """
 
 import json
@@ -17,9 +17,8 @@ from typing import Any
 
 from .constants import REPO_MANIFEST_FILE_PATH
 
-# GitHub owner/repo identifiers: a single path segment with no separators.
-# Leading dots are legal (a repo can be named ".github"); "." and ".." are
-# rejected separately below.
+# A single path segment with no separators. Leading dots are legal (a repo can
+# be named ".github"); "." and ".." are rejected separately below.
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -47,10 +46,24 @@ def is_safe_repo_segment(value: str) -> bool:
     return bool(_SAFE_SEGMENT_RE.match(value)) and value not in (".", "..")
 
 
+def is_safe_repo_owner(value: str) -> bool:
+    """True when ``value`` is a namespace path of safe segments.
+
+    An owner may be a single segment (GitHub, ``octocat``) or a nested
+    namespace (GitLab subgroups, ``group/subgroup``). The owner is never used
+    as a filesystem path — checkout directories derive from repo_name — so a
+    ``/`` between safe segments is fine; this only rejects empty segments and
+    traversal ("", "..", "a//b", "/etc", "a/") that could poison the clone URL.
+    """
+    parts = value.split("/")
+    return len(parts) >= 1 and all(is_safe_repo_segment(part) for part in parts)
+
+
 def _require_safe(*, owner: str, name: str) -> None:
-    for label, value in (("repo_owner", owner), ("repo_name", name)):
-        if not is_safe_repo_segment(value):
-            raise RepoConfigError(f"unsafe {label} {value!r}: not a single path segment")
+    if not is_safe_repo_owner(owner):
+        raise RepoConfigError(f"unsafe repo_owner {owner!r}: not a safe namespace path")
+    if not is_safe_repo_segment(name):
+        raise RepoConfigError(f"unsafe repo_name {name!r}: not a single path segment")
 
 
 def _str_field(item: Mapping[str, Any], key: str) -> str:
@@ -68,11 +81,12 @@ def parse_repositories(
 ) -> list[RepoEntry]:
     """Build the ordered repository list from SESSION_CONFIG or the scalar env.
 
-    Checkout paths derive from repo_name, so owners/names must be safe single
-    path segments and names must be unique (case-insensitive — checkout paths
-    would collide). The control plane enforces both at create time, so a
-    violation here means a corrupt or tampered config: RepoConfigError, and
-    the boot must not proceed. Entries missing owner or name are skipped.
+    Checkout paths derive from repo_name, so owners must be safe namespace
+    paths, names must be safe single path segments, and names must be unique
+    (case-insensitive — checkout paths would collide). The control plane
+    enforces these constraints at create time, so a violation here means a
+    corrupt or tampered config: RepoConfigError, and the boot must not proceed.
+    Entries missing owner or name are skipped.
     """
     raw = session_config.get("repositories")
     entries: list[RepoEntry] = []
@@ -112,9 +126,9 @@ def parse_repositories(
 def find_repo_entry(entries: Iterable[RepoEntry], owner: str, name: str) -> RepoEntry | None:
     """Find a repository by identity, case-insensitively.
 
-    GitHub owner/name identifiers are case-insensitive, but the returned
-    entry carries the canonical casing (and checkout path) — callers must
-    use the entry's fields, never the lookup arguments.
+    Repository identities are matched case-insensitively, but the returned
+    entry carries the canonical casing (and checkout path) — callers must use
+    the entry's fields, never the lookup arguments.
     """
     owner_key = owner.lower()
     name_key = name.lower()

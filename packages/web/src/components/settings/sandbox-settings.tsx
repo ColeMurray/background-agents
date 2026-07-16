@@ -14,6 +14,7 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
+  encodeRepositoryPathSegments,
   findSandboxPortConflict,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
@@ -143,7 +144,9 @@ function useSandboxSettingsScope(
 ): SandboxScopeModel {
   const isGlobal = scope === "global";
   const globalApiUrl = "/api/integration-settings/sandbox";
-  const repoApiUrl = `/api/integration-settings/sandbox/repos/${owner}/${name}`;
+  const repoPath =
+    owner && name ? encodeRepositoryPathSegments({ repoOwner: owner, repoName: name }) : "";
+  const repoApiUrl = `/api/integration-settings/sandbox/repos/${repoPath}`;
   const apiUrl = isGlobal
     ? globalApiUrl
     : scope === "repo"

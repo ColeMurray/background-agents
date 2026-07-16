@@ -8,18 +8,39 @@ import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession, sendPrompt } from "./control-plane-client";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 
+export interface StartSessionOptions {
+  target: SlackSessionTarget;
+  channel: string;
+  threadTs: string;
+  messageText: string;
+  userId: string;
+  /**
+   * Slack ts of the triggering message. Persisted on the thread mapping so
+   * follow-ups can scope interim thread context to newer messages.
+   */
+  messageTs?: string;
+  previousMessages?: string[];
+  channelName?: string;
+  channelDescription?: string;
+  traceId?: string;
+}
+
 export async function startSessionAndSendPrompt(
   env: Env,
-  target: SlackSessionTarget,
-  channel: string,
-  threadTs: string,
-  messageText: string,
-  userId: string,
-  previousMessages?: string[],
-  channelName?: string,
-  channelDescription?: string,
-  traceId?: string
+  options: StartSessionOptions
 ): Promise<{ sessionId: string } | null> {
+  const {
+    target,
+    channel,
+    threadTs,
+    messageText,
+    userId,
+    messageTs,
+    previousMessages,
+    channelName,
+    channelDescription,
+    traceId,
+  } = options;
   const [availableModels, slackDefaultModel] = await Promise.all([
     getAvailableModels(env, traceId),
     getSlackDefaultModel(env, traceId),
@@ -104,7 +125,7 @@ export async function startSessionAndSendPrompt(
     env,
     channel,
     threadTs,
-    buildThreadSession(session.sessionId, target, model, reasoningEffort)
+    buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs)
   );
   return { sessionId: session.sessionId };
 }

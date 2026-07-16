@@ -1,4 +1,9 @@
-import type { CallbackContext } from "@open-inspect/shared";
+import {
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  sessionAttachmentReferencesSchema,
+  type CallbackContext,
+  type SessionAttachmentReference,
+} from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -9,6 +14,20 @@ import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
+function validateAttachments(raw: unknown): SessionAttachmentReference[] | Response | undefined {
+  if (raw === undefined) return undefined;
+  const result = sessionAttachmentReferencesSchema.safeParse(raw);
+  if (!result.success) {
+    if (Array.isArray(raw) && raw.length > MAX_SESSION_ATTACHMENTS_PER_MESSAGE) {
+      return error(
+        `You can attach up to ${MAX_SESSION_ATTACHMENTS_PER_MESSAGE} files per message`,
+        400
+      );
+    }
+    return error("Invalid attachments", 400);
+  }
+  return result.data;
+}
 
 async function handleSessionPrompt(
   request: Request,
@@ -25,13 +44,16 @@ async function handleSessionPrompt(
     source?: string;
     model?: string;
     reasoningEffort?: string;
-    attachments?: Array<{ type: string; name: string; url?: string }>;
+    attachments?: unknown;
     callbackContext?: CallbackContext;
   };
 
   if (!body.content) {
     return error("content is required");
   }
+
+  const attachments = validateAttachments(body.attachments);
+  if (attachments instanceof Response) return attachments;
 
   const authorId = body.authorId || "anonymous";
 
@@ -61,7 +83,7 @@ async function handleSessionPrompt(
       source: body.source || "web",
       model: body.model,
       reasoningEffort: body.reasoningEffort,
-      attachments: body.attachments,
+      attachments,
       callbackContext: body.callbackContext,
       authorDisplayName: enrichment?.displayName,
       authorEmail: enrichment?.email,

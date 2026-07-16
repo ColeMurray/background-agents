@@ -19,6 +19,16 @@ const SESSION_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_repos
   PRIMARY KEY (repo_owner, repo_name)
 )`;
 
+const ATTACHMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  object_key TEXT NOT NULL,
+  message_id TEXT,
+  cleanup_claimed_at INTEGER,
+  created_at INTEGER NOT NULL
+)`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -111,6 +121,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
   updated_at INTEGER NOT NULL                       -- last content change (PR lifecycle updates)
 );
 
+-- User session attachments stored in the media bucket (chat composer attachments).
+-- message_id is set once a message references the attachment; unreferenced rows are
+-- pruned (with their R2 objects) after a TTL.
+${ATTACHMENTS_TABLE_SQL};
+
 -- Sandbox state
 CREATE TABLE IF NOT EXISTS sandbox (
   id TEXT PRIMARY KEY,
@@ -163,7 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
 import { createLogger } from "../logger";
-import type { SqlStorage } from "./repository";
+import type { SqlStorage } from "./sql-storage";
 
 const schemaLog = createLogger("schema");
 
@@ -440,6 +455,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(sql, `ALTER TABLE artifacts ADD COLUMN updated_at INTEGER`);
       sql.exec(`UPDATE artifacts SET updated_at = created_at WHERE updated_at IS NULL`);
     },
+  },
+  {
+    id: 35,
+    description: "Create attachments table",
+    run: ATTACHMENTS_TABLE_SQL,
   },
 ];
 

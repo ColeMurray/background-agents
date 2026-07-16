@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { recordSchema } from "./artifacts";
 import { gitSyncStatusSchema, type EventType } from "./statuses";
+import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 
 export interface AgentEvent {
   id: string;
@@ -140,7 +141,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   // unknown union entries, so this entry must exist before runtimes emit it.
   z.object({
     type: z.literal("warning"),
-    scope: z.enum(["sync", "setup", "start", "assembly", "secrets"]),
+    scope: z.enum(["sync", "setup", "start", "assembly", "secrets", "media"]),
     message: z.string(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),
@@ -165,6 +166,9 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
         avatar: z.string().optional(),
       })
       .optional(),
+    // Attachment metadata only — never inline content, which would bloat the
+    // events table and every broadcast. attachmentId lets clients stream attachments.
+    attachments: resolvedSessionAttachmentsSchema.optional(),
   }),
 ]);
 

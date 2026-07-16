@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,
+  parseRepositoryFullName,
   type Environment,
   type RepositoryInput,
 } from "@open-inspect/shared";
@@ -116,8 +117,10 @@ export function EnvironmentForm({
       description: description.trim() ? description.trim() : null,
       prebuildEnabled,
       repositories: selectedKeys.map((key) => {
-        const [repoOwner = "", repoName = ""] = key.split("/");
-        const entry: RepositoryInput = { repoOwner, repoName };
+        const entry: RepositoryInput = parseRepositoryFullName(key) ?? {
+          repoOwner: "",
+          repoName: "",
+        };
         const branch = branchByKey[key]?.trim();
         if (branch) entry.baseBranch = branch;
         return entry;
@@ -271,8 +274,11 @@ function EnvironmentRepositoryRow({
   onRemove: () => void;
   disabled: boolean;
 }) {
-  const [repoOwner = "", repoName = ""] = repositoryKey.split("/");
-  const { branches, loading: loadingBranches } = useBranches(repoOwner, repoName);
+  const repository = parseRepositoryFullName(repositoryKey);
+  const { branches, loading: loadingBranches } = useBranches(
+    repository?.repoOwner ?? "",
+    repository?.repoName ?? ""
+  );
 
   return (
     <div className="flex flex-wrap items-center gap-2 border border-border-muted px-3 py-2">

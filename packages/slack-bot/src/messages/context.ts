@@ -1,6 +1,17 @@
+function formatMessageSection(header: string, messages: string[]): string {
+  if (messages.length === 0) return "";
+  return `${header}:\n---\n${messages.join("\n")}\n---\n\n`;
+}
+
 export function formatThreadContext(previousMessages: string[]): string {
-  if (previousMessages.length === 0) return "";
-  return `Context from the Slack thread:\n---\n${previousMessages.join("\n")}\n---\n\n`;
+  return formatMessageSection("Context from the Slack thread", previousMessages);
+}
+
+export function formatInterimThreadContext(interimMessages: string[]): string {
+  return formatMessageSection(
+    "New messages in the Slack thread since your last task",
+    interimMessages
+  );
 }
 
 export function formatChannelContext(channelName: string, channelDescription?: string): string {

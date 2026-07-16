@@ -13,6 +13,7 @@ const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
   model: z.string().min(1),
   reasoningEffort: z.string().min(1).optional(),
   createdAt: z.number().finite().nonnegative(),
+  lastPromptTs: z.string().min(1).optional(),
 });
 
 function getThreadSessionKey(channel: string, threadTs: string): string {
@@ -81,11 +82,34 @@ export async function clearThreadSession(
   }
 }
 
+/**
+ * Advance the thread mapping's lastPromptTs checkpoint. Concurrent follow-ups
+ * can complete out of order, and an older one must not move the checkpoint
+ * backwards or later prompts would re-include already-forwarded context, so
+ * the mapping is re-read and only written when the new ts is strictly newer.
+ * KV has no compare-and-swap, so truly simultaneous writes can still race in
+ * a narrow window; a lost race only re-includes a few already-forwarded
+ * thread messages in a later prompt. No-op when the mapping is gone (e.g.
+ * concurrently cleared) so a dead session is never resurrected.
+ */
+export async function advanceLastPromptTs(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  promptTs: string
+): Promise<void> {
+  const current = await lookupThreadSession(env, channel, threadTs);
+  if (!current) return;
+  if (current.lastPromptTs && parseFloat(current.lastPromptTs) >= parseFloat(promptTs)) return;
+  await storeThreadSession(env, channel, threadTs, { ...current, lastPromptTs: promptTs });
+}
+
 export function buildThreadSession(
   sessionId: string,
   target: SlackSessionTarget,
   model: string,
-  reasoningEffort?: string
+  reasoningEffort?: string,
+  lastPromptTs?: string
 ): ThreadSession {
   return {
     sessionId,
@@ -94,5 +118,6 @@ export function buildThreadSession(
     model,
     reasoningEffort,
     createdAt: Date.now(),
+    lastPromptTs,
   };
 }

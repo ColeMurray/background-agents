@@ -9,7 +9,12 @@
  * (`repository_shas`) and spawn selection is gated by the runtime version
  * baked at build time.
  */
-import type { ImageBuildScopeKind, ImageBuildStatus } from "@open-inspect/shared";
+import {
+  formatRepositoryFullName,
+  parseRepositoryFullName,
+  type ImageBuildScopeKind,
+  type ImageBuildStatus,
+} from "@open-inspect/shared";
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,
@@ -30,18 +35,19 @@ export interface ImageBuildScope {
 
 /** The repo scope for a repository, id normalized to lowercase `owner/name`. */
 export function repoImageBuildScope(repoOwner: string, repoName: string): ImageBuildScope {
-  return { kind: "repo", id: `${repoOwner.toLowerCase()}/${repoName.toLowerCase()}` };
+  return {
+    kind: "repo",
+    id: formatRepositoryFullName({ repoOwner, repoName }).toLowerCase(),
+  };
 }
 
 /**
- * Split a repo scope id back into its owner/name halves. Null on anything
- * that is not exactly `owner/name` — callers fail closed (a malformed id can
- * only come from a raw store write, never from repoImageBuildScope).
+ * Split a repo scope id back into its structured identity. Null on malformed
+ * values — callers fail closed (a malformed id can only come from a raw store
+ * write, never from repoImageBuildScope).
  */
 export function parseRepoScopeId(scopeId: string): { repoOwner: string; repoName: string } | null {
-  const segments = scopeId.split("/");
-  if (segments.length !== 2 || !segments[0] || !segments[1]) return null;
-  return { repoOwner: segments[0], repoName: segments[1] };
+  return parseRepositoryFullName(scopeId);
 }
 
 /** Opaque provider artifact reference, optionally tied to the build sandbox that produced it. */

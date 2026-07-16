@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Attachment } from "./websocket";
+import type { ResolvedSessionAttachment } from "./session-attachments";
 import {
   sandboxStatusSchema,
   sessionStatusSchema,
@@ -79,7 +79,7 @@ export interface SessionMessage {
   authorId: string;
   content: string;
   source: MessageSource;
-  attachments: Attachment[] | null;
+  attachments: ResolvedSessionAttachment[] | null;
   status: MessageStatus;
   createdAt: number;
   startedAt: number | null;

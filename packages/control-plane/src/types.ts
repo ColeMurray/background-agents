@@ -13,7 +13,6 @@ import { z } from "zod";
 
 export type {
   ArtifactType,
-  Attachment,
   ClientMessage,
   CreateSessionRequest,
   CreateSessionResponse,
@@ -25,6 +24,8 @@ export type {
   MessageStatus,
   ParticipantRole,
   ParticipantPresence,
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
   SpawnSource,
   SandboxEvent,
   SandboxStatus,

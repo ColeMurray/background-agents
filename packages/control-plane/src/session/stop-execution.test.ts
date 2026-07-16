@@ -10,7 +10,9 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionRepository, type SqlStorage, type SqlResult } from "./repository";
+import { SessionRepository } from "./repository";
+import { SessionAttachmentRepository } from "./session-attachment-repository";
+import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and can return configurable data.
@@ -54,7 +56,11 @@ describe("Stop execution - repository interactions", () => {
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(mock.sql);
+    repo = new SessionRepository(
+      mock.sql,
+      (closure) => closure(),
+      new SessionAttachmentRepository(mock.sql)
+    );
   });
 
   describe("getProcessingMessage", () => {

@@ -3,7 +3,11 @@
 import { useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
-import type { EnvironmentRepository } from "@open-inspect/shared";
+import {
+  encodeRepositoryPathSegments,
+  formatRepositoryFullName,
+  type EnvironmentRepository,
+} from "@open-inspect/shared";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { RepoIcon, ChevronDownIcon } from "@/components/ui/icons";
@@ -33,14 +37,12 @@ export function EnvironmentSecretsImport({
 
   const source = useMemo(
     () =>
-      repositories.find(
-        (repository) => `${repository.repoOwner}/${repository.repoName}` === sourceKey
-      ) ?? null,
+      repositories.find((repository) => formatRepositoryFullName(repository) === sourceKey) ?? null,
     [repositories, sourceKey]
   );
 
   const { data, isLoading } = useSWR<RepoSecretsResponse>(
-    source ? `/api/repos/${source.repoOwner}/${source.repoName}/secrets` : null
+    source ? `/api/repos/${encodeRepositoryPathSegments(source)}/secrets` : null
   );
   const sourceSecretKeys = data?.secrets?.map((secret) => secret.key) ?? [];
 

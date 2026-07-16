@@ -147,6 +147,12 @@ export interface ThreadSession {
   reasoningEffort?: string;
   /** Unix timestamp of when the session was created. Used for debugging and observability. */
   createdAt: number;
+  /**
+   * Slack ts of the last thread message forwarded to the session. Follow-up
+   * prompts include the human messages posted after this point so the agent
+   * sees discussion that happened between invocations.
+   */
+  lastPromptTs?: string;
 }
 
 /**

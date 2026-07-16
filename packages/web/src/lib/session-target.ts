@@ -7,6 +7,8 @@
  * exclusivity refinement can never trip on picker-built requests.
  */
 
+import { parseRepositoryFullName } from "@open-inspect/shared";
+
 export type SessionTarget =
   | { kind: "none" }
   | { kind: "repo"; repoFullName: string }
@@ -16,11 +18,6 @@ export type SessionTarget =
 export const NO_REPOSITORY_OPTION_VALUE = "__no_repository__";
 export const MULTIPLE_REPOSITORIES_OPTION_VALUE = "__multiple_repositories__";
 const ENVIRONMENT_OPTION_PREFIX = "env:";
-
-export function parseRepoFullName(repoFullName: string): { owner: string; name: string } | null {
-  const [owner, name] = repoFullName.split("/");
-  return owner && name ? { owner, name } : null;
-}
 
 export function environmentOptionValue(environmentId: string): string {
   return `${ENVIRONMENT_OPTION_PREFIX}${environmentId}`;
@@ -113,11 +110,11 @@ export function buildSessionTargetRequestFields(
     case "none":
       return { repoOwner: null, repoName: null };
     case "repo": {
-      const repository = parseRepoFullName(target.repoFullName);
+      const repository = parseRepositoryFullName(target.repoFullName);
       if (!repository) return { repoOwner: null, repoName: null };
       return {
-        repoOwner: repository.owner,
-        repoName: repository.name,
+        repoOwner: repository.repoOwner,
+        repoName: repository.repoName,
         branch: selectedBranch || undefined,
       };
     }
@@ -126,11 +123,8 @@ export function buildSessionTargetRequestFields(
     case "repos":
       return {
         repositories: target.repoFullNames
-          .map(parseRepoFullName)
-          .filter(
-            (repository): repository is { owner: string; name: string } => repository !== null
-          )
-          .map((repository) => ({ repoOwner: repository.owner, repoName: repository.name })),
+          .map(parseRepositoryFullName)
+          .filter((repository) => repository !== null),
       };
   }
 }

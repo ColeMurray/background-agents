@@ -70,6 +70,29 @@ function getRepositories() {
   }
 }
 
+/** Resolve an owner/name argument, preserving nested owners and manifest casing. */
+export function resolveRepositoryTarget(repo, repositories) {
+  const requested = String(repo || "").trim();
+
+  if (repositories.length > 0) {
+    const normalized = requested.toLowerCase();
+    return (
+      repositories.find(
+        (repository) => `${repository.owner}/${repository.name}`.toLowerCase() === normalized
+      ) || null
+    );
+  }
+
+  const separator = requested.lastIndexOf("/");
+  if (separator <= 0 || separator === requested.length - 1) {
+    return null;
+  }
+
+  const owner = requested.slice(0, separator);
+  const name = requested.slice(separator + 1);
+  return owner.split("/").some((segment) => !segment) ? null : { owner, name };
+}
+
 async function getCurrentBranch(repoPath) {
   try {
     const gitArgs = repoPath
@@ -131,27 +154,18 @@ export default tool({
     let repoName;
     let repoPath;
     if (args.repo) {
-      const parts = String(args.repo).trim().split("/");
-      if (parts.length !== 2 || !parts[0] || !parts[1]) {
-        return `Failed to create pull request: repo must be "owner/name"${
-          validValues ? ` (one of: ${validValues})` : ""
-        }.`;
-      }
-      const [ownerArg, nameArg] = parts;
-      const match = repositories.find(
-        (r) =>
-          r.owner.toLowerCase() === ownerArg.toLowerCase() &&
-          r.name.toLowerCase() === nameArg.toLowerCase()
-      );
-      if (repositories.length > 0 && !match) {
+      const target = resolveRepositoryTarget(args.repo, repositories);
+      if (!target && repositories.length > 0) {
         return `Failed to create pull request: ${args.repo} is not part of this session. Valid values: ${validValues}.`;
       }
+      if (!target) {
+        return 'Failed to create pull request: repo must be "owner/name".';
+      }
       // Use the manifest's canonical casing and path — checkout directories
-      // and the control plane's member records are case-sensitive even
-      // though the match above is not.
-      repoOwner = match ? match.owner : ownerArg;
-      repoName = match ? match.name : nameArg;
-      repoPath = match ? match.path : undefined;
+      // and the control plane's member records are case-sensitive.
+      repoOwner = target.owner;
+      repoName = target.name;
+      repoPath = target.path;
     } else if (repositories.length > 1) {
       return `Failed to create pull request: this session spans multiple repositories — pass repo with one of: ${validValues}.`;
     }

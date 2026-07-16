@@ -260,6 +260,12 @@ class TestUnitTriggerPath:
     def test_repo_unit_path(self):
         assert _unit_trigger_path(_repo_unit()) == "/image-builds/trigger/repo/acme/web"
 
+    def test_repo_unit_path_encodes_nested_owner_namespace(self):
+        unit = _repo_unit()
+        unit["scopeId"] = "group/subgroup/web"
+
+        assert _unit_trigger_path(unit) == "/image-builds/trigger/repo/group%2Fsubgroup/web"
+
     def test_environment_unit_path(self):
         assert _unit_trigger_path(_environment_unit()) == "/image-builds/trigger/environment/env_1"
 

@@ -3,7 +3,7 @@
  */
 
 import type {
-  Attachment,
+  ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
   GitSyncStatus,
@@ -86,6 +86,16 @@ export interface MessageRow {
   completed_at: number | null;
 }
 
+export interface SessionAttachmentRow {
+  id: string;
+  mime_type: string;
+  size_bytes: number;
+  object_key: string;
+  message_id: string | null; // Set once a prompt references this upload
+  cleanup_claimed_at: number | null; // Retained until object deletion is acknowledged
+  created_at: number;
+}
+
 export interface EventRow {
   id: string;
   type: EventType;
@@ -139,7 +149,7 @@ export interface PromptCommand {
     scmName: string | null;
     scmEmail: string | null;
   };
-  attachments?: Attachment[];
+  attachments?: ResolvedSessionAttachment[];
 }
 
 export interface StopCommand {

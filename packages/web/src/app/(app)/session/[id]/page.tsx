@@ -21,9 +21,17 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  type SessionAttachmentReference,
+} from "@open-inspect/shared";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import {
+  DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+  useSessionAttachments,
+} from "@/hooks/use-session-attachments";
 import type { ComboboxGroup } from "@/components/ui/combobox";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
@@ -79,7 +87,16 @@ function SessionPageContent() {
     modelItems,
     loadingEnabledModels,
   } = useModelSelection(sessionState);
-  const { prompt, inputRef, handleSubmit, handleInputChange, handleKeyDown } = usePromptInput(
+  const {
+    prompt,
+    sessionAttachments,
+    inputRef,
+    isSubmitting,
+    handleSubmit,
+    handleInputChange,
+    handleKeyDown,
+  } = usePromptInput(
+    sessionId,
     isProcessing,
     sendPrompt,
     sendTyping,
@@ -144,7 +161,6 @@ function SessionPageContent() {
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected}
         connecting={connecting}
-        participants={participants}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
         onToggleDetails={toggleDetails}
@@ -251,11 +267,19 @@ function SessionPageContent() {
         prompt={{
           value: prompt,
           isProcessing,
+          draftLocked: isSubmitting || sessionAttachments.isUploading,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,
           onKeyDown: handleKeyDown,
           onStopExecution: stopExecution,
+        }}
+        attachments={{
+          items: sessionAttachments.attachments,
+          error: sessionAttachments.attachmentError,
+          isUploading: sessionAttachments.isUploading,
+          onAdd: sessionAttachments.addFiles,
+          onRemove: sessionAttachments.removeAttachment,
         }}
         model={{
           selectedModel,
@@ -422,6 +446,7 @@ function useModelSelection(sessionState: SessionState) {
  * debounced typing indicator.
  */
 function usePromptInput(
+  sessionId: string,
   isProcessing: boolean,
   sendPrompt: ReturnType<typeof useSessionSocket>["sendPrompt"],
   sendTyping: ReturnType<typeof useSessionSocket>["sendTyping"],
@@ -430,8 +455,11 @@ function usePromptInput(
   loadingEnabledModels: boolean
 ) {
   const [prompt, setPrompt] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const sessionAttachments = useSessionAttachments();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const submitInFlightRef = useRef(false);
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -442,16 +470,49 @@ function usePromptInput(
 
   useEffect(() => clearTypingTimeout, [clearTypingTimeout]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim() || isProcessing || loadingEnabledModels) return;
+    const hasAttachments = sessionAttachments.attachments.length > 0;
+    if (
+      submitInFlightRef.current ||
+      (!prompt.trim() && !hasAttachments) ||
+      isProcessing ||
+      loadingEnabledModels ||
+      sessionAttachments.isUploading
+    ) {
+      return;
+    }
 
-    // Drop any queued typing indicator — the prompt supersedes it
-    clearTypingTimeout();
-    sendPrompt(prompt, selectedModel, reasoningEffort);
-    setPrompt("");
-    // Revalidate sidebar so this session bubbles to the top
-    mutate(isUnarchivedSessionListKey);
+    submitInFlightRef.current = true;
+    setIsSubmitting(true);
+    try {
+      let attachments: SessionAttachmentReference[] | undefined;
+      if (hasAttachments) {
+        try {
+          attachments = await sessionAttachments.uploadAll(sessionId);
+        } catch {
+          return;
+        }
+      }
+
+      // Drop any queued typing indicator — the prompt supersedes it
+      clearTypingTimeout();
+      const accepted = await sendPrompt(
+        prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+        selectedModel,
+        reasoningEffort,
+        attachments
+      );
+      if (!accepted) return;
+
+      setPrompt("");
+      sessionAttachments.clearAttachments();
+      // Revalidate sidebar so this session bubbles to the top
+      mutate(isUnarchivedSessionListKey);
+    } finally {
+      submitInFlightRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -473,5 +534,13 @@ function usePromptInput(
     }, 300);
   };
 
-  return { prompt, inputRef, handleSubmit, handleInputChange, handleKeyDown };
+  return {
+    prompt,
+    sessionAttachments,
+    inputRef,
+    isSubmitting,
+    handleSubmit,
+    handleInputChange,
+    handleKeyDown,
+  };
 }

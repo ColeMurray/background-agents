@@ -5,8 +5,24 @@
  * through this barrel. Keep internal schemas out of this export surface.
  */
 
-export { attachmentSchema, clientMessageSchema } from "./websocket";
-export type { Attachment, ClientMessage } from "./websocket";
+export {
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  sessionAttachmentMimeTypeSchema,
+  sessionAttachmentIdSchema,
+  sessionAttachmentReferenceSchema,
+  sessionAttachmentReferencesSchema,
+  resolvedSessionAttachmentSchema,
+  resolvedSessionAttachmentsSchema,
+} from "./session-attachments";
+export type {
+  SessionAttachmentMimeType,
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
+} from "./session-attachments";
+
+export { clientMessageSchema } from "./websocket";
+export type { ClientMessage } from "./websocket";
 
 export { sessionStatusSchema } from "./statuses";
 export type {
@@ -31,6 +47,10 @@ export {
   repositoriesInputSchema,
   sessionRepositoriesInputSchema,
   RepositoryPairValidationError,
+  decodeRepositoryPathSegments,
+  encodeRepositoryPathSegments,
+  formatRepositoryFullName,
+  parseRepositoryFullName,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {

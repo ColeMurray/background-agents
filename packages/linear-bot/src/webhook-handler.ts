@@ -239,7 +239,7 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
 }
 
 function getNewSessionActorUserId(webhook: AgentSessionWebhook): string | undefined {
-  return webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId;
+  return webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId ?? undefined;
 }
 
 function shouldTransitionIssueOnStart(webhook: AgentSessionWebhook): boolean {

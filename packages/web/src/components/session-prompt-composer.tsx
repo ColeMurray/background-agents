@@ -1,11 +1,15 @@
 "use client";
 
+import { useRef } from "react";
 import { ActionBar } from "@/components/action-bar";
+import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
-import { ModelIcon, SendIcon, StopIcon } from "@/components/ui/icons";
+import { ModelIcon, PaperclipIcon, SendIcon, StopIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
+import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-attachments";
 import type { Artifact } from "@/types/session";
 
 type SessionPromptComposerProps = {
@@ -20,11 +24,19 @@ type SessionPromptComposerProps = {
   prompt: {
     value: string;
     isProcessing: boolean;
+    draftLocked: boolean;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
     onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
     onKeyDown: (e: React.KeyboardEvent) => void;
     onStopExecution: () => void;
+  };
+  attachments: {
+    items: PendingAttachment[];
+    error: string | null;
+    isUploading: boolean;
+    onAdd: (files: Iterable<File>) => void;
+    onRemove: (id: string) => void;
   };
   model: {
     selectedModel: string;
@@ -35,7 +47,27 @@ type SessionPromptComposerProps = {
   };
 };
 
-export function SessionPromptComposer({ session, prompt, model }: SessionPromptComposerProps) {
+export function SessionPromptComposer({
+  session,
+  prompt,
+  attachments,
+  model,
+}: SessionPromptComposerProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
+  const sendDisabled = !hasContent || prompt.isProcessing || prompt.draftLocked;
+  // Keep the complete draft stable while its attachments upload and until
+  // the server confirms that the matching prompt was queued.
+  const attachmentsLocked = prompt.draftLocked;
+  const {
+    isDraggingOver,
+    handleFileInputChange,
+    handlePaste,
+    handleDrop,
+    handleDragOver,
+    handleDragLeave,
+  } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
+
   return (
     <footer className="border-t border-border-muted flex-shrink-0">
       <form onSubmit={prompt.onSubmit} className="max-w-4xl mx-auto p-4 pb-6">
@@ -52,7 +84,20 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
         </div>
 
         {/* Input container */}
-        <div className="border border-border bg-input">
+        <div
+          className={`border bg-input ${isDraggingOver ? "border-accent" : "border-border"}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {/* Pending attachment previews */}
+          <AttachmentPreviewStrip
+            items={attachments.items}
+            error={attachments.error}
+            onRemove={attachments.onRemove}
+            disabled={attachmentsLocked}
+          />
+
           {/* Text input area with floating send button */}
           <div className="relative">
             <textarea
@@ -60,6 +105,8 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
               value={prompt.value}
               onChange={prompt.onChange}
               onKeyDown={prompt.onKeyDown}
+              onPaste={handlePaste}
+              disabled={prompt.draftLocked}
               placeholder={
                 prompt.isProcessing ? "Type your next message..." : "Ask or build anything"
               }
@@ -68,9 +115,30 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
             />
             {/* Floating action buttons */}
             <div className="absolute bottom-3 right-3 flex items-center gap-2">
+              {attachments.isUploading && (
+                <span className="text-xs text-muted-foreground">Uploading…</span>
+              )}
               {prompt.isProcessing && prompt.value.trim() && (
                 <span className="text-xs text-warning">Waiting...</span>
               )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ATTACHMENT_ACCEPT}
+                multiple
+                className="hidden"
+                onChange={handleFileInputChange}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={attachmentsLocked}
+                className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                title="Attach images"
+                aria-label="Attach images"
+              >
+                <PaperclipIcon className="w-5 h-5" />
+              </button>
               {prompt.isProcessing && (
                 <button
                   type="button"
@@ -83,15 +151,15 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
               )}
               <button
                 type="submit"
-                disabled={!prompt.value.trim() || prompt.isProcessing}
+                disabled={sendDisabled}
                 className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                 title={
-                  prompt.isProcessing && prompt.value.trim()
+                  prompt.isProcessing && hasContent
                     ? "Wait for execution to complete"
                     : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
                 }
                 aria-label={
-                  prompt.isProcessing && prompt.value.trim()
+                  prompt.isProcessing && hasContent
                     ? "Wait for execution to complete"
                     : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
                 }
@@ -111,7 +179,7 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
                 items={model.items}
                 direction="up"
                 dropdownWidth="w-56"
-                disabled={prompt.isProcessing}
+                disabled={prompt.isProcessing || prompt.draftLocked}
                 triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
               >
                 <ModelIcon className="w-3.5 h-3.5" />
@@ -125,7 +193,7 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
                 selectedModel={model.selectedModel}
                 reasoningEffort={model.reasoningEffort}
                 onSelect={model.onReasoningEffortChange}
-                disabled={prompt.isProcessing}
+                disabled={prompt.isProcessing || prompt.draftLocked}
               />
             </div>
 

@@ -265,6 +265,40 @@ async def test_restore_sandbox_without_repo_does_not_resolve_clone_token(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_restore_sandbox_uses_normalized_repo_context(monkeypatch):
+    """Snapshot restores should validate and pass a single normalized repo context."""
+    captured = {}
+    calls = []
+
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, captured)
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
+
+    result = await _call_restore_sandbox(
+        {
+            "snapshot_image_id": "img-abc",
+            "session_config": {
+                "session_id": "sess-1",
+                "repo_owner": "  acme  ",
+                "repo_name": "  repo  ",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+            },
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    session_config = captured["restore"]["session_config"]
+
+    assert result["success"] is True
+    assert calls == [True]
+    assert session_config["repo_owner"] == "acme"
+    assert session_config["repo_name"] == "repo"
+    assert captured["restore"]["clone_token"] == "ghs_token"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "session_config",
     [

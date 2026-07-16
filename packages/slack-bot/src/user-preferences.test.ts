@@ -221,6 +221,20 @@ describe("resolveUserPreferences", () => {
     expect(resolved.model).toBe("openai/gpt-5.4");
   });
 
+  it("ignores removed models when choosing the first enabled model", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6",
+      ["openai/gpt-5.2", "gpt-5.4"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-5.4");
+  });
+
   it("validates stored reasoning effort against the resolved Slack default model", () => {
     const resolved = resolveUserPreferences(
       {

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionMessageQueue } from "./message-queue";
+import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { ClientInfo, Env, ServerMessage } from "../types";
-import type { MessageRow, ParticipantRow, SessionRow } from "./types";
+import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -86,7 +87,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 
 function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | null }) {
   const repository = {
-    createMessage: vi.fn(),
+    createMessageWithAttachments: vi.fn(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
@@ -96,6 +97,10 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
+  };
+
+  const attachmentRepository = {
+    getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };
 
   const wsManager = {
@@ -131,6 +136,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
       child: vi.fn(),
     },
     repository: repository as never,
+    attachmentRepository: attachmentRepository as never,
     wsManager: wsManager as never,
     participantService: participantService as never,
     callbackService: callbackService as never,
@@ -148,6 +154,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
   return {
     queue,
     repository,
+    attachmentRepository,
     wsManager,
     participantService,
     broadcast,
@@ -169,7 +176,7 @@ describe("SessionMessageQueue", () => {
       expect.anything(),
       expect.objectContaining({ code: "NOT_SUBSCRIBED" })
     );
-    expect(h.repository.createMessage).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     expect(h.setSessionStatus).not.toHaveBeenCalled();
   });
 
@@ -191,6 +198,161 @@ describe("SessionMessageQueue", () => {
     await h.queue.handlePromptMessage({} as WebSocket, { content: "hello" });
 
     expect(h.setSessionStatus).toHaveBeenCalledWith("active");
+  });
+
+  it("stores attachments and embeds content-free metadata in the user_message event", async () => {
+    const h = buildQueue();
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/sess-1/attachments/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "look at this",
+      attachments: [
+        {
+          name: "shot.png",
+          attachmentId: "up-1",
+        },
+      ],
+    });
+
+    expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: JSON.stringify([
+          { name: "shot.png", attachmentId: "up-1", mimeType: "image/png" },
+        ]),
+      }),
+      ["up-1"]
+    );
+
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({
+        type: "user_message",
+        attachments: [{ name: "shot.png", mimeType: "image/png", attachmentId: "up-1" }],
+      }),
+    });
+    const storedEvent = JSON.parse(h.repository.createEvent.mock.calls[0][0].data as string);
+    expect(storedEvent.attachments).toEqual([
+      { name: "shot.png", mimeType: "image/png", attachmentId: "up-1" },
+    ]);
+  });
+
+  it("rejects a prompt when its upload loses the atomic claim race", async () => {
+    const h = buildQueue();
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/sess-1/attachments/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+    h.repository.createMessageWithAttachments.mockImplementation(() => {
+      throw new AttachmentClaimConflictError("already claimed");
+    });
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "look",
+      attachments: [{ name: "shot.png", attachmentId: "up-1" }],
+    });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
+    );
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.setSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects upload references that cannot be claimed", async () => {
+    const h = buildQueue();
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "look",
+      attachments: [{ name: "missing.png", attachmentId: "missing" }],
+    });
+
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
+    );
+  });
+
+  it("does not disguise attachment storage failures as invalid user input", async () => {
+    const h = buildQueue();
+    h.attachmentRepository.getUnreferenced.mockImplementation(() => {
+      throw new Error("database unavailable");
+    });
+
+    await expect(
+      h.queue.handlePromptMessage({} as WebSocket, {
+        content: "look",
+        attachments: [{ name: "shot.png", attachmentId: "up-1" }],
+      })
+    ).rejects.toThrow("database unavailable");
+
+    expect(h.wsManager.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: "INVALID_ATTACHMENTS" })
+    );
+  });
+
+  it("rejects attachment rows with unsupported image metadata", async () => {
+    const h = buildQueue();
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
+      {
+        id: "up-invalid",
+        mime_type: "application/pdf",
+        size_bytes: 100,
+        object_key: "sessions/sess-1/attachments/up-invalid",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    await h.queue.handlePromptMessage({} as WebSocket, {
+      content: "watch this",
+      attachments: [{ name: "document.pdf", attachmentId: "up-invalid" }],
+    });
+
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        code: "INVALID_ATTACHMENTS",
+        message: "Attachment is not a supported image",
+      })
+    );
+  });
+
+  it("omits attachments from the user_message event when none are sent", async () => {
+    const h = buildQueue();
+
+    await h.queue.handlePromptMessage({} as WebSocket, { content: "hello" });
+
+    const broadcastCall = h.broadcast.mock.calls.find(
+      ([message]) =>
+        (message as { type: string; event?: { type?: string } }).type === "sandbox_event" &&
+        (message as { event?: { type?: string } }).event?.type === "user_message"
+    );
+    expect(broadcastCall).toBeDefined();
+    expect((broadcastCall?.[0] as { event: Record<string, unknown> }).event).not.toHaveProperty(
+      "attachments"
+    );
   });
 
   it("uses the provider-agnostic auth name for user messages without SCM identity", () => {
@@ -215,7 +377,7 @@ describe("SessionMessageQueue", () => {
 
   it("dispatches prompt command when sandbox socket exists", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-42" }));
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
@@ -234,7 +396,7 @@ describe("SessionMessageQueue", () => {
 
   it("notifies the integration after a prompt is dispatched to the sandbox", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-linear" }));
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
@@ -247,7 +409,7 @@ describe("SessionMessageQueue", () => {
   it("does not notify the integration when sandbox dispatch fails", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-failed" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: WebSocket.OPEN } as WebSocket);
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
     h.wsManager.send.mockReturnValue(false);
 
     await h.queue.processMessageQueue();
@@ -258,7 +420,7 @@ describe("SessionMessageQueue", () => {
 
   it("marks processing message failed and broadcasts synthetic completion on stop", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-9" });
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 

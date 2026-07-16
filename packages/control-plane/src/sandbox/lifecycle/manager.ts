@@ -395,9 +395,11 @@ export class SandboxLifecycleManager {
    */
   private async doSpawn(): Promise<void> {
     this.isSpawningSandbox = true;
+    const spawnStartedAt = Date.now();
+    let session: SessionRow | null = null;
 
     try {
-      const session = this.storage.getSession();
+      session = this.storage.getSession();
       if (!session) {
         this.log.error("Cannot spawn sandbox: no session");
         return;
@@ -419,13 +421,6 @@ export class SandboxLifecycleManager {
         modalSandboxId: expectedSandboxId,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
-
-      this.log.info("Spawning sandbox", {
-        event: "sandbox.spawn",
-        expected_sandbox_id: expectedSandboxId,
-        repo_owner: session.repo_owner,
-        repo_name: session.repo_name,
-      });
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
@@ -526,12 +521,6 @@ export class SandboxLifecycleManager {
         });
       }
 
-      this.log.info("Sandbox spawned", {
-        event: "sandbox.spawned",
-        sandbox_id: result.sandboxId,
-        provider_object_id: result.providerObjectId,
-      });
-
       if (result.providerObjectId) {
         this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
@@ -558,12 +547,27 @@ export class SandboxLifecycleManager {
 
       // Reset circuit breaker on successful spawn initiation
       this.storage.resetCircuitBreaker();
+
+      this.log.info("Sandbox spawn completed", {
+        event: "sandbox.spawn",
+        outcome: "success",
+        duration_ms: Date.now() - spawnStartedAt,
+        expected_sandbox_id: expectedSandboxId,
+        sandbox_id: result.sandboxId,
+        provider_object_id: result.providerObjectId,
+        repo_owner: session.repo_owner,
+        repo_name: session.repo_name,
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to spawn sandbox";
       this.storage.setLastSpawnError(errorMessage, Date.now());
-      this.log.error("Sandbox spawn failed", {
-        event: "sandbox.spawn_failed",
+      this.log.error("Sandbox spawn completed", {
+        event: "sandbox.spawn",
+        outcome: "error",
+        duration_ms: Date.now() - spawnStartedAt,
         error: error instanceof Error ? error : String(error),
+        repo_owner: session?.repo_owner,
+        repo_name: session?.repo_name,
       });
 
       // Only increment circuit breaker for permanent errors
@@ -714,9 +718,11 @@ export class SandboxLifecycleManager {
     }
 
     this.isSpawningSandbox = true;
+    const restoreStartedAt = Date.now();
+    let session: SessionRow | null = null;
 
     try {
-      const session = this.storage.getSession();
+      session = this.storage.getSession();
       if (!session) {
         this.log.error("Cannot restore: no session");
         return;
@@ -737,11 +743,6 @@ export class SandboxLifecycleManager {
         modalSandboxId: expectedSandboxId,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
-
-      this.log.info("Restoring from snapshot", {
-        event: "sandbox.restore",
-        snapshot_image_id: snapshotImageId,
-      });
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
@@ -776,12 +777,6 @@ export class SandboxLifecycleManager {
       });
 
       if (result.success) {
-        this.log.info("Sandbox restored", {
-          event: "sandbox.restored",
-          sandbox_id: result.sandboxId,
-          provider_object_id: result.providerObjectId,
-        });
-
         if (result.providerObjectId) {
           this.storeAndBroadcastProviderObjectId(result.providerObjectId);
         }
@@ -810,10 +805,26 @@ export class SandboxLifecycleManager {
           type: "sandbox_restored",
           message: "Session restored from snapshot",
         });
+
+        this.log.info("Sandbox restore completed", {
+          event: "sandbox.restore",
+          outcome: "success",
+          duration_ms: Date.now() - restoreStartedAt,
+          snapshot_image_id: snapshotImageId,
+          sandbox_id: result.sandboxId,
+          provider_object_id: result.providerObjectId,
+          repo_owner: session.repo_owner,
+          repo_name: session.repo_name,
+        });
       } else {
-        this.log.error("Snapshot restore failed", {
+        this.log.error("Sandbox restore completed", {
+          event: "sandbox.restore",
+          outcome: "error",
+          duration_ms: Date.now() - restoreStartedAt,
           error: result.error,
           snapshot_image_id: snapshotImageId,
+          repo_owner: session.repo_owner,
+          repo_name: session.repo_name,
         });
         this.storage.setLastSpawnError(
           result.error || "Failed to restore from snapshot",
@@ -828,9 +839,14 @@ export class SandboxLifecycleManager {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to restore sandbox";
       this.storage.setLastSpawnError(errorMessage, Date.now());
-      this.log.error("Snapshot restore request failed", {
+      this.log.error("Sandbox restore completed", {
+        event: "sandbox.restore",
+        outcome: "error",
+        duration_ms: Date.now() - restoreStartedAt,
         error: error instanceof Error ? error : String(error),
         snapshot_image_id: snapshotImageId,
+        repo_owner: session?.repo_owner,
+        repo_name: session?.repo_name,
       });
       this.storage.updateSandboxStatus("failed");
       this.broadcaster.broadcast({
