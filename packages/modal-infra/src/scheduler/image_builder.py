@@ -311,14 +311,6 @@ async def build_image(
 
         clone_token = resolve_clone_token() or ""
 
-        log.info(
-            "image_build.start",
-            build_id=build_id,
-            scope_kind=scope_kind,
-            scope_id=scope_id,
-            repository_count=len(repositories),
-        )
-
         handle = await manager.create_build_sandbox(
             repo_owner=primary.get("repo_owner", ""),
             repo_name=primary.get("repo_name", ""),
@@ -365,13 +357,15 @@ async def build_image(
         build_duration = time.time() - start_time
 
         log.info(
-            "image_build.success",
+            "image_build.complete",
             build_id=build_id,
             scope_kind=scope_kind,
             scope_id=scope_id,
+            outcome="success",
+            duration_seconds=round(build_duration, 3),
+            repository_count=len(repositories),
             provider_image_id=provider_image_id,
             runtime_version=build_logs.runtime_version,
-            build_duration_s=round(build_duration, 1),
         )
 
         if callback_url:
@@ -392,12 +386,14 @@ async def build_image(
             sandbox_terminated = await _terminate_build_sandbox(handle, build_id, "build_failed")
 
         log.error(
-            "image_build.failed",
+            "image_build.complete",
             build_id=build_id,
             scope_kind=scope_kind,
             scope_id=scope_id,
+            outcome="error",
             error=str(e),
-            build_duration_s=round(build_duration, 1),
+            duration_seconds=round(build_duration, 3),
+            repository_count=len(repositories),
         )
 
         if failure_callback_url:

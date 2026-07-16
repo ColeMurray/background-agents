@@ -1,6 +1,7 @@
 import type { Logger } from "../../../logger";
 import type { EnqueuePromptRequest, MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
+import { SessionAttachmentError } from "../../session-attachment-resolver";
 
 /**
  * Valid event types for filtering.
@@ -47,6 +48,9 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
         const body = (await request.json()) as EnqueuePromptRequest;
         return Response.json(await deps.messageService.enqueuePrompt(body));
       } catch (error) {
+        if (error instanceof SessionAttachmentError) {
+          return Response.json({ error: error.message }, { status: 400 });
+        }
         deps.getLog().error("handleEnqueuePrompt error", {
           error: error instanceof Error ? error : String(error),
         });

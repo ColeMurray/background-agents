@@ -1,8 +1,9 @@
 /**
- * SessionRepository - Database operations for Session Durable Objects.
+ * SessionRepository - Core session aggregate persistence.
  *
- * Consolidates all SQL operations from SessionDO into a single class
- * to enable unit testing via mock injection and reduce coupling.
+ * Feature-specific persistence can live in focused repositories that share
+ * the same session-local SQL store. Cross-repository transactions remain
+ * coordinated here when they also create or update core session records.
  */
 
 import type {
@@ -30,6 +31,8 @@ import {
   type EventTimelineCursor,
 } from "./event-cursor";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
+import type { SessionAttachmentRepository } from "./session-attachment-repository";
+import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -264,25 +267,14 @@ export interface ResumeSandboxData {
 }
 
 /**
- * SqlStorage interface matching Cloudflare's SqlStorage.
- * Used to allow mock injection for testing.
- */
-export interface SqlStorage {
-  exec(query: string, ...params: unknown[]): SqlResult;
-}
-
-export interface SqlResult {
-  toArray(): unknown[];
-  one(): unknown;
-  readonly rowsRead?: number;
-  readonly rowsWritten?: number;
-}
-
-/**
- * SessionRepository encapsulates all database operations for a session.
+ * Core database operations for a session Durable Object.
  */
 export class SessionRepository {
-  constructor(private readonly sql: SqlStorage) {}
+  constructor(
+    private readonly sql: SqlStorage,
+    private readonly transactionSync: TransactionSync,
+    private readonly attachments: Pick<SessionAttachmentRepository, "claimForMessage">
+  ) {}
 
   private rows<T>(result: SqlResult): T[] {
     return result.toArray() as T[];
@@ -785,6 +777,14 @@ export class SessionRepository {
       data.status,
       data.createdAt
     );
+  }
+
+  /** Persist a message and claim all referenced attachments in one SQLite transaction. */
+  createMessageWithAttachments(data: CreateMessageData, attachmentIds: string[]): void {
+    this.transactionSync(() => {
+      this.attachments.claimForMessage(data.id, attachmentIds);
+      this.createMessage(data);
+    });
   }
 
   updateMessageToProcessing(messageId: string, startedAt: number): void {

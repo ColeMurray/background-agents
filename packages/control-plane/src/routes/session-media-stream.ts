@@ -1,15 +1,22 @@
 import { createLogger } from "../logger";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
-import { createMediaObjectStorage } from "../storage/object-storage";
+import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
 import type { ArtifactResponse, Env } from "../types";
+import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
+import {
+  createPartialStoredObjectResponse,
+  createRangeNotSatisfiableResponse,
+  createStoredObjectResponse,
+} from "./responses/stored-object-response";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+export { parseByteRangeHeader } from "./requests/byte-range";
 
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(
-  artifact: Pick<ArtifactResponse, "metadata">
+  artifact: ArtifactResponse
 ): "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | null {
   const mimeType = artifact.metadata?.mimeType;
   if (typeof mimeType !== "string") return null;
@@ -19,15 +26,25 @@ function getMediaMimeType(
   return null;
 }
 
-function getContentTypeFromHeaders(
-  headers: Headers
-): "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | null {
-  const contentType = headers.get("Content-Type");
-  if (!contentType) return null;
-  if (isSupportedScreenshotMimeType(contentType) || isSupportedVideoMimeType(contentType)) {
-    return contentType;
+function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
+  const headers = new Headers();
+  metadata.writeHttpMetadata(headers);
+  return headers.get("Content-Type");
+}
+
+function resolveMediaContentType(
+  artifact: ArtifactResponse,
+  metadata: ObjectStorageMetadata
+): string | null {
+  const storedContentType = getStoredContentType(metadata);
+  if (
+    storedContentType &&
+    (isSupportedScreenshotMimeType(storedContentType) ||
+      isSupportedVideoMimeType(storedContentType))
+  ) {
+    return storedContentType;
   }
-  return null;
+  return getMediaMimeType(artifact);
 }
 
 async function handleMediaGet(
@@ -51,8 +68,11 @@ async function handleMediaGet(
   if (!artifact || (artifact.type !== "screenshot" && artifact.type !== "video") || !artifact.url) {
     return error("Media artifact not found", 404);
   }
-
   const rangeHeader = request.headers.get("Range");
+  let body: ReadableStream;
+  let metadata: ObjectStorageMetadata;
+  let range: ByteRange | null = null;
+
   if (rangeHeader) {
     const head = await storage.head(artifact.url);
     if (!head) {
@@ -65,55 +85,41 @@ async function handleMediaGet(
       });
       return error("Media artifact not found", 404);
     }
+    range = parseByteRangeHeader(rangeHeader, head.size);
+    if (!range) return createRangeNotSatisfiableResponse(head.size);
 
-    const parsedRange = parseByteRangeHeader(rangeHeader, head.size);
-    if (parsedRange instanceof Response) return parsedRange;
-
-    const rangedObject = await storage.get(artifact.url, {
-      range: { offset: parsedRange.start, length: parsedRange.length },
+    const object = await storage.get(artifact.url, {
+      range: { offset: range.start, length: range.length },
     });
-    if (!rangedObject) {
-      return error("Media artifact not found", 404);
-    }
-
-    const headers = new Headers();
-    head.writeHttpMetadata(headers);
-    const contentType = getContentTypeFromHeaders(headers) ?? getMediaMimeType(artifact);
-    if (!contentType) {
-      logger.error("media.stream.invalid_metadata", {
+    if (!object) {
+      logger.warn("media.stream.object_missing", {
         session_id: sessionId,
         artifact_id: artifactId,
         object_key: artifact.url,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
-      return error("Media artifact is invalid", 500);
+      return error("Media artifact not found", 404);
     }
-
-    headers.set("Content-Type", contentType);
-    headers.set("ETag", head.httpEtag);
-    headers.set("Accept-Ranges", "bytes");
-    headers.set("Content-Range", `bytes ${parsedRange.start}-${parsedRange.end}/${head.size}`);
-    headers.set("Content-Length", String(parsedRange.length));
-
-    return new Response(rangedObject.body, { status: 206, headers });
+    body = object.body;
+    metadata = head;
+  } else {
+    const object = await storage.get(artifact.url);
+    if (!object) {
+      logger.warn("media.stream.object_missing", {
+        session_id: sessionId,
+        artifact_id: artifactId,
+        object_key: artifact.url,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Media artifact not found", 404);
+    }
+    body = object.body;
+    metadata = object;
   }
 
-  const object = await storage.get(artifact.url);
-  if (!object) {
-    logger.warn("media.stream.object_missing", {
-      session_id: sessionId,
-      artifact_id: artifactId,
-      object_key: artifact.url,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Media artifact not found", 404);
-  }
-
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  const contentType = getContentTypeFromHeaders(headers) ?? getMediaMimeType(artifact);
+  const contentType = resolveMediaContentType(artifact, metadata);
   if (!contentType) {
     logger.error("media.stream.invalid_metadata", {
       session_id: sessionId,
@@ -125,59 +131,9 @@ async function handleMediaGet(
     return error("Media artifact is invalid", 500);
   }
 
-  headers.set("Content-Type", contentType);
-  headers.set("ETag", object.httpEtag);
-  headers.set("Accept-Ranges", "bytes");
-  headers.set("Content-Length", String(object.size));
-
-  return new Response(object.body, { headers });
-}
-
-function parseByteRangeHeader(
-  rangeHeader: string,
-  size: number
-): { start: number; end: number; length: number } | Response {
-  const unsatisfied = () =>
-    Response.json(
-      { error: "Requested range is not satisfiable" },
-      { status: 416, headers: { "Content-Range": `bytes */${size}` } }
-    );
-
-  if (!rangeHeader.startsWith("bytes=") || rangeHeader.includes(",")) {
-    return unsatisfied();
-  }
-
-  const range = rangeHeader.slice("bytes=".length).trim();
-  const parts = range.split("-");
-  if (parts.length !== 2) {
-    return unsatisfied();
-  }
-  const [startRaw, endRaw] = parts;
-
-  let start: number;
-  let end: number;
-  if (startRaw === "") {
-    const suffixLength = Number(endRaw);
-    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return unsatisfied();
-    start = Math.max(size - suffixLength, 0);
-    end = size - 1;
-  } else {
-    start = Number(startRaw);
-    end = endRaw === "" ? size - 1 : Number(endRaw);
-  }
-
-  if (
-    !Number.isInteger(start) ||
-    !Number.isInteger(end) ||
-    start < 0 ||
-    end < start ||
-    start >= size
-  ) {
-    return unsatisfied();
-  }
-
-  end = Math.min(end, size - 1);
-  return { start, end, length: end - start + 1 };
+  return range
+    ? createPartialStoredObjectResponse(body, metadata, contentType, range)
+    : createStoredObjectResponse(body, metadata, contentType);
 }
 
 export const sessionMediaStreamRoutes: Route[] = [

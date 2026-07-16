@@ -2,10 +2,10 @@ import {
   DEFAULT_MODEL,
   createKvCacheStore,
   getDefaultReasoningEffort,
-  getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
+  resolveEnabledModel,
 } from "@open-inspect/shared";
 import type { Env, UserPreferences } from "./types";
 import {
@@ -48,7 +48,11 @@ function normalizeResolvedPreferences(
   defaultModel: string | undefined,
   options: { validateBranch?: boolean; enabledModels?: string[] } = {}
 ): ResolvedUserPreferences {
-  const model = resolveEnabledModel(preferences.model, defaultModel, options.enabledModels);
+  const model = resolveEnabledModel({
+    model: preferences.model,
+    fallbackModel: defaultModel,
+    enabledModels: options.enabledModels,
+  });
   const reasoningEffort =
     preferences.reasoningEffort && isValidReasoningEffort(model, preferences.reasoningEffort)
       ? preferences.reasoningEffort
@@ -71,23 +75,6 @@ function getNormalizedValidModel(model: string | undefined | null): string | und
   }
 
   return undefined;
-}
-
-function resolveEnabledModel(
-  model: string | undefined | null,
-  defaultModel: string | undefined,
-  enabledModels: string[] | undefined
-): string {
-  const fallback = getValidModelOrDefault(defaultModel ?? DEFAULT_MODEL);
-  const desired = getNormalizedValidModel(model) ?? fallback;
-  if (!enabledModels || enabledModels.length === 0) {
-    return desired;
-  }
-
-  const enabled = new Set(enabledModels);
-  if (enabled.has(desired)) return desired;
-  if (enabled.has(fallback)) return fallback;
-  return enabledModels[0] ?? fallback;
 }
 
 function mergeUserPreferencesPatch(
@@ -116,11 +103,11 @@ function mergeUserPreferencesPatch(
     return null;
   }
 
-  const resolvedModel = resolveEnabledModel(
+  const resolvedModel = resolveEnabledModel({
     model,
-    options.defaultModel ?? DEFAULT_MODEL,
-    options.enabledModels
-  );
+    fallbackModel: options.defaultModel ?? DEFAULT_MODEL,
+    enabledModels: options.enabledModels,
+  });
   if (reasoningEffort && !isValidReasoningEffort(resolvedModel, reasoningEffort)) {
     reasoningEffort = undefined;
   }
@@ -221,11 +208,11 @@ export async function saveUserPreferences(
       });
       return false;
     }
-    const resolvedModel = resolveEnabledModel(
+    const resolvedModel = resolveEnabledModel({
       model,
-      options.defaultModel ?? env.DEFAULT_MODEL,
-      options.enabledModels
-    );
+      fallbackModel: options.defaultModel ?? env.DEFAULT_MODEL,
+      enabledModels: options.enabledModels,
+    });
     if (reasoningEffort && !isValidReasoningEffort(resolvedModel, reasoningEffort)) {
       reasoningEffort = undefined;
     }

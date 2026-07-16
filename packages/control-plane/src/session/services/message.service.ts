@@ -1,4 +1,5 @@
 import type { ArtifactRow, MessageRow } from "../types";
+import type { SessionAttachmentReference } from "@open-inspect/shared";
 import type { ArtifactResponse, ListEventsResponse } from "../../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
@@ -10,7 +11,7 @@ export interface EnqueuePromptRequest {
   source: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string }>;
+  attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
 
   // Identity enrichment (from router D1 lookup at prompt time)

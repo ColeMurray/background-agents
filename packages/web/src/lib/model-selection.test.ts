@@ -34,6 +34,15 @@ describe("resolveEnabledModel", () => {
   it("falls back to the default when no models are enabled", () => {
     expect(resolveEnabledModel("anthropic/claude-opus-4-8", [])).toBe(DEFAULT_MODEL);
   });
+
+  it("ignores removed models when choosing a fallback", () => {
+    expect(
+      resolveEnabledModel("anthropic/claude-opus-4-8", ["openai/gpt-5.2", "openai/gpt-5.5"])
+    ).toBe("openai/gpt-5.5");
+    expect(resolveEnabledModel("anthropic/claude-opus-4-8", ["openai/gpt-5.2"])).toBe(
+      DEFAULT_MODEL
+    );
+  });
 });
 
 describe("resolveModelPreference", () => {

@@ -1,4 +1,8 @@
-import type { VideoArtifactMetadata } from "@open-inspect/shared";
+import {
+  SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  type SessionAttachmentMimeType,
+  type VideoArtifactMetadata,
+} from "@open-inspect/shared";
 
 export const SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024;
 export const SCREENSHOT_UPLOAD_LIMIT_PER_SESSION = 100;
@@ -6,6 +10,18 @@ export const VIDEO_MAX_BYTES = 100 * 1024 * 1024;
 export const VIDEO_UPLOAD_LIMIT_PER_SESSION = 20;
 export const VIDEO_MAX_DURATION_MS = 90_000;
 export const VIDEO_TIMESTAMP_TOLERANCE_MS = 1_000;
+
+// User-attached prompt images (attached in the chat composer).
+export const SESSION_ATTACHMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+// Allows multipart boundaries and headers while rejecting oversized requests
+// before request.formData() buffers them when Content-Length is available.
+export const SESSION_ATTACHMENT_MAX_REQUEST_BYTES = SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 128 * 1024;
+export const SESSION_ATTACHMENT_LIMIT_PER_SESSION = 100;
+export const SESSION_ATTACHMENT_TOTAL_BYTES_PER_SESSION = 500 * 1024 * 1024;
+// Attachments never referenced by a message after this long are pruned (R2
+// object + record) the next time the session records an attachment.
+export const SESSION_ATTACHMENT_UNREFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
+export const SESSION_ATTACHMENT_CLEANUP_CLAIM_TTL_MS = 5 * 60 * 1000;
 
 const SCREENSHOT_EXTENSIONS = {
   "image/png": "png",
@@ -84,6 +100,57 @@ export function detectVideoFileType(bytes: Uint8Array): VideoFileType | null {
   }
 
   return null;
+}
+
+export type SessionAttachmentFileType = {
+  mimeType: SessionAttachmentMimeType;
+  extension: string;
+};
+
+const SESSION_ATTACHMENT_MIME_TYPES: ReadonlySet<string> = new Set(
+  SESSION_ATTACHMENT_IMAGE_MIME_TYPES
+);
+
+export function isSupportedSessionAttachmentMimeType(
+  value: string
+): value is SessionAttachmentMimeType {
+  return SESSION_ATTACHMENT_MIME_TYPES.has(value);
+}
+
+export function sessionAttachmentRequestExceedsLimit(request: Request): boolean {
+  const raw = request.headers.get("Content-Length");
+  if (!raw || !/^\d+$/.test(raw)) return false;
+  return Number(raw) > SESSION_ATTACHMENT_MAX_REQUEST_BYTES;
+}
+
+/**
+ * Detect user-attached prompt images by magic bytes. This is intentionally
+ * separate from the agent screenshot/recording detectors: session attachments do
+ * not support videos in the initial attachment release.
+ */
+export function detectSessionAttachmentFileType(
+  bytes: Uint8Array
+): SessionAttachmentFileType | null {
+  const image = detectScreenshotFileType(bytes);
+  if (image) {
+    return { mimeType: image.mimeType, extension: image.extension };
+  }
+
+  // GIF87a / GIF89a
+  if (
+    bytes.length >= 6 &&
+    hasPrefix(bytes, [0x47, 0x49, 0x46, 0x38]) &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return { mimeType: "image/gif", extension: "gif" };
+  }
+
+  return null;
+}
+
+export function buildSessionAttachmentObjectKey(sessionId: string, attachmentId: string): string {
+  return `sessions/${sessionId}/attachments/${attachmentId}`;
 }
 
 export function buildMediaObjectKey(

@@ -1,15 +1,5 @@
 import { z } from "zod";
-
-// Attachment to a message
-export const attachmentSchema = z.object({
-  type: z.enum(["file", "image", "url"]),
-  name: z.string(),
-  url: z.string().optional(),
-  content: z.string().optional(),
-  mimeType: z.string().optional(),
-});
-
-export type Attachment = z.infer<typeof attachmentSchema>;
+import { sessionAttachmentReferencesSchema } from "./session-attachments";
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
@@ -19,7 +9,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     content: z.string(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
-    attachments: z.array(attachmentSchema).optional(),
+    attachments: sessionAttachmentReferencesSchema.optional(),
   }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),

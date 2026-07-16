@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, MIGRATIONS, SCHEMA_SQL } from "./schema";
-import type { SqlStorage, SqlResult } from "./repository";
+import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
@@ -70,7 +70,7 @@ describe("applyMigrations", () => {
   });
 
   it("skips all migrations when fully migrated", () => {
-    // All 24 IDs already applied
+    // Every migration ID is already applied.
     const appliedRows = MIGRATIONS.map((m) => ({ id: m.id }));
     mock.setData("SELECT id FROM _schema_migrations", appliedRows);
 
@@ -241,5 +241,12 @@ describe("applyMigrations", () => {
         c.query.includes("updated_at IS NULL")
     );
     expect(backfill).toBeDefined();
+  });
+
+  it("creates the final attachments schema in its single unshipped migration", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 35);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");
+    expect(migration?.run).toContain("cleanup_claimed_at INTEGER");
+    expect(migration?.run).not.toContain("kind TEXT");
   });
 });

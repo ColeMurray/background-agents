@@ -30,6 +30,11 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
+from .attachment_processor import (
+    AttachmentProcessor,
+    HydratedSessionAttachment,
+    parse_session_image_attachments,
+)
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .log_config import configure_logging, get_logger
 from .repo_config import find_repo_entry, load_repo_manifest
@@ -244,6 +249,13 @@ class AgentBridge:
             sandbox_id=sandbox_id,
             session_id=session_id,
         )
+        self.attachment_processor = AttachmentProcessor(
+            control_plane_url=control_plane_url,
+            session_id=session_id,
+            auth_token=auth_token,
+            log=self.log,
+            warn_user=self._send_media_warning,
+        )
 
         self.sse_inactivity_timeout = self._resolve_timeout_seconds(
             name="BRIDGE_SSE_INACTIVITY_TIMEOUT",
@@ -279,6 +291,10 @@ class AgentBridge:
         self._pending_acks: dict[str, dict[str, Any]] = {}
 
         self._last_forwarded_session_title: str | None = None
+        self._connected_at_monotonic: float | None = None
+        self._connection_count = 0
+        self._reconnect_attempt_count = 0
+        self._total_connected_duration_seconds = 0.0
 
     @property
     def ws_url(self) -> str:
@@ -313,41 +329,32 @@ class AgentBridge:
         await self._load_session_id()
 
         reconnect_attempts = 0
+        run_outcome = "shutdown"
 
         try:
             while not self.shutdown_event.is_set():
+                run_outcome = "shutdown"
                 try:
                     await self._connect_and_run()
+                    if not self.shutdown_event.is_set():
+                        run_outcome = "connection_closed"
                     reconnect_attempts = 0
-                except SessionTerminatedError as e:
-                    # Non-recoverable: session has been terminated by control plane
-                    self.log.info(
-                        "bridge.disconnect",
-                        reason="session_terminated",
-                        detail=str(e),
-                    )
+                except SessionTerminatedError:
+                    run_outcome = "session_terminated"
                     self.shutdown_event.set()
                     break
-                except websockets.ConnectionClosed as e:
-                    self.log.warn(
-                        "bridge.disconnect",
-                        reason="connection_closed",
-                        ws_close_code=e.code,
-                    )
+                except websockets.ConnectionClosed:
+                    run_outcome = "connection_closed"
                 except Exception as e:
                     error_str = str(e)
                     # Check for fatal HTTP errors that shouldn't trigger retry
                     if self._is_fatal_connection_error(error_str):
-                        self.log.error(
-                            "bridge.disconnect",
-                            reason="fatal_error",
-                            exc=e,
-                        )
+                        run_outcome = "fatal_error"
                         self.shutdown_event.set()
                         break
+                    run_outcome = "connection_error"
                     self.log.warn(
-                        "bridge.disconnect",
-                        reason="connection_error",
+                        "bridge.connect_error",
                         detail=error_str,
                     )
 
@@ -355,6 +362,7 @@ class AgentBridge:
                     break
 
                 reconnect_attempts += 1
+                self._reconnect_attempt_count += 1
                 delay = min(
                     self.RECONNECT_BACKOFF_BASE**reconnect_attempts,
                     self.RECONNECT_MAX_DELAY,
@@ -362,6 +370,7 @@ class AgentBridge:
                 self.log.info(
                     "bridge.reconnect",
                     attempt=reconnect_attempts,
+                    reconnect_attempt_count=self._reconnect_attempt_count,
                     delay_s=round(delay, 1),
                 )
                 await asyncio.sleep(delay)
@@ -374,6 +383,50 @@ class AgentBridge:
                     await self._current_prompt_task
             if self.http_client:
                 await self.http_client.aclose()
+            self.log.info(
+                "bridge.run_complete",
+                outcome=run_outcome,
+                connection_count=self._connection_count,
+                reconnect_count=max(0, self._connection_count - 1),
+                reconnect_attempt_count=self._reconnect_attempt_count,
+                total_connected_duration_seconds=round(self._total_connected_duration_seconds, 3),
+            )
+
+    def _mark_connected(self, *, now_monotonic: float | None = None) -> None:
+        self._connection_count += 1
+        self._connected_at_monotonic = time.monotonic() if now_monotonic is None else now_monotonic
+
+    def _finalize_connection(
+        self, *, now_monotonic: float | None = None
+    ) -> dict[str, float | int] | None:
+        if self._connected_at_monotonic is None:
+            return None
+
+        ended_at = time.monotonic() if now_monotonic is None else now_monotonic
+        connection_duration_seconds = max(0.0, ended_at - self._connected_at_monotonic)
+        self._connected_at_monotonic = None
+        self._total_connected_duration_seconds += connection_duration_seconds
+
+        return {
+            "connection_duration_seconds": round(connection_duration_seconds, 3),
+            "total_connected_duration_seconds": round(self._total_connected_duration_seconds, 3),
+            "connection_count": self._connection_count,
+            "reconnect_count": max(0, self._connection_count - 1),
+            "reconnect_attempt_count": self._reconnect_attempt_count,
+        }
+
+    def _log_disconnect(
+        self,
+        *,
+        reason: str,
+        level: str = "info",
+        **fields: Any,
+    ) -> None:
+        connection_fields = self._finalize_connection()
+        if connection_fields is None:
+            return
+        log_method = getattr(self.log, level)
+        log_method("bridge.disconnect", reason=reason, **connection_fields, **fields)
 
     def _is_fatal_connection_error(self, error_str: str) -> bool:
         """Check if a connection error is fatal and shouldn't trigger retry.
@@ -415,25 +468,30 @@ class AgentBridge:
                 ping_timeout=10,
             ) as ws:
                 self.ws = ws
-                self.log.info("bridge.connect", outcome="success")
-
-                await self._send_event(
-                    {
-                        "type": "ready",
-                        "sandboxId": self.sandbox_id,
-                        "opencodeSessionId": self.opencode_session_id,
-                    }
-                )
-
-                await self._drain_boot_warnings()
-
-                just_flushed = await self._flush_event_buffer()
-                await self._flush_pending_acks(skip_ack_ids=just_flushed)
-
-                heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                self._mark_connected()
+                heartbeat_task: asyncio.Task[None] | None = None
                 background_tasks: set[asyncio.Task[None]] = set()
 
                 try:
+                    self.log.info(
+                        "bridge.connect",
+                        outcome="success",
+                        connection_count=self._connection_count,
+                        reconnect_count=max(0, self._connection_count - 1),
+                        reconnect_attempt_count=self._reconnect_attempt_count,
+                    )
+                    await self._send_event(
+                        {
+                            "type": "ready",
+                            "sandboxId": self.sandbox_id,
+                            "opencodeSessionId": self.opencode_session_id,
+                        }
+                    )
+                    await self._drain_boot_warnings()
+                    just_flushed = await self._flush_event_buffer()
+                    await self._flush_pending_acks(skip_ack_ids=just_flushed)
+
+                    heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                     async for message in ws:
                         if self.shutdown_event.is_set():
                             break
@@ -449,11 +507,32 @@ class AgentBridge:
                         except Exception as e:
                             self.log.error("bridge.command_error", exc=e)
 
+                except websockets.ConnectionClosed as e:
+                    self._log_disconnect(
+                        reason="connection_closed",
+                        level="warn",
+                        ws_close_code=e.code,
+                    )
+                    raise
+
                 finally:
-                    heartbeat_task.cancel()
+                    if heartbeat_task is not None:
+                        heartbeat_task.cancel()
                     for task in background_tasks:
                         task.cancel()
                     self.ws = None
+                    if self._connected_at_monotonic is not None:
+                        close_code = getattr(ws, "close_code", None)
+                        reason = (
+                            "shutdown_requested"
+                            if self.shutdown_event.is_set()
+                            else "connection_closed"
+                        )
+                        level = "warn" if close_code not in (None, 1000, 1001) else "info"
+                        extra_fields = (
+                            {"ws_close_code": close_code} if close_code is not None else {}
+                        )
+                        self._log_disconnect(reason=reason, level=level, **extra_fields)
 
         except InvalidStatus as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
@@ -506,6 +585,10 @@ class AgentBridge:
             if not isinstance(entry, dict) or not entry.get("message"):
                 continue
             await self._send_event({"type": "warning", **entry})
+
+    async def _send_media_warning(self, message: str) -> None:
+        """Surface non-fatal media handling failures to the user timeline."""
+        await self._send_event({"type": "warning", "scope": "media", "message": message})
 
     async def _send_event(self, event: dict[str, Any]) -> None:
         """Send event to control plane, buffering if WS is unavailable."""
@@ -703,6 +786,7 @@ class AgentBridge:
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
+        raw_attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
@@ -727,11 +811,25 @@ class AgentBridge:
             if not self.opencode_session_id:
                 await self._create_opencode_session()
 
+            session_attachments, rejected_attachments = parse_session_image_attachments(
+                raw_attachments
+            )
+            if rejected_attachments:
+                self.log.warn(
+                    "prompt.invalid_attachments",
+                    message_id=message_id,
+                    rejected_count=rejected_attachments,
+                )
+                await self._send_media_warning(
+                    f"{rejected_attachments} invalid attachment(s) were skipped."
+                )
+            attachments = await self.attachment_processor.process(session_attachments)
+
             had_error = False
             error_message = None
             emitted_output = False
             async for event in self._stream_opencode_response_sse(
-                message_id, content, model, reasoning_effort
+                message_id, content, model, reasoning_effort, attachments
             ):
                 if event.get("type") == "error":
                     had_error = True
@@ -929,6 +1027,7 @@ class AgentBridge:
         model: str | None,
         opencode_message_id: str | None = None,
         reasoning_effort: str | None = None,
+        attachments: list[HydratedSessionAttachment] | None = None,
     ) -> dict[str, Any]:
         """Build request body for OpenCode prompt requests.
 
@@ -939,8 +1038,12 @@ class AgentBridge:
                                  When provided, OpenCode uses this as the user message ID,
                                  and assistant responses will have parentID pointing to it.
             reasoning_effort: Optional reasoning effort level (e.g., "high", "max")
+            attachments: Optional list of attachment dicts (type/name/url/content/mimeType)
+                         to forward as OpenCode file parts.
         """
-        request_body: dict[str, Any] = {"parts": [{"type": "text", "text": content}]}
+        parts: list[dict[str, Any]] = [{"type": "text", "text": content}]
+        parts.extend(dict(part) for part in self.attachment_processor.build_file_parts(attachments))
+        request_body: dict[str, Any] = {"parts": parts}
 
         if opencode_message_id:
             request_body["messageID"] = opencode_message_id
@@ -1031,6 +1134,7 @@ class AgentBridge:
         content: str,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        attachments: list[HydratedSessionAttachment] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -1051,7 +1155,7 @@ class AgentBridge:
 
         opencode_message_id = OpenCodeIdentifier.ascending("message")
         request_body = self._build_prompt_request_body(
-            content, model, opencode_message_id, reasoning_effort
+            content, model, opencode_message_id, reasoning_effort, attachments
         )
 
         sse_url = f"{self.opencode_base_url}/event"

@@ -402,6 +402,7 @@ class TestBuildImage:
             patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
             patch("src.scheduler.image_builder.resolve_clone_token", return_value="gh-token"),
             patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch("src.scheduler.image_builder.log") as mock_log,
             patch(
                 "src.scheduler.image_builder._callback_with_retry",
                 new_callable=AsyncMock,
@@ -425,6 +426,19 @@ class TestBuildImage:
         assert callback_payload["provider_image_id"] == "im-test"
         assert callback_payload["repository_shas"] == REPOSITORY_SHAS
         assert callback_payload["runtime_version"] == RUNTIME_VERSION
+        event_call = next(
+            call for call in mock_log.info.call_args_list if call.args == ("image_build.complete",)
+        )
+        assert event_call.kwargs == {
+            "build_id": "img-1",
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "outcome": "success",
+            "duration_seconds": pytest.approx(event_call.kwargs["duration_seconds"]),
+            "repository_count": 1,
+            "provider_image_id": "im-test",
+            "runtime_version": RUNTIME_VERSION,
+        }
 
     @pytest.mark.asyncio
     async def test_forwards_build_timeout_to_create_build_sandbox(self):
@@ -497,6 +511,7 @@ class TestBuildImage:
             patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
             patch("src.scheduler.image_builder.resolve_clone_token", return_value="gh-token"),
             patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch("src.scheduler.image_builder.log") as mock_log,
             patch(
                 "src.scheduler.image_builder._callback_with_retry",
                 new_callable=AsyncMock,
@@ -520,6 +535,18 @@ class TestBuildImage:
         assert failure_payload == {
             "build_id": "img-1",
             "error": "Timed out waiting for image to be created",
+        }
+        event_call = next(
+            call for call in mock_log.error.call_args_list if call.args == ("image_build.complete",)
+        )
+        assert event_call.kwargs == {
+            "build_id": "img-1",
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "outcome": "error",
+            "error": "Timed out waiting for image to be created",
+            "duration_seconds": pytest.approx(event_call.kwargs["duration_seconds"]),
+            "repository_count": 1,
         }
 
     @pytest.mark.asyncio

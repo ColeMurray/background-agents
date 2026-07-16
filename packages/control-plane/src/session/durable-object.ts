@@ -17,6 +17,7 @@ import {
   resolveAppName,
   sandboxEventSchema,
   timingSafeEqual,
+  type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
@@ -60,6 +61,7 @@ import type {
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { resolveParticipantName } from "./participant-name";
 import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
@@ -95,6 +97,7 @@ import {
   type ChildSessionsHandler,
 } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
+import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
@@ -144,6 +147,7 @@ type BoundarySchema<T> = {
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
+  private attachmentRepository: SessionAttachmentRepository;
   private initialized = false;
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
@@ -169,6 +173,8 @@ export class SessionDO extends DurableObject<Env> {
   private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox handler (lazily initialized)
   private _sandboxHandler: SandboxHandler | null = null;
+  // Session attachments handler (lazily initialized)
+  private _attachmentsHandler: AttachmentsHandler | null = null;
   // WebSocket token handler (lazily initialized)
   private _wsTokenHandler: WsTokenHandler | null = null;
   // Session lifecycle handler (lazily initialized)
@@ -191,6 +197,13 @@ export class SessionDO extends DurableObject<Env> {
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
+    recordAttachment: (request) => {
+      const session = this.getSession();
+      return this.attachmentsHandler.recordAttachment(
+        request,
+        session ? this.getPublicSessionId(session) : null
+      );
+    },
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
@@ -217,7 +230,12 @@ export class SessionDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.repository = new SessionRepository(this.sql);
+    this.attachmentRepository = new SessionAttachmentRepository(this.sql);
+    this.repository = new SessionRepository(
+      this.sql,
+      (closure) => ctx.storage.transactionSync(closure),
+      this.attachmentRepository
+    );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -333,6 +351,7 @@ export class SessionDO extends DurableObject<Env> {
         ctx: this.ctx,
         log: this.log,
         repository: this.repository,
+        attachmentRepository: this.attachmentRepository,
         wsManager: this.wsManager,
         participantService: this.participantService,
         callbackService: this.callbackService,
@@ -438,6 +457,14 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._sandboxHandler;
+  }
+
+  private get attachmentsHandler(): AttachmentsHandler {
+    if (!this._attachmentsHandler) {
+      this._attachmentsHandler = new AttachmentsHandler(this.attachmentRepository, this.log);
+    }
+
+    return this._attachmentsHandler;
   }
 
   private get wsTokenHandler(): WsTokenHandler {
@@ -1391,7 +1418,7 @@ export class SessionDO extends DurableObject<Env> {
       content: string;
       model?: string;
       reasoningEffort?: string;
-      attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+      attachments?: SessionAttachmentReference[];
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, data);

@@ -6,6 +6,9 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
+  resolvedSessionAttachmentsSchema,
+  type SessionAttachmentReference,
+  type ResolvedSessionAttachment,
 } from "@open-inspect/shared";
 import type {
   ClientInfo,
@@ -18,18 +21,23 @@ import type {
 import type { SourceControlProviderName } from "../source-control";
 import type { SessionRow, ParticipantRow, SandboxCommand } from "./types";
 import type { SessionRepository } from "./repository";
+import {
+  AttachmentClaimConflictError,
+  type SessionAttachmentRepository,
+} from "./session-attachment-repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
+import { SessionAttachmentError, resolveSessionAttachments } from "./session-attachment-resolver";
 
 interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+  attachments?: SessionAttachmentReference[];
 }
 
 interface MessageQueueDeps {
@@ -37,6 +45,7 @@ interface MessageQueueDeps {
   ctx: DurableObjectState;
   log: Logger;
   repository: SessionRepository;
+  attachmentRepository: SessionAttachmentRepository;
   wsManager: SessionWebSocketManager;
   participantService: ParticipantService;
   callbackService: CallbackNotificationService;
@@ -56,6 +65,22 @@ interface StopExecutionOptions {
   suppressStatusReconcile?: boolean;
 }
 
+interface EnqueuePromptCoreData {
+  participant: ParticipantRow;
+  userId: string;
+  content: string;
+  source: MessageSource;
+  model?: string;
+  reasoningEffort?: string;
+  attachments?: SessionAttachmentReference[];
+  callbackContext?: Record<string, unknown>;
+}
+
+interface EnqueuedPrompt {
+  messageId: string;
+  position: number;
+}
+
 export class SessionMessageQueue {
   constructor(private readonly deps: MessageQueueDeps) {}
 
@@ -70,60 +95,30 @@ export class SessionMessageQueue {
       return;
     }
 
-    const messageId = generateId();
-    const now = Date.now();
-
-    let participant = this.deps.participantService.getByUserId(client.userId);
-    if (!participant) {
-      participant = this.deps.participantService.create(client.userId, client.name);
-    }
-
-    let messageModel: string | null = null;
-    if (data.model) {
-      if (isValidModel(data.model)) {
-        messageModel = data.model;
-      } else {
-        this.deps.log.warn("Invalid message model, ignoring override", { model: data.model });
+    let enqueued: EnqueuedPrompt;
+    try {
+      let participant = this.deps.participantService.getByUserId(client.userId);
+      if (!participant) {
+        participant = this.deps.participantService.create(client.userId, client.name);
       }
+      enqueued = await this.enqueuePromptCore({
+        participant,
+        userId: client.userId,
+        content: data.content,
+        source: "web",
+        model: data.model,
+        reasoningEffort: data.reasoningEffort,
+        attachments: data.attachments,
+      });
+    } catch (error) {
+      if (!(error instanceof SessionAttachmentError)) throw error;
+      this.deps.wsManager.send(ws, {
+        type: "error",
+        code: "INVALID_ATTACHMENTS",
+        message: error.message,
+      });
+      return;
     }
-
-    const effectiveModelForEffort = messageModel || this.deps.getSession()?.model || DEFAULT_MODEL;
-    const messageReasoningEffort = this.deps.validateReasoningEffort(
-      effectiveModelForEffort,
-      data.reasoningEffort
-    );
-
-    this.deps.repository.createMessage({
-      id: messageId,
-      authorId: participant.id,
-      content: data.content,
-      source: "web",
-      model: messageModel,
-      reasoningEffort: messageReasoningEffort,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
-      status: "pending",
-      createdAt: now,
-    });
-
-    await this.deps.setSessionStatus("active");
-
-    this.writeUserMessageEvent(participant, data.content, messageId, now);
-
-    const position = this.deps.repository.getPendingOrProcessingCount();
-
-    this.deps.log.info("prompt.enqueue", {
-      event: "prompt.enqueue",
-      message_id: messageId,
-      source: "web",
-      author_id: participant.id,
-      user_id: client.userId,
-      model: messageModel,
-      reasoning_effort: messageReasoningEffort,
-      content_length: data.content.length,
-      has_attachments: !!data.attachments?.length,
-      attachments_count: data.attachments?.length ?? 0,
-      queue_position: position,
-    });
 
     if (this.deps.env.DB) {
       const store = new SessionIndexStore(this.deps.env.DB);
@@ -143,9 +138,9 @@ export class SessionMessageQueue {
 
     this.deps.wsManager.send(ws, {
       type: "prompt_queued",
-      messageId,
-      position,
-    } as ServerMessage);
+      messageId: enqueued.messageId,
+      position: enqueued.position,
+    });
 
     await this.processMessageQueue();
   }
@@ -202,7 +197,7 @@ export class SessionMessageQueue {
         scmName: author?.scm_name ?? null,
         scmEmail: author?.scm_email ?? null,
       },
-      attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
+      attachments: this.parseStoredAttachments(message.attachments),
     };
 
     const sent = this.deps.wsManager.send(sandboxWs, command);
@@ -314,12 +309,32 @@ export class SessionMessageQueue {
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
 
+  private parseStoredAttachments(value: string | null): ResolvedSessionAttachment[] | undefined {
+    if (!value) return undefined;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(value);
+    } catch {
+      this.deps.log.error("prompt.invalid_stored_attachments");
+      return undefined;
+    }
+    const parsed = resolvedSessionAttachmentsSchema.safeParse(raw);
+    if (!parsed.success) {
+      this.deps.log.error("prompt.invalid_stored_attachments");
+      return undefined;
+    }
+    return parsed.data;
+  }
+
   writeUserMessageEvent(
     participant: ParticipantRow,
     content: string,
     messageId: string,
-    now: number
+    now: number,
+    attachments?: ResolvedSessionAttachment[]
   ): void {
+    // Metadata only — base64 payloads would bloat the events table and every
+    // broadcast, and DO SQLite rows cap at 2 MB.
     const userMessageEvent: SandboxEvent = {
       type: "user_message",
       content,
@@ -330,6 +345,7 @@ export class SessionMessageQueue {
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(participant.scm_login, this.deps.scmProvider),
       },
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
     this.deps.repository.createEvent({
       id: generateId(),
@@ -372,6 +388,28 @@ export class SessionMessageQueue {
       participant = this.deps.repository.getParticipantById(participant.id) ?? participant;
     }
 
+    const enqueued = await this.enqueuePromptCore({
+      participant,
+      userId: data.authorId,
+      content: data.content,
+      source: data.source as MessageSource,
+      model: data.model,
+      reasoningEffort: data.reasoningEffort,
+      attachments: data.attachments,
+      callbackContext: data.callbackContext,
+    });
+
+    await this.processMessageQueue();
+
+    return { messageId: enqueued.messageId, status: "queued" };
+  }
+
+  private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
+    const resolvedAttachments = resolveSessionAttachments(
+      data.attachments,
+      this.deps.attachmentRepository
+    );
+    const attachments = resolvedAttachments?.attachments;
     const messageId = generateId();
     const now = Date.now();
 
@@ -380,7 +418,7 @@ export class SessionMessageQueue {
       if (isValidModel(data.model)) {
         messageModel = data.model;
       } else {
-        this.deps.log.warn("Invalid message model in enqueue, ignoring", { model: data.model });
+        this.deps.log.warn("Invalid message model, ignoring override", { model: data.model });
       }
     }
 
@@ -390,42 +428,50 @@ export class SessionMessageQueue {
       data.reasoningEffort
     );
 
-    this.deps.repository.createMessage({
-      id: messageId,
-      authorId: participant.id,
-      content: data.content,
-      source: data.source as MessageSource,
-      model: messageModel,
-      reasoningEffort: messageReasoningEffort,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
-      callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
-      status: "pending",
-      createdAt: now,
-    });
+    try {
+      this.deps.repository.createMessageWithAttachments(
+        {
+          id: messageId,
+          authorId: data.participant.id,
+          content: data.content,
+          source: data.source,
+          model: messageModel,
+          reasoningEffort: messageReasoningEffort,
+          attachments: attachments ? JSON.stringify(attachments) : null,
+          callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
+          status: "pending",
+          createdAt: now,
+        },
+        resolvedAttachments?.attachmentIds ?? []
+      );
+    } catch (error) {
+      if (error instanceof AttachmentClaimConflictError) {
+        throw new SessionAttachmentError(
+          "One or more attachments are missing, expired, or already used"
+        );
+      }
+      throw error;
+    }
 
     await this.deps.setSessionStatus("active");
+    this.writeUserMessageEvent(data.participant, data.content, messageId, now, attachments);
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now);
-
-    const queuePosition = this.deps.repository.getPendingOrProcessingCount();
-
+    const position = this.deps.repository.getPendingOrProcessingCount();
     this.deps.log.info("prompt.enqueue", {
       event: "prompt.enqueue",
       message_id: messageId,
       source: data.source,
-      author_id: participant.id,
-      user_id: data.authorId,
+      author_id: data.participant.id,
+      user_id: data.userId,
       model: messageModel,
       reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
-      has_attachments: !!data.attachments?.length,
-      attachments_count: data.attachments?.length ?? 0,
+      has_attachments: !!attachments?.length,
+      attachments_count: attachments?.length ?? 0,
       has_callback_context: !!data.callbackContext,
-      queue_position: queuePosition,
+      queue_position: position,
     });
 
-    await this.processMessageQueue();
-
-    return { messageId, status: "queued" };
+    return { messageId, position };
   }
 }
