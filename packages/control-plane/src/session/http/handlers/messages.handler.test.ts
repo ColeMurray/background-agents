@@ -221,30 +221,26 @@ describe("createMessagesHandler", () => {
     expect(await response.json()).toEqual({ error: "Invalid message status: invalid" });
   });
 
-  it("maps listMessages response", async () => {
+  it("returns listMessages response", async () => {
     const { handler, messageService } = createHandler();
     vi.mocked(messageService.listMessages).mockReturnValue({
       messages: [
         {
           id: "m1",
-          author_id: "p1",
+          authorId: "p1",
           content: "hello",
           source: "web",
-          model: null,
-          reasoning_effort: null,
-          attachments: JSON.stringify([
+          attachments: [
             {
               name: "screenshot.png",
               attachmentId: "attachment-1",
               mimeType: "image/png",
             },
-          ]),
-          callback_context: null,
+          ],
           status: "completed",
-          error_message: null,
-          created_at: 1000,
-          started_at: 1100,
-          completed_at: 1200,
+          createdAt: 1000,
+          startedAt: 1100,
+          completedAt: 1200,
         },
       ],
       cursor: "1000",
@@ -284,18 +280,14 @@ describe("createMessagesHandler", () => {
       messages: [
         {
           id: "m1",
-          author_id: "p1",
+          authorId: "p1",
           content: "hello",
           source: "web",
-          model: null,
-          reasoning_effort: null,
           attachments: null,
-          callback_context: null,
           status: "completed",
-          error_message: null,
-          created_at: 1000,
-          started_at: null,
-          completed_at: null,
+          createdAt: 1000,
+          startedAt: null,
+          completedAt: null,
         },
       ],
       cursor: "1000",

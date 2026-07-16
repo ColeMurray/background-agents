@@ -6,7 +6,6 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-  resolvedSessionAttachmentsSchema,
   type SessionAttachmentReference,
   type ResolvedSessionAttachment,
 } from "@open-inspect/shared";
@@ -31,7 +30,11 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import { SessionAttachmentError, resolveSessionAttachments } from "./session-attachment-resolver";
+import {
+  parseStoredSessionAttachments,
+  SessionAttachmentError,
+  resolveSessionAttachments,
+} from "./session-attachment-resolver";
 
 interface PromptMessageData {
   content: string;
@@ -197,7 +200,9 @@ export class SessionMessageQueue {
         scmName: author?.scm_name ?? null,
         scmEmail: author?.scm_email ?? null,
       },
-      attachments: this.parseStoredAttachments(message.attachments),
+      attachments: parseStoredSessionAttachments(message.attachments, () =>
+        this.deps.log.error("prompt.invalid_stored_attachments")
+      ),
     };
 
     const sent = this.deps.wsManager.send(sandboxWs, command);
@@ -307,23 +312,6 @@ export class SessionMessageQueue {
       this.deps.callbackService.notifyComplete(processingMessage.id, false, stuckError)
     );
     await this.deps.reconcileSessionStatusAfterExecution(false);
-  }
-
-  private parseStoredAttachments(value: string | null): ResolvedSessionAttachment[] | undefined {
-    if (!value) return undefined;
-    let raw: unknown;
-    try {
-      raw = JSON.parse(value);
-    } catch {
-      this.deps.log.error("prompt.invalid_stored_attachments");
-      return undefined;
-    }
-    const parsed = resolvedSessionAttachmentsSchema.safeParse(raw);
-    if (!parsed.success) {
-      this.deps.log.error("prompt.invalid_stored_attachments");
-      return undefined;
-    }
-    return parsed.data;
   }
 
   writeUserMessageEvent(

@@ -1,4 +1,5 @@
 import {
+  resolvedSessionAttachmentsSchema,
   sessionAttachmentMimeTypeSchema,
   type SessionAttachmentReference,
   type ResolvedSessionAttachment,
@@ -13,6 +14,21 @@ export interface ResolvedSessionAttachments {
 }
 
 type SessionAttachmentLookup = Pick<SessionAttachmentRepository, "getUnreferenced">;
+
+export function parseStoredSessionAttachments(
+  value: string | null,
+  onInvalid?: () => void
+): ResolvedSessionAttachment[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = resolvedSessionAttachmentsSchema.safeParse(JSON.parse(value));
+    if (parsed.success) return parsed.data;
+  } catch {
+    // Report malformed JSON through the same callback as invalid attachment metadata.
+  }
+  onInvalid?.();
+  return undefined;
+}
 
 /** Resolve client references against canonical, unclaimed attachment rows. */
 export function resolveSessionAttachments(

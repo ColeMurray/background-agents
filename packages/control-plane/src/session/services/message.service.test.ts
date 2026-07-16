@@ -175,7 +175,13 @@ describe("MessageService", () => {
         source: "web",
         model: null,
         reasoning_effort: null,
-        attachments: null,
+        attachments: JSON.stringify([
+          {
+            name: "screenshot.png",
+            attachmentId: "attachment-1",
+            mimeType: "image/png",
+          },
+        ]),
         callback_context: null,
         status: "pending",
         error_message: null,
@@ -190,7 +196,7 @@ describe("MessageService", () => {
         source: "web",
         model: null,
         reasoning_effort: null,
-        attachments: null,
+        attachments: "invalid-json",
         callback_context: null,
         status: "pending",
         error_message: null,
@@ -221,6 +227,14 @@ describe("MessageService", () => {
     expect(result.hasMore).toBe(true);
     expect(result.cursor).toBe("2000");
     expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.attachments).toEqual([
+      {
+        name: "screenshot.png",
+        attachmentId: "attachment-1",
+        mimeType: "image/png",
+      },
+    ]);
+    expect(result.messages[1]?.attachments).toBeNull();
     expect(repository.listMessages).toHaveBeenCalledWith({
       cursor: null,
       limit: 2,
