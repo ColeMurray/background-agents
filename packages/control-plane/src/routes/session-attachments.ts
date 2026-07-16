@@ -29,8 +29,8 @@ import {
 } from "../media";
 import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage";
 import { createMediaObjectStorage } from "../storage/object-storage";
-import { createObjectStorageResponse } from "../storage/object-storage-response";
 import type { Env } from "../types";
+import { createStoredObjectResponse } from "./responses/stored-object-response";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
@@ -137,7 +137,7 @@ async function handleAttachmentGet(
   const storage = createMediaObjectStorage(env);
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
 
-  return createObjectStorageResponse({
+  return createStoredObjectResponse({
     request,
     storage,
     objectKey,

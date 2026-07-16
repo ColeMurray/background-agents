@@ -1,6 +1,6 @@
-import type { ObjectStorage, ObjectStorageMetadata } from "./object-storage";
+import type { ObjectStorage, ObjectStorageMetadata } from "../../storage/object-storage";
 
-export interface ObjectStorageResponseOptions {
+export interface StoredObjectResponseOptions {
   request: Request;
   storage: ObjectStorage;
   objectKey: string;
@@ -11,8 +11,8 @@ export interface ObjectStorageResponseOptions {
 }
 
 /** Create an HTTP response for a stored object, including byte-range support. */
-export async function createObjectStorageResponse(
-  options: ObjectStorageResponseOptions
+export async function createStoredObjectResponse(
+  options: StoredObjectResponseOptions
 ): Promise<Response> {
   const rangeHeader = options.request.headers.get("Range");
   if (rangeHeader) {
@@ -43,7 +43,7 @@ export async function createObjectStorageResponse(
 
 function buildObjectHeaders(
   source: ObjectStorageMetadata,
-  options: ObjectStorageResponseOptions
+  options: StoredObjectResponseOptions
 ): Headers | Response {
   const headers = new Headers();
   source.writeHttpMetadata(headers);

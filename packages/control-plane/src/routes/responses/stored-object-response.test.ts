@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ObjectStorage, ObjectStorageMetadata, ObjectStorageObject } from "./object-storage";
-import { parseByteRangeHeader, createObjectStorageResponse } from "./object-storage-response";
+import type {
+  ObjectStorage,
+  ObjectStorageMetadata,
+  ObjectStorageObject,
+} from "../../storage/object-storage";
+import { createStoredObjectResponse, parseByteRangeHeader } from "./stored-object-response";
 
 function metadata(contentType = "image/png"): ObjectStorageMetadata {
   return {
@@ -45,9 +49,9 @@ function options(request: Request, objectStorage: ObjectStorage) {
   };
 }
 
-describe("createObjectStorageResponse", () => {
+describe("createStoredObjectResponse", () => {
   it("creates a full-object response with canonical headers", async () => {
-    const response = await createObjectStorageResponse(
+    const response = await createStoredObjectResponse(
       options(new Request("https://example.test"), storage())
     );
 
@@ -59,7 +63,7 @@ describe("createObjectStorageResponse", () => {
 
   it("uses the same flow for byte ranges", async () => {
     const objectStorage = storage();
-    const response = await createObjectStorageResponse(
+    const response = await createStoredObjectResponse(
       options(
         new Request("https://example.test", { headers: { Range: "bytes=2-5" } }),
         objectStorage
@@ -76,7 +80,7 @@ describe("createObjectStorageResponse", () => {
 
   it("rejects disallowed stored metadata", async () => {
     const objectStorage = storage({ get: vi.fn(async () => object("application/octet-stream")) });
-    const response = await createObjectStorageResponse(
+    const response = await createStoredObjectResponse(
       options(new Request("https://example.test"), objectStorage)
     );
 
