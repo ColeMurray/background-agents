@@ -2,46 +2,15 @@
  * Callback handlers for control-plane notifications.
  */
 
-import {
-  computeHmacHex,
-  postEphemeral,
-  postMessage,
-  removeReaction,
-  timingSafeEqual,
-} from "@open-inspect/shared";
+import { computeHmacHex, postEphemeral, timingSafeEqual } from "@open-inspect/shared";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "./types";
-import { extractAgentResponse } from "./completion/extractor";
-import { buildCompletionBlocks, getFallbackText, truncateError } from "./completion/blocks";
+import { createSlackCompletionJob, type SlackCompletionJob } from "./completion/job";
 import { createLogger } from "./logger";
 import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity-status";
 
 const log = createLogger("callback");
-
-async function clearThinkingReaction(
-  env: Env,
-  channel: string,
-  reactionMessageTs: string,
-  traceId?: string
-): Promise<void> {
-  const reactionResult = await removeReaction(
-    env.SLACK_BOT_TOKEN,
-    channel,
-    reactionMessageTs,
-    "eyes"
-  );
-
-  if (!reactionResult.ok && reactionResult.error !== "no_reaction") {
-    log.warn("slack.reaction.remove", {
-      trace_id: traceId,
-      channel,
-      message_ts: reactionMessageTs,
-      reaction: "eyes",
-      slack_error: reactionResult.error,
-    });
-  }
-}
 
 /**
  * Verify internal callback signature using shared secret.
@@ -80,8 +49,6 @@ const completionCallbackSchema = z.looseObject({
   context: slackCallbackContextSchema,
 });
 
-type CompletionCallbackPayload = z.infer<typeof completionCallbackSchema>;
-
 const toolCallCallbackSchema = z.looseObject({
   sessionId: z.string(),
   tool: z.string(),
@@ -104,39 +71,18 @@ function isSignedCallbackPayload(
   );
 }
 
-/**
- * Payload for a scheduler-owned automation completion (Slack-triggered run). The
- * SchedulerDO posts this when the run finishes. The bot posts the agent's final
- * response into the triggering message's thread and clears the `eyes` reaction.
- *
- * The run-result fields (`sessionId`/`messageId` and the presentation fields) are
- * optional so a control-plane/bot version skew degrades to a reaction clear only.
- */
-interface AutomationCompletePayload {
-  channel: string;
-  /** The triggering message: thread anchor for the result and the `eyes` reaction target. */
-  reactionMessageTs: string;
-  sessionId?: string;
-  messageId?: string;
-  success?: boolean;
-  error?: string;
-  repoFullName?: string;
-  model?: string;
-  reasoningEffort?: string;
-  signature: string;
-}
-
-function isValidAutomationCompletePayload(payload: unknown): payload is AutomationCompletePayload {
-  if (!isPlainRecord(payload)) return false;
-  const p = payload;
-  return (
-    typeof p.channel === "string" &&
-    typeof p.reactionMessageTs === "string" &&
-    typeof p.signature === "string" &&
-    (p.sessionId === undefined || typeof p.sessionId === "string") &&
-    (p.messageId === undefined || typeof p.messageId === "string")
-  );
-}
+const automationCompleteSchema = z.looseObject({
+  channel: z.string().min(1),
+  reactionMessageTs: z.string().min(1),
+  sessionId: z.string().min(1),
+  messageId: z.string().min(1),
+  success: z.boolean(),
+  error: z.string().optional(),
+  repoFullName: z.string(),
+  model: z.string(),
+  reasoningEffort: z.string().optional(),
+  signature: z.string(),
+});
 
 /** Payload for a concurrency-skip ephemeral notice. */
 interface AutomationSkipPayload {
@@ -220,6 +166,40 @@ function rejectInvalidPayload(
   return c.json({ error: "invalid payload" }, 400);
 }
 
+async function enqueueCompletion(
+  c: Context<{ Bindings: Env }>,
+  job: SlackCompletionJob,
+  path: string,
+  startTime: number
+): Promise<Response> {
+  try {
+    await c.env.SLACK_COMPLETION_QUEUE.send(job, { contentType: "json" });
+  } catch (error) {
+    log.error("slack.completion.enqueue", {
+      trace_id: job.traceId,
+      delivery_id: job.deliveryId,
+      session_id: job.sessionId,
+      message_id: job.messageId,
+      outcome: "error",
+      error: error instanceof Error ? error : new Error(String(error)),
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "completion enqueue failed" }, 503);
+  }
+
+  log.info("http.request", {
+    trace_id: job.traceId,
+    delivery_id: job.deliveryId,
+    http_method: "POST",
+    http_path: path,
+    http_status: 200,
+    session_id: job.sessionId,
+    message_id: job.messageId,
+    duration_ms: Date.now() - startTime,
+  });
+  return c.json({ ok: true, deliveryId: job.deliveryId });
+}
+
 export const callbacksRouter = new Hono<{ Bindings: Env }>();
 
 /**
@@ -243,20 +223,27 @@ callbacksRouter.post("/complete", async (c) => {
   });
   if (rejection) return rejection;
 
-  // Process in background
-  c.executionCtx.waitUntil(handleCompletionCallback(valid, c.env, traceId));
-
-  log.info("http.request", {
-    trace_id: traceId,
-    http_method: "POST",
-    http_path: "/callbacks/complete",
-    http_status: 200,
-    session_id: valid.sessionId,
-    message_id: valid.messageId,
-    duration_ms: Date.now() - startTime,
-  });
-
-  return c.json({ ok: true });
+  return enqueueCompletion(
+    c,
+    createSlackCompletionJob({
+      source: "session",
+      sessionId: valid.sessionId,
+      messageId: valid.messageId,
+      success: valid.success,
+      error: valid.error,
+      channel: valid.context.channel,
+      threadTs: valid.context.threadTs,
+      reactionMessageTs: valid.context.reactionMessageTs,
+      context: {
+        repoFullName: valid.context.repoFullName,
+        model: valid.context.model,
+        reasoningEffort: valid.context.reasoningEffort,
+      },
+      traceId,
+    }),
+    "/callbacks/complete",
+    startTime
+  );
 });
 
 /**
@@ -327,9 +314,11 @@ callbacksRouter.post("/automation-complete", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  if (!isValidAutomationCompletePayload(payload)) {
+  const parsed = automationCompleteSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
     return rejectInvalidPayload(c, "/callbacks/automation-complete", traceId, startTime);
   }
+  const valid = parsed.data;
 
   const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/automation-complete",
@@ -338,11 +327,27 @@ callbacksRouter.post("/automation-complete", async (c) => {
   });
   if (rejection) return rejection;
 
-  c.executionCtx.waitUntil(
-    handleAutomationComplete(payload as AutomationCompletePayload, c.env, traceId)
+  return enqueueCompletion(
+    c,
+    createSlackCompletionJob({
+      source: "automation",
+      sessionId: valid.sessionId,
+      messageId: valid.messageId,
+      success: valid.success,
+      error: valid.error,
+      channel: valid.channel,
+      threadTs: valid.reactionMessageTs,
+      reactionMessageTs: valid.reactionMessageTs,
+      context: {
+        repoFullName: valid.repoFullName,
+        model: valid.model,
+        reasoningEffort: valid.reasoningEffort,
+      },
+      traceId,
+    }),
+    "/callbacks/automation-complete",
+    startTime
   );
-
-  return c.json({ ok: true });
 });
 
 /**
@@ -407,166 +412,6 @@ async function handleToolCallCallback(
     outcome: "success",
     duration_ms: Date.now() - startTime,
   });
-}
-
-/**
- * Handle completion callback - fetch events and post to Slack.
- */
-async function handleCompletionCallback(
-  payload: CompletionCallbackPayload,
-  env: Env,
-  traceId?: string
-): Promise<void> {
-  const startTime = Date.now();
-  const { sessionId, context } = payload;
-  const base = {
-    trace_id: traceId,
-    session_id: sessionId,
-    message_id: payload.messageId,
-    channel: context.channel,
-  };
-
-  try {
-    // Fetch events to build response (filtered by messageId directly)
-    const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
-
-    // Fall back to the callback payload's error if the extractor didn't find one.
-    agentResponse.error = agentResponse.error || payload.error;
-    const errorMessage = agentResponse.error;
-
-    // Check if extraction succeeded (has content or was explicitly successful)
-    if (!agentResponse.textContent && agentResponse.toolCalls.length === 0 && !payload.success) {
-      const displayError = truncateError(errorMessage || "Unknown error", 2000);
-      log.error("callback.complete", {
-        ...base,
-        outcome: "error",
-        error_message: "empty_agent_response",
-        agent_error: errorMessage || "Unknown error",
-        duration_ms: Date.now() - startTime,
-      });
-      await postMessage(env.SLACK_BOT_TOKEN, context.channel, `The agent failed: ${displayError}`, {
-        thread_ts: context.threadTs,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `:x: *Agent failed:* ${displayError}`,
-            },
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: { type: "plain_text", text: "View Session" },
-                url: `${env.WEB_APP_URL}/session/${sessionId}`,
-                action_id: "view_session",
-              },
-            ],
-          },
-        ],
-      });
-
-      if (context.reactionMessageTs) {
-        await clearThinkingReaction(env, context.channel, context.reactionMessageTs, traceId);
-      }
-      return;
-    }
-
-    // Build and post completion message
-    const blocks = buildCompletionBlocks(sessionId, agentResponse, context, env.WEB_APP_URL);
-
-    await postMessage(env.SLACK_BOT_TOKEN, context.channel, getFallbackText(agentResponse), {
-      thread_ts: context.threadTs,
-      blocks,
-    });
-
-    if (context.reactionMessageTs) {
-      await clearThinkingReaction(env, context.channel, context.reactionMessageTs, traceId);
-    }
-
-    log.info("callback.complete", {
-      ...base,
-      outcome: "success",
-      agent_success: payload.success,
-      tool_call_count: agentResponse.toolCalls.length,
-      artifact_count: agentResponse.artifacts.length,
-      has_text: Boolean(agentResponse.textContent),
-      duration_ms: Date.now() - startTime,
-    });
-  } catch (error) {
-    log.error("callback.complete", {
-      ...base,
-      outcome: "error",
-      error: error instanceof Error ? error : new Error(String(error)),
-      duration_ms: Date.now() - startTime,
-    });
-    // Don't throw - this is fire-and-forget
-  }
-}
-
-/**
- * Post a Slack-triggered run's result into the triggering message's thread and
- * clear the `eyes` reaction. Reuses the interactive completion path
- * (`handleCompletionCallback`) — which fetches the agent's response, posts it
- * in-thread, and clears the reaction. Falls back to a reaction clear only when
- * the run carries no session coordinates (control-plane/bot version skew).
- * Fire-and-forget.
- */
-async function handleAutomationComplete(
-  payload: AutomationCompletePayload,
-  env: Env,
-  traceId?: string
-): Promise<void> {
-  if (payload.sessionId && payload.messageId) {
-    await handleCompletionCallback(
-      {
-        sessionId: payload.sessionId,
-        messageId: payload.messageId,
-        success: payload.success ?? true,
-        error: payload.error,
-        timestamp: Date.now(),
-        signature: payload.signature,
-        context: {
-          source: "slack",
-          channel: payload.channel,
-          threadTs: payload.reactionMessageTs,
-          reactionMessageTs: payload.reactionMessageTs,
-          repoFullName: payload.repoFullName ?? "",
-          model: payload.model ?? "",
-          reasoningEffort: payload.reasoningEffort,
-        },
-      },
-      env,
-      traceId
-    );
-    return;
-  }
-
-  // No session coordinates — clear the reaction only.
-  const startTime = Date.now();
-  const base = {
-    trace_id: traceId,
-    channel: payload.channel,
-    message_ts: payload.reactionMessageTs,
-  };
-  try {
-    await clearThinkingReaction(env, payload.channel, payload.reactionMessageTs, traceId);
-
-    log.info("callback.automation_complete", {
-      ...base,
-      outcome: "success",
-      duration_ms: Date.now() - startTime,
-    });
-  } catch (error) {
-    log.error("callback.automation_complete", {
-      ...base,
-      outcome: "error",
-      error: error instanceof Error ? error : new Error(String(error)),
-      duration_ms: Date.now() - startTime,
-    });
-  }
 }
 
 /**

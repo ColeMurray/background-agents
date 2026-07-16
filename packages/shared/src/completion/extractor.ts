@@ -11,6 +11,7 @@ import type {
   AgentResponse,
   ToolCallSummary,
   ArtifactInfo,
+  MediaArtifactInfo,
 } from "../types/artifacts";
 import type { EventResponse, ListEventsResponse } from "../types/sandbox-events";
 import type { ArtifactType } from "../types/statuses";
@@ -106,7 +107,13 @@ export async function extractAgentResponse(
           http_status: response.status,
           duration_ms: Date.now() - startTime,
         });
-        return { textContent: "", toolCalls: [], artifacts: [], success: false };
+        return {
+          textContent: "",
+          toolCalls: [],
+          artifacts: [],
+          mediaArtifacts: [],
+          success: false,
+        };
       }
 
       const data = (await response.json()) as ListEventsResponse;
@@ -123,6 +130,7 @@ export async function extractAgentResponse(
       event_count: allEvents.length,
       tool_call_count: agentResponse.toolCalls.length,
       artifact_count: agentResponse.artifacts.length,
+      media_artifact_count: agentResponse.mediaArtifacts.length,
       has_text: Boolean(agentResponse.textContent),
       has_error: Boolean(agentResponse.error),
       duration_ms: Date.now() - startTime,
@@ -136,7 +144,7 @@ export async function extractAgentResponse(
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
-    return { textContent: "", toolCalls: [], artifacts: [], success: false };
+    return { textContent: "", toolCalls: [], artifacts: [], mediaArtifacts: [], success: false };
   }
 }
 
@@ -171,6 +179,16 @@ export function buildAgentResponseFromEvents(
     .map((event) => toEventArtifactInfo(event.data))
     .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
 
+  const mediaArtifacts: MediaArtifactInfo[] = [];
+  const mediaArtifactIds = new Set<string>();
+  for (const event of chronologicalEvents) {
+    if (event.type !== "artifact") continue;
+    const mediaArtifact = toEventMediaArtifactInfo(event.data);
+    if (!mediaArtifact || mediaArtifactIds.has(mediaArtifact.id)) continue;
+    mediaArtifactIds.add(mediaArtifact.id);
+    mediaArtifacts.push(mediaArtifact);
+  }
+
   const completionEvent = findLastEvent(chronologicalEvents, "execution_complete");
   const errorEvent = findLastEvent(chronologicalEvents, "error");
   const errorMessage =
@@ -185,6 +203,7 @@ export function buildAgentResponseFromEvents(
     textContent,
     toolCalls,
     artifacts: eventArtifacts.length > 0 ? eventArtifacts : artifacts,
+    mediaArtifacts,
     success,
     error: errorMessage,
   };
@@ -346,6 +365,36 @@ export function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo
     type,
     url: String(data.url ?? ""),
     label: getArtifactLabel(data),
+  };
+}
+
+/** Convert a media artifact event into the protected download information. */
+export function toEventMediaArtifactInfo(data: Record<string, unknown>): MediaArtifactInfo | null {
+  const type = toArtifactType(data.artifactType);
+  if (type !== "screenshot" && type !== "video") return null;
+
+  const id = typeof data.artifactId === "string" ? data.artifactId.trim() : "";
+  if (!id) return null;
+
+  const metadata =
+    data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata)
+      ? (data.metadata as Record<string, unknown>)
+      : undefined;
+  const mimeType = typeof metadata?.mimeType === "string" ? metadata.mimeType : undefined;
+  const sizeBytes =
+    typeof metadata?.sizeBytes === "number" &&
+    Number.isSafeInteger(metadata.sizeBytes) &&
+    metadata.sizeBytes > 0
+      ? metadata.sizeBytes
+      : undefined;
+  const caption = typeof metadata?.caption === "string" ? metadata.caption : undefined;
+
+  return {
+    id,
+    type,
+    ...(mimeType ? { mimeType } : {}),
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    ...(caption ? { caption } : {}),
   };
 }
 

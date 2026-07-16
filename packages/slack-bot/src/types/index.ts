@@ -2,6 +2,8 @@
  * Type definitions for the Slack bot.
  */
 
+import type { SlackCompletionJob } from "../completion/job";
+
 /**
  * Cloudflare Worker environment bindings.
  */
@@ -11,6 +13,9 @@ export interface Env {
 
   // Service binding to control plane
   CONTROL_PLANE: Fetcher;
+
+  // Durable completion handoff. All Slack completion callbacks enqueue here.
+  SLACK_COMPLETION_QUEUE: Queue<SlackCompletionJob>;
 
   // Environment variables
   DEPLOYMENT_NAME: string;

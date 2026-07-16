@@ -52,6 +52,7 @@ import { resolveSessionScopedSettings } from "../session/integration-settings-re
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import type { RequestContext } from "../routes/shared";
+import { deliverWithRetry } from "../session/callback-delivery";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -116,7 +117,7 @@ const runCompleteBodySchema = z.object({
   automationId: z.string(),
   runId: z.string(),
   sessionId: z.string(),
-  messageId: z.string().optional(),
+  messageId: z.string().min(1),
   success: z.boolean(),
   error: z.string().optional(),
 });
@@ -1079,7 +1080,7 @@ export class SchedulerDO extends DurableObject<Env> {
       const automation = await store.getById(body.automationId);
       await this.notifySlackCompletion(run, slackMeta, {
         sessionId: body.sessionId,
-        messageId: body.messageId ?? "",
+        messageId: body.messageId,
         success: body.success,
         error: body.error,
         repoFullName: formatRunRepositoryLabel(run),
@@ -1113,29 +1114,29 @@ export class SchedulerDO extends DurableObject<Env> {
     const body = buildSlackCompletionNotification(meta, ctx);
     if (!body) return;
 
-    try {
-      const signature = await computeHmacHex(JSON.stringify(body), secret);
-      const response = await binding.fetch("https://internal/callbacks/automation-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...body, signature }),
-      });
-      if (!response.ok) {
+    const signature = await computeHmacHex(JSON.stringify(body), secret);
+    await deliverWithRetry(
+      (signal) =>
+        binding.fetch("https://internal/callbacks/automation-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...body, signature }),
+          signal,
+        }),
+      (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      ({ attempt, response, error }) => {
         this.log.warn("Slack completion callback failed", {
           event: "scheduler.slack_complete_failed",
           automation_id: run.automation_id,
           run_id: run.id,
-          http_status: response.status,
+          attempt,
+          ...(response ? { http_status: response.status } : {}),
+          ...(error !== undefined
+            ? { error: error instanceof Error ? error : new Error(String(error)) }
+            : {}),
         });
       }
-    } catch (e) {
-      this.log.warn("Slack completion callback errored", {
-        event: "scheduler.slack_complete_failed",
-        automation_id: run.automation_id,
-        run_id: run.id,
-        error: e instanceof Error ? e : new Error(String(e)),
-      });
-    }
+    );
   }
 
   /**

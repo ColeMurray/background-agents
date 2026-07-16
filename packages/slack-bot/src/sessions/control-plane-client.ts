@@ -8,9 +8,9 @@ import { getAuthHeaders } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext, Env } from "../types";
+import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 const log = createLogger("handler");
-export const CONTROL_PLANE_REQUEST_TIMEOUT_MS = 10_000;
 
 interface CreateSessionOptions {
   target: SlackSessionTarget;
@@ -64,7 +64,7 @@ export async function createSession(
         actorDisplayName,
         actorEmail,
       }),
-      signal: AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       log.error("control_plane.create_session", {
@@ -122,7 +122,7 @@ export async function sendPrompt(
         method: "POST",
         headers,
         body: JSON.stringify({ content, authorId, source: "slack", callbackContext }),
-        signal: AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
       }
     );
     if (!response.ok) {

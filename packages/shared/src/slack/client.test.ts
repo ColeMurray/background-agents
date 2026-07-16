@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   addReaction,
+  completeExternalUpload,
+  getExternalUploadUrl,
   getChannelInfo,
   getPermalink,
   getThreadMessages,
@@ -12,6 +14,7 @@ import {
   publishView,
   removeReaction,
   updateMessage,
+  uploadToExternalUrl,
 } from "./client";
 
 function jsonResponse(
@@ -23,6 +26,123 @@ function jsonResponse(
     headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
   });
 }
+
+describe("external file uploads", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("requests an upload URL with filename, length, and alt text", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        upload_url: "https://files.slack.com/upload/v1/ticket",
+        file_id: "F123",
+      })
+    );
+
+    const signal = AbortSignal.timeout(1_000);
+    const result = await getExternalUploadUrl("xoxb-token", {
+      filename: "chart.png",
+      length: 1234,
+      altText: "Revenue chart",
+      signal,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      upload_url: "https://files.slack.com/upload/v1/ticket",
+      file_id: "F123",
+    });
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe(
+      "https://slack.com/api/files.getUploadURLExternal?filename=chart.png&length=1234&alt_txt=Revenue+chart"
+    );
+    expect(init?.method).toBe("GET");
+    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer xoxb-token");
+    expect(init?.signal).toBe(signal);
+    expect(init?.body).toBeUndefined();
+  });
+
+  it("uploads raw bytes without forwarding Slack authorization", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("OK", { status: 200 }));
+    const body = new Blob(["chart-bytes"], { type: "image/png" });
+
+    const signal = AbortSignal.timeout(1_000);
+    const result = await uploadToExternalUrl(
+      "https://files.slack.com/upload/v1/ticket",
+      body,
+      "image/png",
+      signal
+    );
+
+    expect(result).toEqual({ ok: true });
+    const [, init] = fetchSpy.mock.calls[0]!;
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(body);
+    expect(init?.headers).toEqual({ "Content-Type": "image/png" });
+    expect(init?.signal).toBe(signal);
+  });
+
+  it("normalizes raw upload HTTP and network failures", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("failed", { status: 503 }))
+      .mockRejectedValueOnce(new Error("offline"));
+
+    await expect(
+      uploadToExternalUrl("https://files.slack.com/upload/v1/one", new Blob(["one"]), "image/png")
+    ).resolves.toEqual({ ok: false, error: "http_503" });
+    await expect(
+      uploadToExternalUrl("https://files.slack.com/upload/v1/two", new Blob(["two"]), "image/png")
+    ).resolves.toEqual({ ok: false, error: "network_error" });
+  });
+
+  it("completes and shares uploads in the parent thread", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({ ok: true, files: [{ id: "F123", title: "Revenue chart" }] })
+      );
+
+    const signal = AbortSignal.timeout(1_000);
+    const result = await completeExternalUpload("xoxb-token", {
+      files: [
+        { id: "F123", title: "Revenue chart" },
+        { id: "F456", title: "Forecast video" },
+      ],
+      channelId: "C123",
+      threadTs: "111.222",
+      signal,
+    });
+
+    expect(result.ok).toBe(true);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/files.completeUploadExternal");
+    expect(init?.signal).toBe(signal);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      files: [
+        { id: "F123", title: "Revenue chart" },
+        { id: "F456", title: "Forecast video" },
+      ],
+      channel_id: "C123",
+      thread_ts: "111.222",
+    });
+  });
+
+  it("normalizes finalization network failures instead of rejecting", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("offline"));
+
+    await expect(
+      completeExternalUpload("xoxb-token", {
+        files: [{ id: "F123", title: "Revenue chart" }],
+        channelId: "C123",
+        threadTs: "111.222",
+      })
+    ).resolves.toEqual({ ok: false, error: "network_error" });
+  });
+});
 
 describe("postMessage", () => {
   afterEach(() => {

@@ -1,7 +1,9 @@
 export {
   addReaction,
   authTest,
+  completeExternalUpload,
   getChannelInfo,
+  getExternalUploadUrl,
   getPermalink,
   getThreadMessages,
   getUserInfo,
@@ -12,6 +14,7 @@ export {
   publishView,
   removeReaction,
   updateMessage,
+  uploadToExternalUrl,
   verifySlackSignature,
 } from "./client";
 export type {
@@ -19,6 +22,8 @@ export type {
   SlackChannelInfo,
   SlackChannelListing,
   SlackEnvelope,
+  CompleteExternalUploadOptions,
+  ExternalUploadUrlOptions,
   SlackThreadMessage,
   SlackUser,
 } from "./client";

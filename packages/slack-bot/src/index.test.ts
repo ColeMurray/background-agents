@@ -59,6 +59,9 @@ function createMockKV() {
 function makeEnv(): Env {
   return {
     SLACK_KV: createMockKV() as unknown as KVNamespace,
+    SLACK_COMPLETION_QUEUE: {
+      send: vi.fn(),
+    } as unknown as Queue,
     CONTROL_PLANE: {
       fetch: vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
