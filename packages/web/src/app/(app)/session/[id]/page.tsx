@@ -155,7 +155,7 @@ function SessionPageContent() {
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
       <SessionHeader
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}
@@ -181,8 +181,8 @@ function SessionPageContent() {
       )}
 
       {/* Main content */}
-      <main className="flex-1 flex overflow-hidden">
-        <div className="flex-1 flex flex-col overflow-hidden">
+      <main className="min-w-0 flex-1 flex overflow-hidden">
+        <div className="min-w-0 flex-1 flex flex-col overflow-hidden">
           <PanelGroup orientation="vertical" id="session-terminal">
             {/* Chat / Event Timeline */}
             <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">

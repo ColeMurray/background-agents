@@ -433,6 +433,11 @@ function HomeContent({
                   />
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                    {isCreatingSession && (
+                      <span className="whitespace-nowrap text-xs text-accent">
+                        Warming sandbox...
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
@@ -443,9 +448,6 @@ function HomeContent({
                     >
                       <PaperclipIcon className="w-5 h-5" />
                     </button>
-                    {isCreatingSession && (
-                      <span className="text-xs text-accent">Warming sandbox...</span>
-                    )}
                     <button
                       type="submit"
                       disabled={

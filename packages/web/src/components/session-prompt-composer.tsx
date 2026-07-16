@@ -69,8 +69,8 @@ export function SessionPromptComposer({
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
 
   return (
-    <footer className="border-t border-border-muted flex-shrink-0">
-      <form onSubmit={prompt.onSubmit} className="max-w-4xl mx-auto p-4 pb-6">
+    <footer className="min-w-0 border-t border-border-muted flex-shrink-0">
+      <form onSubmit={prompt.onSubmit} className="w-full min-w-0 max-w-4xl mx-auto p-4 pb-6">
         {/* Action bar above input */}
         <div className="mb-3">
           <ActionBar
@@ -116,10 +116,10 @@ export function SessionPromptComposer({
             {/* Floating action buttons */}
             <div className="absolute bottom-3 right-3 flex items-center gap-2">
               {attachments.isUploading && (
-                <span className="text-xs text-muted-foreground">Uploading…</span>
+                <span className="whitespace-nowrap text-xs text-muted-foreground">Uploading…</span>
               )}
               {prompt.isProcessing && prompt.value.trim() && (
-                <span className="text-xs text-warning">Waiting...</span>
+                <span className="whitespace-nowrap text-xs text-warning">Waiting...</span>
               )}
               <input
                 ref={fileInputRef}

@@ -137,6 +137,33 @@ function sessionCreateBody(): Record<string, unknown> {
 }
 
 describe("Home", () => {
+  it("keeps the attachment control anchored while the sandbox warms", async () => {
+    let resolveCreate: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation(
+      (input) =>
+        new Promise<Response>((resolve) => {
+          if (String(input) === "/api/sessions") {
+            resolveCreate = resolve;
+          } else {
+            resolve(Response.json({ error: "unexpected request" }, { status: 500 }));
+          }
+        })
+    );
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "I");
+
+    const warmingStatus = await screen.findByText("Warming sandbox...");
+    const attachmentButton = screen.getByRole("button", { name: "Attach images" });
+    expect(
+      warmingStatus.compareDocumentPosition(attachmentButton) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
+    resolveCreate?.(Response.json({ sessionId: "session-1" }));
+    await waitFor(() => expect(screen.queryByText("Warming sandbox...")).not.toBeInTheDocument());
+  });
+
   it("can start a new session without a repository from the primary selector", async () => {
     const user = userEvent.setup();
     render(<Home />);
