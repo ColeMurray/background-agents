@@ -12,6 +12,7 @@ const VALID_EVENT_TYPES = [
   "tool_result",
   "token",
   "error",
+  "warning",
   "git_sync",
   "step_start",
   "step_finish",
