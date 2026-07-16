@@ -75,7 +75,7 @@ def parse_prompt_image_attachments(
             {
                 "uploadId": upload_id,
                 "name": name,
-                "mimeType": cast(PromptImageMimeType, mime_type),
+                "mimeType": cast("PromptImageMimeType", mime_type),
             }
         )
     return parsed, rejected
