@@ -32,7 +32,7 @@ import type { Env } from "../types";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 import { streamStoredMedia } from "./stream-stored-media";
-import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage.service";
+import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage";
 
 const logger = createLogger("router:session-attachments");
 

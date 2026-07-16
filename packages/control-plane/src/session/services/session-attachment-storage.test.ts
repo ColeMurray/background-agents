@@ -5,7 +5,7 @@ import type { SessionRuntimeClient } from "../runtime-client";
 import {
   SessionAttachmentStorageService,
   type SessionAttachmentRecord,
-} from "./session-attachment-storage.service";
+} from "./session-attachment-storage";
 
 const RECORD: SessionAttachmentRecord = {
   attachmentId: "up-1",
