@@ -7,7 +7,7 @@
     "bootstrap": "node src/bootstrap.js"
   },
   "dependencies": {
-    "@islo-labs/sdk": "^0.0.20"
+    "@islo-labs/sdk": "^0.0.30"
   },
   "engines": {
     "node": ">=20.0.0"

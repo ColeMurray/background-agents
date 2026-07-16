@@ -18,9 +18,9 @@ import {
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,
- * OpenComputer checkpoints. Daytona has no image support.
+ * OpenComputer checkpoints, and Islo snapshots. Daytona has no image support.
  */
-export type ImageBuildProvider = "modal" | "vercel" | "opencomputer";
+export type ImageBuildProvider = "modal" | "vercel" | "opencomputer" | "islo";
 
 /**
  * What an image bakes. `id` is a lowercase `owner/name` pair for repo scopes

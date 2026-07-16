@@ -329,6 +329,16 @@ export class ImageBuildWorkflow {
         );
         return { adapter, start: (callbacks) => adapter.startBuild(plan, callbacks) };
       }
+      case "islo": {
+        const adapter = this.createAdapterGuarded(
+          plan.provider,
+          "trigger_build",
+          ctx,
+          () => this.adapterFactory.create("islo"),
+          plan.buildId
+        );
+        return { adapter, start: (callbacks) => adapter.startBuild(plan, callbacks) };
+      }
       default: {
         const exhaustive: never = plan;
         throw new ImageBuildProviderUnconfiguredError(

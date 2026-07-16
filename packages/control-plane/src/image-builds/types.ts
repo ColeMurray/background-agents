@@ -77,10 +77,19 @@ export interface OpenComputerImageBuildPlan extends BaseImageBuildPlan {
   cloneAuth: ImageBuildCloneAuth;
 }
 
+/** Islo builds inside a sandbox; the control plane snapshots it after callback success. */
+export interface IsloImageBuildPlan extends BaseImageBuildPlan {
+  provider: "islo";
+  callbackMode: "provider_session";
+  callbackToken: string;
+  cloneAuth: ImageBuildCloneAuth;
+}
+
 export type ImageBuildPlan =
   | ModalImageBuildPlan
   | VercelImageBuildPlan
-  | OpenComputerImageBuildPlan;
+  | OpenComputerImageBuildPlan
+  | IsloImageBuildPlan;
 
 export type PlannedImageBuild =
   | { plan: ModalImageBuildPlan; callbackAuth: { type: "none" } }
@@ -90,6 +99,10 @@ export type PlannedImageBuild =
     }
   | {
       plan: OpenComputerImageBuildPlan;
+      callbackAuth: { type: "bearer_token"; tokenHash: string; expiresAt: number };
+    }
+  | {
+      plan: IsloImageBuildPlan;
       callbackAuth: { type: "bearer_token"; tokenHash: string; expiresAt: number };
     };
 
@@ -156,4 +169,5 @@ export type ImageBuildAdapter<Plan extends ImageBuildPlan> = {
 export type AnyImageBuildAdapter =
   | ImageBuildAdapter<ModalImageBuildPlan>
   | ImageBuildAdapter<VercelImageBuildPlan>
-  | ImageBuildAdapter<OpenComputerImageBuildPlan>;
+  | ImageBuildAdapter<OpenComputerImageBuildPlan>
+  | ImageBuildAdapter<IsloImageBuildPlan>;

@@ -235,12 +235,35 @@ For the full template build and runtime details, see
 2. Create an API key for non-interactive use. The Islo docs describe API key auth via
    `ISLO_API_KEY`.
 3. Set `sandbox_provider = "islo"` in `terraform.tfvars`.
-4. Set `islo_api_key` and `islo_base_snapshot` in `terraform.tfvars`. Terraform builds this named
-   snapshot from `packages/islo-infra`, starting from the public Islo runner image and baking in
-   `packages/sandbox-runtime`.
+4. Set `islo_api_key` in `terraform.tfvars`.
+5. Leave `islo_base_snapshot` empty to create sandboxes directly from `islo_base_image`, which
+   defaults to `ghcr.io/islo-labs/background-agents-runtime:stable`. This maintained Islo image
+   includes the Background Agents sandbox runtime, OpenCode, code-server, ttyd, browser tooling, and
+   credential helper expected by the control plane.
+6. Optionally set `islo_base_snapshot` to a named snapshot if you want Terraform to build an
+   optimized base snapshot from `packages/islo-infra`, starting from the generic public Islo runner
+   image and baking in the repo-local `packages/sandbox-runtime`.
 
 The control plane calls Islo directly from Cloudflare Workers. Islo provides the sandbox compute; no
-Modal deployment is required when `sandbox_provider = "islo"`.
+Modal deployment is required when `sandbox_provider = "islo"`. Islo sandboxes default to an Islo
+provider-native lifecycle policy of `pause_after_idle = 3600` seconds. Set
+`islo_lifecycle_enabled = false` to omit the lifecycle policy, or tune the `islo_lifecycle_*`
+variables in Terraform.
+
+After deployment, run the manual live smoke from the control-plane package:
+
+```bash
+ISLO_SMOKE_CONTROL_PLANE_URL=https://<control-plane-worker> \
+ISLO_SMOKE_SEED_GLOBAL_SECRET=true \
+ANTHROPIC_API_KEY=sk-ant-... \
+npm run smoke:islo -w @open-inspect/control-plane
+```
+
+The smoke creates a no-repository session, subscribes over WebSocket, sends a prompt, and waits for
+the sandbox bridge to emit output and `execution_complete.success = true`. To avoid writing a global
+secret, omit `ISLO_SMOKE_SEED_GLOBAL_SECRET=true` and preconfigure `ANTHROPIC_API_KEY` in Settings >
+Secrets. Run it once with `islo_base_snapshot = ""` to verify image-only creation, and again with a
+snapshot or ready repo image configured to verify the snapshot path.
 
 ### Anthropic
 

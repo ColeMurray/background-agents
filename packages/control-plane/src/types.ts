@@ -106,7 +106,8 @@ export interface Env {
   VERCEL_SANDBOX_API_BASE_URL?: string; // Override for tests or non-default Vercel API base URL
   VERCEL_SNAPSHOT_EXPIRATION_MS?: string; // Snapshot expiration in ms; 0 means no expiration
   ISLO_BASE_URL?: string; // Optional Islo API base URL
-  ISLO_BASE_SNAPSHOT?: string; // Named Islo snapshot used for fresh sandbox creation
+  ISLO_BASE_SNAPSHOT?: string; // Optional named Islo snapshot used for optimized sandbox creation
+  ISLO_BASE_IMAGE?: string; // Islo Background Agents runtime image used when ISLO_BASE_SNAPSHOT is unset
   ISLO_VCPUS?: string; // Islo sandbox vCPU count
   ISLO_MEMORY_MB?: string; // Islo sandbox memory in MB
   ISLO_DISK_GB?: string; // Islo sandbox disk size in GB
@@ -115,6 +116,11 @@ export interface Env {
   ISLO_START_USER?: string; // Optional user for the runtime start exec
   ISLO_GATEWAY_PROFILE?: string; // Optional Islo gateway profile name/ID
   ISLO_SHARE_TTL_SECONDS?: string; // Optional Islo share TTL in seconds
+  ISLO_LIFECYCLE_ENABLED?: string; // Set false/0/no to omit Islo lifecycle policy
+  ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS?: string; // Default 3600 when lifecycle is enabled
+  ISLO_LIFECYCLE_PAUSE_AFTER_SECONDS?: string; // Optional absolute pause policy in seconds
+  ISLO_LIFECYCLE_DELETE_AFTER_SECONDS?: string; // Optional absolute delete policy in seconds
+  ISLO_LIFECYCLE_AUTO_RESUME?: string; // Islo auto_resume policy: never or on_activity
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

@@ -63,6 +63,16 @@ describe("sandbox-provider", () => {
     expect(supportsRepoImages()).toBe(true);
   });
 
+  it("supports islo with repo images", async () => {
+    delete process.env.NEXT_PUBLIC_SANDBOX_PROVIDER;
+    process.env.SANDBOX_PROVIDER = "islo";
+
+    const { getPublicSandboxProvider, supportsRepoImages } = await loadProvider();
+
+    expect(getPublicSandboxProvider()).toBe("islo");
+    expect(supportsRepoImages()).toBe(true);
+  });
+
   it("throws for unsupported providers", async () => {
     process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "fly";
 

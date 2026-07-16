@@ -9,7 +9,11 @@ import {
   createOpenComputerProvider,
   type OpenComputerSandboxProvider,
 } from "./providers/opencomputer-provider";
-import { createIsloProvider, type IsloSandboxProvider } from "./providers/islo-provider";
+import {
+  createDefaultIsloSource,
+  createIsloProvider,
+  type IsloSandboxProvider,
+} from "./providers/islo-provider";
 import { createVercelSandboxClient } from "./providers/vercel/client";
 import { createVercelProvider, type VercelSandboxProvider } from "./providers/vercel/provider";
 import { resolveScmProviderFromEnv } from "../source-control";
@@ -114,14 +118,15 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
 }
 
 function createIsloProviderFromEnv(env: Env): IsloSandboxProvider {
-  if (!env.ISLO_API_KEY || !env.ISLO_BASE_SNAPSHOT) {
-    throw new Error("ISLO_API_KEY and ISLO_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=islo");
+  if (!env.ISLO_API_KEY) {
+    throw new Error("ISLO_API_KEY is required when SANDBOX_PROVIDER=islo");
   }
 
   return createIsloProvider({
     apiKey: env.ISLO_API_KEY,
     baseUrl: env.ISLO_BASE_URL,
-    baseSnapshot: env.ISLO_BASE_SNAPSHOT,
+    baseSource: createDefaultIsloSource(env.ISLO_BASE_SNAPSHOT, env.ISLO_BASE_IMAGE),
+    lifecycle: parseIsloLifecyclePolicy(env),
     vcpus: parsePositiveIntegerEnv("ISLO_VCPUS", env.ISLO_VCPUS),
     memoryMb: parsePositiveIntegerEnv("ISLO_MEMORY_MB", env.ISLO_MEMORY_MB),
     diskGb: parsePositiveIntegerEnv("ISLO_DISK_GB", env.ISLO_DISK_GB),
@@ -185,6 +190,36 @@ function parsePositiveIntegerEnv(name: string, value: string | undefined): numbe
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function parseIsloLifecyclePolicy(env: Env) {
+  const enabledRaw = env.ISLO_LIFECYCLE_ENABLED?.trim().toLowerCase();
+  if (enabledRaw === "false" || enabledRaw === "0" || enabledRaw === "no") return undefined;
+
+  return {
+    pause_after_idle:
+      parsePositiveIntegerEnv(
+        "ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS",
+        env.ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS
+      ) ?? 3600,
+    pause_after: parsePositiveIntegerEnv(
+      "ISLO_LIFECYCLE_PAUSE_AFTER_SECONDS",
+      env.ISLO_LIFECYCLE_PAUSE_AFTER_SECONDS
+    ),
+    delete_after: parsePositiveIntegerEnv(
+      "ISLO_LIFECYCLE_DELETE_AFTER_SECONDS",
+      env.ISLO_LIFECYCLE_DELETE_AFTER_SECONDS
+    ),
+    ...(env.ISLO_LIFECYCLE_AUTO_RESUME
+      ? { auto_resume: parseIsloAutoResumePolicy(env.ISLO_LIFECYCLE_AUTO_RESUME) }
+      : {}),
+  };
+}
+
+function parseIsloAutoResumePolicy(value: string): "never" | "on_activity" {
+  const raw = value.trim();
+  if (raw === "never" || raw === "on_activity") return raw;
+  throw new Error("ISLO_LIFECYCLE_AUTO_RESUME must be either never or on_activity");
 }
 
 function parseCommandEnv(value: string | undefined): string[] | undefined {

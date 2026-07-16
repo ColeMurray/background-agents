@@ -50,6 +50,8 @@ describe("validateKey", () => {
   it("rejects reserved keys", () => {
     expect(() => validateKey("PATH")).toThrow(SecretsValidationError);
     expect(() => validateKey("SANDBOX_ID")).toThrow(SecretsValidationError);
+    expect(() => validateKey("IMAGE_BUILD_MODE")).toThrow(SecretsValidationError);
+    expect(() => validateKey("OI_REPO_IMAGE_CALLBACK_TOKEN")).toThrow(SecretsValidationError);
   });
 
   it("rejects reserved keys case-insensitively", () => {

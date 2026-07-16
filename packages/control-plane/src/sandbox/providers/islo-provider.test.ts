@@ -6,6 +6,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { IsloApiError, type IsloApi } from "@islo-labs/sdk";
 import { computeHmacHex } from "@open-inspect/shared";
 import {
+  createDefaultIsloSource,
   createIsloProvider,
   IsloSandboxProvider,
   type IsloClientLike,
@@ -17,7 +18,7 @@ const SHARE_DELAY_TIMEOUT_MS = 50;
 
 const defaultProviderConfig: IsloProviderConfig = {
   apiKey: "islo-api-key",
-  baseSnapshot: "open-inspect-runtime",
+  baseSource: { type: "snapshot", snapshotName: "open-inspect-runtime" },
   vcpus: 4,
   memoryMb: 8192,
   diskGb: 20,
@@ -62,8 +63,12 @@ function createMockClient(
     getSandbox: IsloClientLike["sandboxes"]["getSandbox"];
     resumeSandbox: IsloClientLike["sandboxes"]["resumeSandbox"];
     pauseSandbox: IsloClientLike["sandboxes"]["pauseSandbox"];
+    deleteSandbox: IsloClientLike["sandboxes"]["deleteSandbox"];
     execInSandbox: IsloClientLike["sandboxes"]["execInSandbox"];
     getExecResult: IsloClientLike["sandboxes"]["getExecResult"];
+    createSnapshot: IsloClientLike["snapshots"]["createSnapshot"];
+    getSnapshot: IsloClientLike["snapshots"]["getSnapshot"];
+    deleteSnapshot: IsloClientLike["snapshots"]["deleteSnapshot"];
     listShares: IsloClientLike["shares"]["listShares"];
     createShare: IsloClientLike["shares"]["createShare"];
   }> = {}
@@ -88,11 +93,15 @@ function createMockClient(
       getSandbox: vi.fn(async () => sandboxResponse()),
       resumeSandbox: vi.fn(async () => sandboxResponse()),
       pauseSandbox: vi.fn(async () => sandboxResponse({ status: "paused" })),
+      deleteSandbox: vi.fn(async () => undefined),
       execInSandbox,
       getExecResult: vi.fn(async () => ({
         exec_id: "write-tunnels",
         status: "completed",
         exit_code: 0,
+        stdout: "",
+        stderr: "",
+        truncated: false,
       })),
       ...pickSandboxOverrides(overrides),
     },
@@ -108,7 +117,29 @@ function createMockClient(
       ...(overrides.listShares ? { listShares: overrides.listShares } : {}),
       ...(overrides.createShare ? { createShare: overrides.createShare } : {}),
     },
+    snapshots: {
+      createSnapshot: vi.fn(async () => ({
+        id: "snapshot-id",
+        name: "snapshot-name",
+        status: "ready",
+      })),
+      getSnapshot: vi.fn(async () => ({
+        id: "snapshot-id",
+        name: "snapshot-name",
+        status: "ready",
+      })),
+      deleteSnapshot: vi.fn(async () => undefined),
+      ...(overrides.createSnapshot ? { createSnapshot: overrides.createSnapshot } : {}),
+      ...(overrides.getSnapshot ? { getSnapshot: overrides.getSnapshot } : {}),
+      ...(overrides.deleteSnapshot ? { deleteSnapshot: overrides.deleteSnapshot } : {}),
+    },
   };
+}
+
+function requireCreateEnv(client: IsloClientLike): Record<string, string> {
+  const env = vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0].env;
+  if (!env) throw new Error("Expected createSandbox env");
+  return env as Record<string, string>;
 }
 
 function pickSandboxOverrides(
@@ -119,6 +150,7 @@ function pickSandboxOverrides(
     ...(overrides.getSandbox ? { getSandbox: overrides.getSandbox } : {}),
     ...(overrides.resumeSandbox ? { resumeSandbox: overrides.resumeSandbox } : {}),
     ...(overrides.pauseSandbox ? { pauseSandbox: overrides.pauseSandbox } : {}),
+    ...(overrides.deleteSandbox ? { deleteSandbox: overrides.deleteSandbox } : {}),
     ...(overrides.execInSandbox ? { execInSandbox: overrides.execInSandbox } : {}),
     ...(overrides.getExecResult ? { getExecResult: overrides.getExecResult } : {}),
   };
@@ -134,11 +166,18 @@ describe("IsloSandboxProvider", () => {
 
     expect(provider.name).toBe("islo");
     expect(provider.capabilities).toEqual({
-      supportsSnapshots: false,
-      supportsRestore: false,
+      supportsSnapshots: true,
+      supportsRestore: true,
       supportsWarm: false,
       supportsPersistentResume: true,
       supportsExplicitStop: true,
+    });
+  });
+
+  it("defaults fresh Islo sandboxes to the maintained Background Agents runtime image", () => {
+    expect(createDefaultIsloSource()).toEqual({
+      type: "image",
+      image: "ghcr.io/islo-labs/background-agents-runtime:stable",
     });
   });
 
@@ -191,12 +230,14 @@ describe("IsloSandboxProvider", () => {
     );
 
     const createRequest = vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0];
+    const env = requireCreateEnv(client);
     expect(createRequest).not.toHaveProperty("setup_scripts");
-    expect(createRequest.env).toMatchObject({
+    expect(env).toMatchObject({
       HOME: "/workspace",
       PYTHONPATH: "/app",
       PYTHONUNBUFFERED: "1",
       NODE_PATH: "/usr/lib/node_modules",
+      AGENT_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium",
       SANDBOX_ID: "sandbox-owner-repo-123",
       CONTROL_PLANE_URL: "https://control-plane.test",
       SANDBOX_AUTH_TOKEN: "sandbox-token",
@@ -207,12 +248,16 @@ describe("IsloSandboxProvider", () => {
       EXPECTED_TUNNEL_PORTS: "3000,5173",
       VCS_HOST: "github.com",
       VCS_CLONE_USERNAME: "x-access-token",
+      IMAGE_BUILD_MODE: "false",
+      OI_REPO_IMAGE_BUILD_ID: "",
+      OI_REPO_IMAGE_CALLBACK_URL: "",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "",
+      OI_REPO_IMAGE_PROVIDER_SESSION_ID: "",
     });
-    expect(createRequest.env.PATH).toContain("/usr/local/bin");
-    expect(createRequest.env.GITHUB_TOKEN).toBeUndefined();
-    expect(JSON.parse(createRequest.env.SESSION_CONFIG)).toMatchObject({
+    expect(env.PATH).toContain("/usr/local/bin");
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(JSON.parse(env.SESSION_CONFIG)).toMatchObject({
       session_id: "session-123",
-      sessionId: "session-123",
       repo_owner: "owner",
       repo_name: "repo",
       mcp_servers: [
@@ -229,7 +274,7 @@ describe("IsloSandboxProvider", () => {
     const expectedPassword = (
       await computeHmacHex("code-server:sandbox-owner-repo-123", "password-secret")
     ).slice(0, 32);
-    expect(createRequest.env.CODE_SERVER_PASSWORD).toBe(expectedPassword);
+    expect(env.CODE_SERVER_PASSWORD).toBe(expectedPassword);
 
     expect(client.shares.createShare).toHaveBeenCalledTimes(4);
     expect(client.shares.createShare).toHaveBeenCalledWith(
@@ -244,21 +289,261 @@ describe("IsloSandboxProvider", () => {
     expect(client.shares.listShares).not.toHaveBeenCalled();
 
     const execCalls = vi.mocked(client.sandboxes.execInSandbox).mock.calls;
-    expect(execCalls).toHaveLength(2);
-    expect(execCalls[0][0].body.command.join(" ")).toContain("TUNNEL_3000");
-    expect(execCalls[0][0].body.command.join(" ")).toContain("TUNNEL_5173");
-    expect(execCalls[1][0]).toMatchObject({
-      sandbox_name: "sandbox-owner-repo-123",
-      body: {
-        command: expect.arrayContaining(["sh", "-lc"]),
-        workdir: "/workspace",
-      },
+    expect(execCalls).toHaveLength(3);
+    const preflightCommand = execCalls[0][0].command.join(" ");
+    expect(preflightCommand).toContain("import sandbox_runtime.entrypoint");
+    expect(preflightCommand).toContain("opencode --version");
+    expect(preflightCommand).toContain("agent-browser --version");
+    expect(preflightCommand).toContain("AGENT_BROWSER_EXECUTABLE_PATH");
+    expect(preflightCommand).toContain("--headless");
+    expect(preflightCommand).toContain("code-server --version");
+    expect(preflightCommand).toContain("ttyd --version");
+    expect(execCalls[0][0].env).toMatchObject({
+      HOME: "/workspace",
+      PYTHONPATH: "/app",
+      AGENT_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium",
     });
-    const startRuntimeCommand = execCalls[1][0].body.command.join(" ");
+    expect(execCalls[1][0].command.join(" ")).toContain("TUNNEL_3000");
+    expect(execCalls[1][0].command.join(" ")).toContain("TUNNEL_5173");
+    expect(execCalls[2][0]).toMatchObject({
+      sandbox_name: "sandbox-owner-repo-123",
+      command: expect.arrayContaining(["sh", "-lc"]),
+      workdir: "/workspace",
+    });
+    const startRuntimeCommand = execCalls[2][0].command.join(" ");
     expect(startRuntimeCommand).toContain("nohup");
     expect(startRuntimeCommand).toContain("sandbox_runtime.entrypoint");
     expect(startRuntimeCommand).toContain("kill -0");
     expect(startRuntimeCommand).not.toContain("sleep 2");
+  });
+
+  it("creates from an image source when no base snapshot is configured", async () => {
+    const client = createMockClient();
+    const provider = new IsloSandboxProvider(client, {
+      ...defaultProviderConfig,
+      baseSource: { type: "image", image: "ghcr.io/islo-labs/background-agents-runtime:stable" },
+    });
+
+    await provider.createSandbox(baseCreateConfig);
+
+    const createRequest = vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0];
+    expect(createRequest).toMatchObject({
+      image: "ghcr.io/islo-labs/background-agents-runtime:stable",
+    });
+    expect(createRequest).not.toHaveProperty("snapshot_name");
+  });
+
+  it("fails early when the Islo image is missing the Background Agents runtime", async () => {
+    const client = createMockClient({
+      getExecResult: vi.fn(async () => ({
+        exec_id: "runtime-preflight",
+        status: "failed",
+        exit_code: 127,
+        stdout: "",
+        stderr: "python3: No module named sandbox_runtime",
+        truncated: false,
+      })),
+    });
+    const provider = new IsloSandboxProvider(client, {
+      ...defaultProviderConfig,
+      baseSource: { type: "image", image: "ghcr.io/islo-labs/islo-runner:latest" },
+    });
+
+    await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
+      message: expect.stringContaining('Failed Islo step "runtime_preflight"'),
+    });
+    expect(client.shares.createShare).not.toHaveBeenCalled();
+    expect(client.sandboxes.pauseSandbox).toHaveBeenCalledWith({
+      sandbox_name: "sandbox-owner-repo-123",
+    });
+  });
+
+  it("prefers repo image snapshots over the base source", async () => {
+    const client = createMockClient();
+    const provider = new IsloSandboxProvider(client, {
+      ...defaultProviderConfig,
+      baseSource: { type: "image", image: "ghcr.io/islo-labs/background-agents-runtime:stable" },
+    });
+
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      repoImageId: "repo-image-snapshot",
+      repoImageSha: "abc123",
+    });
+
+    const createRequest = vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0];
+    expect(createRequest).toMatchObject({
+      snapshot_name: "repo-image-snapshot",
+    });
+    expect(createRequest).not.toHaveProperty("image");
+    expect(requireCreateEnv(client)).toMatchObject({
+      FROM_REPO_IMAGE: "true",
+      REPO_IMAGE_SHA: "abc123",
+      IMAGE_BUILD_MODE: "false",
+    });
+  });
+
+  it("passes configured Islo lifecycle policy at create time", async () => {
+    const client = createMockClient();
+    const provider = new IsloSandboxProvider(client, {
+      ...defaultProviderConfig,
+      lifecycle: {
+        pause_after_idle: 3600,
+        pause_after: 7200,
+        delete_after: 86400,
+        auto_resume: "on_activity",
+      },
+    });
+
+    await provider.createSandbox(baseCreateConfig);
+
+    expect(vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0]).toMatchObject({
+      lifecycle: {
+        pause_after_idle: 3600,
+        pause_after: 7200,
+        delete_after: 86400,
+        auto_resume: "on_activity",
+      },
+    });
+  });
+
+  it("restores from an Islo snapshot and restarts runtime", async () => {
+    const client = createMockClient();
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+
+    const result = await provider.restoreFromSnapshot({
+      snapshotImageId: "saved-snapshot",
+      ...baseCreateConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(client.sandboxes.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "sandbox-owner-repo-123",
+        snapshot_name: "saved-snapshot",
+        env: expect.objectContaining({
+          RESTORED_FROM_SNAPSHOT: "true",
+          IMAGE_BUILD_MODE: "false",
+        }),
+      }),
+      { timeoutInSeconds: undefined }
+    );
+    expect(client.sandboxes.execInSandbox).toHaveBeenCalled();
+  });
+
+  it("takes Islo snapshots and returns the snapshot name", async () => {
+    const client = createMockClient({
+      createSnapshot: vi.fn(async () => ({
+        id: "snapshot-id",
+        name: "snapshot-session",
+        status: "ready",
+      })),
+    });
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+
+    const result = await provider.takeSnapshot({
+      providerObjectId: "sandbox-owner-repo-123",
+      sessionId: "session-123",
+      reason: "execution_complete",
+    });
+
+    expect(result).toEqual({ success: true, imageId: "snapshot-session" });
+    expect(client.snapshots.createSnapshot).toHaveBeenCalledWith({
+      sandbox_name: "sandbox-owner-repo-123",
+      name: expect.stringMatching(/^oi-session-123-execution-complete-/),
+    });
+  });
+
+  it("waits for Islo snapshots that are still processing", async () => {
+    const client = createMockClient({
+      createSnapshot: vi.fn(async () => ({
+        id: "snapshot-id",
+        name: "snapshot-session",
+        status: "processing",
+      })),
+      getSnapshot: vi.fn(async () => ({
+        id: "snapshot-id",
+        name: "snapshot-session",
+        status: "ready",
+      })),
+    });
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+
+    const result = await provider.takeSnapshot({
+      providerObjectId: "sandbox-owner-repo-123",
+      sessionId: "session-123",
+      reason: "repo_image",
+    });
+
+    expect(result).toEqual({ success: true, imageId: "snapshot-session" });
+    expect(client.snapshots.getSnapshot).toHaveBeenCalledWith(
+      { name: "snapshot-session" },
+      expect.objectContaining({ timeoutInSeconds: expect.any(Number) })
+    );
+  });
+
+  it("triggers repo image builds in an Islo sandbox", async () => {
+    const client = createMockClient();
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+    const onProviderSessionCreated = vi.fn();
+
+    const result = await provider.triggerRepoImageBuild({
+      buildId: "build-123",
+      repoOwner: "owner",
+      repoName: "repo",
+      defaultBranch: "main",
+      callbackUrl: "https://control-plane.test/repo-images/build-complete",
+      callbackToken: "callback-token",
+      userEnvVars: {
+        USER_SECRET: "value",
+        OI_REPO_IMAGE_CALLBACK_TOKEN: "user-controlled",
+        OI_REPO_IMAGE_CALLBACK_SECRET: "legacy-user-controlled",
+      },
+      cloneToken: "clone-token",
+      onProviderSessionCreated,
+    });
+
+    expect(result).toEqual({ buildId: "build-123", status: "building" });
+    expect(onProviderSessionCreated).toHaveBeenCalledWith("sandbox-owner-repo-123");
+    expect(requireCreateEnv(client)).toMatchObject({
+      USER_SECRET: "value",
+      IMAGE_BUILD_MODE: "true",
+      AGENT_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium",
+      SESSION_CONFIG: JSON.stringify({ branch: "main" }),
+      OI_REPO_IMAGE_BUILD_ID: "build-123",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://control-plane.test/repo-images/build-complete",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+      VCS_CLONE_TOKEN: "clone-token",
+    });
+    expect(requireCreateEnv(client)).not.toHaveProperty("OI_REPO_IMAGE_CALLBACK_SECRET");
+    const startEnv = vi
+      .mocked(client.sandboxes.execInSandbox)
+      .mock.calls.map(([request]) => request.env as Record<string, string> | undefined)
+      .find((env) => env?.OI_REPO_IMAGE_PROVIDER_SESSION_ID);
+    if (!startEnv) throw new Error("Expected repo image runtime start env");
+    expect(startEnv).toMatchObject({
+      OI_REPO_IMAGE_PROVIDER_SESSION_ID: "sandbox-owner-repo-123",
+    });
+  });
+
+  it("creates a sandbox for repository-less sessions without null env values", async () => {
+    const client = createMockClient();
+    const provider = new IsloSandboxProvider(client, defaultProviderConfig);
+
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      repoOwner: null,
+      repoName: null,
+    });
+
+    const env = requireCreateEnv(client);
+    expect(env.REPO_OWNER).toBe("");
+    expect(env.REPO_NAME).toBe("");
+    expect(Object.values(env).every((value) => typeof value === "string")).toBe(true);
+    expect(JSON.parse(env.SESSION_CONFIG)).toMatchObject({
+      repo_owner: null,
+      repo_name: null,
+    });
   });
 
   it("does not ask runtime to wait for code-server and ttyd share ports", async () => {
@@ -274,8 +559,7 @@ describe("IsloSandboxProvider", () => {
       },
     });
 
-    const createRequest = vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0];
-    expect(createRequest.env.EXPECTED_TUNNEL_PORTS).toBe("3000");
+    expect(requireCreateEnv(client).EXPECTED_TUNNEL_PORTS).toBe("3000");
 
     const sharePorts = vi
       .mocked(client.shares.createShare)
@@ -284,7 +568,9 @@ describe("IsloSandboxProvider", () => {
 
     const tunnelWriteCommand = vi
       .mocked(client.sandboxes.execInSandbox)
-      .mock.calls[0][0].body.command.join(" ");
+      .mock.calls.map(([request]) => request.command.join(" "))
+      .find((command) => command.includes("TUNNEL_3000"));
+    if (!tunnelWriteCommand) throw new Error("Expected tunnel write command");
     expect(tunnelWriteCommand).toContain("TUNNEL_3000");
     expect(tunnelWriteCommand).not.toContain("TUNNEL_8080");
     expect(tunnelWriteCommand).not.toContain("TUNNEL_7680");
@@ -305,8 +591,8 @@ describe("IsloSandboxProvider", () => {
           expires_at: "2026-06-04T08:00:00.000Z",
         };
       }),
-      execInSandbox: vi.fn(async () => {
-        order.push("runtime-start");
+      execInSandbox: vi.fn(async (request: IsloApi.ExecRequest) => {
+        order.push(request.command.join(" ").includes("nohup") ? "runtime-start" : "preflight");
         return {
           exec_id: "start-runtime",
           status: "running",
@@ -323,7 +609,7 @@ describe("IsloSandboxProvider", () => {
 
     expect(order).toContain("runtime-start");
     expect(order.indexOf("runtime-start")).toBeLessThan(order.indexOf("share-end"));
-    expect(vi.mocked(client.sandboxes.execInSandbox)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(client.sandboxes.execInSandbox)).toHaveBeenCalledTimes(2);
   });
 
   it("waits through Islo share creation not-running readiness errors", async () => {
@@ -392,7 +678,7 @@ describe("IsloSandboxProvider", () => {
 
     await provider.createSandbox(baseCreateConfig);
 
-    const env = vi.mocked(client.sandboxes.createSandbox).mock.calls[0][0].env;
+    const env = requireCreateEnv(client);
     expect(env.VCS_HOST).toBe("gitlab.com");
     expect(env.VCS_CLONE_USERNAME).toBe("oauth2");
   });

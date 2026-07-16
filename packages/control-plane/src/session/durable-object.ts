@@ -115,6 +115,7 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
+import { getSandboxWebSocketId } from "./sandbox-websocket";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -900,7 +901,7 @@ export class SessionDO extends DurableObject<Env> {
     if (isSandbox) {
       const wsStartTime = Date.now();
       const authHeader = request.headers.get("Authorization");
-      const sandboxId = request.headers.get("X-Sandbox-ID");
+      const sandboxId = getSandboxWebSocketId(url);
       const providedToken = authHeader?.startsWith("Bearer ")
         ? authHeader.slice("Bearer ".length)
         : null;
@@ -908,6 +909,17 @@ export class SessionDO extends DurableObject<Env> {
       // Get expected values from DB
       const sandbox = this.getSandbox();
       const expectedSandboxId = sandbox?.modal_sandbox_id;
+
+      if (!sandboxId) {
+        this.log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "auth_failed",
+          reject_reason: "missing_sandbox_id",
+          duration_ms: Date.now() - wsStartTime,
+        });
+        return new Response("Forbidden: Missing sandbox ID", { status: 403 });
+      }
 
       // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout).
       // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
@@ -960,7 +972,7 @@ export class SessionDO extends DurableObject<Env> {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
 
-      const sandboxId = request.headers.get("X-Sandbox-ID");
+      const sandboxId = getSandboxWebSocketId(url);
 
       if (isSandbox) {
         const { replaced } = this.wsManager.acceptAndSetSandboxSocket(

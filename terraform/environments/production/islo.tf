@@ -5,7 +5,7 @@
 # Calculate hash of Islo snapshot source files for change detection.
 # Includes islo-infra (snapshot definition) and sandbox-runtime (copied into snapshot).
 data "external" "islo_source_hash" {
-  count = local.use_islo_backend ? 1 : 0
+  count = local.use_islo_backend && trimspace(var.islo_base_snapshot) != "" ? 1 : 0
 
   program = ["bash", "-c", <<-EOF
     set -euo pipefail
@@ -39,7 +39,7 @@ data "external" "islo_source_hash" {
 }
 
 module "islo_infra" {
-  count  = local.use_islo_backend ? 1 : 0
+  count  = local.use_islo_backend && trimspace(var.islo_base_snapshot) != "" ? 1 : 0
   source = "../../modules/islo-infra"
 
   api_key       = var.islo_api_key

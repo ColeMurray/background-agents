@@ -56,12 +56,30 @@ describe("createSandboxProviderFromEnv", () => {
   it("rejects malformed Islo start command JSON with a named env error", () => {
     const env = createEnv({
       ISLO_API_KEY: "islo-key",
-      ISLO_BASE_SNAPSHOT: "base",
       ISLO_START_COMMAND: "[not-json",
     });
 
     expect(() => createSandboxProviderFromEnv(env, "islo")).toThrow(
       "ISLO_START_COMMAND must be valid JSON"
+    );
+  });
+
+  it("accepts Islo without a base snapshot by falling back to a base image", () => {
+    const env = createEnv({
+      ISLO_API_KEY: "islo-key",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "islo")).not.toThrow();
+  });
+
+  it("rejects malformed Islo lifecycle configuration", () => {
+    const env = createEnv({
+      ISLO_API_KEY: "islo-key",
+      ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS: "abc",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "islo")).toThrow(
+      "ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS must be a positive integer"
     );
   });
 });

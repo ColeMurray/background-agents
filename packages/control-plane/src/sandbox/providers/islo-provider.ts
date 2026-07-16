@@ -9,15 +9,21 @@
 import { Islo, IsloApiError, type IsloApi } from "@islo-labs/sdk";
 import { computeHmacHex, MAX_TUNNEL_PORTS } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
+import type { CorrelationContext } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
+import { buildSessionConfig } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type RestoreConfig,
+  type RestoreResult,
   type ResumeConfig,
   type ResumeResult,
   type SandboxProvider,
   type SandboxProviderCapabilities,
+  type SnapshotConfig,
+  type SnapshotResult,
   type StopConfig,
   type StopResult,
 } from "../provider";
@@ -42,24 +48,33 @@ const SANDBOX_READY_POLL_INTERVAL_MS = 200;
 const SANDBOX_READY_TIMEOUT_MS = 60_000;
 const SHARE_CREATE_RETRY_INTERVAL_MS = 100;
 const SHARE_CREATE_RETRY_TIMEOUT_MS = 15_000;
+const SNAPSHOT_READY_POLL_INTERVAL_MS = 500;
+const SNAPSHOT_READY_TIMEOUT_MS = 120_000;
 const EXEC_POLL_INTERVAL_MS = 100;
 const EXEC_POLL_TIMEOUT_MS = 30_000;
+const RUNTIME_PREFLIGHT_TIMEOUT_MS = 15_000;
 const RUNTIME_START_TIMEOUT_MS = 5_000;
 const RUNTIME_EXEC_TIMEOUT_MS = 10_000;
 const EXEC_CREATE_REQUEST_TIMEOUT_MS = 30_000;
 const EXEC_RESULT_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_ISLO_BASE_IMAGE = "ghcr.io/islo-labs/background-agents-runtime:stable";
+const DEFAULT_AGENT_BROWSER_EXECUTABLE_PATH = "/usr/bin/chromium";
+const REPO_IMAGE_CALLBACK_ENV_KEYS = [
+  "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
+  "OI_REPO_IMAGE_BUILD_ID",
+  "OI_REPO_IMAGE_CALLBACK_URL",
+  "OI_REPO_IMAGE_CALLBACK_TOKEN",
+] as const;
+const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
+  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
+  "OI_REPO_IMAGE_CALLBACK_SECRET",
+] as const;
 
-type IsloSandboxCreate = {
-  name: string;
-  snapshot_name: string;
-  vcpus: number;
-  memory_mb: number;
-  disk_gb: number;
-  env: Record<string, string>;
-  workdir: string;
-  init: { type: "minimal" };
-  gateway_profile?: string;
-};
+export type IsloSandboxSource =
+  | { type: "snapshot"; snapshotName: string }
+  | { type: "image"; image: string };
+
+export type IsloLifecyclePolicy = IsloApi.LifecyclePolicy;
 
 type IsloRequestOptions = {
   timeoutInSeconds?: number;
@@ -74,7 +89,7 @@ export interface IsloClientLike {
   ): Promise<Response>;
   sandboxes: {
     createSandbox(
-      request: IsloSandboxCreate,
+      request: IsloApi.CreateSandboxRequest,
       requestOptions?: IsloRequestOptions
     ): Promise<IsloApi.SandboxResponse>;
     getSandbox(
@@ -89,8 +104,12 @@ export interface IsloClientLike {
       request: IsloApi.PauseSandboxRequest,
       requestOptions?: IsloRequestOptions
     ): Promise<IsloApi.SandboxResponse>;
+    deleteSandbox(
+      request: IsloApi.DeleteSandboxRequest,
+      requestOptions?: IsloRequestOptions
+    ): Promise<void>;
     execInSandbox(
-      request: IsloApi.ExecInSandboxRequest,
+      request: IsloApi.ExecRequest,
       requestOptions?: IsloRequestOptions
     ): Promise<IsloApi.ExecResponse>;
     getExecResult(
@@ -108,12 +127,27 @@ export interface IsloClientLike {
       requestOptions?: IsloRequestOptions
     ): Promise<IsloApi.ShareResponse>;
   };
+  snapshots: {
+    createSnapshot(
+      request: IsloApi.SnapshotCreate,
+      requestOptions?: IsloRequestOptions
+    ): Promise<IsloApi.SnapshotResponse>;
+    getSnapshot(
+      request: IsloApi.GetSnapshotRequest,
+      requestOptions?: IsloRequestOptions
+    ): Promise<IsloApi.SnapshotResponse>;
+    deleteSnapshot(
+      request: IsloApi.DeleteSnapshotRequest,
+      requestOptions?: IsloRequestOptions
+    ): Promise<void>;
+  };
 }
 
 export interface IsloProviderConfig {
   apiKey: string;
   baseUrl?: string;
-  baseSnapshot: string;
+  baseSource: IsloSandboxSource;
+  lifecycle?: IsloLifecyclePolicy;
   vcpus?: number;
   memoryMb?: number;
   diskGb?: number;
@@ -127,12 +161,31 @@ export interface IsloProviderConfig {
   codeServerPasswordSecret: string;
 }
 
+export interface TriggerIsloRepoImageBuildConfig {
+  buildId: string;
+  repoOwner: string;
+  repoName: string;
+  defaultBranch: string;
+  callbackUrl: string;
+  callbackToken: string;
+  userEnvVars?: Record<string, string>;
+  cloneToken?: string;
+  buildTimeoutSeconds?: number;
+  onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
+  correlation?: CorrelationContext;
+}
+
+export interface TriggerIsloRepoImageBuildResult {
+  buildId: string;
+  status: string;
+}
+
 export class IsloSandboxProvider implements SandboxProvider {
   readonly name = "islo";
 
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSnapshots: false,
-    supportsRestore: false,
+    supportsSnapshots: true,
+    supportsRestore: true,
     supportsWarm: false,
     supportsPersistentResume: true,
     supportsExplicitStop: true,
@@ -144,20 +197,161 @@ export class IsloSandboxProvider implements SandboxProvider {
   ) {}
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    const source = config.repoImageId
+      ? ({ type: "snapshot", snapshotName: config.repoImageId } satisfies IsloSandboxSource)
+      : this.providerConfig.baseSource;
+    return this.createSandboxFromSource(config, source, {
+      fromRepoImage: !!config.repoImageId,
+      repoImageSha: config.repoImageSha ?? undefined,
+    });
+  }
+
+  async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
+    try {
+      const result = await this.createSandboxFromSource(
+        config,
+        { type: "snapshot", snapshotName: config.snapshotImageId },
+        { restoredFromSnapshot: true }
+      );
+
+      return {
+        success: true,
+        sandboxId: result.sandboxId,
+        providerObjectId: result.providerObjectId,
+        codeServerUrl: result.codeServerUrl,
+        codeServerPassword: result.codeServerPassword,
+        ttydUrl: result.ttydUrl,
+        tunnelUrls: result.tunnelUrls,
+      };
+    } catch (error) {
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to restore Islo sandbox from snapshot", error);
+    }
+  }
+
+  async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
+    try {
+      const snapshot = await this.client.snapshots.createSnapshot({
+        sandbox_name: config.providerObjectId,
+        name: buildSnapshotName(config.sessionId, config.reason),
+      });
+      const readySnapshot = isSnapshotReady(snapshot.status)
+        ? snapshot
+        : await this.waitForSnapshotReady(snapshot.name);
+
+      return { success: true, imageId: readySnapshot.name };
+    } catch (error) {
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to snapshot Islo sandbox", error);
+    }
+  }
+
+  async triggerRepoImageBuild(
+    config: TriggerIsloRepoImageBuildConfig
+  ): Promise<TriggerIsloRepoImageBuildResult> {
+    let sandboxCreated = false;
+    const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
+
+    try {
+      const envVars = await this.buildBuildEnvVars(config);
+      const sandbox = await this.client.sandboxes.createSandbox(
+        {
+          name: sandboxName,
+          ...sourceToCreateRequest(this.providerConfig.baseSource),
+          vcpus: this.providerConfig.vcpus ?? DEFAULT_ISLO_VCPUS,
+          memory_mb: this.providerConfig.memoryMb ?? DEFAULT_ISLO_MEMORY_MB,
+          disk_gb: this.providerConfig.diskGb ?? DEFAULT_ISLO_DISK_GB,
+          workdir: this.providerConfig.workdir || "/workspace",
+          env: envVars,
+          init: { type: "minimal" },
+          ...(this.providerConfig.lifecycle ? { lifecycle: this.providerConfig.lifecycle } : {}),
+          ...(this.providerConfig.gatewayProfile
+            ? { gateway_profile: this.providerConfig.gatewayProfile }
+            : {}),
+        },
+        { timeoutInSeconds: config.buildTimeoutSeconds }
+      );
+      sandboxCreated = true;
+
+      const readySandbox =
+        sandbox.status === "running" ? sandbox : await this.waitForSandboxRunning(sandboxName);
+      const providerSessionId = readySandbox.name || sandboxName;
+      await config.onProviderSessionCreated?.(providerSessionId);
+
+      await this.runStep("runtime_preflight", providerSessionId, () =>
+        this.preflightRuntime(
+          providerSessionId,
+          {
+            codeServerEnabled: false,
+            terminalEnabled: false,
+          },
+          envVars
+        )
+      );
+      await this.startRuntime(providerSessionId, {
+        ...envVars,
+        [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: providerSessionId,
+      });
+
+      log.info("islo.repo_image_build_triggered", {
+        build_id: config.buildId,
+        repo_owner: config.repoOwner,
+        repo_name: config.repoName,
+        sandbox_name: providerSessionId,
+      });
+
+      return { buildId: config.buildId, status: "building" };
+    } catch (error) {
+      if (sandboxCreated) {
+        await this.cleanupSandboxAfterFailedCreate(sandboxName);
+      }
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to trigger Islo repo image build", error);
+    }
+  }
+
+  async deleteProviderImage(providerImageId: string): Promise<void> {
+    try {
+      await this.client.snapshots.deleteSnapshot({ name: providerImageId });
+    } catch (error) {
+      if (isIsloNotFound(error)) return;
+      throw this.classifyError("Failed to delete Islo snapshot", error);
+    }
+  }
+
+  async deleteSandbox(sandboxName: string): Promise<void> {
+    try {
+      await this.client.sandboxes.deleteSandbox({ sandbox_name: sandboxName });
+    } catch (error) {
+      if (isIsloNotFound(error)) return;
+      throw this.classifyError("Failed to delete Islo sandbox", error);
+    }
+  }
+
+  private async createSandboxFromSource(
+    config: CreateSandboxConfig | RestoreConfig,
+    source: IsloSandboxSource,
+    mode: {
+      restoredFromSnapshot?: boolean;
+      fromRepoImage?: boolean;
+      repoImageSha?: string;
+    }
+  ): Promise<CreateSandboxResult> {
     let sandboxCreated = false;
     try {
-      const envVars = await this.buildEnvVars(config);
+      const envVars = await this.buildEnvVars(config, mode);
       const sandbox = await this.runStep("create_sandbox", config.sandboxId, () =>
         this.client.sandboxes.createSandbox(
           {
             name: config.sandboxId,
-            snapshot_name: this.providerConfig.baseSnapshot,
+            ...sourceToCreateRequest(source),
             vcpus: this.providerConfig.vcpus ?? DEFAULT_ISLO_VCPUS,
             memory_mb: this.providerConfig.memoryMb ?? DEFAULT_ISLO_MEMORY_MB,
             disk_gb: this.providerConfig.diskGb ?? DEFAULT_ISLO_DISK_GB,
             workdir: this.providerConfig.workdir || "/workspace",
             env: envVars,
             init: { type: "minimal" },
+            ...(this.providerConfig.lifecycle ? { lifecycle: this.providerConfig.lifecycle } : {}),
             ...(this.providerConfig.gatewayProfile
               ? { gateway_profile: this.providerConfig.gatewayProfile }
               : {}),
@@ -173,11 +367,22 @@ export class IsloSandboxProvider implements SandboxProvider {
               this.waitForSandboxRunning(config.sandboxId)
             );
 
+      const terminalEnabled = Boolean(config.sandboxSettings?.terminalEnabled);
+      await this.runStep("runtime_preflight", config.sandboxId, () =>
+        this.preflightRuntime(
+          config.sandboxId,
+          {
+            codeServerEnabled: Boolean(config.codeServerEnabled),
+            terminalEnabled,
+          },
+          envVars
+        )
+      );
       const needsTunnelEnvFile =
         resolveRuntimeTunnelPorts(
           config.sandboxSettings?.tunnelPorts,
           config.codeServerEnabled,
-          Boolean(config.sandboxSettings?.terminalEnabled)
+          terminalEnabled
         ).length > 0;
       let shares: Awaited<ReturnType<IsloSandboxProvider["createShares"]>>;
 
@@ -290,23 +495,17 @@ export class IsloSandboxProvider implements SandboxProvider {
     }
   }
 
-  private async buildEnvVars(config: CreateSandboxConfig): Promise<Record<string, string>> {
+  private async buildEnvVars(
+    config: CreateSandboxConfig | RestoreConfig,
+    mode: {
+      restoredFromSnapshot?: boolean;
+      fromRepoImage?: boolean;
+      repoImageSha?: string;
+    } = {}
+  ): Promise<Record<string, string>> {
     const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
 
-    const sessionConfig: Record<string, unknown> = {
-      session_id: config.sessionId,
-      sessionId: config.sessionId,
-      repo_owner: config.repoOwner,
-      repo_name: config.repoName,
-      provider: config.provider,
-      model: config.model,
-    };
-    if (config.branch) {
-      sessionConfig.branch = config.branch;
-    }
-    if (config.mcpServers?.length) {
-      sessionConfig.mcp_servers = config.mcpServers;
-    }
+    const sessionConfig = buildSessionConfig(config);
 
     const terminalEnabled = Boolean(config.sandboxSettings?.terminalEnabled);
     const tunnelPorts = resolveRuntimeTunnelPorts(
@@ -321,14 +520,27 @@ export class IsloSandboxProvider implements SandboxProvider {
       NODE_PATH: envVars.NODE_PATH || "/usr/lib/node_modules",
       PATH:
         envVars.PATH || "/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games",
+      AGENT_BROWSER_EXECUTABLE_PATH:
+        envVars.AGENT_BROWSER_EXECUTABLE_PATH || DEFAULT_AGENT_BROWSER_EXECUTABLE_PATH,
       PYTHONUNBUFFERED: "1",
       SANDBOX_ID: config.sandboxId,
       CONTROL_PLANE_URL: config.controlPlaneUrl,
       SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-      REPO_OWNER: config.repoOwner,
-      REPO_NAME: config.repoName,
+      REPO_OWNER: config.repoOwner ?? "",
+      REPO_NAME: config.repoName ?? "",
       SESSION_CONFIG: JSON.stringify(sessionConfig),
     });
+
+    envVars.IMAGE_BUILD_MODE = "false";
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      envVars[key] = "";
+    }
+    envVars.VCS_CLONE_TOKEN = "";
+    if (mode.restoredFromSnapshot) envVars.RESTORED_FROM_SNAPSHOT = "true";
+    if (mode.fromRepoImage) {
+      envVars.FROM_REPO_IMAGE = "true";
+      envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
+    }
 
     if (config.codeServerEnabled) {
       envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
@@ -346,6 +558,47 @@ export class IsloSandboxProvider implements SandboxProvider {
       envVars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = tunnelPorts.join(",");
     }
 
+    if (this.providerConfig.scmProvider === "gitlab") {
+      envVars.VCS_HOST = "gitlab.com";
+      envVars.VCS_CLONE_USERNAME = "oauth2";
+    } else {
+      envVars.VCS_HOST = "github.com";
+      envVars.VCS_CLONE_USERNAME = "x-access-token";
+    }
+
+    return envVars;
+  }
+
+  private async buildBuildEnvVars(
+    config: TriggerIsloRepoImageBuildConfig
+  ): Promise<Record<string, string>> {
+    const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      delete envVars[key];
+    }
+
+    Object.assign(envVars, {
+      HOME: envVars.HOME || "/workspace",
+      PYTHONPATH: envVars.PYTHONPATH ? `/app:${envVars.PYTHONPATH}` : "/app",
+      NODE_PATH: envVars.NODE_PATH || "/usr/lib/node_modules",
+      PATH:
+        envVars.PATH || "/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games",
+      AGENT_BROWSER_EXECUTABLE_PATH:
+        envVars.AGENT_BROWSER_EXECUTABLE_PATH || DEFAULT_AGENT_BROWSER_EXECUTABLE_PATH,
+      PYTHONUNBUFFERED: "1",
+      SANDBOX_ID: `build-${config.repoOwner}-${config.repoName}`,
+      REPO_OWNER: config.repoOwner,
+      REPO_NAME: config.repoName,
+      IMAGE_BUILD_MODE: "true",
+      SESSION_CONFIG: JSON.stringify({ branch: config.defaultBranch }),
+      [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
+      [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
+      [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
+    });
+
+    if (config.cloneToken) {
+      envVars.VCS_CLONE_TOKEN = config.cloneToken;
+    }
     if (this.providerConfig.scmProvider === "gitlab") {
       envVars.VCS_HOST = "gitlab.com";
       envVars.VCS_CLONE_USERNAME = "oauth2";
@@ -384,6 +637,30 @@ export class IsloSandboxProvider implements SandboxProvider {
     throw new Error(
       `Timed out waiting for Islo sandbox to be running (last status: ${lastStatus})`
     );
+  }
+
+  private async waitForSnapshotReady(snapshotName: string): Promise<IsloApi.SnapshotResponse> {
+    const deadline = Date.now() + SNAPSHOT_READY_TIMEOUT_MS;
+    let lastStatus = "unknown";
+
+    while (Date.now() < deadline) {
+      const snapshot = await this.client.snapshots.getSnapshot(
+        { name: snapshotName },
+        { timeoutInSeconds: boundedRequestTimeoutSeconds(deadline - Date.now()) }
+      );
+      lastStatus = snapshot.status || "unknown";
+
+      if (isSnapshotReady(snapshot.status)) {
+        return snapshot;
+      }
+      if (isSnapshotTerminalFailure(snapshot.status)) {
+        throw new Error(`Islo snapshot entered terminal state: ${snapshot.status}`);
+      }
+
+      await sleep(SNAPSHOT_READY_POLL_INTERVAL_MS);
+    }
+
+    throw new Error(`Timed out waiting for Islo snapshot to be ready (last status: ${lastStatus})`);
   }
 
   private async createShares(
@@ -526,9 +803,38 @@ export class IsloSandboxProvider implements SandboxProvider {
     );
   }
 
+  private async preflightRuntime(
+    sandboxName: string,
+    config: { codeServerEnabled: boolean; terminalEnabled: boolean },
+    env: Record<string, string>
+  ): Promise<void> {
+    const checks = [
+      "python3 -c 'import sandbox_runtime.entrypoint'",
+      "opencode --version",
+      "agent-browser --version",
+      'test -x "$AGENT_BROWSER_EXECUTABLE_PATH"',
+      '"$AGENT_BROWSER_EXECUTABLE_PATH" --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --dump-dom about:blank >/dev/null',
+      "test -x /usr/local/bin/oi-git-credentials",
+      'test "$(git config --system --get credential.helper)" = "/usr/local/bin/oi-git-credentials"',
+      'test "$(git config --system --get credential.useHttpPath)" = "true"',
+    ];
+    if (config.codeServerEnabled) checks.push("code-server --version");
+    if (config.terminalEnabled) checks.push("ttyd --version");
+
+    await this.execAndWait(
+      sandboxName,
+      {
+        command: ["sh", "-lc", checks.join(" && ")],
+        workdir: this.providerConfig.workdir || "/workspace",
+        env,
+      },
+      RUNTIME_PREFLIGHT_TIMEOUT_MS
+    );
+  }
+
   private async execAndWait(
     sandboxName: string,
-    body: IsloApi.ExecRequest,
+    body: Omit<IsloApi.ExecRequest, "sandbox_name">,
     timeoutMs = EXEC_POLL_TIMEOUT_MS
   ): Promise<IsloApi.ExecResultResponse> {
     const execCreateTimeoutSeconds = boundedRequestTimeoutSeconds(
@@ -536,7 +842,7 @@ export class IsloSandboxProvider implements SandboxProvider {
       EXEC_CREATE_REQUEST_TIMEOUT_MS
     );
     const exec = await this.client.sandboxes.execInSandbox(
-      { sandbox_name: sandboxName, body },
+      { sandbox_name: sandboxName, ...body },
       { timeoutInSeconds: execCreateTimeoutSeconds }
     );
     const deadline = Date.now() + timeoutMs;
@@ -675,6 +981,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isSnapshotReady(status: string | null | undefined): boolean {
+  return ["ready", "created", "completed"].includes(status || "");
+}
+
+function isSnapshotTerminalFailure(status: string | null | undefined): boolean {
+  return ["failed", "error", "deleted"].includes(status || "");
+}
+
 function isIsloNotFound(error: unknown): boolean {
   return error instanceof IsloApiError && error.statusCode === 404;
 }
@@ -689,8 +1003,8 @@ export function createIsloProvider(config: IsloProviderConfig): IsloSandboxProvi
   if (!config.apiKey) {
     throw new Error("createIsloProvider requires apiKey");
   }
-  if (!config.baseSnapshot) {
-    throw new Error("createIsloProvider requires baseSnapshot");
+  if (!isValidIsloSource(config.baseSource)) {
+    throw new Error("createIsloProvider requires baseSource");
   }
   if (!config.codeServerPasswordSecret) {
     throw new Error("createIsloProvider requires codeServerPasswordSecret");
@@ -702,11 +1016,49 @@ export function createIsloProvider(config: IsloProviderConfig): IsloSandboxProvi
   }) as IsloClientLike;
 
   log.info("islo.provider_created", {
-    base_snapshot: config.baseSnapshot,
+    base_source: config.baseSource.type,
     vcpus: config.vcpus ?? DEFAULT_ISLO_VCPUS,
     memory_mb: config.memoryMb ?? DEFAULT_ISLO_MEMORY_MB,
     disk_gb: config.diskGb ?? DEFAULT_ISLO_DISK_GB,
   });
 
   return new IsloSandboxProvider(client, config);
+}
+
+export function createDefaultIsloSource(
+  baseSnapshot?: string,
+  baseImage?: string
+): IsloSandboxSource {
+  const snapshotName = baseSnapshot?.trim();
+  if (snapshotName) return { type: "snapshot", snapshotName };
+  const image = baseImage?.trim() || DEFAULT_ISLO_BASE_IMAGE;
+  return { type: "image", image };
+}
+
+function sourceToCreateRequest(
+  source: IsloSandboxSource
+): Pick<IsloApi.CreateSandboxRequest, "image" | "snapshot_name"> {
+  return source.type === "snapshot"
+    ? { snapshot_name: source.snapshotName }
+    : { image: source.image };
+}
+
+function isValidIsloSource(source: IsloSandboxSource | undefined): source is IsloSandboxSource {
+  if (!source) return false;
+  return source.type === "snapshot"
+    ? source.snapshotName.trim().length > 0
+    : source.image.trim().length > 0;
+}
+
+function buildSnapshotName(sessionId: string, reason: string): string {
+  const safeSession = sanitizeSnapshotPart(sessionId).slice(0, 48) || "session";
+  const safeReason = sanitizeSnapshotPart(reason).slice(0, 32) || "snapshot";
+  return `oi-${safeSession}-${safeReason}-${Date.now()}`;
+}
+
+function sanitizeSnapshotPart(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }

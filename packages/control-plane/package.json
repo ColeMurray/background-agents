@@ -6,6 +6,7 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
     "build:vercel-base-snapshot": "esbuild scripts/build-vercel-base-snapshot.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/vercel-base-snapshot.js",
+    "smoke:islo": "esbuild scripts/islo-live-smoke.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/islo-live-smoke.js && node dist/islo-live-smoke.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -15,7 +16,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
-    "@islo-labs/sdk": "^0.0.20",
+    "@islo-labs/sdk": "^0.0.30",
     "@open-inspect/shared": "file:../shared",
     "zod": "^4.1.13"
   },

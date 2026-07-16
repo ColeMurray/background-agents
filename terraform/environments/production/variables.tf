@@ -383,14 +383,15 @@ variable "islo_base_url" {
 }
 
 variable "islo_base_snapshot" {
-  description = "Named Islo snapshot used for fresh sandbox creation"
+  description = "Optional named Islo snapshot used for optimized sandbox creation. Leave empty to create from islo_base_image."
   type        = string
   default     = ""
+}
 
-  validation {
-    condition     = var.sandbox_provider != "islo" || length(var.islo_base_snapshot) > 0
-    error_message = "islo_base_snapshot must be set when sandbox_provider = 'islo'."
-  }
+variable "islo_base_image" {
+  description = "Background Agents runtime image for Islo sandboxes when islo_base_snapshot is empty."
+  type        = string
+  default     = "ghcr.io/islo-labs/background-agents-runtime:stable"
 }
 
 variable "islo_vcpus" {
@@ -454,6 +455,56 @@ variable "islo_share_ttl_seconds" {
   description = "Optional TTL in seconds for Islo share URLs"
   type        = number
   default     = 0
+}
+
+variable "islo_lifecycle_enabled" {
+  description = "Whether to pass Islo lifecycle policy at sandbox creation time."
+  type        = bool
+  default     = true
+}
+
+variable "islo_lifecycle_pause_after_idle_seconds" {
+  description = "Pause Islo sandboxes after this many idle seconds when lifecycle is enabled."
+  type        = number
+  default     = 3600
+
+  validation {
+    condition     = var.islo_lifecycle_pause_after_idle_seconds > 0 && floor(var.islo_lifecycle_pause_after_idle_seconds) == var.islo_lifecycle_pause_after_idle_seconds
+    error_message = "islo_lifecycle_pause_after_idle_seconds must be a positive integer."
+  }
+}
+
+variable "islo_lifecycle_pause_after_seconds" {
+  description = "Optional absolute pause policy for Islo sandboxes in seconds. 0 means unset."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.islo_lifecycle_pause_after_seconds >= 0 && floor(var.islo_lifecycle_pause_after_seconds) == var.islo_lifecycle_pause_after_seconds
+    error_message = "islo_lifecycle_pause_after_seconds must be a non-negative integer."
+  }
+}
+
+variable "islo_lifecycle_delete_after_seconds" {
+  description = "Optional absolute delete policy for Islo sandboxes in seconds. 0 means unset."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.islo_lifecycle_delete_after_seconds >= 0 && floor(var.islo_lifecycle_delete_after_seconds) == var.islo_lifecycle_delete_after_seconds
+    error_message = "islo_lifecycle_delete_after_seconds must be a non-negative integer."
+  }
+}
+
+variable "islo_lifecycle_auto_resume" {
+  description = "Optional Islo auto_resume policy. Valid values: empty, never, on_activity."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "never", "on_activity"], var.islo_lifecycle_auto_resume)
+    error_message = "islo_lifecycle_auto_resume must be empty, never, or on_activity."
+  }
 }
 
 variable "opencomputer_api_url" {

@@ -25,7 +25,7 @@ export async function GET() {
     return NextResponse.json(
       {
         error:
-          "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
+          "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, opencomputer, or islo",
       },
       { status: 501 }
     );

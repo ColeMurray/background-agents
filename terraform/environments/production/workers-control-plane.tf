@@ -85,11 +85,19 @@ module "control_plane_worker" {
       { name = "DAYTONA_TARGET", value = var.daytona_target },
     ] : [],
     local.use_islo_backend ? [
-      { name = "ISLO_BASE_SNAPSHOT", value = var.islo_base_snapshot },
+      { name = "ISLO_BASE_IMAGE", value = var.islo_base_image },
       { name = "ISLO_VCPUS", value = tostring(var.islo_vcpus) },
       { name = "ISLO_MEMORY_MB", value = tostring(var.islo_memory_mb) },
       { name = "ISLO_DISK_GB", value = tostring(var.islo_disk_gb) },
       { name = "ISLO_WORKDIR", value = var.islo_workdir },
+      { name = "ISLO_LIFECYCLE_ENABLED", value = tostring(var.islo_lifecycle_enabled) },
+      {
+        name  = "ISLO_LIFECYCLE_PAUSE_AFTER_IDLE_SECONDS",
+        value = tostring(var.islo_lifecycle_pause_after_idle_seconds),
+      },
+    ] : [],
+    local.use_islo_backend && var.islo_base_snapshot != "" ? [
+      { name = "ISLO_BASE_SNAPSHOT", value = var.islo_base_snapshot },
     ] : [],
     local.use_islo_backend && var.islo_base_url != "" ? [
       { name = "ISLO_BASE_URL", value = var.islo_base_url },
@@ -105,6 +113,21 @@ module "control_plane_worker" {
     ] : [],
     local.use_islo_backend && var.islo_share_ttl_seconds > 0 ? [
       { name = "ISLO_SHARE_TTL_SECONDS", value = tostring(var.islo_share_ttl_seconds) },
+    ] : [],
+    local.use_islo_backend && var.islo_lifecycle_pause_after_seconds > 0 ? [
+      {
+        name  = "ISLO_LIFECYCLE_PAUSE_AFTER_SECONDS",
+        value = tostring(var.islo_lifecycle_pause_after_seconds),
+      },
+    ] : [],
+    local.use_islo_backend && var.islo_lifecycle_delete_after_seconds > 0 ? [
+      {
+        name  = "ISLO_LIFECYCLE_DELETE_AFTER_SECONDS",
+        value = tostring(var.islo_lifecycle_delete_after_seconds),
+      },
+    ] : [],
+    local.use_islo_backend && var.islo_lifecycle_auto_resume != "" ? [
+      { name = "ISLO_LIFECYCLE_AUTO_RESUME", value = var.islo_lifecycle_auto_resume },
     ] : [],
     local.use_opencomputer_backend ? [
       { name = "OPENCOMPUTER_API_URL", value = var.opencomputer_api_url },

@@ -1,9 +1,12 @@
 # Open-Inspect Islo Snapshot Tooling
 
-Standalone scripts for seeding and managing Islo base snapshots used by Open-Inspect sandboxes.
+Standalone scripts for seeding and managing optional Islo base snapshots used by Open-Inspect
+sandboxes.
 
 The control plane communicates with the Islo API directly. These scripts are for setup/deploy-time
-snapshot creation, not runtime session operations.
+snapshot creation, not runtime session operations. The Islo provider can also create sandboxes
+directly from the maintained `ghcr.io/islo-labs/background-agents-runtime:stable` image; snapshots
+are an optimization for faster boot and custom, repo-local runtime builds.
 
 ## Scripts
 
@@ -14,8 +17,9 @@ snapshot creation, not runtime session operations.
 
 - `ISLO_API_KEY` (required) — must have sandbox and snapshot permissions
 - `ISLO_BASE_URL`
-- `ISLO_BASE_SNAPSHOT` (required)
-- `ISLO_BASE_IMAGE` — defaults to `ghcr.io/islo-labs/islo-runner:latest`
+- `ISLO_BASE_SNAPSHOT` (required only when running these snapshot scripts)
+- `ISLO_BASE_IMAGE` — optional parent image for snapshot builds; defaults to the generic
+  `ghcr.io/islo-labs/islo-runner:latest`
 
 ## Usage
 
@@ -27,6 +31,6 @@ ISLO_API_KEY=... ISLO_BASE_SNAPSHOT=open-inspect-runtime npm run bootstrap -- --
 
 Re-run `bootstrap` whenever `packages/sandbox-runtime` or the sandbox toolchain changes.
 
-> **Note**: Snapshot builds are automated via Terraform when `sandbox_provider = "islo"`. The
-> `islo-infra` Terraform module triggers a rebuild whenever source files change. Manual runs are
-> only needed for initial setup or debugging.
+> **Note**: Snapshot builds are automated via Terraform only when `sandbox_provider = "islo"` and
+> `islo_base_snapshot` is non-empty. The `islo-infra` Terraform module triggers a rebuild whenever
+> source files change. Manual runs are only needed for initial setup or debugging.

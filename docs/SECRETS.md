@@ -133,8 +133,10 @@ matters for multi-repository sessions, where several repositories' secrets fold 
 Certain keys are reserved for system use and cannot be set as secrets:
 
 `PYTHONUNBUFFERED`, `SANDBOX_ID`, `CONTROL_PLANE_URL`, `SANDBOX_AUTH_TOKEN`, `REPO_OWNER`,
-`REPO_NAME`, `GITHUB_APP_TOKEN`, `SESSION_CONFIG`, `RESTORED_FROM_SNAPSHOT`,
-`OPENCODE_CONFIG_CONTENT`, `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `PWD`, `LANG`
+`REPO_NAME`, `GITHUB_APP_TOKEN`, `SESSION_CONFIG`, `RESTORED_FROM_SNAPSHOT`, `FROM_REPO_IMAGE`,
+`REPO_IMAGE_SHA`, `IMAGE_BUILD_MODE`, `OI_REPO_IMAGE_PROVIDER_SESSION_ID`, `OI_REPO_IMAGE_BUILD_ID`,
+`OI_REPO_IMAGE_CALLBACK_URL`, `OI_REPO_IMAGE_CALLBACK_TOKEN`, `OPENCODE_CONFIG_CONTENT`, `PATH`,
+`HOME`, `USER`, `SHELL`, `TERM`, `PWD`, `LANG`
 
 If you try to save a reserved key, the UI will show a validation error.
 

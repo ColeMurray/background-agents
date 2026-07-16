@@ -101,10 +101,18 @@ opencomputer_template = ""
 
 # Islo API
 # Only required when sandbox_provider = "islo"
-# Snapshot builds are automated from packages/islo-infra when Islo is selected.
-islo_api_key = ""              # Requires sandbox and snapshot permissions
-islo_base_snapshot = ""        # Name of the seeded Islo snapshot
-# islo_base_url = ""           # Optional Islo API base URL
+# Leave islo_base_snapshot empty to create directly from the maintained Islo
+# Background Agents runtime image.
+# If set, Terraform builds/updates that optimized base snapshot from packages/islo-infra.
+islo_api_key       = ""        # Requires sandbox permissions; snapshot permissions if using snapshots/repo images
+islo_base_snapshot = ""        # Optional named Islo snapshot optimization
+islo_base_image    = "ghcr.io/islo-labs/background-agents-runtime:stable"
+# islo_base_url    = ""        # Optional Islo API base URL
+# islo_lifecycle_enabled = true
+# islo_lifecycle_pause_after_idle_seconds = 3600
+# islo_lifecycle_pause_after_seconds = 0
+# islo_lifecycle_delete_after_seconds = 0
+# islo_lifecycle_auto_resume = "" # "", "never", or "on_activity"
 
 # =============================================================================
 # GitHub App Credentials
@@ -241,7 +249,7 @@ nextauth_secret = ""
 # - "daytona": direct Daytona REST API integration with stop/start resume
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
 # - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
-# - "islo": direct Islo API integration with named snapshot sandboxes
+# - "islo": direct Islo API integration with image, snapshot, and repo-image sandboxes
 sandbox_provider = "modal"
 
 # Platform for the web app deployment
