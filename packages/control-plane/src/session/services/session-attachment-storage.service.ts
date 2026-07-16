@@ -1,14 +1,14 @@
 import type { SessionAttachmentMimeType } from "@open-inspect/shared";
-import type { Logger } from "../logger";
-import { SessionInternalPaths } from "../session/contracts";
+import type { Logger } from "../../logger";
+import { SessionInternalPaths } from "../contracts";
 import {
   sessionAttachmentMutationResultSchema,
   type RecordAttachmentCommand,
   type SessionAttachmentCommand,
   type SessionAttachmentMutationResult,
-} from "../session/session-attachment-contracts";
-import type { ObjectStorage } from "../storage/object-storage";
-import type { SessionRuntimeClient } from "../session/runtime-client";
+} from "../session-attachment-contracts";
+import type { ObjectStorage } from "../../storage/object-storage";
+import type { SessionRuntimeClient } from "../runtime-client";
 
 const MAX_REGISTRATION_ATTEMPTS = 3;
 
@@ -23,19 +23,19 @@ export type StoreSessionAttachmentResult =
   | { ok: true }
   | { ok: false; status: number; error: string };
 
-interface SessionAttachmentCoordinatorContext {
+interface SessionAttachmentStorageContext {
   requestId?: string;
   traceId?: string;
 }
 
 /** Coordinates attachment persistence across R2 and the session Durable Object. */
-export class SessionAttachmentCoordinator {
+export class SessionAttachmentStorageService {
   constructor(
     private readonly runtime: SessionRuntimeClient,
     private readonly storage: ObjectStorage,
     private readonly sessionId: string,
     private readonly log: Logger,
-    private readonly context: SessionAttachmentCoordinatorContext
+    private readonly context: SessionAttachmentStorageContext
   ) {}
 
   async store(

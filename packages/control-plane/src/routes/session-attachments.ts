@@ -32,7 +32,7 @@ import type { Env } from "../types";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 import { streamStoredMedia } from "./stream-stored-media";
-import { SessionAttachmentCoordinator } from "./session-attachment-coordinator";
+import { SessionAttachmentStorageService } from "../session/services/session-attachment-storage.service";
 
 const logger = createLogger("router:session-attachments");
 
@@ -89,7 +89,7 @@ async function handleAttachmentPost(
   const attachmentId = generateId();
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
   const storage = createMediaObjectStorage(env);
-  const coordinator = new SessionAttachmentCoordinator(
+  const attachmentStorage = new SessionAttachmentStorageService(
     ctx.sessionRuntime,
     storage,
     sessionId,
@@ -99,7 +99,7 @@ async function handleAttachmentPost(
       traceId: ctx.trace_id,
     }
   );
-  const stored = await coordinator.store(bytes, {
+  const stored = await attachmentStorage.store(bytes, {
     attachmentId,
     mimeType: detected.mimeType,
     sizeBytes: bytes.byteLength,

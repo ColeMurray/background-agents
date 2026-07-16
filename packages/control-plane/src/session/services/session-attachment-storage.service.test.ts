@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Logger } from "../logger";
-import type { ObjectStorage } from "../storage/object-storage";
-import type { SessionRuntimeClient } from "../session/runtime-client";
+import type { Logger } from "../../logger";
+import type { ObjectStorage } from "../../storage/object-storage";
+import type { SessionRuntimeClient } from "../runtime-client";
 import {
-  SessionAttachmentCoordinator,
+  SessionAttachmentStorageService,
   type SessionAttachmentRecord,
-} from "./session-attachment-coordinator";
+} from "./session-attachment-storage.service";
 
 const RECORD: SessionAttachmentRecord = {
   attachmentId: "up-1",
@@ -14,7 +14,7 @@ const RECORD: SessionAttachmentRecord = {
   objectKey: "sessions/session-1/attachments/up-1",
 };
 
-function buildCoordinator(responses: Array<Response | Error>) {
+function buildService(responses: Array<Response | Error>) {
   const fetch = vi.fn(async (_sessionId: string, _path: unknown, _init?: RequestInit) => {
     const response = responses.shift();
     if (response instanceof Error) throw response;
@@ -35,18 +35,18 @@ function buildCoordinator(responses: Array<Response | Error>) {
     error: vi.fn(),
     child: () => log,
   };
-  const coordinator = new SessionAttachmentCoordinator(runtime, storage, "session-1", log, {
+  const service = new SessionAttachmentStorageService(runtime, storage, "session-1", log, {
     requestId: "request-1",
     traceId: "trace-1",
   });
-  return { coordinator, fetch, storage, log };
+  return { service, fetch, storage, log };
 }
 
-describe("SessionAttachmentCoordinator", () => {
+describe("SessionAttachmentStorageService", () => {
   it("registers and then stores an attachment", async () => {
-    const h = buildCoordinator([Response.json({ status: "ok" })]);
+    const h = buildService([Response.json({ status: "ok" })]);
 
-    await expect(h.coordinator.store(Uint8Array.from([1, 2, 3]), RECORD)).resolves.toEqual({
+    await expect(h.service.store(Uint8Array.from([1, 2, 3]), RECORD)).resolves.toEqual({
       ok: true,
     });
 
@@ -64,9 +64,9 @@ describe("SessionAttachmentCoordinator", () => {
   });
 
   it("does not store an object when registration is rejected", async () => {
-    const h = buildCoordinator([Response.json({ error: "Quota exceeded" }, { status: 429 })]);
+    const h = buildService([Response.json({ error: "Quota exceeded" }, { status: 429 })]);
 
-    await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
       ok: false,
       status: 429,
       error: "Quota exceeded",
@@ -76,9 +76,9 @@ describe("SessionAttachmentCoordinator", () => {
   });
 
   it("does not store an object when registration throws", async () => {
-    const h = buildCoordinator([new Error("runtime unavailable")]);
+    const h = buildService([new Error("runtime unavailable")]);
 
-    await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).rejects.toThrow(
+    await expect(h.service.store(Uint8Array.from([1]), RECORD)).rejects.toThrow(
       "runtime unavailable"
     );
     expect(h.storage.put).not.toHaveBeenCalled();
@@ -86,9 +86,9 @@ describe("SessionAttachmentCoordinator", () => {
   });
 
   it("rejects without storing when the registry response is malformed", async () => {
-    const h = buildCoordinator([new Response("not-json")]);
+    const h = buildService([new Response("not-json")]);
 
-    await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
       ok: false,
       status: 502,
       error: "Attachment registry returned an invalid response",
@@ -97,18 +97,16 @@ describe("SessionAttachmentCoordinator", () => {
   });
 
   it("leaves a discoverable attachment record when object storage fails", async () => {
-    const h = buildCoordinator([Response.json({ status: "ok" })]);
+    const h = buildService([Response.json({ status: "ok" })]);
     h.storage.put.mockRejectedValue(new Error("R2 unavailable"));
 
-    await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).rejects.toThrow(
-      "R2 unavailable"
-    );
+    await expect(h.service.store(Uint8Array.from([1]), RECORD)).rejects.toThrow("R2 unavailable");
     expect(h.fetch).toHaveBeenCalledTimes(1);
     expect(h.storage.delete).not.toHaveBeenCalled();
   });
 
   it("completes stale cleanup before retrying registration", async () => {
-    const h = buildCoordinator([
+    const h = buildService([
       Response.json({
         status: "cleanup_required",
         cleanupClaimedAt: 1000,
@@ -120,7 +118,7 @@ describe("SessionAttachmentCoordinator", () => {
       Response.json({ status: "ok" }),
     ]);
 
-    await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({ ok: true });
+    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({ ok: true });
     expect(h.storage.delete).toHaveBeenCalledWith("sessions/session-1/attachments/old-1");
     expect(JSON.parse(h.fetch.mock.calls[1][2]?.body as string)).toEqual({
       action: "complete_cleanup",
@@ -139,7 +137,7 @@ describe("SessionAttachmentCoordinator", () => {
   });
 
   it("releases failed stale deletions and rejects the new attachment", async () => {
-    const h = buildCoordinator([
+    const h = buildService([
       Response.json({
         status: "cleanup_required",
         cleanupClaimedAt: 1000,
@@ -153,7 +151,7 @@ describe("SessionAttachmentCoordinator", () => {
       if (key.endsWith("/old-1")) throw new Error("R2 unavailable");
     });
 
-    await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
       ok: false,
       status: 503,
       error: "Failed to clean up expired attachments; please retry",
@@ -168,7 +166,7 @@ describe("SessionAttachmentCoordinator", () => {
   });
 
   it("rejects without storing when cleanup completion is not acknowledged", async () => {
-    const h = buildCoordinator([
+    const h = buildService([
       Response.json({
         status: "cleanup_required",
         cleanupClaimedAt: 1000,
@@ -179,7 +177,7 @@ describe("SessionAttachmentCoordinator", () => {
       Response.json({ status: "cleanup_required", cleanupClaimedAt: 1000, staleAttachments: [] }),
     ]);
 
-    await expect(h.coordinator.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
+    await expect(h.service.store(Uint8Array.from([1]), RECORD)).resolves.toEqual({
       ok: false,
       status: 502,
       error: "Attachment registry returned an invalid response",
