@@ -241,4 +241,29 @@ describe("MessageService", () => {
       status: "pending",
     });
   });
+
+  it("returns null attachments for a stored empty array", () => {
+    const { service, repository } = createService();
+    vi.mocked(repository.listMessages).mockReturnValue([
+      {
+        id: "m1",
+        author_id: "p1",
+        content: "hello",
+        source: "web",
+        model: null,
+        reasoning_effort: null,
+        attachments: "[]",
+        callback_context: null,
+        status: "pending",
+        error_message: null,
+        created_at: 1000,
+        started_at: null,
+        completed_at: null,
+      },
+    ]);
+
+    const result = service.listMessages({ cursor: null, limit: 1, status: null });
+
+    expect(result.messages).toEqual([expect.objectContaining({ attachments: null })]);
+  });
 });
