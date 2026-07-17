@@ -502,6 +502,10 @@ session. OpenComputer uses a managed template plus checkpoints for the same preb
 lifecycle. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md) for provider-specific details.
 
+Superserve uses a managed runtime template and persistent microVM pause/resume for session
+continuity. Its MVP provider intentionally opts out of repository image prebuilds and snapshots. See
+[Superserve Sandbox Provider](SUPERSERVE_PROVIDER.md).
+
 ### Image Prebuilding
 
 For frequently-used repositories — and for [environments](#environments) — images can be prebuilt on

@@ -115,6 +115,18 @@ e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # sandbox on inbound activity. Default true; set false to kill on timeout.
 # e2b_auto_pause = true
 
+# Superserve REST API
+# Only required when sandbox_provider = "superserve".
+# Leave superserve_template empty to build a managed runtime template during apply.
+superserve_api_url       = "https://api.superserve.ai"
+superserve_api_key       = ""
+superserve_template      = ""
+superserve_sandbox_host  = "sandbox.superserve.ai"
+# superserve_auto_delete_seconds = 604800
+# Strict allowlist example: include the control-plane, SCM, and LLM hosts required by your deployment.
+# superserve_network_allow_out = ["open-inspect-control-plane-example.workers.dev", "github.com", "api.github.com", "api.anthropic.com"]
+# superserve_network_deny_out  = ["0.0.0.0/0"]
+
 # =============================================================================
 # GitHub App Credentials
 # =============================================================================

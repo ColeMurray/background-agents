@@ -1,0 +1,17 @@
+{
+  "name": "@open-inspect/superserve-infra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/build-template.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/build-template.js --packages=external",
+    "build-template": "npm run build && npm run build-template:run --",
+    "build-template:run": "node dist/build-template.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@superserve/sdk": "^0.8.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.2"
+  }
+}

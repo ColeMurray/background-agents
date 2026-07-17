@@ -2,7 +2,13 @@
  * Public sandbox backend helpers for the web app.
  */
 
-export type PublicSandboxProvider = "modal" | "daytona" | "vercel" | "opencomputer" | "e2b";
+export type PublicSandboxProvider =
+  | "modal"
+  | "daytona"
+  | "vercel"
+  | "opencomputer"
+  | "e2b"
+  | "superserve";
 
 export function getPublicSandboxProvider(): PublicSandboxProvider {
   const rawValue = process.env.NEXT_PUBLIC_SANDBOX_PROVIDER ?? process.env.SANDBOX_PROVIDER;
@@ -16,7 +22,8 @@ export function getPublicSandboxProvider(): PublicSandboxProvider {
     value === "daytona" ||
     value === "vercel" ||
     value === "opencomputer" ||
-    value === "e2b"
+    value === "e2b" ||
+    value === "superserve"
   ) {
     return value;
   }

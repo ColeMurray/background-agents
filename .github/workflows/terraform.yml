@@ -14,6 +14,7 @@ on:
       - "packages/daytona-infra/**"
       - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/superserve-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
@@ -31,6 +32,7 @@ on:
       - "packages/daytona-infra/**"
       - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/superserve-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**"
@@ -251,6 +253,13 @@ jobs:
           TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
           TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
           TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
+          TF_VAR_superserve_api_url: "${{ secrets.SUPERSERVE_API_URL || 'https://api.superserve.ai' }}"
+          TF_VAR_superserve_api_key: ${{ secrets.SUPERSERVE_API_KEY }}
+          TF_VAR_superserve_template: ${{ secrets.SUPERSERVE_TEMPLATE }}
+          TF_VAR_superserve_sandbox_host: "${{ secrets.SUPERSERVE_SANDBOX_HOST || 'sandbox.superserve.ai' }}"
+          TF_VAR_superserve_auto_delete_seconds: "${{ secrets.SUPERSERVE_AUTO_DELETE_SECONDS || 'null' }}"
+          TF_VAR_superserve_network_allow_out: "${{ secrets.SUPERSERVE_NETWORK_ALLOW_OUT || '[]' }}"
+          TF_VAR_superserve_network_deny_out: "${{ secrets.SUPERSERVE_NETWORK_DENY_OUT || '[]' }}"
 
       - name: Post Plan Results
         uses: actions/github-script@v8
@@ -407,6 +416,13 @@ jobs:
           TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
           TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
           TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
+          TF_VAR_superserve_api_url: "${{ secrets.SUPERSERVE_API_URL || 'https://api.superserve.ai' }}"
+          TF_VAR_superserve_api_key: ${{ secrets.SUPERSERVE_API_KEY }}
+          TF_VAR_superserve_template: ${{ secrets.SUPERSERVE_TEMPLATE }}
+          TF_VAR_superserve_sandbox_host: "${{ secrets.SUPERSERVE_SANDBOX_HOST || 'sandbox.superserve.ai' }}"
+          TF_VAR_superserve_auto_delete_seconds: "${{ secrets.SUPERSERVE_AUTO_DELETE_SECONDS || 'null' }}"
+          TF_VAR_superserve_network_allow_out: "${{ secrets.SUPERSERVE_NETWORK_ALLOW_OUT || '[]' }}"
+          TF_VAR_superserve_network_deny_out: "${{ secrets.SUPERSERVE_NETWORK_DENY_OUT || '[]' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

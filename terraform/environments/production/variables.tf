@@ -393,6 +393,73 @@ variable "opencomputer_template" {
   default     = ""
 }
 
+variable "superserve_api_url" {
+  description = "Base URL for the Superserve control-plane REST API"
+  type        = string
+  default     = "https://api.superserve.ai"
+
+  validation {
+    condition     = var.sandbox_provider != "superserve" || length(trimspace(var.superserve_api_url)) > 0
+    error_message = "superserve_api_url must be set when sandbox_provider = 'superserve'."
+  }
+}
+
+variable "superserve_api_key" {
+  description = "API key for the Superserve REST API (X-API-Key auth)"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "superserve" || length(trimspace(var.superserve_api_key)) > 0
+    error_message = "superserve_api_key must be set when sandbox_provider = 'superserve'."
+  }
+}
+
+variable "superserve_template" {
+  description = "Optional existing Superserve template. When empty, Terraform builds a managed Open-Inspect runtime template."
+  type        = string
+  default     = ""
+}
+
+variable "superserve_sandbox_host" {
+  description = "Bare Superserve data-plane and preview hostname"
+  type        = string
+  default     = "sandbox.superserve.ai"
+
+  validation {
+    condition     = var.sandbox_provider != "superserve" || can(regex("^[a-zA-Z0-9.-]+$", var.superserve_sandbox_host))
+    error_message = "superserve_sandbox_host must be a bare hostname without a scheme, port, or path."
+  }
+}
+
+variable "superserve_auto_delete_seconds" {
+  description = "Optional seconds to retain a continuously paused Superserve sandbox; null keeps it indefinitely"
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.superserve_auto_delete_seconds == null ? true : (
+      var.superserve_auto_delete_seconds >= 0 &&
+      var.superserve_auto_delete_seconds <= 2592000 &&
+      floor(var.superserve_auto_delete_seconds) == var.superserve_auto_delete_seconds
+    )
+    error_message = "superserve_auto_delete_seconds must be null or an integer from 0 to 2592000."
+  }
+}
+
+variable "superserve_network_allow_out" {
+  description = "Domain or CIDR egress allow rules applied to each Superserve sandbox"
+  type        = list(string)
+  default     = []
+}
+
+variable "superserve_network_deny_out" {
+  description = "CIDR egress deny rules applied to each Superserve sandbox"
+  type        = list(string)
+  default     = []
+}
+
 variable "vercel_sandbox_token" {
   description = "Vercel API token for the Vercel Sandbox API"
   type        = string
@@ -502,13 +569,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', 'e2b', or 'superserve'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
+    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b", "superserve"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', 'e2b', or 'superserve'."
   }
 }
 

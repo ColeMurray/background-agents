@@ -67,6 +67,7 @@ export interface Env {
   ANTHROPIC_API_KEY?: string; // Anthropic API key for Claude models
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
   OPENCOMPUTER_API_KEY?: string; // OpenComputer REST API key (X-API-Key auth + HMAC derivation)
+  SUPERSERVE_API_KEY?: string; // Superserve REST API key (X-API-Key auth + HMAC derivation)
   VERCEL_TOKEN?: string; // Vercel API access token for Sandbox API
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
@@ -87,7 +88,7 @@ export interface Env {
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
+  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", "e2b", or "superserve"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -98,6 +99,12 @@ export interface Env {
   DAYTONA_TARGET?: string; // Optional Daytona target name
   OPENCOMPUTER_API_URL?: string; // OpenComputer REST API base URL
   OPENCOMPUTER_TEMPLATE?: string; // Declarative template containing sandbox runtime
+  SUPERSERVE_API_URL?: string; // Superserve control-plane REST API base URL
+  SUPERSERVE_TEMPLATE?: string; // Template containing the Open-Inspect sandbox runtime
+  SUPERSERVE_SANDBOX_HOST?: string; // Bare data-plane/preview hostname
+  SUPERSERVE_AUTO_DELETE_SECONDS?: string; // Optional paused-sandbox retention (0-2592000 seconds)
+  SUPERSERVE_NETWORK_ALLOW_OUT?: string; // Optional comma-separated domain/CIDR egress allow rules
+  SUPERSERVE_NETWORK_DENY_OUT?: string; // Optional comma-separated CIDR egress deny rules
   VERCEL_PROJECT_ID?: string; // Vercel project ID used for Sandbox API scope
   VERCEL_TEAM_ID?: string; // Optional Vercel team ID used for Sandbox API scope
   VERCEL_BASE_SNAPSHOT_ID?: string; // Optional prebuilt base snapshot with sandbox runtime
