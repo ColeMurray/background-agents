@@ -81,14 +81,19 @@ export class ImageBuildReaper {
     let reaped = 0;
     await Promise.all(
       rows.map(async (row) => {
-        if (row.provider_image_id) {
+        // A row may carry a checkpoint, a secret store, or both. The store is
+        // reaped here too: it outlives the build sandbox as the checkpoint's
+        // base layer, so a bare store id (a build superseded before it
+        // finalized) still needs reclaiming.
+        if (row.provider_image_id || row.provider_secret_store_id) {
           const adapter = this.resolveCleanupAdapter(row.provider, row.id, ctx, adapters);
           if (!adapter) return;
           const deleted = await this.deleteImageBestEffort(
             row.provider,
             {
-              providerImageId: row.provider_image_id,
+              providerImageId: row.provider_image_id ?? "",
               providerSessionId: row.provider_session_id,
+              providerSecretStoreId: row.provider_secret_store_id,
             },
             ctx,
             adapter
@@ -158,7 +163,11 @@ export class ImageBuildReaper {
 
   async deleteImageBestEffort(
     provider: ImageBuildProvider,
-    image: { providerImageId: string; providerSessionId?: string | null },
+    image: {
+      providerImageId: string;
+      providerSessionId?: string | null;
+      providerSecretStoreId?: string | null;
+    },
     ctx: ImageBuildWorkflowContext,
     adapter: AnyImageBuildAdapter
   ): Promise<boolean> {

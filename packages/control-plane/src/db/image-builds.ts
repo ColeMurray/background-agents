@@ -89,6 +89,7 @@ export interface ImageBuildRow extends ImageBuildRecordView {
   provider_image_id: string | null;
   repositories_fingerprint: string;
   provider_session_id: string | null;
+  provider_secret_store_id: string | null;
   callback_token_hash: string | null;
   callback_token_expires_at: number | null;
   callback_token_used_at: number | null;
@@ -102,6 +103,7 @@ export interface ReapableImageBuildRow {
   provider: ImageBuildProvider;
   provider_image_id: string | null;
   provider_session_id: string | null;
+  provider_secret_store_id: string | null;
 }
 
 /**
@@ -172,13 +174,14 @@ export class ImageBuildStore {
   async bindProviderSession(
     buildId: string,
     provider: ImageBuildProvider,
-    providerSessionId: string
+    providerSessionId: string,
+    providerSecretStoreId?: string | null
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE image_builds SET provider_session_id = ? WHERE id = ? AND provider = ? AND status = 'building'"
+        "UPDATE image_builds SET provider_session_id = ?, provider_secret_store_id = ? WHERE id = ? AND provider = ? AND status = 'building'"
       )
-      .bind(providerSessionId, buildId, provider)
+      .bind(providerSessionId, providerSecretStoreId ?? null, buildId, provider)
       .run();
 
     return (result.meta?.changes ?? 0) > 0;
@@ -430,7 +433,7 @@ export class ImageBuildStore {
 
     const superseded = await this.db
       .prepare(
-        `SELECT id, provider_image_id, provider_session_id FROM image_builds
+        `SELECT id, provider_image_id, provider_session_id, provider_secret_store_id FROM image_builds
          WHERE scope_kind = ?
            AND scope_id = ?
            AND provider = ?
@@ -451,13 +454,19 @@ export class ImageBuildStore {
         build.created_at,
         buildId
       )
-      .all<{ id: string; provider_image_id: string | null; provider_session_id: string | null }>();
+      .all<{
+        id: string;
+        provider_image_id: string | null;
+        provider_session_id: string | null;
+        provider_secret_store_id: string | null;
+      }>();
 
     const supersededImages: SupersededImageBuild[] = (superseded.results || []).map((image) => ({
       imageBuildId: image.id,
       image: {
         providerImageId: image.provider_image_id ?? "",
         providerSessionId: image.provider_session_id,
+        providerSecretStoreId: image.provider_secret_store_id,
       },
     }));
 
@@ -719,7 +728,7 @@ export class ImageBuildStore {
   async getSupersededImages(limit: number): Promise<ReapableImageBuildRow[]> {
     const result = await this.db
       .prepare(
-        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
+        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id, provider_secret_store_id
          FROM image_builds WHERE status = 'superseded'
          ORDER BY created_at ASC LIMIT ?`
       )
@@ -740,7 +749,7 @@ export class ImageBuildStore {
   async getFailedImagesWithArtifacts(limit: number): Promise<ReapableImageBuildRow[]> {
     const result = await this.db
       .prepare(
-        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
+        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id, provider_secret_store_id
          FROM image_builds WHERE status = 'failed' AND provider_image_id IS NOT NULL
          ORDER BY created_at ASC LIMIT ?`
       )
@@ -767,7 +776,7 @@ export class ImageBuildStore {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE image_builds SET provider_image_id = NULL, provider_session_id = NULL
+        `UPDATE image_builds SET provider_image_id = NULL, provider_session_id = NULL, provider_secret_store_id = NULL
          WHERE id = ? AND status = 'failed' AND provider_image_id = ?`
       )
       .bind(imageBuildId, reapedProviderImageId)

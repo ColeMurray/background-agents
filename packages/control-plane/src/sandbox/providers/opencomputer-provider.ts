@@ -66,7 +66,10 @@ export interface TriggerOpenComputerEnvironmentImageBuildConfig {
   userEnvVars?: Record<string, string>;
   cloneToken?: string;
   buildTimeoutSeconds?: number;
-  onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
+  onProviderSessionCreated?: (
+    providerSessionId: string,
+    providerSecretStoreId?: string | null
+  ) => Promise<void>;
 }
 
 export interface TriggerOpenComputerEnvironmentImageBuildResult {
@@ -406,7 +409,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       providerObjectId = sandbox.id;
 
       if (config.onProviderSessionCreated) {
-        await config.onProviderSessionCreated(sandbox.id);
+        // Report the build's secret store id too: the checkpoint taken from
+        // this sandbox retains the store as its base layer, so it must be
+        // reaped with the image rather than deleted at sandbox teardown.
+        await config.onProviderSessionCreated(sandbox.id, secretStore?.id);
       }
 
       await this.client.startRuntime(sandbox.id, {
@@ -441,14 +447,31 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
   async deleteProviderImage(
     providerImageId: string,
-    providerSessionId?: string | null
+    providerSessionId?: string | null,
+    providerSecretStoreId?: string | null
   ): Promise<void> {
-    if (!providerSessionId) return;
-    try {
-      await this.client.deleteCheckpoint(providerSessionId, providerImageId);
-    } catch (error) {
-      if (error instanceof OpenComputerNotFoundError) return;
-      throw this.classifyError("Failed to delete OpenComputer checkpoint", error);
+    // Checkpoint deletion is keyed by its source sandbox; skip when the pair is
+    // incomplete (e.g. a build superseded before it produced a checkpoint).
+    if (providerSessionId && providerImageId) {
+      try {
+        await this.client.deleteCheckpoint(providerSessionId, providerImageId);
+      } catch (error) {
+        if (!(error instanceof OpenComputerNotFoundError)) {
+          throw this.classifyError("Failed to delete OpenComputer checkpoint", error);
+        }
+      }
+    }
+    // The build's secret store is the checkpoint's base layer, kept alive past
+    // sandbox teardown, so it is reclaimed here with the image. Idempotent — an
+    // already-deleted store is treated as done.
+    if (providerSecretStoreId) {
+      try {
+        await this.client.deleteSecretStore(providerSecretStoreId);
+      } catch (error) {
+        if (!(error instanceof OpenComputerNotFoundError)) {
+          throw this.classifyError("Failed to delete OpenComputer secret store", error);
+        }
+      }
     }
   }
 

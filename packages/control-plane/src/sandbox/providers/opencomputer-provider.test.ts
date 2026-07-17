@@ -314,6 +314,51 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
+  it("reaps a checkpoint and its base secret store together", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.deleteProviderImage("oc-checkpoint-1", "oc-session-1", "secret-store-9");
+
+    expect(client.deleteCheckpoint).toHaveBeenCalledWith("oc-session-1", "oc-checkpoint-1");
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-9");
+  });
+
+  it("reaps a bare secret store when no checkpoint pair is present", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.deleteProviderImage("", null, "secret-store-9");
+
+    expect(client.deleteCheckpoint).not.toHaveBeenCalled();
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-9");
+  });
+
+  it("ignores a missing checkpoint or secret store when reaping an image", async () => {
+    const client = createMockClient({
+      deleteCheckpoint: vi.fn(async () => {
+        throw new OpenComputerNotFoundError("checkpoint gone");
+      }),
+      deleteSecretStore: vi.fn(async () => {
+        throw new OpenComputerNotFoundError("store gone");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.deleteProviderImage("oc-checkpoint-1", "oc-session-1", "secret-store-9")
+    ).resolves.toBeUndefined();
+  });
+
   it("derives a unique secret-store name per sandbox", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
@@ -619,7 +664,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.setSecret).not.toHaveBeenCalledWith(
       expect.objectContaining({ name: "OI_REPO_IMAGE_CALLBACK_SECRET" })
     );
-    expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1", "secret-store-1");
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1", {
       OI_REPO_IMAGE_PROVIDER_SESSION_ID: "oc-sandbox-1",
     });
@@ -671,7 +716,7 @@ describe("OpenComputerSandboxProvider", () => {
       openinspect_kind: "environment-image-build",
       openinspect_environment: "env_flagship",
     });
-    expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1", "secret-store-1");
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1", {
       OI_REPO_IMAGE_PROVIDER_SESSION_ID: "oc-sandbox-1",
     });

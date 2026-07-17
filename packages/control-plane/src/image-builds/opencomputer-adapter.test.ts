@@ -82,7 +82,7 @@ describe("OpenComputerImageBuildAdapter", () => {
     });
   });
 
-  it("cleans up completed build sandboxes and deletes checkpoints with session context", async () => {
+  it("keeps the secret store when tearing down a build whose image is ready", async () => {
     const provider = createProvider();
     const adapter = new OpenComputerImageBuildAdapter(provider);
     const correlation = { request_id: "request-1", trace_id: "trace-1" };
@@ -91,15 +91,68 @@ describe("OpenComputerImageBuildAdapter", () => {
       buildId: "build-1",
       providerSessionId: "oc-session-1",
       correlation,
+      keepSecretStore: true,
     });
-    await adapter.deleteImage({
-      image: { providerImageId: "oc-checkpoint-1", providerSessionId: "oc-session-1" },
+
+    // The checkpoint retains the store as its base layer, so the store must
+    // survive the build sandbox and be reaped later with the image.
+    expect(provider.deleteSandbox).toHaveBeenCalledWith("oc-session-1", {
+      deleteSecretStore: false,
+    });
+  });
+
+  it("deletes the secret store when the completed build's checkpoint was discarded", async () => {
+    const provider = createProvider();
+    const adapter = new OpenComputerImageBuildAdapter(provider);
+    const correlation = { request_id: "request-1", trace_id: "trace-1" };
+
+    await adapter.cleanupCompletedBuild?.({
+      buildId: "build-1",
+      providerSessionId: "oc-session-1",
+      correlation,
+      keepSecretStore: false,
+    });
+
+    expect(provider.deleteSandbox).toHaveBeenCalledWith("oc-session-1", {
+      deleteSecretStore: true,
+    });
+  });
+
+  it("deletes the secret store with the sandbox when a build fails", async () => {
+    const provider = createProvider();
+    const adapter = new OpenComputerImageBuildAdapter(provider);
+    const correlation = { request_id: "request-1", trace_id: "trace-1" };
+
+    await adapter.cleanupFailedBuild?.({
+      buildId: "build-1",
+      providerSessionId: "oc-session-1",
+      errorMessage: "boom",
       correlation,
     });
 
     expect(provider.deleteSandbox).toHaveBeenCalledWith("oc-session-1", {
       deleteSecretStore: true,
     });
-    expect(provider.deleteProviderImage).toHaveBeenCalledWith("oc-checkpoint-1", "oc-session-1");
+  });
+
+  it("reaps the checkpoint and its base secret store when deleting an image", async () => {
+    const provider = createProvider();
+    const adapter = new OpenComputerImageBuildAdapter(provider);
+    const correlation = { request_id: "request-1", trace_id: "trace-1" };
+
+    await adapter.deleteImage({
+      image: {
+        providerImageId: "oc-checkpoint-1",
+        providerSessionId: "oc-session-1",
+        providerSecretStoreId: "secret-store-9",
+      },
+      correlation,
+    });
+
+    expect(provider.deleteProviderImage).toHaveBeenCalledWith(
+      "oc-checkpoint-1",
+      "oc-session-1",
+      "secret-store-9"
+    );
   });
 });

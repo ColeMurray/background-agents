@@ -720,7 +720,8 @@ describe("ImageBuildWorkflow", () => {
       expect(store.bindProviderSession).toHaveBeenCalledWith(
         expect.stringMatching(/^imgb-env_1-/),
         "vercel",
-        "vercel-session-1"
+        "vercel-session-1",
+        undefined
       );
     });
 
@@ -1004,6 +1005,7 @@ describe("ImageBuildWorkflow", () => {
         provider: "modal" as const,
         provider_image_id: providerImageId,
         provider_session_id: null,
+        provider_secret_store_id: null,
       };
     }
 
@@ -1044,7 +1046,11 @@ describe("ImageBuildWorkflow", () => {
       expect(result.reapedFailed).toBe(1);
       expect(adapter.deleteImage).toHaveBeenCalledWith(
         expect.objectContaining({
-          image: { providerImageId: "im-restore", providerSessionId: null },
+          image: {
+            providerImageId: "im-restore",
+            providerSessionId: null,
+            providerSecretStoreId: null,
+          },
         })
       );
       // The failed row itself is kept for visibility — only the artifact

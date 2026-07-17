@@ -95,7 +95,15 @@ export type PlannedImageBuild =
 
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */
 export interface ImageBuildStartCallbacks {
-  bindProviderSession(providerSessionId: string): Promise<void>;
+  /**
+   * `providerSecretStoreId` records a per-build secret store the provider
+   * created for the build sandbox (OpenComputer), so the reaper can delete it
+   * with the image. Providers without one omit it.
+   */
+  bindProviderSession(
+    providerSessionId: string,
+    providerSecretStoreId?: string | null
+  ): Promise<void>;
 }
 
 /**
@@ -139,6 +147,19 @@ export interface FailedImageBuildInput {
 }
 
 /**
+ * Teardown input for a build sandbox whose completion already settled.
+ * `keepSecretStore` is the workflow's judgement about whether a durable image
+ * now depends on the build's secret store: true only when the build was marked
+ * ready (its checkpoint retains the store as a base layer, so it must outlive
+ * the sandbox and be reaped with the image); false when the checkpoint was
+ * discarded (superseded, or the commit never settled), so the store is deleted
+ * with the sandbox. Providers without per-build secret stores ignore it.
+ */
+export interface CleanupCompletedBuildInput extends FinalizeImageBuildInput {
+  keepSecretStore: boolean;
+}
+
+/**
  * Provider-facing operations for image builds. The workflow owns state
  * transitions; adapters own translating lifecycle steps into provider API
  * calls (start build, snapshot/checkpoint, teardown, artifact deletion).
@@ -150,7 +171,7 @@ export type ImageBuildAdapter<Plan extends ImageBuildPlan> = {
   deleteImage(input: DeleteImageInput): Promise<void>;
   finalizeSuccessfulBuild?(input: FinalizeImageBuildInput): Promise<ImageBuildProviderImageRef>;
   cleanupFailedBuild?(input: FailedImageBuildInput): Promise<void>;
-  cleanupCompletedBuild?(input: FinalizeImageBuildInput): Promise<void>;
+  cleanupCompletedBuild?(input: CleanupCompletedBuildInput): Promise<void>;
 };
 
 export type AnyImageBuildAdapter =

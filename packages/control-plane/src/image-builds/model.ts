@@ -54,6 +54,12 @@ export function parseRepoScopeId(scopeId: string): { repoOwner: string; repoName
 export interface ImageBuildProviderImageRef {
   providerImageId: string;
   providerSessionId?: string | null;
+  /**
+   * OpenComputer only: the per-build secret store the checkpoint retains as its
+   * base layer, reaped together with the image. Null for Modal/Vercel, whose
+   * artifacts are self-contained.
+   */
+  providerSecretStoreId?: string | null;
 }
 
 export interface SupersededImageBuild {

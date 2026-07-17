@@ -1,0 +1,17 @@
+-- Provider secret store backing an image, reaped with the image.
+--
+-- OpenComputer image builds run in a sandbox that carries a per-build secret
+-- store; checkpointing that sandbox (the image artifact) retains the store as
+-- the checkpoint's base layer, so every later fork of the image MERGES that
+-- store back in. Deleting it at build-sandbox teardown — which the completed
+-- build cleanup used to do — leaves every spawn from the image failing with
+-- "secret store not found". The store must therefore outlive the build sandbox
+-- and be reclaimed only when the image itself is (superseded, restore-failed,
+-- or the owning entity deleted).
+--
+-- This column records that store's provider id on the build row so the cleanup
+-- reaper deletes it alongside provider_image_id/provider_session_id. Nullable:
+-- only OpenComputer populates it; Modal images and Vercel snapshots are
+-- self-contained and leave it NULL. No backfill — images built before this
+-- column already had their store deleted at teardown and must be rebuilt.
+ALTER TABLE image_builds ADD COLUMN provider_secret_store_id TEXT;

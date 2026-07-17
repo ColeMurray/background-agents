@@ -266,9 +266,14 @@ export class ImageBuildWorkflow {
       const start = this.preparePlannedBuildStart(planned, ctx);
       startAdapter = start.adapter;
       await start.start({
-        bindProviderSession: async (providerSessionId) => {
+        bindProviderSession: async (providerSessionId, providerSecretStoreId) => {
           providerSessionIdForCleanup = providerSessionId;
-          const bound = await this.store.bindProviderSession(buildId, provider, providerSessionId);
+          const bound = await this.store.bindProviderSession(
+            buildId,
+            provider,
+            providerSessionId,
+            providerSecretStoreId
+          );
           if (!bound) {
             throw new Error(`Failed to bind ${provider} build session`);
           }
@@ -637,10 +642,22 @@ export class ImageBuildWorkflow {
         }
       }
 
-      await this.cleanupCompletedBuild(provider, adapter, input, ctx);
+      // Keep the build's secret store only when a ready image now depends on
+      // it (its checkpoint's base layer); every other outcome discarded the
+      // checkpoint, so the store is torn down with the sandbox.
+      await this.cleanupCompletedBuild(
+        provider,
+        adapter,
+        input,
+        ctx,
+        result.type === "marked_ready"
+      );
     } catch (e) {
       if (adapter) {
-        await this.cleanupCompletedBuild(provider, adapter, input, ctx);
+        // If the commit settled before the throw, a ready image may own the
+        // store — keep it (the reaper reclaims it if the row is not ready).
+        // Otherwise no durable image exists, so delete it with the sandbox.
+        await this.cleanupCompletedBuild(provider, adapter, input, ctx, commitResolved);
       }
       if (!commitResolved) {
         // The ready transition never settled: the row is still building and
@@ -678,7 +695,8 @@ export class ImageBuildWorkflow {
     provider: ImageBuildProvider,
     adapter: AnyImageBuildAdapter,
     input: { buildId: string; providerSessionId: string },
-    ctx: ImageBuildWorkflowContext
+    ctx: ImageBuildWorkflowContext,
+    keepSecretStore: boolean
   ): Promise<void> {
     if (!adapter.cleanupCompletedBuild) return;
     try {
@@ -686,6 +704,7 @@ export class ImageBuildWorkflow {
         buildId: input.buildId,
         providerSessionId: input.providerSessionId,
         correlation: ctx,
+        keepSecretStore,
       });
     } catch (e) {
       logger.warn(`image_build.${provider}_completed_build_cleanup_failed`, {

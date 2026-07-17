@@ -2,6 +2,7 @@ import { createLogger } from "../logger";
 import type { OpenComputerSandboxProvider } from "../sandbox/providers/opencomputer-provider";
 import type { ImageBuildProviderImageRef } from "./model";
 import type {
+  CleanupCompletedBuildInput,
   DeleteImageInput,
   FailedImageBuildInput,
   FinalizeImageBuildInput,
@@ -66,28 +67,43 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComp
     };
   }
 
-  async cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void> {
-    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
+  async cleanupCompletedBuild(input: CleanupCompletedBuildInput): Promise<void> {
+    // Keep the secret store when a durable image depends on it: the checkpoint
+    // taken in finalizeSuccessfulBuild retains it as a base layer, so deleting
+    // it here would break every future fork of the image. It is reaped with the
+    // image in deleteImage. When the checkpoint was discarded (not marked
+    // ready), nothing depends on the store, so it is deleted with the sandbox.
+    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation, {
+      deleteSecretStore: !input.keepSecretStore,
+    });
   }
 
   async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
-    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
+    // A failed build produced no checkpoint, so nothing references the store —
+    // delete it with the sandbox.
+    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation, {
+      deleteSecretStore: true,
+    });
   }
 
   async deleteImage(input: DeleteImageInput): Promise<void> {
     await this.provider.deleteProviderImage(
       input.image.providerImageId,
-      input.image.providerSessionId
+      input.image.providerSessionId,
+      input.image.providerSecretStoreId
     );
   }
 
   private async deleteBuildSandbox(
     buildId: string,
     providerSessionId: string,
-    correlation: FinalizeImageBuildInput["correlation"]
+    correlation: FinalizeImageBuildInput["correlation"],
+    options: { deleteSecretStore: boolean }
   ): Promise<void> {
     try {
-      await this.provider.deleteSandbox(providerSessionId, { deleteSecretStore: true });
+      await this.provider.deleteSandbox(providerSessionId, {
+        deleteSecretStore: options.deleteSecretStore,
+      });
     } catch (error) {
       logger.warn("image_build.opencomputer_build_cleanup_failed", {
         build_id: buildId,

@@ -154,7 +154,11 @@ describe("Image builds", () => {
       expect(result.supersededImages).toEqual([
         {
           imageBuildId: "imgb-old",
-          image: { providerImageId: "im-old", providerSessionId: null },
+          image: {
+            providerImageId: "im-old",
+            providerSessionId: null,
+            providerSecretStoreId: null,
+          },
         },
       ]);
 
