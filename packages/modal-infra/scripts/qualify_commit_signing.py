@@ -39,6 +39,7 @@ app = modal.App("open-inspect-commit-signing-qualification")
 base_image = _load_base_image()
 
 MINIMUM_GIT_VERSION = (2, 34, 0)
+QUALIFICATION_TIMEOUT_SECONDS = 900
 
 
 def _run(*args: str, cwd: Path | None = None) -> str:
@@ -89,7 +90,10 @@ def _assert_identity(repo: Path, commit: str) -> None:
         raise RuntimeError(f"Unexpected author/committer identity: {identity}")
 
 
-@app.function(image=base_image, timeout=900)  # type: ignore[untyped-decorator]
+@app.function(  # type: ignore[untyped-decorator]
+    image=base_image,
+    timeout=QUALIFICATION_TIMEOUT_SECONDS,
+)
 def qualify_commit_signing() -> dict[str, Any]:
     from sandbox_runtime.git_signing import GitSigningRuntime
     from sandbox_runtime.repo_config import RepoEntry, dump_repo_manifest
