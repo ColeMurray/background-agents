@@ -18,6 +18,14 @@ import type { GitPushSpec } from "../source-control";
 
 // Database row types (match SQLite schema)
 
+export type PromptGitIdentity =
+  | {
+      mode: "attributed-user";
+      name: string;
+      email: string;
+    }
+  | { mode: "agent-only" };
+
 export interface SessionRow {
   id: string;
   session_name: string | null; // External session name for WebSocket routing
@@ -79,6 +87,7 @@ export interface MessageRow {
   reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
+  git_identity: string | null; // JSON PromptGitIdentity snapshot; null only for pre-migration messages
   status: MessageStatus;
   error_message: string | null;
   created_at: number;
@@ -146,13 +155,7 @@ export interface PromptCommand {
   reasoningEffort?: string; // Reasoning effort level
   author: {
     userId: string;
-    gitIdentity:
-      | {
-          mode: "attributed-user";
-          name: string;
-          email: string;
-        }
-      | { mode: "agent-only" };
+    gitIdentity: PromptGitIdentity;
   };
   attachments?: ResolvedSessionAttachment[];
 }

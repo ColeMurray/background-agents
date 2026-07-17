@@ -179,6 +179,7 @@ export interface CreateMessageData {
   reasoningEffort?: string | null;
   attachments?: string | null;
   callbackContext?: string | null;
+  gitIdentity: string;
   status: MessageStatus;
   createdAt: number;
 }
@@ -799,8 +800,8 @@ export class SessionRepository {
 
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
-      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, git_identity, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -809,6 +810,7 @@ export class SessionRepository {
       data.reasoningEffort ?? null,
       data.attachments ?? null,
       data.callbackContext ?? null,
+      data.gitIdentity,
       data.status,
       data.createdAt
     );

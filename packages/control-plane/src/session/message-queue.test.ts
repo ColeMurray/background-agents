@@ -63,6 +63,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    git_identity: null,
     status: "pending",
     error_message: null,
     created_at: 1000,
@@ -199,6 +200,31 @@ describe("SessionMessageQueue", () => {
     await h.queue.handlePromptMessage({} as WebSocket, { content: "hello" });
 
     expect(h.setSessionStatus).toHaveBeenCalledWith("active");
+  });
+
+  it("snapshots the resolved Git author identity when a prompt is enqueued", async () => {
+    const h = buildQueue();
+    h.participantService.getByUserId.mockReturnValue(
+      createParticipant({
+        scm_user_id: "1001",
+        scm_login: "octocat",
+        scm_name: "Octo Cat",
+        scm_email: "private@example.com",
+      })
+    );
+
+    await h.queue.handlePromptMessage({} as WebSocket, { content: "hello" });
+
+    expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitIdentity: JSON.stringify({
+          mode: "attributed-user",
+          name: "Octo Cat",
+          email: "1001+octocat@users.noreply.github.com",
+        }),
+      }),
+      []
+    );
   });
 
   it("stores attachments and embeds content-free metadata in the user_message event", async () => {
@@ -395,16 +421,23 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
   });
 
-  it("derives canonical GitHub author metadata again at sandbox dispatch", async () => {
+  it("dispatches the Git author identity snapshotted with the queued prompt", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
-    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-attributed" }));
+    h.repository.getNextPendingMessage.mockReturnValue({
+      ...createMessage({ id: "msg-attributed" }),
+      git_identity: JSON.stringify({
+        mode: "attributed-user",
+        name: "Queued Author",
+        email: "1001+queued@users.noreply.github.com",
+      }),
+    } as MessageRow);
     h.repository.getParticipantById.mockReturnValue(
       createParticipant({
-        scm_user_id: "1001",
-        scm_login: "octocat",
-        scm_name: "Octo Cat",
-        scm_email: "private@example.com",
+        scm_user_id: "2002",
+        scm_login: "changed",
+        scm_name: "Changed Later",
+        scm_email: "changed@example.com",
       })
     );
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
@@ -418,8 +451,8 @@ describe("SessionMessageQueue", () => {
           userId: "user-1",
           gitIdentity: {
             mode: "attributed-user",
-            name: "Octo Cat",
-            email: "1001+octocat@users.noreply.github.com",
+            name: "Queued Author",
+            email: "1001+queued@users.noreply.github.com",
           },
         },
       })

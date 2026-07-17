@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS messages (
   reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
   callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
+  git_identity TEXT,                                -- JSON prompt-scoped Git author identity snapshot
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   created_at INTEGER NOT NULL,
@@ -460,6 +461,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 35,
     description: "Create attachments table",
     run: ATTACHMENTS_TABLE_SQL,
+  },
+  {
+    id: 36,
+    description: "Add prompt-scoped Git identity snapshot to messages",
+    run: `ALTER TABLE messages ADD COLUMN git_identity TEXT`,
   },
 ];
 

@@ -661,6 +661,7 @@ describe("SessionRepository", () => {
         model: "claude-sonnet-4",
         attachments: "[]",
         callbackContext: '{"channel":"C123"}',
+        gitIdentity: '{"mode":"agent-only"}',
         status: "pending",
         createdAt: 1000,
       });
@@ -676,6 +677,7 @@ describe("SessionRepository", () => {
         null,
         "[]",
         '{"channel":"C123"}',
+        '{"mode":"agent-only"}',
         "pending",
         1000,
       ]);
@@ -688,6 +690,7 @@ describe("SessionRepository", () => {
       authorId: "p-1",
       content: "Look",
       source: "web" as const,
+      gitIdentity: '{"mode":"agent-only"}',
       status: "pending" as const,
       createdAt: 1000,
     };

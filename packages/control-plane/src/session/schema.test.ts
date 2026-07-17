@@ -249,4 +249,14 @@ describe("applyMigrations", () => {
     expect(migration?.run).toContain("cleanup_claimed_at INTEGER");
     expect(migration?.run).not.toContain("kind TEXT");
   });
+
+  it("stores queued Git identity snapshots for fresh and existing session databases", () => {
+    const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
+      ");"
+    )[0];
+    expect(messagesTable).toContain("git_identity TEXT");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 36);
+    expect(migration?.run).toContain("ALTER TABLE messages ADD COLUMN git_identity TEXT");
+  });
 });

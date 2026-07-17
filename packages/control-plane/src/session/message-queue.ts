@@ -18,7 +18,7 @@ import type {
   SessionStatus,
 } from "../types";
 import type { SourceControlProviderName } from "../source-control";
-import type { SessionRow, ParticipantRow, SandboxCommand } from "./types";
+import type { SessionRow, ParticipantRow, PromptGitIdentity, SandboxCommand } from "./types";
 import type { SessionRepository } from "./repository";
 import {
   AttachmentClaimConflictError,
@@ -83,6 +83,45 @@ interface EnqueuePromptCoreData {
 interface EnqueuedPrompt {
   messageId: string;
   position: number;
+}
+
+function resolveParticipantGitIdentity(
+  participant: ParticipantRow | null,
+  scmProvider: SourceControlProviderName
+): PromptGitIdentity {
+  const gitAuthor = resolveGitAuthorIdentity({
+    scmProvider,
+    scmUserId: participant?.scm_user_id,
+    scmLogin: participant?.scm_login,
+    scmName: participant?.scm_name,
+    scmEmail: participant?.scm_email,
+  });
+  return gitAuthor
+    ? {
+        mode: "attributed-user",
+        name: gitAuthor.name,
+        email: gitAuthor.email,
+      }
+    : { mode: "agent-only" };
+}
+
+function parseGitIdentitySnapshot(value: string): PromptGitIdentity | null {
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (parsed.mode === "agent-only") return { mode: "agent-only" };
+    if (
+      parsed.mode === "attributed-user" &&
+      typeof parsed.name === "string" &&
+      parsed.name.length > 0 &&
+      typeof parsed.email === "string" &&
+      parsed.email.length > 0
+    ) {
+      return { mode: "attributed-user", name: parsed.name, email: parsed.email };
+    }
+  } catch {
+    // Invalid snapshots fail closed to agent-only at dispatch.
+  }
+  return null;
 }
 
 export class SessionMessageQueue {
@@ -183,13 +222,9 @@ export class SessionMessageQueue {
     }
 
     const author = this.deps.repository.getParticipantById(message.author_id);
-    const gitAuthor = resolveGitAuthorIdentity({
-      scmProvider: this.deps.scmProvider,
-      scmUserId: author?.scm_user_id,
-      scmLogin: author?.scm_login,
-      scmName: author?.scm_name,
-      scmEmail: author?.scm_email,
-    });
+    const gitIdentity = message.git_identity
+      ? (parseGitIdentitySnapshot(message.git_identity) ?? { mode: "agent-only" as const })
+      : resolveParticipantGitIdentity(author, this.deps.scmProvider);
     const session = this.deps.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     const resolvedEffort =
@@ -205,13 +240,7 @@ export class SessionMessageQueue {
       reasoningEffort: resolvedEffort,
       author: {
         userId: author?.user_id ?? "unknown",
-        gitIdentity: gitAuthor
-          ? {
-              mode: "attributed-user",
-              name: gitAuthor.name,
-              email: gitAuthor.email,
-            }
-          : { mode: "agent-only" },
+        gitIdentity,
       },
       attachments: parseStoredSessionAttachments(message.attachments, () =>
         this.deps.log.error("prompt.invalid_stored_attachments")
@@ -422,6 +451,7 @@ export class SessionMessageQueue {
       effectiveModelForEffort,
       data.reasoningEffort
     );
+    const gitIdentity = resolveParticipantGitIdentity(data.participant, this.deps.scmProvider);
 
     try {
       this.deps.repository.createMessageWithAttachments(
@@ -434,6 +464,7 @@ export class SessionMessageQueue {
           reasoningEffort: messageReasoningEffort,
           attachments: attachments ? JSON.stringify(attachments) : null,
           callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
+          gitIdentity: JSON.stringify(gitIdentity),
           status: "pending",
           createdAt: now,
         },
