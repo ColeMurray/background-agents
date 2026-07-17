@@ -38,6 +38,7 @@ function createStore() {
     getBuildRow: vi.fn().mockResolvedValue(null),
     recordArtifactOnSupersededBuild: vi.fn().mockResolvedValue(true),
     bindProviderSession: vi.fn().mockResolvedValue(true),
+    verifyCallbackToken: vi.fn().mockResolvedValue(false),
     consumeCallbackToken: vi.fn().mockResolvedValue(null),
     markBuildFailedWithCallbackToken: vi.fn().mockResolvedValue(false),
     tryMarkImageBuildReady: vi.fn(),
@@ -625,6 +626,7 @@ describe("ImageBuildWorkflow", () => {
         providerSessionId: "vercel-session-1",
         status: "building",
       });
+      store.verifyCallbackToken.mockResolvedValue(true);
       return store;
     }
 
@@ -721,6 +723,13 @@ describe("ImageBuildWorkflow", () => {
           providerSessionId: "vercel-session-1",
         })
       );
+      expect(store.verifyCallbackToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buildId: "imgb-env_1-1-abcd",
+          provider: "vercel",
+          providerSessionId: "vercel-session-1",
+        })
+      );
       expect(adapter.finalizeSuccessfulBuild).toHaveBeenCalledWith(
         expect.objectContaining({ providerSessionId: "vercel-session-1" })
       );
@@ -753,6 +762,26 @@ describe("ImageBuildWorkflow", () => {
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
     });
 
+    it("does not consume the token for an authenticated malformed completion", async () => {
+      const store = sessionBuildStore();
+      const { workflow } = createWorkflow({ store });
+
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion({
+            providerImageId: undefined,
+            providerSessionId: "vercel-session-1",
+            runtimeVersion: undefined,
+          }),
+          callbackToken: "callback-token",
+          context: ctx,
+        })
+      ).rejects.toBeInstanceOf(ImageBuildInvalidCallbackError);
+
+      expect(store.verifyCallbackToken).toHaveBeenCalled();
+      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
+    });
+
     it("requires provider_session_id on provider-session completions", async () => {
       const { workflow } = createWorkflow({ store: sessionBuildStore() });
 
@@ -767,7 +796,7 @@ describe("ImageBuildWorkflow", () => {
 
     it("authenticates the token before validating the completion payload", async () => {
       const store = sessionBuildStore();
-      store.consumeCallbackToken.mockResolvedValue(null);
+      store.verifyCallbackToken.mockResolvedValue(false);
       const { workflow } = createWorkflow({ store });
 
       // Malformed payload (no session id, no runtime version) + bad token:
@@ -782,6 +811,7 @@ describe("ImageBuildWorkflow", () => {
           context: ctx,
         })
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
+      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
     });
 
     it("marks the build failed when deferred finalization fails", async () => {

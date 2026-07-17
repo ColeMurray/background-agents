@@ -48,7 +48,6 @@ from ..clone_token import resolve_clone_token
 from ..log_config import get_logger
 from ..sandbox.manager import (
     DEFAULT_BUILD_TIMEOUT_SECONDS,
-    MAX_BUILD_TIMEOUT_SECONDS,
     build_function_timeout_seconds,
 )
 
@@ -413,12 +412,6 @@ async def build_image(
 # Scheduler: cron-based rebuild logic
 # ---------------------------------------------------------------------------
 
-# Sized at the longest possible build's worker timeout so a long-but-live build isn't reaped.
-STALE_BUILD_THRESHOLD_SECONDS = build_function_timeout_seconds(MAX_BUILD_TIMEOUT_SECONDS)
-
-# Cleanup threshold: failed builds older than this are deleted
-FAILED_BUILD_CLEANUP_SECONDS = 86400  # 24 hours
-
 # Builds triggered per tick across ALL units, at most — cheap storm insurance
 # since there is no global build-concurrency cap; the next tick picks up the
 # rest. Sized so a runtime-floor bump (which queues every enabled unit) drains
@@ -649,8 +642,8 @@ def _unit_trigger_path(unit: dict) -> str | None:
 async def _rebuild_images_pass(control_plane_url: str, clone_token: str) -> int:
     """
     The unified rebuild pass (design §4): GET enabled units + cross-scope
-    status, evaluate the rebuild triggers per unit, POST triggers (one cap
-    across all units per tick), then mark-stale and cleanup.
+    status, evaluate the rebuild triggers per unit, and POST triggers (one cap
+    across all units per tick). The control-plane cron owns build maintenance.
     """
     enabled_data = await _api_get(f"{control_plane_url}/image-builds/enabled")
     units: list[dict] = enabled_data.get("units", [])
@@ -687,29 +680,6 @@ async def _rebuild_images_pass(control_plane_url: str, clone_token: str) -> int:
                     scope_id=unit.get("scopeId", ""),
                     error=str(e),
                 )
-
-    try:
-        result = await _api_post(
-            f"{control_plane_url}/image-builds/mark-stale",
-            {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS},
-        )
-        stale_count = result.get("markedFailed", 0)
-        if stale_count:
-            log.info("scheduler.stale_marked", count=stale_count)
-    except Exception as e:
-        log.warn("scheduler.mark_stale_error", error=str(e))
-
-    try:
-        result = await _api_post(
-            f"{control_plane_url}/image-builds/cleanup",
-            {"max_age_seconds": FAILED_BUILD_CLEANUP_SECONDS},
-        )
-        deleted = result.get("deleted", 0)
-        reaped = result.get("reapedSuperseded", 0)
-        if deleted or reaped:
-            log.info("scheduler.cleanup", deleted=deleted, reaped_superseded=reaped)
-    except Exception as e:
-        log.warn("scheduler.cleanup_error", error=str(e))
 
     return builds_triggered
 

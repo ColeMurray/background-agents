@@ -6,6 +6,12 @@
 
 import { handleRequest } from "./router";
 import { createLogger } from "./logger";
+import { ImageBuildStore } from "./db/image-builds";
+import {
+  DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS,
+  DEFAULT_STALE_BUILD_MAX_AGE_MS,
+} from "./image-builds/maintenance";
+import { createImageBuildWorkflowFromEnv } from "./image-builds/workflow";
 import type { Env } from "./types";
 
 const logger = createLogger("worker");
@@ -31,12 +37,12 @@ export default {
     return handleRequest(request, env, ctx);
   },
 
-  /**
-   * Cron trigger handler — wakes the SchedulerDO to process overdue automations.
-   */
+  /** Run image-build maintenance and wake the SchedulerDO for overdue automations. */
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await runImageBuildMaintenance(env);
+
     if (!env.SCHEDULER) {
-      logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
+      logger.debug("SCHEDULER binding not configured, skipping scheduled automation tick");
       return;
     }
 
@@ -48,6 +54,47 @@ export default {
     await stub.fetch("http://internal/internal/tick", { method: "POST" });
   },
 };
+
+export async function runImageBuildMaintenance(env: Env): Promise<void> {
+  const context = {
+    trace_id: crypto.randomUUID(),
+    request_id: crypto.randomUUID().slice(0, 8),
+  };
+
+  try {
+    const markedFailed = await new ImageBuildStore(env.DB).markStaleBuildsAsFailed(
+      DEFAULT_STALE_BUILD_MAX_AGE_MS
+    );
+    if (markedFailed > 0) {
+      logger.info("image_build.stale_marked", { count: markedFailed, ...context });
+    }
+  } catch (errorValue) {
+    logger.warn("image_build.mark_stale_error", {
+      error: errorValue instanceof Error ? errorValue.message : String(errorValue),
+      ...context,
+    });
+  }
+
+  try {
+    const result = await createImageBuildWorkflowFromEnv(env).cleanupImages(
+      DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS,
+      context
+    );
+    if (result.deletedFailed || result.reapedFailed || result.reapedSuperseded) {
+      logger.info("image_build.cleanup", {
+        deleted_failed: result.deletedFailed,
+        reaped_failed: result.reapedFailed,
+        reaped_superseded: result.reapedSuperseded,
+        ...context,
+      });
+    }
+  } catch (errorValue) {
+    logger.warn("image_build.cleanup_error", {
+      error: errorValue instanceof Error ? errorValue.message : String(errorValue),
+      ...context,
+    });
+  }
+}
 
 /**
  * Handle WebSocket connections.

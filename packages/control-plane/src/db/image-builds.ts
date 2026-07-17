@@ -219,6 +219,17 @@ export class ImageBuildStore {
     };
   }
 
+  async verifyCallbackToken(params: {
+    buildId: string;
+    provider: ImageBuildProvider;
+    tokenHash: string;
+    providerSessionId: string;
+    now: number;
+  }): Promise<boolean> {
+    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
+    return this.callbackTokenRowIsUsable(build, params);
+  }
+
   async markBuildFailedWithCallbackToken(params: {
     buildId: string;
     provider: ImageBuildProvider;

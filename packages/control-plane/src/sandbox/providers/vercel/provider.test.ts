@@ -13,6 +13,11 @@ import type {
   VercelSnapshotMetadata,
   VercelSnapshotResponse,
 } from "./client";
+import {
+  MIN_COMPATIBLE_RUNTIME_VERSION,
+  parseRuntimeVersionNumber,
+} from "../../../image-builds/model";
+import { VERCEL_SANDBOX_VERSION } from "./bootstrap";
 
 function createSessionResponse(
   sessionId = "vercel-session-1",
@@ -549,6 +554,7 @@ describe("VercelSandboxProvider", () => {
       ...environmentBuildConfig(),
       userEnvVars: {
         USER_SECRET: "value",
+        SANDBOX_VERSION: "v999-user-controlled",
         OI_REPO_IMAGE_CALLBACK_TOKEN: "user-controlled",
         OI_REPO_IMAGE_CALLBACK_SECRET: "legacy-user-controlled",
       },
@@ -567,6 +573,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         USER_SECRET: "value",
         IMAGE_BUILD_MODE: "true",
+        SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
         VCS_CLONE_TOKEN: "clone-token",
       })
     );
@@ -597,6 +604,13 @@ describe("VercelSandboxProvider", () => {
       undefined
     );
     expect(result).toEqual({ buildId: "envimg-1", status: "building" });
+  });
+
+  it("reports a compatible authoritative runtime version for image builds", () => {
+    const version = parseRuntimeVersionNumber(VERCEL_SANDBOX_VERSION);
+
+    expect(version).not.toBeNull();
+    expect(version).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
   });
 
   it("starts environment image builds with a repositories-bearing SESSION_CONFIG", async () => {

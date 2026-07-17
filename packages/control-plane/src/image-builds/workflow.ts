@@ -7,6 +7,7 @@ import {
   ImageBuildCallbackAuthError,
   markImageBuildFailedWithCallbackTokenOrThrow,
   requireInternalImageBuildCallbackAuth,
+  verifyImageBuildCallbackTokenOrThrow,
 } from "./callback-auth";
 import {
   ImageBuildCallbackAuthRejectedError,
@@ -373,6 +374,13 @@ export class ImageBuildWorkflow {
       if (!providerSessionId) {
         throw new ImageBuildInvalidCallbackError("provider_session_id is required");
       }
+
+      await this.consumeTokenBuildCallbackAuth(command.callbackToken, {
+        buildId: build.id,
+        provider,
+        providerSessionId,
+        ctx,
+      });
 
       logger.info("image_build.build_complete_received", {
         build_id: validated.buildId,
@@ -780,6 +788,27 @@ export class ImageBuildWorkflow {
   }
 
   private async requireTokenBuildCallbackAuth(
+    token: string | null | undefined,
+    params: {
+      buildId: string;
+      provider: ImageBuildProvider;
+      providerSessionId: string;
+      ctx: ImageBuildWorkflowContext;
+    }
+  ): Promise<void> {
+    try {
+      await verifyImageBuildCallbackTokenOrThrow(this.store, this.env, token, {
+        buildId: params.buildId,
+        provider: params.provider,
+        providerSessionId: params.providerSessionId,
+        now: Date.now(),
+      });
+    } catch (e) {
+      throw this.loggedCallbackAuthError(e, params);
+    }
+  }
+
+  private async consumeTokenBuildCallbackAuth(
     token: string | null | undefined,
     params: {
       buildId: string;

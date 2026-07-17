@@ -97,6 +97,20 @@ export async function consumeImageBuildCallbackTokenOrThrow(
   }
 }
 
+/** Verify a provider-session callback token without consuming it. */
+export async function verifyImageBuildCallbackTokenOrThrow(
+  store: Pick<ImageBuildStore, "verifyCallbackToken">,
+  env: Env,
+  token: string | null | undefined,
+  params: ImageBuildCallbackTokenParams
+): Promise<void> {
+  const tokenHash = await hashRequiredCallbackToken(token, env);
+  const verified = await store.verifyCallbackToken({ ...params, tokenHash });
+  if (!verified) {
+    throw new ImageBuildCallbackAuthError("rejected", "Unauthorized");
+  }
+}
+
 /**
  * Token-authenticated failure mark for provider-session builds: the token
  * consume and the failed transition are one conditional UPDATE in the store.

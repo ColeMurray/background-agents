@@ -34,7 +34,7 @@ import type {
   VercelVcpus,
 } from "./client";
 import { VercelSandboxApiError } from "./client";
-import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "./bootstrap";
+import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN, VERCEL_SANDBOX_VERSION } from "./bootstrap";
 
 const log = createLogger("vercel-provider");
 
@@ -425,6 +425,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       PYTHONUNBUFFERED: "1",
       NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
       SANDBOX_ID: config.sandboxId,
+      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
       REPO_OWNER: config.repoOwner,
       REPO_NAME: config.repoName,
       IMAGE_BUILD_MODE: "true",
