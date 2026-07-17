@@ -14,6 +14,12 @@ import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
+
+type GitHubEnrichmentResult =
+  | { status: "resolved"; enrichment: GitHubEnrichment }
+  | { status: "absent" }
+  | { status: "unavailable" };
+
 function validateAttachments(raw: unknown): SessionAttachmentReference[] | Response | undefined {
   if (raw === undefined) return undefined;
   const result = sessionAttachmentReferencesSchema.safeParse(raw);
@@ -57,7 +63,7 @@ async function handleSessionPrompt(
 
   const authorId = body.authorId || "anonymous";
 
-  let enrichment: GitHubEnrichment | undefined;
+  let enrichmentResult: GitHubEnrichmentResult = { status: "absent" };
   const parsed = parseAuthorId(authorId);
   if (authorId !== "anonymous") {
     try {
@@ -70,15 +76,20 @@ async function handleSessionPrompt(
         userId = (await userStore.getUserById(authorId))?.id;
       }
       if (userId) {
-        enrichment = (await resolveGitHubEnrichment(env, userStore, userId)) ?? undefined;
+        const enrichment = await resolveGitHubEnrichment(env, userStore, userId);
+        enrichmentResult = enrichment ? { status: "resolved", enrichment } : { status: "absent" };
       }
     } catch (e) {
+      enrichmentResult = { status: "unavailable" };
       logger.warn("Failed to enrich prompt with GitHub identity", {
         error: e instanceof Error ? e : String(e),
         authorId,
       });
     }
   }
+
+  const enrichment =
+    enrichmentResult.status === "resolved" ? enrichmentResult.enrichment : undefined;
 
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
     method: "POST",
@@ -91,14 +102,17 @@ async function handleSessionPrompt(
       reasoningEffort: body.reasoningEffort,
       attachments,
       callbackContext: body.callbackContext,
-      scmIdentity: enrichment
-        ? {
-            userId: enrichment.scmUserId,
-            login: enrichment.scmLogin ?? null,
-            name: enrichment.displayName ?? null,
-            email: enrichment.email ?? null,
-          }
-        : null,
+      scmIdentity:
+        enrichmentResult.status === "resolved"
+          ? {
+              userId: enrichmentResult.enrichment.scmUserId,
+              login: enrichmentResult.enrichment.scmLogin ?? null,
+              name: enrichmentResult.enrichment.displayName ?? null,
+              email: enrichmentResult.enrichment.email ?? null,
+            }
+          : enrichmentResult.status === "absent"
+            ? null
+            : undefined,
       scmAccessTokenEncrypted: enrichment?.accessTokenEncrypted,
       scmRefreshTokenEncrypted: enrichment?.refreshTokenEncrypted,
       scmTokenExpiresAt: enrichment?.tokenExpiresAt,

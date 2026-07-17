@@ -79,12 +79,65 @@ describe("session prompt identity enrichment", () => {
     expect(sessionFetch).toHaveBeenCalledOnce();
   });
 
-  it("clears attribution when the linked GitHub identity cannot be resolved", async () => {
+  it("preserves stored enrichment when the GitHub identity lookup is unavailable", async () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getUserById: async () => {
           throw new Error("D1 unavailable");
         },
+      } as never;
+    });
+    const sessionFetch = vi.fn(async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      expect(body.authorId).toBe("user-1");
+      expect(body).not.toHaveProperty("scmIdentity");
+      expect(body).not.toHaveProperty("scmAccessTokenEncrypted");
+      expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
+      expect(body).not.toHaveProperty("scmTokenExpiresAt");
+      return Response.json({ status: "queued" });
+    });
+    const statement = {
+      bind: vi.fn(() => statement),
+      first: vi.fn(async () => null),
+      all: vi.fn(async () => ({ results: [] })),
+      run: vi.fn(async () => ({ meta: { changes: 0 } })),
+    };
+    const token = await generateInternalToken(secret);
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/prompt", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ content: "Fix the bug", authorId: "user-1" }),
+      }),
+      {
+        INTERNAL_CALLBACK_SECRET: secret,
+        SCM_PROVIDER: "github",
+        DB: {
+          prepare: vi.fn(() => statement),
+          batch: vi.fn(),
+          exec: vi.fn(),
+          dump: vi.fn(),
+        },
+        SESSION: {
+          idFromName: (name: string) => name,
+          get: () => ({ fetch: sessionFetch }),
+        },
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(sessionFetch).toHaveBeenCalledOnce();
+  });
+
+  it("clears attribution only after a successful lookup proves the GitHub identity is absent", async () => {
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        getUserById: async () => ({ id: "user-1", displayName: "Unlinked User" }),
+        getIdentitiesForUser: async () => [],
       } as never;
     });
     const sessionFetch = vi.fn(async (request: Request) => {
