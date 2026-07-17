@@ -95,7 +95,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     updateMessageToProcessing: vi.fn(),
     getParticipantById: vi.fn(() => createParticipant()),
     updateParticipantCoalesce: vi.fn(),
-    replaceParticipantScmIdentity: vi.fn(),
+    replaceParticipantScmEnrichment: vi.fn(),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
   };
@@ -582,11 +582,14 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github-bot",
-        scmIdentity: {
+        scmEnrichment: {
           userId: "1001",
           login: "octocat",
           name: "Octo Cat",
           email: "1001+octocat@users.noreply.github.com",
+          accessTokenEncrypted: null,
+          refreshTokenEncrypted: null,
+          tokenExpiresAt: null,
         },
       });
 
@@ -606,74 +609,59 @@ describe("SessionMessageQueue", () => {
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
     });
 
-    it("replaces stored SCM attribution with trusted prompt enrichment", async () => {
+    it("replaces stored SCM identity and tokens with one trusted enrichment snapshot", async () => {
       const h = buildQueue();
 
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
         source: "github-bot",
-        scmIdentity: {
+        scmEnrichment: {
           userId: "1001",
           login: "octocat",
           name: "Trusted Octo Cat",
           email: "1001+octocat@users.noreply.github.com",
+          accessTokenEncrypted: "enc-access",
+          refreshTokenEncrypted: "enc-refresh",
+          tokenExpiresAt: 9999999,
         },
       });
 
-      expect(h.repository.replaceParticipantScmIdentity).toHaveBeenCalledWith("part-1", {
+      expect(h.repository.replaceParticipantScmEnrichment).toHaveBeenCalledWith("part-1", {
         scmName: "Trusted Octo Cat",
         scmEmail: "1001+octocat@users.noreply.github.com",
         scmLogin: "octocat",
         scmUserId: "1001",
+        scmAccessTokenEncrypted: "enc-access",
+        scmRefreshTokenEncrypted: "enc-refresh",
+        scmTokenExpiresAt: 9999999,
       });
-    });
-
-    it("does not coalesce trusted identity fields", async () => {
-      const h = buildQueue();
-
-      await h.queue.enqueuePromptFromApi({
-        content: "Fix bug",
-        authorId: "github:1001",
-        source: "github-bot",
-        scmIdentity: {
-          userId: "1001",
-          login: "octocat",
-          name: "Trusted Octo Cat",
-          email: "1001+octocat@users.noreply.github.com",
-        },
-      });
-
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
 
-    it("coalesces token enrichment separately from trusted identity", async () => {
+    it("clears the complete SCM enrichment snapshot after confirmed absence", async () => {
       const h = buildQueue();
 
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
         source: "github-bot",
-        scmIdentity: {
-          userId: "1001",
-          login: "octocat",
-          name: "Octo Cat",
-          email: "1001+octocat@users.noreply.github.com",
-        },
-        scmAccessTokenEncrypted: "enc-access",
-        scmRefreshTokenEncrypted: "enc-refresh",
-        scmTokenExpiresAt: 9999999,
+        scmEnrichment: null,
       });
 
-      expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
-        scmAccessTokenEncrypted: "enc-access",
-        scmRefreshTokenEncrypted: "enc-refresh",
-        scmTokenExpiresAt: 9999999,
+      expect(h.repository.replaceParticipantScmEnrichment).toHaveBeenCalledWith("part-1", {
+        scmName: null,
+        scmEmail: null,
+        scmLogin: null,
+        scmUserId: null,
+        scmAccessTokenEncrypted: null,
+        scmRefreshTokenEncrypted: null,
+        scmTokenExpiresAt: null,
       });
-      expect(h.repository.getParticipantById).toHaveBeenCalledWith("part-1");
+      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
 
-    it("skips COALESCE when no enrichment fields are provided", async () => {
+    it("leaves stored enrichment unchanged when no snapshot is provided", async () => {
       const h = buildQueue();
 
       await h.queue.enqueuePromptFromApi({
@@ -682,6 +670,7 @@ describe("SessionMessageQueue", () => {
         source: "github-bot",
       });
 
+      expect(h.repository.replaceParticipantScmEnrichment).not.toHaveBeenCalled();
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
   });

@@ -365,33 +365,21 @@ export class SessionMessageQueue {
     if (!participant) {
       participant = this.deps.participantService.create(
         data.authorId,
-        data.scmIdentity?.name || data.authorId
+        data.scmEnrichment?.name || data.authorId
       );
     }
 
-    const hasIdentityEnrichment = data.scmIdentity !== undefined;
-    if (hasIdentityEnrichment) {
-      const identity = data.scmIdentity;
-      this.deps.repository.replaceParticipantScmIdentity(participant.id, {
-        scmName: identity?.name ?? null,
-        scmEmail: identity?.email ?? null,
-        scmLogin: identity?.login ?? null,
-        scmUserId: identity?.userId ?? null,
+    if (data.scmEnrichment !== undefined) {
+      const enrichment = data.scmEnrichment;
+      this.deps.repository.replaceParticipantScmEnrichment(participant.id, {
+        scmName: enrichment?.name ?? null,
+        scmEmail: enrichment?.email ?? null,
+        scmLogin: enrichment?.login ?? null,
+        scmUserId: enrichment?.userId ?? null,
+        scmAccessTokenEncrypted: enrichment?.accessTokenEncrypted ?? null,
+        scmRefreshTokenEncrypted: enrichment?.refreshTokenEncrypted ?? null,
+        scmTokenExpiresAt: enrichment?.tokenExpiresAt ?? null,
       });
-    }
-
-    const hasTokenEnrichment =
-      data.scmAccessTokenEncrypted !== undefined ||
-      data.scmRefreshTokenEncrypted !== undefined ||
-      data.scmTokenExpiresAt !== undefined;
-    if (hasTokenEnrichment) {
-      this.deps.repository.updateParticipantCoalesce(participant.id, {
-        scmAccessTokenEncrypted: data.scmAccessTokenEncrypted ?? null,
-        scmRefreshTokenEncrypted: data.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: data.scmTokenExpiresAt ?? null,
-      });
-    }
-    if (hasIdentityEnrichment || hasTokenEnrichment) {
       participant = this.deps.repository.getParticipantById(participant.id) ?? participant;
     }
 

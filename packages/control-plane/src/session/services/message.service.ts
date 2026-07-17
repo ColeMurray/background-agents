@@ -15,19 +15,17 @@ export interface EnqueuePromptRequest {
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
 
-  // Trusted identity enrichment (from router D1 lookup at prompt time).
-  // `undefined` leaves the stored identity unchanged; `null` clears it.
-  scmIdentity?: {
+  // Trusted SCM enrichment snapshot (from the router's D1 lookup at prompt time).
+  // `undefined` leaves the stored snapshot unchanged; `null` clears it atomically.
+  scmEnrichment?: {
     userId: string | null;
     login: string | null;
     name: string | null;
     email: string | null;
+    accessTokenEncrypted: string | null;
+    refreshTokenEncrypted: string | null;
+    tokenExpiresAt: number | null;
   } | null;
-
-  // SCM token enrichment (from cross-provider identity resolution)
-  scmAccessTokenEncrypted?: string;
-  scmRefreshTokenEncrypted?: string;
-  scmTokenExpiresAt?: number;
 }
 
 export type ListEventsRequest = SessionEventListRequest;

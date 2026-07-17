@@ -157,11 +157,14 @@ export interface UpdateParticipantData {
   scmTokenExpiresAt?: number | null;
 }
 
-export interface ReplaceParticipantScmIdentityData {
+export interface ReplaceParticipantScmEnrichmentData {
   scmUserId: string | null;
   scmLogin: string | null;
   scmName: string | null;
   scmEmail: string | null;
+  scmAccessTokenEncrypted: string | null;
+  scmRefreshTokenEncrypted: string | null;
+  scmTokenExpiresAt: number | null;
 }
 
 /**
@@ -675,21 +678,27 @@ export class SessionRepository {
     );
   }
 
-  replaceParticipantScmIdentity(
+  replaceParticipantScmEnrichment(
     participantId: string,
-    data: ReplaceParticipantScmIdentityData
+    data: ReplaceParticipantScmEnrichmentData
   ): void {
     this.sql.exec(
       `UPDATE participants SET
          scm_user_id = ?,
          scm_login = ?,
          scm_name = ?,
-         scm_email = ?
+         scm_email = ?,
+         scm_access_token_encrypted = ?,
+         scm_refresh_token_encrypted = ?,
+         scm_token_expires_at = ?
        WHERE id = ?`,
       data.scmUserId,
       data.scmLogin,
       data.scmName,
       data.scmEmail,
+      data.scmAccessTokenEncrypted,
+      data.scmRefreshTokenEncrypted,
+      data.scmTokenExpiresAt,
       participantId
     );
   }

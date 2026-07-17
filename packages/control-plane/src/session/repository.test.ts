@@ -551,13 +551,16 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("replaceParticipantScmIdentity", () => {
-    it("overwrites all SCM attribution fields including nulls", () => {
-      repo.replaceParticipantScmIdentity("p-1", {
+  describe("replaceParticipantScmEnrichment", () => {
+    it("overwrites SCM identity and token fields in one statement including nulls", () => {
+      repo.replaceParticipantScmEnrichment("p-1", {
         scmUserId: "1001",
         scmLogin: "octocat",
         scmName: null,
         scmEmail: "1001+octocat@users.noreply.github.com",
+        scmAccessTokenEncrypted: "enc-access",
+        scmRefreshTokenEncrypted: null,
+        scmTokenExpiresAt: 9999,
       });
 
       expect(mock.calls).toHaveLength(1);
@@ -567,6 +570,9 @@ describe("SessionRepository", () => {
         "octocat",
         null,
         "1001+octocat@users.noreply.github.com",
+        "enc-access",
+        null,
+        9999,
         "p-1",
       ]);
     });

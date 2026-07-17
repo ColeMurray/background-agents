@@ -33,11 +33,14 @@ describe("session prompt identity enrichment", () => {
       const body = (await request.json()) as Record<string, unknown>;
       expect(body).toMatchObject({
         authorId: "user-1",
-        scmIdentity: {
+        scmEnrichment: {
           userId: "1001",
           login: "ada",
           name: "Trusted Ada",
           email: "1001+ada@users.noreply.github.com",
+          accessTokenEncrypted: null,
+          refreshTokenEncrypted: null,
+          tokenExpiresAt: null,
         },
       });
       return Response.json({ status: "queued" });
@@ -90,10 +93,7 @@ describe("session prompt identity enrichment", () => {
     const sessionFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
       expect(body.authorId).toBe("user-1");
-      expect(body).not.toHaveProperty("scmIdentity");
-      expect(body).not.toHaveProperty("scmAccessTokenEncrypted");
-      expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
-      expect(body).not.toHaveProperty("scmTokenExpiresAt");
+      expect(body).not.toHaveProperty("scmEnrichment");
       return Response.json({ status: "queued" });
     });
     const statement = {
@@ -144,7 +144,7 @@ describe("session prompt identity enrichment", () => {
       const body = (await request.json()) as Record<string, unknown>;
       expect(body).toMatchObject({
         authorId: "user-1",
-        scmIdentity: null,
+        scmEnrichment: null,
       });
       return Response.json({ status: "queued" });
     });

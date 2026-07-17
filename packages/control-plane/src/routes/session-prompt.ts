@@ -88,9 +88,6 @@ async function handleSessionPrompt(
     }
   }
 
-  const enrichment =
-    enrichmentResult.status === "resolved" ? enrichmentResult.enrichment : undefined;
-
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -102,20 +99,20 @@ async function handleSessionPrompt(
       reasoningEffort: body.reasoningEffort,
       attachments,
       callbackContext: body.callbackContext,
-      scmIdentity:
+      scmEnrichment:
         enrichmentResult.status === "resolved"
           ? {
               userId: enrichmentResult.enrichment.scmUserId,
               login: enrichmentResult.enrichment.scmLogin ?? null,
               name: enrichmentResult.enrichment.displayName ?? null,
               email: enrichmentResult.enrichment.email ?? null,
+              accessTokenEncrypted: enrichmentResult.enrichment.accessTokenEncrypted ?? null,
+              refreshTokenEncrypted: enrichmentResult.enrichment.refreshTokenEncrypted ?? null,
+              tokenExpiresAt: enrichmentResult.enrichment.tokenExpiresAt ?? null,
             }
           : enrichmentResult.status === "absent"
             ? null
             : undefined,
-      scmAccessTokenEncrypted: enrichment?.accessTokenEncrypted,
-      scmRefreshTokenEncrypted: enrichment?.refreshTokenEncrypted,
-      scmTokenExpiresAt: enrichment?.tokenExpiresAt,
     }),
   });
 
