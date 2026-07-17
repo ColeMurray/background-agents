@@ -91,6 +91,27 @@ class TestImageBuildMode:
         supervisor.monitor_processes.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor._get_head_sha = AsyncMock(return_value="a" * 40)
+        observed_baselines = []
+
+        async def assert_baseline_is_ready(_repo):
+            observed_baselines.append(supervisor.repositories[0].base_sha)
+            return True
+
+        supervisor.run_setup_script = AsyncMock(side_effect=assert_baseline_is_ready)
+        supervisor.shutdown = AsyncMock()
+        supervisor.shutdown_event.set()
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run()
+
+        supervisor.run_setup_script.assert_awaited_once()
+        assert observed_baselines == ["a" * 40]
+
+    @pytest.mark.asyncio
     async def test_clone_depth_100(self, build_env, tmp_path):
         """Build mode should clone with --depth 100, not --depth 1."""
         supervisor = _make_supervisor(build_env)

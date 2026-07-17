@@ -253,7 +253,7 @@ describe("POST /internal/stop", () => {
     expect(msgBStatus[0].status).toBe("pending");
   });
 
-  it("execution_complete after stop dispatches queued message when sandbox connected", async () => {
+  it("keeps the next message behind the stop capture barrier until capture settles", async () => {
     const name = `ws-stop-drain-${Date.now()}`;
     const { stub } = await initNamedSession(name);
 
@@ -291,6 +291,24 @@ describe("POST /internal/stop", () => {
     // Connect sandbox WS so queue drain can dispatch
     const { ws: sandboxWs } = await openSandboxWs(name, sandboxAuth);
     if (sandboxWs) sandboxWs.accept();
+    await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "ready",
+        sandboxId: sandboxAuth.sandboxId,
+        timestamp: Date.now() / 1000,
+        capabilities: ["session_diff_v1"],
+        repositories: [
+          {
+            position: 0,
+            repoOwner: "acme",
+            repoName: "web-app",
+            baseSha: "a".repeat(40),
+          },
+        ],
+      }),
+    });
 
     // Stop execution - marks A as failed
     await stub.fetch("http://internal/internal/stop", { method: "POST" });
@@ -308,13 +326,29 @@ describe("POST /internal/stop", () => {
       }),
     });
 
-    // B should now be processing (queue drained with sandbox connected)
+    // The duplicate terminal event cannot jump the capture barrier.
     const msgBStatus = await queryDO<{ id: string; status: string }>(
       stub,
       "SELECT id, status FROM messages WHERE id = ?",
       msgB
     );
-    expect(msgBStatus[0].status).toBe("processing");
+    expect(msgBStatus[0].status).toBe("pending");
+
+    const capture = await queryDO<{ attempt_id: string }>(
+      stub,
+      "SELECT attempt_id FROM diff_state WHERE singleton = 1"
+    );
+    await stub.fetch(`http://internal/internal/diff-failed?captureId=${capture[0].attempt_id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "capture stopped for test" }),
+    });
+    const afterCapture = await queryDO<{ status: string }>(
+      stub,
+      "SELECT status FROM messages WHERE id = ?",
+      msgB
+    );
+    expect(afterCapture[0].status).toBe("processing");
 
     if (sandboxWs) sandboxWs.close();
   });

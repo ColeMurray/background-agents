@@ -11,7 +11,12 @@ import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
-import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
+import {
+  Group as PanelGroup,
+  Panel,
+  Separator as PanelResizeHandle,
+  useDefaultLayout,
+} from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
 import {
@@ -33,6 +38,12 @@ import {
   useSessionAttachments,
 } from "@/hooks/use-session-attachments";
 import type { ComboboxGroup } from "@/components/ui/combobox";
+import { useSessionDiffs } from "@/hooks/use-session-diffs";
+import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
+import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
+import { SessionChangesPanel } from "@/components/session-changes-panel";
+import { SessionDesktopLayout } from "@/components/session-desktop-layout";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -106,6 +117,9 @@ function SessionPageContent() {
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
+  const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
+  const diffReturnFocusRef = useRef<DiffSelection | null>(null);
+  const { state: diffState, isLoading: diffLoading, error: diffError } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
@@ -151,6 +165,75 @@ function SessionPageContent() {
   );
 
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
+  const resolvedDiff = useMemo(
+    () =>
+      selectedDiff && diffState?.current
+        ? resolveDiffSelection(diffState.current, selectedDiff)
+        : null,
+    [diffState, selectedDiff]
+  );
+  const changesLayout = useDefaultLayout({
+    id: "session-changes-layout",
+    panelIds:
+      resolvedDiff && diffState && !isBelowLg
+        ? ["session-main", "session-changes"]
+        : ["session-main"],
+    storage: typeof window === "undefined" ? undefined : localStorage,
+  });
+  const openDiff = useCallback((repository: SessionDiffRepository, file: SessionDiffFile) => {
+    const selection = { repositoryPosition: repository.position, path: file.path };
+    diffReturnFocusRef.current = selection;
+    setSelectedDiff(selection);
+    setIsDetailsOpen(false);
+  }, []);
+  const closeDiff = useCallback(() => {
+    const returnSelection = diffReturnFocusRef.current;
+    setSelectedDiff(null);
+    requestAnimationFrame(() => {
+      if (!isBelowLg && returnSelection) {
+        const row = Array.from(
+          document.querySelectorAll<HTMLButtonElement>("button[data-diff-path]")
+        ).find(
+          (candidate) =>
+            candidate.dataset.diffRepositoryPosition ===
+              String(returnSelection.repositoryPosition) &&
+            candidate.dataset.diffPath === returnSelection.path
+        );
+        if (row) {
+          row.focus();
+          return;
+        }
+      }
+      detailsButtonRef.current?.focus();
+    });
+  }, [isBelowLg]);
+
+  const sessionWorkspace = (
+    <div className="flex h-full flex-1 flex-col overflow-hidden">
+      <PanelGroup orientation="vertical" id="session-terminal">
+        <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
+          <SessionTimeline
+            events={events}
+            sessionId={sessionId}
+            currentParticipantId={currentParticipantId}
+            isProcessing={isProcessing}
+            loadingHistory={loadingHistory}
+            showSkeleton={showTimelineSkeleton}
+            onLoadOlder={loadOlderEvents}
+            onOpenMedia={setSelectedMediaArtifactId}
+          />
+        </Panel>
+        {showTerminal && (
+          <>
+            <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
+            <Panel defaultSize="30%" minSize="15%" maxSize="70%">
+              <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
+    </div>
+  );
 
   return (
     <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
@@ -181,45 +264,60 @@ function SessionPageContent() {
 
       {/* Main content */}
       <main className="min-w-0 flex-1 flex overflow-hidden">
-        <div className="min-w-0 flex-1 flex flex-col overflow-hidden">
-          <PanelGroup orientation="vertical" id="session-terminal">
-            {/* Chat / Event Timeline */}
-            <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
-              <SessionTimeline
-                events={events}
+        {!isBelowLg ? (
+          <SessionDesktopLayout
+            workspace={sessionWorkspace}
+            sidebar={
+              <SessionRightSidebar
                 sessionId={sessionId}
-                currentParticipantId={currentParticipantId}
-                isProcessing={isProcessing}
-                loadingHistory={loadingHistory}
-                showSkeleton={showTimelineSkeleton}
-                onLoadOlder={loadOlderEvents}
+                sessionState={sessionState}
+                participants={participants}
+                events={events}
+                artifacts={artifacts}
+                terminalOpen={terminalOpen}
+                onToggleTerminal={toggleTerminal}
                 onOpenMedia={setSelectedMediaArtifactId}
+                diffState={diffState}
+                diffLoading={diffLoading}
+                diffError={diffError}
+                selectedDiff={selectedDiff}
+                onOpenDiff={openDiff}
               />
-            </Panel>
-
-            {/* Terminal panel — only rendered when URL + token available and open */}
-            {showTerminal && (
-              <>
-                <PanelResizeHandle className="h-1.5 bg-border-muted hover:bg-accent transition-colors cursor-row-resize" />
-                <Panel defaultSize="30%" minSize="15%" maxSize="70%">
-                  <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
-                </Panel>
-              </>
-            )}
-          </PanelGroup>
-        </div>
-
-        {/* Right sidebar */}
-        <SessionRightSidebar
-          sessionId={sessionId}
-          sessionState={sessionState}
-          participants={participants}
-          events={events}
-          artifacts={artifacts}
-          terminalOpen={terminalOpen}
-          onToggleTerminal={toggleTerminal}
-          onOpenMedia={setSelectedMediaArtifactId}
-        />
+            }
+            changes={
+              resolvedDiff && diffState ? (
+                <SessionChangesPanel
+                  sessionId={sessionId}
+                  state={diffState}
+                  resolved={resolvedDiff}
+                  onClose={closeDiff}
+                  onSelect={setSelectedDiff}
+                />
+              ) : null
+            }
+            defaultLayout={changesLayout.defaultLayout}
+            onLayoutChanged={changesLayout.onLayoutChanged}
+          />
+        ) : (
+          <>
+            {sessionWorkspace}
+            <SessionRightSidebar
+              sessionId={sessionId}
+              sessionState={sessionState}
+              participants={participants}
+              events={events}
+              artifacts={artifacts}
+              terminalOpen={terminalOpen}
+              onToggleTerminal={toggleTerminal}
+              onOpenMedia={setSelectedMediaArtifactId}
+              diffState={diffState}
+              diffLoading={diffLoading}
+              diffError={diffError}
+              selectedDiff={selectedDiff}
+              onOpenDiff={openDiff}
+            />
+          </>
+        )}
       </main>
 
       {isBelowLg && (
@@ -236,7 +334,33 @@ function SessionPageContent() {
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminal}
           onOpenMedia={setSelectedMediaArtifactId}
+          diffState={diffState}
+          diffLoading={diffLoading}
+          diffError={diffError}
+          selectedDiff={selectedDiff}
+          onOpenDiff={openDiff}
         />
+      )}
+
+      {isBelowLg && (
+        <Sheet
+          open={Boolean(resolvedDiff && diffState)}
+          onOpenChange={(open) => !open && closeDiff()}
+        >
+          <SheetContent className="inset-0 h-dvh w-screen max-w-none gap-0 p-0 sm:max-w-none">
+            <SheetTitle className="sr-only">Changes</SheetTitle>
+            {resolvedDiff && diffState && (
+              <SessionChangesPanel
+                mobile
+                sessionId={sessionId}
+                state={diffState}
+                resolved={resolvedDiff}
+                onClose={closeDiff}
+                onSelect={setSelectedDiff}
+              />
+            )}
+          </SheetContent>
+        </Sheet>
       )}
 
       <MediaLightbox

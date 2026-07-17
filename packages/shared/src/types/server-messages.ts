@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
+import { diffAttemptStatusSchema } from "./session-diffs";
 import { sandboxEventSchema, tolerantSandboxEventsSchema } from "./sandbox-events";
 import { participantPresenceSchema, sessionStateSchema } from "./sessions";
 import { sandboxStatusSchema, sessionStatusSchema } from "./statuses";
@@ -60,6 +61,12 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
   z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
+  z.object({
+    type: z.literal("diff_state_changed"),
+    attemptStatus: diffAttemptStatusSchema,
+    revisionId: z.string().nullable(),
+    updatedAt: z.number(),
+  }),
   z.object({
     type: z.literal("history_page"),
     items: tolerantSandboxEventsSchema,

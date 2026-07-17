@@ -29,6 +29,48 @@ const ATTACHMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS attachments (
   created_at INTEGER NOT NULL
 )`;
 
+const SESSION_DIFF_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS diff_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  baseline_status TEXT NOT NULL DEFAULT 'pending',
+  baseline_reason TEXT,
+  attempt_id TEXT,
+  attempt_trigger_message_id TEXT,
+  attempt_status TEXT NOT NULL DEFAULT 'idle',
+  attempt_started_at INTEGER,
+  attempt_error TEXT,
+  ready_manifest TEXT,
+  ready_updated_at INTEGER,
+  deleted_at INTEGER,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS diff_objects (
+  object_key TEXT PRIMARY KEY,
+  capture_id TEXT NOT NULL,
+  file_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  size_bytes INTEGER,
+  sha256 TEXT,
+  cleanup_after INTEGER,
+  cleanup_attempts INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS diff_capture_triggers (
+  trigger_message_id TEXT PRIMARY KEY,
+  capture_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_objects_capture_file
+ON diff_objects(capture_id, file_id);
+
+CREATE TABLE IF NOT EXISTS session_alarm_deadlines (
+  name TEXT PRIMARY KEY,
+  deadline INTEGER NOT NULL
+);`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -158,6 +200,9 @@ CREATE TABLE IF NOT EXISTS sandbox (
 -- by push handling from PR-5 onward; until then the position-0 row is
 -- overlaid with the session scalar branch/sha columns at read time.
 ${SESSION_REPOSITORIES_TABLE_SQL};
+
+-- Latest durable checkout diff state and private object recovery ledger.
+${SESSION_DIFF_TABLES_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -460,6 +505,27 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 35,
     description: "Create attachments table",
     run: ATTACHMENTS_TABLE_SQL,
+  },
+  {
+    id: 36,
+    description: "Add durable latest session diff state",
+    run: (sql) => {
+      sql.exec(SESSION_DIFF_TABLES_SQL);
+      // Schema setup runs before /internal/init. A session row here therefore
+      // proves this is a migrated DO whose original post-sync baseline is not
+      // trustworthy. New sessions receive a pending row in their init handler.
+      sql.exec(
+        `
+        INSERT OR IGNORE INTO diff_state (
+          singleton, baseline_status, baseline_reason, attempt_status, updated_at
+        )
+        SELECT 1, 'unavailable', 'Changes were not captured when this session started', 'idle', ?
+        FROM session
+        LIMIT 1
+      `,
+        Date.now()
+      );
+    },
   },
 ];
 

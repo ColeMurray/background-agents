@@ -35,6 +35,7 @@ from .constants import (
     TUNNEL_ENV_FILE_PATH,
     TUNNEL_ENV_SANDBOX_ID_KEY,
 )
+from .diff_baseline import resolve_session_diff_baselines
 from .log_config import configure_logging, get_logger
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
@@ -438,10 +439,12 @@ class SandboxSupervisor:
     # ------------------------------------------------------------------
 
     async def _update_existing_repo(self, repo: RepoEntry) -> bool:
-        """Fetch the target branch and check it out in an existing repo.
+        """Refresh an existing checkout without corrupting restored session state.
 
-        Used by both snapshot-restore and repo-image boot paths where the
-        repository already exists on disk.
+        A snapshot contains the session's HEAD, index, and worktree. Fetching
+        remote refs is safe there, but checkout/reset is not. Fresh clones and
+        explicitly initialized repository images still align to their requested
+        branch.
         """
         if not repo.path.exists():
             self.log.info(
@@ -453,12 +456,25 @@ class SandboxSupervisor:
             return False
 
         try:
+            preserve_checkout = self.boot_mode == "snapshot_restore"
+            if preserve_checkout:
+                if await self._ensure_plain_origin(repo):
+                    await self._fetch_branch(repo, repo.branch)
+                return True
             if not await self._ensure_plain_origin(repo):
                 return False
             if not await self._fetch_branch(repo, repo.branch):
                 return False
             return await self._checkout_branch(repo, repo.branch)
         except Exception as e:
+            if preserve_checkout:
+                self.log.warn(
+                    "git.restore_refresh_error",
+                    exc=e,
+                    repo_owner=repo.owner,
+                    repo_name=repo.name,
+                )
+                return True
             self.log.error("git.update_error", exc=e, repo_owner=repo.owner, repo_name=repo.name)
             return False
 
@@ -485,10 +501,8 @@ class SandboxSupervisor:
     async def _sync_repo(self, repo: RepoEntry) -> bool:
         """Sync one repository: update in place when present, clone when missing.
 
-        The same rule serves every boot mode — a fresh boot clones, an
-        image/snapshot boot finds the path and fetches — so member count and
-        boot mode never multiply into special cases here. Failure policy is
-        the caller's (run()) job.
+        A fresh boot clones and aligns the requested branch. Snapshot restore
+        refreshes refs without switching or resetting the restored checkout.
         """
         self.log.debug(
             "git.sync_start",
@@ -1839,6 +1853,12 @@ class SandboxSupervisor:
                             "the checkout may be stale."
                         ),
                     )
+            self.repositories = await resolve_session_diff_baselines(
+                self.repositories,
+                discover_missing=self.boot_mode != "snapshot_restore",
+                get_head_sha=self._get_head_sha,
+            )
+            self._write_repo_manifest()
             if image_build_mode and git_sync_success and self.repositories:
                 # repository_shas is the cross-language provenance document
                 # ([{repoOwner, repoName, baseSha}]): parsed from this event by
@@ -1850,7 +1870,7 @@ class SandboxSupervisor:
                     {
                         "repoOwner": repo.owner,
                         "repoName": repo.name,
-                        "baseSha": await self._get_head_sha(repo),
+                        "baseSha": repo.base_sha or "",
                     }
                     for repo in self.repositories
                 ]

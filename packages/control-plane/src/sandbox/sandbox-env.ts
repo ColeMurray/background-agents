@@ -22,6 +22,7 @@ export interface SessionRepositoryConfigPayload {
   repo_owner: string;
   repo_name: string;
   branch: string;
+  base_sha?: string;
 }
 
 /** Canonical `SESSION_CONFIG` payload handed to the sandbox runtime. */
@@ -84,5 +85,6 @@ export function toRepositoryConfigPayload(
     repo_owner: repository.repoOwner,
     repo_name: repository.repoName,
     branch: repository.baseBranch,
+    ...(repository.baseSha ? { base_sha: repository.baseSha } : {}),
   };
 }

@@ -437,6 +437,29 @@ export class SessionRepository {
     );
   }
 
+  setSessionDiffBaselines(
+    repositories: Array<{
+      repoOwner: string;
+      repoName: string;
+      baseSha: string;
+      isPrimary: boolean;
+    }>
+  ): void {
+    for (const repository of repositories) {
+      this.sql.exec(
+        `UPDATE session_repositories
+         SET base_sha = ?
+         WHERE lower(repo_owner) = lower(?) AND lower(repo_name) = lower(?)`,
+        repository.baseSha,
+        repository.repoOwner,
+        repository.repoName
+      );
+      if (repository.isPrimary) {
+        this.sql.exec(`UPDATE session SET base_sha = ?`, repository.baseSha);
+      }
+    }
+  }
+
   // === SANDBOX ===
   // Note: Each session DO has exactly one sandbox row, so update methods use
   // a subquery `WHERE id = (SELECT id FROM sandbox LIMIT 1)` to find it.

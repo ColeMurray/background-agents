@@ -249,4 +249,25 @@ describe("applyMigrations", () => {
     expect(migration?.run).toContain("cleanup_claimed_at INTEGER");
     expect(migration?.run).not.toContain("kind TEXT");
   });
+
+  it("creates durable diff state and marks migrated sessions unavailable", () => {
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS diff_state");
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS diff_objects");
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS diff_capture_triggers");
+
+    const migration = MIGRATIONS.find((item) => item.id === 36);
+    expect(migration).toBeDefined();
+    expect(typeof migration?.run).toBe("function");
+
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+
+    expect(
+      mock.calls.some(
+        (call) =>
+          call.query.includes("INSERT OR IGNORE INTO diff_state") &&
+          call.query.includes("'unavailable'") &&
+          call.query.includes("FROM session")
+      )
+    ).toBe(true);
+  });
 });

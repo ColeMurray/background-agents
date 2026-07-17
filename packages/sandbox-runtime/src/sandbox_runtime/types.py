@@ -129,6 +129,7 @@ class SessionRepositoryConfig(TypedDict, total=False):
     repo_owner: str
     repo_name: str
     branch: str | None
+    base_sha: str | None
 
 
 class SessionConfig(BaseModel):

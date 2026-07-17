@@ -49,6 +49,29 @@ describe("buildSessionConfig", () => {
     ]);
   });
 
+  it("threads immutable diff baselines through the canonical runtime config", () => {
+    const config = buildSessionConfig({
+      ...baseInput,
+      repositories: [
+        {
+          repoOwner: "testowner",
+          repoName: "testrepo",
+          baseBranch: "main",
+          baseSha: "a".repeat(40),
+        },
+      ],
+    });
+
+    expect(config.repositories).toEqual([
+      {
+        repo_owner: "testowner",
+        repo_name: "testrepo",
+        branch: "main",
+        base_sha: "a".repeat(40),
+      },
+    ]);
+  });
+
   it("omits repositories for single-repo inputs", () => {
     const parsed = JSON.parse(JSON.stringify(buildSessionConfig(baseInput)));
 

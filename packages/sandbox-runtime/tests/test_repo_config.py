@@ -138,6 +138,22 @@ class TestRepoManifest:
 
         assert load_repo_manifest(manifest) == entries
 
+    def test_round_trips_the_immutable_session_diff_baseline(self, tmp_path):
+        baseline = "a" * 40
+        entries = [
+            RepoEntry(
+                owner="acme",
+                name="frontend",
+                branch="main",
+                path=WORKSPACE / "frontend",
+                base_sha=baseline,
+            )
+        ]
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(dump_repo_manifest(entries))
+
+        assert load_repo_manifest(manifest)[0].base_sha == baseline
+
     def test_missing_file_loads_empty(self, tmp_path):
         assert load_repo_manifest(tmp_path / "absent.json") == []
 

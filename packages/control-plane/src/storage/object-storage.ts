@@ -60,5 +60,9 @@ class R2ObjectStorage implements ObjectStorage {
 }
 
 export function createMediaObjectStorage(env: Env): ObjectStorage {
-  return new R2ObjectStorage(env.MEDIA_BUCKET);
+  return createObjectStorage(env.MEDIA_BUCKET);
+}
+
+export function createObjectStorage(bucket: R2Bucket): ObjectStorage {
+  return new R2ObjectStorage(bucket);
 }

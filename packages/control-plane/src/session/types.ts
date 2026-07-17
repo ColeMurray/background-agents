@@ -174,13 +174,31 @@ export interface PushCommand {
   pushSpec: GitPushSpec;
 }
 
+export interface CaptureDiffCommand {
+  type: "capture_diff";
+  captureId: string;
+  baselines: Array<{
+    position: number;
+    repoOwner: string;
+    repoName: string;
+    baseSha: string;
+  }>;
+  limits: {
+    maxFiles: number;
+    maxPatchBytes: number;
+    maxCaptureBytes: number;
+    timeoutMs: number;
+  };
+}
+
 export type SandboxCommand =
   | PromptCommand
   | StopCommand
   | SnapshotCommand
   | ShutdownCommand
   | AckCommand
-  | PushCommand;
+  | PushCommand
+  | CaptureDiffCommand;
 
 // Internal session update types
 

@@ -39,6 +39,7 @@ class RepoEntry:
     name: str
     branch: str
     path: Path
+    base_sha: str | None = None
 
 
 def is_safe_repo_segment(value: str) -> bool:
@@ -105,8 +106,15 @@ def parse_repositories(
                 raise RepoConfigError(f"duplicate repo_name {name!r}: checkout paths would collide")
             seen_names.add(name_key)
             branch = _str_field(item, "branch") or "main"
+            base_sha = _str_field(item, "base_sha") or None
             entries.append(
-                RepoEntry(owner=owner, name=name, branch=branch, path=workspace_path / name)
+                RepoEntry(
+                    owner=owner,
+                    name=name,
+                    branch=branch,
+                    path=workspace_path / name,
+                    base_sha=base_sha,
+                )
             )
     if entries:
         return entries
@@ -118,6 +126,7 @@ def parse_repositories(
                 name=scalar_name,
                 branch=scalar_branch,
                 path=workspace_path / scalar_name,
+                base_sha=_str_field(session_config, "base_sha") or None,
             )
         ]
     return []
@@ -143,7 +152,13 @@ def dump_repo_manifest(repositories: list[RepoEntry]) -> str:
     return json.dumps(
         {
             "repositories": [
-                {"owner": r.owner, "name": r.name, "branch": r.branch, "path": str(r.path)}
+                {
+                    "owner": r.owner,
+                    "name": r.name,
+                    "branch": r.branch,
+                    "path": str(r.path),
+                    **({"baseSha": r.base_sha} if r.base_sha else {}),
+                }
                 for r in repositories
             ]
         }
@@ -168,5 +183,13 @@ def load_repo_manifest(path: str | Path = REPO_MANIFEST_FILE_PATH) -> list[RepoE
             if not owner or not name or not path_value:
                 continue
             branch = _str_field(item, "branch") or "main"
-            entries.append(RepoEntry(owner=owner, name=name, branch=branch, path=Path(path_value)))
+            entries.append(
+                RepoEntry(
+                    owner=owner,
+                    name=name,
+                    branch=branch,
+                    path=Path(path_value),
+                    base_sha=_str_field(item, "baseSha") or None,
+                )
+            )
     return entries

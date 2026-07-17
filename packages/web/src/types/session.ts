@@ -38,9 +38,3 @@ export interface Task {
   status: "pending" | "in_progress" | "completed";
   activeForm?: string;
 }
-
-export interface FileChange {
-  filename: string;
-  additions: number;
-  deletions: number;
-}

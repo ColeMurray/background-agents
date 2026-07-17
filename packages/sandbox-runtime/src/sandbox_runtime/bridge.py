@@ -35,6 +35,7 @@ from .attachment_processor import (
     parse_session_image_attachments,
 )
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
+from .diff_capture import SessionDiffCaptureClient
 from .log_config import configure_logging, get_logger
 from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
@@ -301,6 +302,25 @@ class AgentBridge:
         url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
+    def _build_ready_event(self) -> dict[str, Any]:
+        repositories = load_repo_manifest(self.repo_manifest_path)
+        return {
+            "type": "ready",
+            "sandboxId": self.sandbox_id,
+            "opencodeSessionId": self.opencode_session_id,
+            "capabilities": ["session_diff_v1"],
+            "repositories": [
+                {
+                    "position": position,
+                    "repoOwner": repository.owner,
+                    "repoName": repository.name,
+                    "baseSha": repository.base_sha,
+                }
+                for position, repository in enumerate(repositories)
+                if repository.base_sha
+            ],
+        }
+
     @staticmethod
     def _redact_git_stderr(stderr_text: str, push_url: str, redacted_push_url: str) -> str:
         """Redact credential-bearing URLs from git stderr."""
@@ -479,13 +499,7 @@ class AgentBridge:
                         reconnect_count=max(0, self._connection_count - 1),
                         reconnect_attempt_count=self._reconnect_attempt_count,
                     )
-                    await self._send_event(
-                        {
-                            "type": "ready",
-                            "sandboxId": self.sandbox_id,
-                            "opencodeSessionId": self.opencode_session_id,
-                        }
-                    )
+                    await self._send_event(self._build_ready_event())
                     await self._drain_boot_warnings()
                     just_flushed = await self._flush_event_buffer()
                     await self._flush_pending_acks(skip_ack_ids=just_flushed)
@@ -770,6 +784,15 @@ class AgentBridge:
             self.git_sync_complete.set()
         elif cmd_type == "push":
             await self._handle_push(cmd)
+        elif cmd_type == "capture_diff":
+            await SessionDiffCaptureClient(
+                session_id=self.session_id,
+                control_plane_url=self.control_plane_url,
+                auth_token=self.auth_token,
+                repo_manifest_path=self.repo_manifest_path,
+                http_client=self.http_client,
+                log=self.log,
+            ).handle(cmd)
         elif cmd_type == "ack":
             ack_id = cmd.get("ackId")
             if ack_id and ack_id in self._pending_acks:

@@ -15,9 +15,17 @@ import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
 import { extractLatestTasks } from "@/lib/tasks";
-import { extractChangedFiles } from "@/lib/files";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
+import type {
+  ParticipantPresence,
+  SessionDiffFile,
+  SessionDiffRepository,
+  SessionDiffState,
+  SessionState,
+} from "@open-inspect/shared";
+import type { DiffSelection } from "@/lib/session-diffs";
+import { deriveSessionDiffView } from "@/lib/session-diffs";
+import { useSessionDiffRetry } from "@/hooks/use-session-diffs";
 
 interface SessionRightSidebarProps {
   sessionId: string;
@@ -28,6 +36,11 @@ interface SessionRightSidebarProps {
   terminalOpen?: boolean;
   onToggleTerminal?: () => void;
   onOpenMedia: (artifactId: string) => void;
+  diffState?: SessionDiffState | null;
+  diffLoading?: boolean;
+  diffError?: Error | null;
+  selectedDiff?: DiffSelection | null;
+  onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
@@ -41,9 +54,13 @@ export function SessionRightSidebarContent({
   terminalOpen,
   onToggleTerminal,
   onOpenMedia,
+  diffState,
+  diffLoading,
+  diffError,
+  selectedDiff,
+  onOpenDiff,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
-  const filesChanged = useMemo(() => extractChangedFiles(events), [events]);
   const warnings = useMemo(
     () =>
       events.filter(
@@ -60,6 +77,17 @@ export function SessionRightSidebarContent({
     () => buildAuthenticatedUrl(sessionState?.ttydUrl, sessionState?.ttydToken),
     [sessionState?.ttydUrl, sessionState?.ttydToken]
   );
+  const { retry, isRetrying, retryError } = useSessionDiffRetry(sessionId);
+  const hasRepository = Boolean(
+    sessionState?.repositories?.length || (sessionState?.repoOwner && sessionState.repoName)
+  );
+  const diffView = deriveSessionDiffView({
+    hasRepository,
+    isProcessing: sessionState?.isProcessing ?? false,
+    state: diffState ?? null,
+    isLoading: diffLoading ?? false,
+    hasError: Boolean(diffError),
+  });
 
   if (!sessionState) {
     return (
@@ -164,10 +192,81 @@ export function SessionRightSidebarContent({
       {/* Child Sessions */}
       <ChildSessionsSection sessionId={sessionState.id} />
 
-      {/* Files Changed */}
-      {filesChanged.length > 0 && (
-        <CollapsibleSection title="Files changed" defaultOpen={true}>
-          <FilesChangedSection files={filesChanged} />
+      {/* Canonical durable checkout changes */}
+      {diffView.kind !== "hidden" && (
+        <CollapsibleSection title="Changes" defaultOpen={true}>
+          {diffView.showManifest && diffState?.current && onOpenDiff && (
+            <FilesChangedSection
+              repositories={diffState.current.repositories}
+              selected={selectedDiff}
+              onSelect={onOpenDiff}
+            />
+          )}
+          <div role="status" aria-live="polite" className={diffView.showManifest ? "mt-2" : ""}>
+            {diffView.kind === "loading" && (
+              <p className="text-xs text-muted-foreground">Loading changes…</p>
+            )}
+            {diffView.kind === "error" && (
+              <p className="text-xs text-destructive">Unable to load changes.</p>
+            )}
+            {diffView.kind === "preparing" && (
+              <p className="text-xs text-muted-foreground">Preparing session baseline…</p>
+            )}
+            {diffView.kind === "unavailable" && (
+              <p className="text-xs text-muted-foreground">{diffView.message}</p>
+            )}
+            {diffView.kind === "available_after_execution" && (
+              <p className="text-xs text-muted-foreground">
+                Changes will be available after the first execution.
+              </p>
+            )}
+            {diffView.kind === "working" && (
+              <p className="text-xs text-muted-foreground">
+                {diffView.showManifest
+                  ? "Agent working — showing the previous capture."
+                  : "Changes will be available after this execution."}
+              </p>
+            )}
+            {diffView.kind === "capturing" && (
+              <p className="text-xs text-muted-foreground">
+                {diffView.showManifest
+                  ? "Refreshing changes — showing the previous capture."
+                  : "Capturing changes after execution…"}
+              </p>
+            )}
+            {diffView.kind === "empty" && (
+              <p className="text-xs text-muted-foreground">
+                No file changes in the latest capture.
+              </p>
+            )}
+            {diffView.kind === "failed" && (
+              <div className="space-y-1.5">
+                <p className="text-xs text-destructive">{diffView.message}</p>
+                <button
+                  type="button"
+                  disabled={isRetrying}
+                  onClick={() => void retry()}
+                  className="text-xs font-medium text-accent underline underline-offset-2 disabled:opacity-50"
+                >
+                  {isRetrying ? "Retrying…" : "Retry changes capture"}
+                </button>
+              </div>
+            )}
+            {retryError && <p className="mt-1.5 text-xs text-destructive">{retryError}</p>}
+          </div>
+          {diffView.showManifest &&
+            diffState?.current?.repositories.map(
+              (repository) =>
+                repository.status !== "ready" && (
+                  <p key={repository.position} className="mt-2 text-[11px] text-warning">
+                    {repository.repoOwner}/{repository.repoName}:{" "}
+                    {repository.status === "stale"
+                      ? "showing the previous capture"
+                      : "changes unavailable"}
+                    {repository.error ? ` — ${repository.error}` : ""}
+                  </p>
+                )
+            )}
         </CollapsibleSection>
       )}
 
@@ -183,10 +282,10 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Artifacts info when no specific sections are populated */}
-      {tasks.length === 0 && filesChanged.length === 0 && artifacts.length === 0 && (
+      {tasks.length === 0 && artifacts.length === 0 && (
         <div className="px-4 py-4">
           <p className="text-sm text-muted-foreground">
-            Tasks and file changes will appear here as the agent works.
+            Tasks and artifacts will appear here as the agent works.
           </p>
         </div>
       )}
@@ -203,6 +302,11 @@ export function SessionRightSidebar({
   terminalOpen,
   onToggleTerminal,
   onOpenMedia,
+  diffState,
+  diffLoading,
+  diffError,
+  selectedDiff,
+  onOpenDiff,
 }: SessionRightSidebarProps) {
   return (
     <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
@@ -215,6 +319,11 @@ export function SessionRightSidebar({
         terminalOpen={terminalOpen}
         onToggleTerminal={onToggleTerminal}
         onOpenMedia={onOpenMedia}
+        diffState={diffState}
+        diffLoading={diffLoading}
+        diffError={diffError}
+        selectedDiff={selectedDiff}
+        onOpenDiff={onOpenDiff}
       />
     </aside>
   );

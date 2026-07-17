@@ -2,6 +2,8 @@ import { isCanonicalUserId, type SessionStatus } from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 import type { Env } from "../types";
+import { createSessionRuntimeClient } from "../session/runtime-client";
+import { SessionInternalPaths } from "../session/contracts";
 
 const SESSION_STATUSES: SessionStatus[] = [
   "created",
@@ -88,10 +90,19 @@ async function handleDeleteSession(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
+
+  const cleanup = await createSessionRuntimeClient(env, ctx).fetch(
+    sessionId,
+    SessionInternalPaths.diffDelete,
+    { method: "POST" }
+  );
+  if (!cleanup.ok && cleanup.status !== 404) {
+    return error("Failed to clean up session changes", 500);
+  }
 
   const sessionStore = new SessionIndexStore(env.DB);
   await sessionStore.delete(sessionId);
