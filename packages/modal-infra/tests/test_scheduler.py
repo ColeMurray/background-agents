@@ -333,12 +333,15 @@ class TestRebuildImages:
         return mock_get, mock_post
 
     @pytest.mark.asyncio
-    async def test_no_units_skips_status_and_posts(self):
-        """Zero units means there is no scheduler work to submit."""
+    async def test_no_units_skips_status_but_still_maintains(self):
+        """Zero units → no status fetch, but mark-stale and cleanup still run."""
         mock_get, mock_post = await self._run_pass(units=[], images=[])
 
         assert [c for c in mock_get.call_args_list if "image-builds/status" in str(c)] == []
-        assert mock_post.call_args_list == []
+        stale_calls = [c for c in mock_post.call_args_list if "image-builds/mark-stale" in str(c)]
+        assert len(stale_calls) == 1
+        cleanup_calls = [c for c in mock_post.call_args_list if "image-builds/cleanup" in str(c)]
+        assert len(cleanup_calls) == 1
 
     @pytest.mark.asyncio
     async def test_triggers_by_unit_kind(self):
@@ -396,6 +399,19 @@ class TestRebuildImages:
 
         trigger_calls = [c for c in mock_post.call_args_list if "/trigger/" in str(c)]
         assert len(trigger_calls) == TRIGGER_CAP_PER_TICK
+        # Maintenance still runs after the cap is reached.
+        assert [c for c in mock_post.call_args_list if "mark-stale" in str(c)] != []
+        assert [c for c in mock_post.call_args_list if "cleanup" in str(c)] != []
+
+    @pytest.mark.asyncio
+    async def test_calls_mark_stale_and_cleanup_once(self):
+        """One maintenance sweep per tick on the unified paths."""
+        _mock_get, mock_post = await self._run_pass(units=[_repo_unit()], images=[])
+
+        stale_calls = [c for c in mock_post.call_args_list if "image-builds/mark-stale" in str(c)]
+        assert len(stale_calls) == 1
+        cleanup_calls = [c for c in mock_post.call_args_list if "image-builds/cleanup" in str(c)]
+        assert len(cleanup_calls) == 1
 
 
 REPO_SCOPE_KWARGS = {

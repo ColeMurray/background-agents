@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { createExecutionContext, env, SELF } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
 import { ImageBuildStore } from "../../src/db/image-builds";
 import { EnvironmentStore } from "../../src/db/environments";
@@ -28,7 +28,6 @@ import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import type { AnyImageBuildAdapter, DeleteImageInput } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
-import worker from "../../src/index";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
 
@@ -655,35 +654,6 @@ describe("Image builds", () => {
       const survivor = await getRow("old-failed-with-artifact");
       expect(survivor?.status).toBe("failed");
       expect(survivor?.provider_image_id).toBe("im-restore-orphan");
-    });
-
-    it("the Worker cron maintains image builds without the automation scheduler binding", async () => {
-      const environmentId = await seedEnvironment();
-      await seedImageRow({
-        id: "cron-stale",
-        environmentId,
-        status: "building",
-        createdAt: Date.now() - 2 * 60 * 60 * 1000,
-      });
-      await seedImageRow({ id: "cron-fresh", environmentId, status: "building" });
-      await seedImageRow({
-        id: "cron-old-failed",
-        environmentId,
-        status: "failed",
-        createdAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
-      });
-      await seedImageRow({ id: "cron-superseded", environmentId, status: "superseded" });
-
-      await worker.scheduled(
-        {} as ScheduledEvent,
-        { ...env, SCHEDULER: undefined } as Env,
-        createExecutionContext()
-      );
-
-      expect((await getRow("cron-stale"))?.status).toBe("failed");
-      expect((await getRow("cron-fresh"))?.status).toBe("building");
-      expect(await getRow("cron-old-failed")).toBeNull();
-      expect(await getRow("cron-superseded")).toBeNull();
     });
 
     it("deleteOldFailedBuilds ages out only artifact-free failed rows", async () => {
