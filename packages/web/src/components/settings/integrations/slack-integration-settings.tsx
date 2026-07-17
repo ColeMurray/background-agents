@@ -465,7 +465,7 @@ function deriveOverrideMode(settings: SlackRepoSettings): OverrideMode {
 }
 
 function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
-  const [mode, setMode] = useState<OverrideMode>(deriveOverrideMode(entry.settings));
+  const [mode, setMode] = useState<OverrideMode>(() => deriveOverrideMode(entry.settings));
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 

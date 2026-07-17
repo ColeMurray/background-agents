@@ -254,6 +254,7 @@ export function MetadataSection({
                 </span>
               )}
               <button
+                type="button"
                 onClick={handleCopyBranch}
                 className="p-1 hover:bg-muted transition-colors"
                 title={copied ? "Copied!" : "Copy branch name"}
