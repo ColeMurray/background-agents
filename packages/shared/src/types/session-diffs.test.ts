@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   diffCaptureCompleteRequestSchema,
   diffCaptureFailureRequestSchema,
+  sessionDiffManifestSchema,
   sessionDiffStateSchema,
 } from "./session-diffs";
+import { MAX_SESSION_REPOSITORIES } from "./repositories";
 import { sandboxEventSchema } from "./sandbox-events";
 import { serverMessageSchema } from "./server-messages";
 
@@ -181,6 +183,40 @@ describe("session diff contracts", () => {
     expect(() =>
       diffCaptureCompleteRequestSchema.parse({ repositories: [outcome, outcome] })
     ).toThrow(/Duplicate repository position/);
+  });
+
+  it("bounds repository counts in capture requests and persisted manifests", () => {
+    const captureRepositories = Array.from(
+      { length: MAX_SESSION_REPOSITORIES + 1 },
+      (_, position) => ({
+        position,
+        repoOwner: "acme",
+        repoName: `repo-${position}`,
+        baseSha: "a".repeat(40),
+        error: "unavailable",
+      })
+    );
+    expect(() =>
+      diffCaptureCompleteRequestSchema.parse({ repositories: captureRepositories })
+    ).toThrow();
+
+    expect(() =>
+      sessionDiffManifestSchema.parse({
+        revisionId: "capture-1",
+        capturedAt: 100,
+        triggerMessageId: null,
+        repositories: captureRepositories.map((repository) => ({
+          ...repository,
+          headSha: "b".repeat(40),
+          capturedAt: 100,
+          status: "unavailable",
+          sourceCaptureId: "capture-1",
+          truncated: false,
+          omittedFileCount: 0,
+          files: [],
+        })),
+      })
+    ).toThrow();
   });
 
   it("rejects duplicate file ids across repositories", () => {

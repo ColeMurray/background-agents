@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_SESSION_REPOSITORIES } from "./repositories";
 
 export const SESSION_DIFF_VERSION = 1 as const;
 export const SESSION_DIFF_MAX_FILES = 1_000;
@@ -128,7 +129,7 @@ export const sessionDiffManifestSchema = z
     revisionId: nonEmptyIdSchema,
     capturedAt: z.number().int().nonnegative(),
     triggerMessageId: nonEmptyIdSchema.nullable(),
-    repositories: z.array(sessionDiffRepositorySchema),
+    repositories: z.array(sessionDiffRepositorySchema).max(MAX_SESSION_REPOSITORIES),
   })
   .superRefine(({ repositories }, ctx) => {
     const fileIds = new Set<string>();
@@ -197,7 +198,7 @@ export const diffCaptureRepositoryOutcomeSchema = z.union([
 
 export const diffCaptureCompleteRequestSchema = z
   .object({
-    repositories: z.array(diffCaptureRepositoryOutcomeSchema).min(1),
+    repositories: z.array(diffCaptureRepositoryOutcomeSchema).min(1).max(MAX_SESSION_REPOSITORIES),
   })
   .superRefine(({ repositories }, ctx) => {
     const positions = new Set<number>();
