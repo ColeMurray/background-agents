@@ -5,7 +5,7 @@ export const MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH = 16_384;
 
 const committerNameSchema = z.string().trim().min(1).max(256);
 const committerEmailSchema = z.string().trim().email().max(320);
-const timestampSchema = z.string().datetime({ offset: true });
+const timestampSchema = z.iso.datetime({ offset: true });
 
 export const commitSigningWriteRequestSchema = z.strictObject({
   privateKey: z.string().min(1).max(MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH),
