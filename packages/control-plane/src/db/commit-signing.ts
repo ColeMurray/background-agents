@@ -47,6 +47,10 @@ interface ConfigurationRow {
   fingerprint: string;
 }
 
+interface DeletedConfigurationRow {
+  fingerprint: string;
+}
+
 export class CommitSigningStore {
   constructor(
     private readonly db: D1Database,
@@ -137,8 +141,13 @@ export class CommitSigningStore {
     };
   }
 
-  async delete(): Promise<void> {
-    await this.db.prepare("DELETE FROM commit_signing_configuration WHERE singleton_id = 1").run();
+  async delete(): Promise<string | undefined> {
+    const deleted = await this.db
+      .prepare(
+        "DELETE FROM commit_signing_configuration WHERE singleton_id = 1 RETURNING fingerprint"
+      )
+      .first<DeletedConfigurationRow>();
+    return deleted?.fingerprint;
   }
 
   private toMetadata(row: MetadataRow): CommitSigningMetadata {

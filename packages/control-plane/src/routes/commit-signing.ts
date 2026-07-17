@@ -127,12 +127,11 @@ async function handleDeleteCommitSigning(
   if (store instanceof Response) return store;
 
   try {
-    const metadata = await store.getMetadata();
-    await store.delete();
+    const deletedFingerprint = await store.delete();
     logger.info("commit_signing.configuration_changed", {
       event: "commit_signing.configuration_changed",
       action: "disable",
-      ...(metadata.enabled ? { fingerprint: metadata.fingerprint } : {}),
+      ...(deletedFingerprint ? { fingerprint: deletedFingerprint } : {}),
       outcome: "success",
       timestamp: Date.now(),
       request_id: ctx.request_id,

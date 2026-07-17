@@ -103,6 +103,13 @@ describe("commit signing store", () => {
       ).first()
     ).toEqual(before);
   });
+
+  it("returns the fingerprint from the row deleted by the same mutation", async () => {
+    const store = await saveConfiguration({ fingerprint: "SHA256:deleted" });
+
+    expect(await store.delete()).toBe("SHA256:deleted");
+    expect(await store.delete()).toBeUndefined();
+  });
 });
 
 describe("commit signing settings API", () => {
