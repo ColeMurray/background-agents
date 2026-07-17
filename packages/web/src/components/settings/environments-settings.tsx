@@ -202,6 +202,7 @@ export function EnvironmentsSettings() {
         <div className="flex items-center gap-1 border-b border-border-muted mb-4">
           {(["configuration", "secrets", "overrides"] as const).map((tab) => (
             <button
+              type="button"
               key={tab}
               onClick={() => setView({ ...view, tab })}
               className={`px-3 py-2 text-sm capitalize transition border-b-2 -mb-px ${
