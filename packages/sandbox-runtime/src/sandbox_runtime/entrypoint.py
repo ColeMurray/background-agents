@@ -458,9 +458,9 @@ class SandboxSupervisor:
         try:
             preserve_checkout = self.boot_mode == "snapshot_restore"
             if preserve_checkout:
-                if await self._ensure_plain_origin(repo):
-                    await self._fetch_branch(repo, repo.branch)
-                return True
+                if not await self._ensure_plain_origin(repo):
+                    return False
+                return await self._fetch_branch(repo, repo.branch)
             if not await self._ensure_plain_origin(repo):
                 return False
             if not await self._fetch_branch(repo, repo.branch):
@@ -474,7 +474,7 @@ class SandboxSupervisor:
                     repo_owner=repo.owner,
                     repo_name=repo.name,
                 )
-                return True
+                return False
             self.log.error("git.update_error", exc=e, repo_owner=repo.owner, repo_name=repo.name)
             return False
 

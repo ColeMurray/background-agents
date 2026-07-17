@@ -824,6 +824,43 @@ class TestUpdateExistingRepo:
 
         assert result is False
 
+    @pytest.mark.parametrize(
+        ("ensure_origin_result", "fetch_result"),
+        [(False, True), (True, False)],
+    )
+    @pytest.mark.asyncio
+    async def test_snapshot_restore_reports_ref_refresh_failures(
+        self, base_env, tmp_path, ensure_origin_result, fetch_result
+    ):
+        supervisor = _make_supervisor(base_env)
+        supervisor.boot_mode = "snapshot_restore"
+        supervisor.repo_path = tmp_path
+        _repoint_primary(supervisor)
+        supervisor._ensure_plain_origin = AsyncMock(return_value=ensure_origin_result)
+        supervisor._fetch_branch = AsyncMock(return_value=fetch_result)
+
+        result = await supervisor._update_existing_repo(supervisor.repositories[0])
+
+        assert result is False
+        if ensure_origin_result:
+            supervisor._fetch_branch.assert_awaited_once()
+        else:
+            supervisor._fetch_branch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_restore_reports_unexpected_refresh_errors(self, base_env, tmp_path):
+        supervisor = _make_supervisor(base_env)
+        supervisor.boot_mode = "snapshot_restore"
+        supervisor.repo_path = tmp_path
+        _repoint_primary(supervisor)
+        supervisor._ensure_plain_origin = AsyncMock(side_effect=RuntimeError("refresh failed"))
+        supervisor.log.warn = MagicMock()
+
+        result = await supervisor._update_existing_repo(supervisor.repositories[0])
+
+        assert result is False
+        supervisor.log.warn.assert_called_once()
+
 
 class TestPerformGitSync:
     """Test perform_git_sync() — clone + update flow."""
