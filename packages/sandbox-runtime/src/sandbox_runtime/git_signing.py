@@ -18,6 +18,7 @@ from .types import GitUser
 
 DEFAULT_SIGNING_KEY_PATH = Path("/run/oi/commit-signing/id_ed25519")
 GIT_CONFIG_TIMEOUT_SECONDS = 10.0
+SIGNING_CONFIG_FETCH_TIMEOUT_SECONDS = 30.0
 SIGNING_CONFIG_KEYS = (
     "author.name",
     "author.email",
@@ -152,7 +153,7 @@ class GitSigningRuntime:
     async def _fetch_configuration(self) -> CommitSigningConfiguration:
         url = f"{self.control_plane_url}/sessions/{quote(self.session_id, safe='')}/commit-signing"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=SIGNING_CONFIG_FETCH_TIMEOUT_SECONDS) as client:
                 response = await client.get(
                     url,
                     headers={"Authorization": f"Bearer {self.auth_token}"},
