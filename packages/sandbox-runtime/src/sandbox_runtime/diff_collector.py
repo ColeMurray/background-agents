@@ -97,6 +97,7 @@ async def _git(
     environment.update(
         {
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_TERMINAL_PROMPT": "0",
             "LC_ALL": "C",
         }

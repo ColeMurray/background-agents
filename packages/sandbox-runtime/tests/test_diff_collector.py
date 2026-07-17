@@ -48,6 +48,25 @@ async def test_collects_a_text_change_relative_to_the_fixed_baseline(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_ignores_replacement_refs_when_resolving_the_fixed_baseline(tmp_path: Path) -> None:
+    repository, base_sha = _repository(tmp_path)
+    (repository.path / "app.ts").write_text("const value = 2;\n")
+    _git(repository.path, "add", "app.ts")
+    _git(repository.path, "commit", "-m", "replacement object")
+    replacement_sha = _git(repository.path, "rev-parse", "HEAD")
+    _git(repository.path, "reset", "--hard", base_sha)
+    _git(repository.path, "replace", base_sha, replacement_sha)
+    (repository.path / "app.ts").write_text("const value = 2;\n")
+
+    capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    assert [changed.path for changed in capture.files] == ["app.ts"]
+    assert capture.files[0].status == "modified"
+    assert "-const value = 1;" in (capture.files[0].patch or "")
+    assert "+const value = 2;" in (capture.files[0].patch or "")
+
+
+@pytest.mark.asyncio
 async def test_collects_committed_staged_and_unstaged_changes(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository.path / "committed.txt").write_text("committed\n")
