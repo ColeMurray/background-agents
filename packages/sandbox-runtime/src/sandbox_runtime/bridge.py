@@ -349,6 +349,7 @@ class AgentBridge:
 
         reconnect_attempts = 0
         run_outcome = "shutdown"
+        signing_initialized = False
 
         try:
             self.http_client = httpx.AsyncClient(
@@ -357,12 +358,14 @@ class AgentBridge:
                     connect=self.HTTP_CONNECT_TIMEOUT,
                 )
             )
-            await self.git_signing.initialize(None)
             await self._load_session_id()
 
             while not self.shutdown_event.is_set():
                 run_outcome = "shutdown"
                 try:
+                    if not signing_initialized:
+                        await self.git_signing.initialize(None)
+                        signing_initialized = True
                     await self._connect_and_run()
                     if not self.shutdown_event.is_set():
                         run_outcome = "connection_closed"

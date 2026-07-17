@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge, SessionTerminatedError
+from sandbox_runtime.git_signing import GitSigningError
 
 
 class TestIsFatalConnectionError:
@@ -147,6 +148,33 @@ class TestIsFatalConnectionError:
             reconnect_attempt_count=1,
             total_connected_duration_seconds=0.0,
         )
+
+    @pytest.mark.asyncio
+    async def test_run_retries_signing_initialization_before_connecting(self, bridge, monkeypatch):
+        class HttpClient:
+            async def aclose(self):
+                return None
+
+        async def connect_and_run():
+            bridge.shutdown_event.set()
+
+        bridge.log = MagicMock()
+        bridge.git_signing.initialize = AsyncMock(
+            side_effect=[GitSigningError("Commit signing configuration unavailable"), None]
+        )
+        bridge._load_session_id = AsyncMock()
+        bridge._connect_and_run = AsyncMock(side_effect=connect_and_run)
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.httpx.AsyncClient", lambda **_kwargs: HttpClient()
+        )
+        sleep = AsyncMock()
+        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
+
+        await bridge.run()
+
+        assert bridge.git_signing.initialize.await_count == 2
+        bridge._connect_and_run.assert_awaited_once()
+        sleep.assert_awaited_once_with(bridge.RECONNECT_BACKOFF_BASE)
 
 
 class TestSessionTerminatedError:
