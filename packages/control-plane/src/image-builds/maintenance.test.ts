@@ -8,9 +8,11 @@ describe("DEFAULT_STALE_BUILD_MAX_AGE_MS", () => {
     expect(DEFAULT_STALE_BUILD_MAX_AGE_MS).toBe(4_200_000);
   });
 
-  // A `building` row older than the threshold must be provably dead, or the
-  // stale mark fails live builds mid-flight and the scope loops on rebuilds.
-  // Each provider's build-sandbox lifetime ceiling must stay at or under it.
+  // The stale mark presumes a `building` row older than the threshold is
+  // dead, so each provider's build-sandbox lifetime ceiling must stay at or
+  // under it — otherwise the mark fails live builds mid-flight and the scope
+  // loops on rebuilds. (Dispatch/queue delay before sandbox start is absorbed
+  // by the margin, not modeled; see the constant's doc comment.)
 
   it("covers the shared build-timeout ceiling (Modal and OpenComputer)", () => {
     // Both providers' sandbox lifetimes are capped at MAX_BUILD_TIMEOUT_SECONDS
