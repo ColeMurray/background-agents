@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { encryptTokenPair } from "../auth/crypto";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { createLogger } from "../logger";
@@ -8,6 +9,18 @@ import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-ws-token");
 
+const sessionWsTokenBodySchema = z.object({
+  userId: z.string(),
+  scmUserId: z.string().optional(),
+  scmLogin: z.string().optional(),
+  scmName: z.string().optional(),
+  authName: z.string().optional(),
+  scmEmail: z.string().optional(),
+  scmToken: z.string().optional(),
+  scmTokenExpiresAt: z.number().optional(),
+  scmRefreshToken: z.string().optional(),
+});
+
 async function handleSessionWsToken(
   request: Request,
   env: Env,
@@ -17,17 +30,19 @@ async function handleSessionWsToken(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  const body = (await request.json()) as {
-    userId: string;
-    scmUserId?: string;
-    scmLogin?: string;
-    scmName?: string;
-    authName?: string;
-    scmEmail?: string;
-    scmToken?: string;
-    scmTokenExpiresAt?: number;
-    scmRefreshToken?: string;
-  };
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+
+  const parsedBody = sessionWsTokenBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return error("Invalid request body", 400);
+  }
+
+  const body = parsedBody.data;
 
   if (!body.userId) {
     return error("userId is required");

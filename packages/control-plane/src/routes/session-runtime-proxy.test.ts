@@ -86,6 +86,52 @@ describe("session runtime proxy routes", () => {
     });
   });
 
+  it("does not forward non-string title update fields", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "updated" });
+    });
+    const { handler, match } = getHandler("PATCH", "/sessions/session-1/title");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/title", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: 123, title: false }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(requests[0].json()).resolves.toEqual({});
+  });
+
+  it("does not forward non-string archive user ids", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "archived" });
+    });
+    const { handler, match } = getHandler("POST", "/sessions/session-1/archive");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: 123 }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(requests[0].json()).resolves.toEqual({});
+  });
+
   it("only rewrites runtime 404 responses to the configured not-found response", async () => {
     const fetch = vi.fn(async () => Response.json({ error: "runtime failed" }, { status: 500 }));
     const { handler, match } = getHandler("GET", "/sessions/session-1");

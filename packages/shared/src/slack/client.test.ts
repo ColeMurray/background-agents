@@ -231,6 +231,21 @@ describe("postMessage", () => {
     expect(result.error).toBe("invalid_response");
   });
 
+  it("on partial Slack envelope returns a typed error rather than asserting it valid", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: false }))
+      .mockResolvedValueOnce(jsonResponse({ ts: "1700000000.000100" }));
+
+    await expect(postMessage("xoxb-token", "C123", "hi")).resolves.toEqual({
+      ok: false,
+      error: "invalid_response",
+    });
+    await expect(postMessage("xoxb-token", "C123", "hi")).resolves.toEqual({
+      ok: false,
+      error: "invalid_response",
+    });
+  });
+
   it("on fetch network error returns a typed error rather than throwing", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new TypeError("fetch failed"));
 
