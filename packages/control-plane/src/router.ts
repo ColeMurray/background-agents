@@ -74,7 +74,6 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
-  /^\/sessions\/[^/]+\/commit-signing$/, // Commit signing configuration broker
   /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
   /^\/sessions\/[^/]+\/attachments\/[^/]+$/, // Session attachment download from sandbox bridge
@@ -82,6 +81,11 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
   /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
+];
+
+/** Routes that require the session-specific sandbox token and reject internal HMAC auth. */
+const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
+  /^\/sessions\/[^/]+\/commit-signing$/, // Decrypted commit signing configuration broker
 ];
 
 type CachedScmProvider =
@@ -136,6 +140,10 @@ function isPublicRoute(path: string): boolean {
  */
 function isSandboxAuthRoute(path: string): boolean {
   return SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path));
+}
+
+function isSandboxAuthOnlyRoute(path: string): boolean {
+  return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
 function isScmAgnosticRoute(path: string): boolean {
@@ -382,24 +390,26 @@ export async function handleRequest(
 
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
-    const acceptsSandboxAuth = isSandboxAuthRoute(path);
-    // First try HMAC auth (for web app, slack bot, etc.)
-    const hmacAuthError = await requireInternalAuth(request, env, ctx);
-    let authError = hmacAuthError;
+    const requiresSandboxAuth = isSandboxAuthOnlyRoute(path);
+    let hmacAuthError: Response | null = null;
+    let authError: Response | null;
 
-    if (hmacAuthError) {
-      // HMAC auth failed - check if this route accepts sandbox auth
-      if (acceptsSandboxAuth) {
+    if (requiresSandboxAuth) {
+      const sessionIdMatch = path.match(/^\/sessions\/([^/]+)\//);
+      authError = sessionIdMatch
+        ? await verifySandboxAuth(request, env, sessionIdMatch[1], ctx)
+        : error("Unauthorized: Invalid session path", 401);
+    } else {
+      const acceptsSandboxAuth = isSandboxAuthRoute(path);
+      // First try HMAC auth (for web app, slack bot, etc.)
+      hmacAuthError = await requireInternalAuth(request, env, ctx);
+      authError = hmacAuthError;
+
+      if (hmacAuthError && acceptsSandboxAuth) {
         // Extract session ID from path (e.g., /sessions/abc123/pr -> abc123)
         const sessionIdMatch = path.match(/^\/sessions\/([^/]+)\//);
         if (sessionIdMatch) {
-          const sessionId = sessionIdMatch[1];
-          const sandboxAuthError = await verifySandboxAuth(request, env, sessionId, ctx);
-          if (!sandboxAuthError) {
-            authError = null;
-          } else {
-            authError = sandboxAuthError;
-          }
+          authError = await verifySandboxAuth(request, env, sessionIdMatch[1], ctx);
         }
       }
     }

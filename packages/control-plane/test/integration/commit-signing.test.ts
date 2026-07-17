@@ -264,6 +264,17 @@ describe("commit signing settings API", () => {
 describe("sandbox commit signing broker", () => {
   beforeEach(cleanD1Tables);
 
+  it("rejects a valid shared internal HMAC token", async () => {
+    const sessionName = await createSandboxSession("commit-signing-hmac");
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(401);
+  });
+
   it("returns an explicit disabled response to the authenticated sandbox", async () => {
     const sessionName = await createSandboxSession("commit-signing");
 
