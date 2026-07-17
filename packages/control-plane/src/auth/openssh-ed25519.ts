@@ -104,7 +104,9 @@ function parsePrivateKeyBlob(privateKeyBlob: Uint8Array): {
   seed: Uint8Array;
 } {
   const reader = new BinaryReader(privateKeyBlob);
-  if (reader.readUint32() !== reader.readUint32()) {
+  const firstCheckValue = reader.readUint32();
+  const secondCheckValue = reader.readUint32();
+  if (firstCheckValue !== secondCheckValue) {
     throw new OpenSshKeyValidationError("Invalid OpenSSH private key check values");
   }
   if (decodeText(reader.readString()) !== ED25519_KEY_TYPE) {
