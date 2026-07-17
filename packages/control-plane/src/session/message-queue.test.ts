@@ -476,10 +476,16 @@ describe("SessionMessageQueue", () => {
 
   it("reconciles session status when failing a stuck processing message", async () => {
     const h = buildQueue();
+    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
     await h.queue.failStuckProcessingMessage();
 
+    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.wsManager.send.mock.invocationCallOrder[0]).toBeLessThan(
+      h.beginDiffCapture.mock.invocationCallOrder[0]!
+    );
     expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(false);
     expect(h.beginDiffCapture.mock.invocationCallOrder[0]).toBeLessThan(
       h.reconcileSessionStatusAfterExecution.mock.invocationCallOrder[0]!

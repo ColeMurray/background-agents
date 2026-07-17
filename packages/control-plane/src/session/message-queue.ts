@@ -300,9 +300,9 @@ export class SessionMessageQueue {
   /**
    * Fail a stuck processing message (defense-in-depth for execution timeout).
    *
-   * Only marks the message as failed and broadcasts — does NOT send a stop command
-   * to the sandbox or call processMessageQueue(). This avoids races where a new
-   * prompt could be dispatched to a sandbox being shut down.
+   * Stops the mutating prompt before capturing its terminal checkout state. It
+   * does not call processMessageQueue(); the existing capture barrier and
+   * lifecycle flow continue to own later dispatch.
    */
   async failStuckProcessingMessage(): Promise<void> {
     const now = Date.now();
@@ -326,6 +326,10 @@ export class SessionMessageQueue {
     this.deps.ctx.waitUntil(
       this.deps.callbackService.notifyComplete(processingMessage.id, false, stuckError)
     );
+    const sandboxWs = this.deps.wsManager.getSandboxSocket();
+    if (sandboxWs) {
+      this.deps.wsManager.send(sandboxWs, { type: "stop" });
+    }
     await this.deps.beginDiffCapture(processingMessage.id);
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
