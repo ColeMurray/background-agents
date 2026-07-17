@@ -64,4 +64,52 @@ describe("createSandboxProviderFromEnv", () => {
       "E2B_AUTO_PAUSE must be a valid boolean"
     );
   });
+
+  it("requires all Superserve endpoints and template settings", () => {
+    const env = createEnv({ SUPERSERVE_API_KEY: "superserve-key" });
+
+    expect(() => createSandboxProviderFromEnv(env, "superserve")).toThrow(
+      "SUPERSERVE_API_URL, SUPERSERVE_API_KEY, SUPERSERVE_TEMPLATE, and SUPERSERVE_SANDBOX_HOST are required"
+    );
+  });
+
+  it("rejects malformed Superserve auto-delete configuration", () => {
+    const env = createEnv({
+      SUPERSERVE_API_URL: "https://api.superserve.test",
+      SUPERSERVE_API_KEY: "superserve-key",
+      SUPERSERVE_TEMPLATE: "runtime",
+      SUPERSERVE_SANDBOX_HOST: "sandbox.superserve.test",
+      SUPERSERVE_AUTO_DELETE_SECONDS: "30.5",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "superserve")).toThrow(
+      "SUPERSERVE_AUTO_DELETE_SECONDS must be an integer between 0 and 2592000"
+    );
+  });
+
+  it("constructs the Superserve provider with optional lifecycle and network policy", () => {
+    const env = createEnv({
+      SUPERSERVE_API_URL: "https://api.superserve.test",
+      SUPERSERVE_API_KEY: "superserve-key",
+      SUPERSERVE_TEMPLATE: "runtime",
+      SUPERSERVE_SANDBOX_HOST: "sandbox.superserve.test",
+      SUPERSERVE_AUTO_DELETE_SECONDS: "604800",
+      SUPERSERVE_NETWORK_ALLOW_OUT: "github.com, api.github.com",
+      SUPERSERVE_NETWORK_DENY_OUT: "0.0.0.0/0",
+    });
+
+    const provider = createSandboxProviderFromEnv(env, "superserve") as unknown as {
+      name: string;
+      client: { config: Record<string, unknown> };
+    };
+
+    expect(provider.name).toBe("superserve");
+    expect(provider.client.config).toMatchObject({
+      autoDeleteSeconds: 604800,
+      network: {
+        allowOut: ["github.com", "api.github.com"],
+        denyOut: ["0.0.0.0/0"],
+      },
+    });
+  });
 });

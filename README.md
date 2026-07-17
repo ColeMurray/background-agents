@@ -121,6 +121,7 @@ built for internal use where all employees are trusted and have access to compan
 | [modal-infra](packages/modal-infra)               | Modal sandbox infrastructure                |
 | [daytona-infra](packages/daytona-infra)           | Daytona snapshot infrastructure             |
 | [opencomputer-infra](packages/opencomputer-infra) | OpenComputer template infrastructure        |
+| [superserve-infra](packages/superserve-infra)     | Superserve template infrastructure          |
 | [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
 | [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
 | [linear-bot](packages/linear-bot)                 | Linear integration (issue → coding session) |
@@ -290,6 +291,7 @@ built with:
 - [Daytona](https://www.daytona.io) - Cloud development sandboxes
 - [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) - Cloud sandbox infrastructure
 - [OpenComputer](https://www.opencomputer.dev) - Cloud sandbox infrastructure
+- [Superserve](https://superserve.ai) - Firecracker microVM sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
 - [OpenCode](https://opencode.ai) - Coding agent runtime
 - [Next.js](https://nextjs.org) - Web framework

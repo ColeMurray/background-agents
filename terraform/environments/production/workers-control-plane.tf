@@ -92,6 +92,23 @@ module "control_plane_worker" {
         value = var.opencomputer_template != "" ? var.opencomputer_template : module.opencomputer_infra[0].snapshot_name,
       },
     ] : [],
+    local.use_superserve_backend ? [
+      { name = "SUPERSERVE_API_URL", value = var.superserve_api_url },
+      { name = "SUPERSERVE_SANDBOX_HOST", value = var.superserve_sandbox_host },
+      {
+        name  = "SUPERSERVE_TEMPLATE",
+        value = var.superserve_template != "" ? var.superserve_template : module.superserve_infra[0].template_name,
+      },
+    ] : [],
+    local.use_superserve_backend && var.superserve_auto_delete_seconds != null ? [
+      { name = "SUPERSERVE_AUTO_DELETE_SECONDS", value = tostring(var.superserve_auto_delete_seconds) },
+    ] : [],
+    local.use_superserve_backend && length(var.superserve_network_allow_out) > 0 ? [
+      { name = "SUPERSERVE_NETWORK_ALLOW_OUT", value = join(",", var.superserve_network_allow_out) },
+    ] : [],
+    local.use_superserve_backend && length(var.superserve_network_deny_out) > 0 ? [
+      { name = "SUPERSERVE_NETWORK_DENY_OUT", value = join(",", var.superserve_network_deny_out) },
+    ] : [],
     local.use_vercel_backend ? [
       { name = "VERCEL_PROJECT_ID", value = var.vercel_sandbox_project_id },
       { name = "VERCEL_RUNTIME", value = var.vercel_sandbox_runtime },
@@ -140,6 +157,10 @@ module "control_plane_worker" {
       { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     ] : [],
+    local.use_superserve_backend ? [
+      { name = "SUPERSERVE_API_KEY", value = var.superserve_api_key },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    ] : [],
     local.use_vercel_backend ? [
       { name = "VERCEL_TOKEN", value = var.vercel_sandbox_token },
     ] : [],
@@ -178,5 +199,6 @@ module "control_plane_worker" {
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
     module.e2b_infra,
+    module.superserve_infra,
   ]
 }

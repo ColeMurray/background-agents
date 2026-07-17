@@ -63,6 +63,16 @@ describe("sandbox-provider", () => {
     expect(supportsRepoImages()).toBe(true);
   });
 
+  it("supports superserve without repo images", async () => {
+    delete process.env.NEXT_PUBLIC_SANDBOX_PROVIDER;
+    process.env.SANDBOX_PROVIDER = "superserve";
+
+    const { getPublicSandboxProvider, supportsRepoImages } = await loadProvider();
+
+    expect(getPublicSandboxProvider()).toBe("superserve");
+    expect(supportsRepoImages()).toBe(false);
+  });
+
   it("throws for unsupported providers", async () => {
     process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "fly";
 

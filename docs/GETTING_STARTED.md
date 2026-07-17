@@ -45,6 +45,7 @@ Create accounts on these services before continuing:
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
 | [E2B](https://e2b.dev) _(optional)_                       | Sandbox infrastructure when `sandbox_provider = "e2b"`          |
+| [Superserve](https://superserve.ai) _(optional)_          | Sandbox infrastructure when `sandbox_provider = "superserve"`   |
 | [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
 | [Anthropic](https://console.anthropic.com)                | Claude API                                                      |
 | [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
@@ -259,6 +260,21 @@ For the full runtime, lifecycle, and configuration model, see
 > **Important**: The E2B provider does not automatically inject LLM API keys into sandboxes. If you
 > plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets
 > after deploying. See [Secrets Management](SECRETS.md) for details.
+
+### Superserve
+
+> Only required when `sandbox_provider = "superserve"`.
+
+1. Create a Superserve API key.
+2. Set `sandbox_provider = "superserve"` in `terraform.tfvars`.
+3. Set `superserve_api_url`, `superserve_api_key`, and the matching regional
+   `superserve_sandbox_host`.
+4. Leave `superserve_template = ""` to let Terraform build the Open-Inspect runtime template, or set
+   it to an existing Superserve template name.
+5. Run `terraform apply`.
+
+See [Superserve Sandbox Provider](SUPERSERVE_PROVIDER.md) for lifecycle, egress policy, template
+build, cron, and MVP security-boundary details.
 
 ### Anthropic
 
@@ -493,7 +509,7 @@ modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
-# Sandbox provider: "modal" (default), "daytona", or "vercel"
+# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "superserve"
 # sandbox_provider          = "modal"
 
 # Daytona (only required when sandbox_provider = "daytona")
@@ -512,6 +528,12 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # E2B (only required when sandbox_provider = "e2b")
 # e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
 # e2b_template_id           = "open-inspect-sandbox"
+
+# Superserve (only required when sandbox_provider = "superserve")
+# superserve_api_url      = "https://api.superserve.ai"
+# superserve_api_key      = "ss_live_..."
+# superserve_sandbox_host = "sandbox.superserve.ai"
+# superserve_template     = "" # Empty builds a managed runtime template
 
 # GitHub App (used for both OAuth and repository access)
 github_client_id     = "Iv1.abc123..."           # From GitHub App settings
@@ -918,7 +940,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `MODAL_WORKSPACE`                | Modal workspace name                                                                        |
 | `MODAL_ENVIRONMENT`              | Modal environment name (defaults to `main`)                                                 |
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`   | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
-| `SANDBOX_PROVIDER`               | `modal`, `daytona`, or `vercel`                                                             |
+| `SANDBOX_PROVIDER`               | `modal`, `daytona`, `vercel`, `opencomputer`, or `superserve`                               |
 | `DAYTONA_API_URL`                | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_API_KEY`                | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_BASE_SNAPSHOT`          | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
@@ -930,6 +952,13 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_SANDBOX_RUNTIME`         | Optional Vercel Sandbox runtime (defaults to `node24`)                                      |
 | `VERCEL_SNAPSHOT_EXPIRATION_MS`  | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)       |
 | `VERCEL_SANDBOX_API_BASE_URL`    | Optional advanced Vercel Sandbox API base URL override                                      |
+| `SUPERSERVE_API_URL`             | Superserve API URL _(only if `sandbox_provider = "superserve"`)_                            |
+| `SUPERSERVE_API_KEY`             | Superserve API key _(only if `sandbox_provider = "superserve"`)_                            |
+| `SUPERSERVE_TEMPLATE`            | Optional existing Superserve template; empty enables the managed template build             |
+| `SUPERSERVE_SANDBOX_HOST`        | Regional Superserve data-plane hostname                                                     |
+| `SUPERSERVE_AUTO_DELETE_SECONDS` | Optional paused-sandbox retention in seconds                                                |
+| `SUPERSERVE_NETWORK_ALLOW_OUT`   | Optional JSON list of domain/CIDR allow rules for Terraform CI                              |
+| `SUPERSERVE_NETWORK_DENY_OUT`    | Optional JSON list of CIDR deny rules for Terraform CI                                      |
 | `GH_OAUTH_CLIENT_ID`             | GitHub App OAuth client ID                                                                  |
 | `GH_OAUTH_CLIENT_SECRET`         | GitHub App OAuth client secret                                                              |
 | `GOOGLE_CLIENT_ID`               | Google OAuth client ID (only if Google login enabled; pair with `GOOGLE_CLIENT_SECRET`)     |

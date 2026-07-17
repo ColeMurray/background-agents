@@ -50,6 +50,11 @@ export {
   type OpenComputerProviderConfig,
 } from "./providers/opencomputer-provider";
 export {
+  SuperserveSandboxProvider,
+  createSuperserveProvider,
+  type SuperserveProviderConfig,
+} from "./providers/superserve-provider";
+export {
   VercelSandboxProvider,
   createVercelProvider,
   type VercelProviderConfig,
@@ -95,6 +100,16 @@ export {
   type OpenComputerCreateSandboxParams,
   type OpenComputerDeleteSandboxOptions,
 } from "./opencomputer-rest-client";
+export {
+  SuperserveRestClient,
+  SuperserveNotFoundError,
+  SuperserveApiError,
+  createSuperserveRestClient,
+  type SuperserveRestConfig,
+  type SuperserveNetworkConfig,
+  type SuperserveSandboxResponse,
+  type SuperserveCreateSandboxParams,
+} from "./superserve-rest-client";
 export {
   resolveSandboxBackendName,
   isModalSandboxBackend,

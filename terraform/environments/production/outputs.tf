@@ -81,6 +81,11 @@ output "sandbox_provider" {
   value       = var.sandbox_provider
 }
 
+output "superserve_template_name" {
+  description = "Superserve runtime template configured for sandbox creation"
+  value       = local.use_superserve_backend ? (var.superserve_template != "" ? var.superserve_template : module.superserve_infra[0].template_name) : null
+}
+
 output "vercel_base_snapshot_id" {
   description = "Vercel base runtime snapshot ID configured for sandbox creation"
   value       = local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : null

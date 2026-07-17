@@ -2,6 +2,7 @@ import { createModalClient } from "./client";
 import { createDaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
 import { createOpenComputerRestClient } from "./opencomputer-rest-client";
+import { createSuperserveRestClient } from "./superserve-rest-client";
 import { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
 import type { SandboxProvider } from "./provider";
 import { createDaytonaProvider, type DaytonaSandboxProvider } from "./providers/daytona-provider";
@@ -16,6 +17,10 @@ import {
   createOpenComputerProvider,
   type OpenComputerSandboxProvider,
 } from "./providers/opencomputer-provider";
+import {
+  createSuperserveProvider,
+  type SuperserveSandboxProvider,
+} from "./providers/superserve-provider";
 import { createVercelSandboxClient } from "./providers/vercel/client";
 import { createVercelProvider, type VercelSandboxProvider } from "./providers/vercel/provider";
 import { resolveScmProviderFromEnv } from "../source-control";
@@ -142,6 +147,43 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
   });
 }
 
+function createSuperserveProviderFromEnv(env: Env): SuperserveSandboxProvider {
+  if (
+    !env.SUPERSERVE_API_URL ||
+    !env.SUPERSERVE_API_KEY ||
+    !env.SUPERSERVE_TEMPLATE ||
+    !env.SUPERSERVE_SANDBOX_HOST
+  ) {
+    throw new Error(
+      "SUPERSERVE_API_URL, SUPERSERVE_API_KEY, SUPERSERVE_TEMPLATE, and SUPERSERVE_SANDBOX_HOST are required when SANDBOX_PROVIDER=superserve"
+    );
+  }
+
+  const allowOut = parseListEnv(env.SUPERSERVE_NETWORK_ALLOW_OUT);
+  const denyOut = parseListEnv(env.SUPERSERVE_NETWORK_DENY_OUT);
+  const client = createSuperserveRestClient({
+    apiUrl: env.SUPERSERVE_API_URL,
+    apiKey: env.SUPERSERVE_API_KEY,
+    template: env.SUPERSERVE_TEMPLATE,
+    sandboxHost: env.SUPERSERVE_SANDBOX_HOST,
+    autoDeleteSeconds: parseOptionalIntegerEnv(
+      "SUPERSERVE_AUTO_DELETE_SECONDS",
+      env.SUPERSERVE_AUTO_DELETE_SECONDS,
+      0,
+      2_592_000
+    ),
+    ...(allowOut.length > 0 || denyOut.length > 0 ? { network: { allowOut, denyOut } } : {}),
+  });
+
+  return createSuperserveProvider(client, {
+    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    codeServerPasswordSecret: env.SUPERSERVE_API_KEY,
+    llmEnvVars: {
+      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+    },
+  });
+}
+
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "modal"): ModalSandboxProvider;
@@ -150,6 +192,10 @@ export function createSandboxProviderFromEnv(
   env: Env,
   backend: "opencomputer"
 ): OpenComputerSandboxProvider;
+export function createSandboxProviderFromEnv(
+  env: Env,
+  backend: "superserve"
+): SuperserveSandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
   backend?: SandboxBackendName
@@ -167,9 +213,35 @@ export function createSandboxProviderFromEnv(
       return createOpenComputerProviderFromEnv(env);
     case "e2b":
       return createE2BProviderFromEnv(env);
+    case "superserve":
+      return createSuperserveProviderFromEnv(env);
     case "modal":
       return createModalProviderFromEnv(env);
   }
+}
+
+function parseOptionalIntegerEnv(
+  name: string,
+  value: string | undefined,
+  minimum: number,
+  maximum: number
+): number | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return parsed;
+}
+
+function parseListEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function parseNumericEnv(name: string, value: string | undefined, defaultValue: number): number {

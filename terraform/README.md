@@ -221,6 +221,15 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
+# Superserve (only if SANDBOX_PROVIDER=superserve)
+SUPERSERVE_API_URL
+SUPERSERVE_API_KEY
+SUPERSERVE_TEMPLATE # Optional existing template; empty builds a managed template
+SUPERSERVE_SANDBOX_HOST
+SUPERSERVE_AUTO_DELETE_SECONDS # Optional paused-sandbox retention
+SUPERSERVE_NETWORK_ALLOW_OUT # Optional Terraform list of domain/CIDR allow rules
+SUPERSERVE_NETWORK_DENY_OUT # Optional Terraform list of CIDR deny rules
+
 # GitHub OAuth App
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET

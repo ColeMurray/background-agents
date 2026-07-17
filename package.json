@@ -17,6 +17,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "build:opencomputer-template": "npm run build-template -w @open-inspect/opencomputer-infra --",
+    "build:superserve-template": "npm run build-template -w @open-inspect/superserve-infra --",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
   },
   "devDependencies": {

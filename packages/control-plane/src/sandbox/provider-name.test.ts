@@ -34,6 +34,10 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("opencomputer")).toBe("opencomputer");
   });
 
+  it('returns "superserve" for "superserve"', () => {
+    expect(resolveSandboxBackendName("superserve")).toBe("superserve");
+  });
+
   it("is case-insensitive", () => {
     expect(resolveSandboxBackendName("MODAL")).toBe("modal");
     expect(resolveSandboxBackendName("Daytona")).toBe("daytona");
@@ -41,6 +45,7 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("DAYTONA")).toBe("daytona");
     expect(resolveSandboxBackendName("VERCEL")).toBe("vercel");
     expect(resolveSandboxBackendName("OPENCOMPUTER")).toBe("opencomputer");
+    expect(resolveSandboxBackendName("SUPERSERVE")).toBe("superserve");
   });
 
   it("trims whitespace", () => {
@@ -49,6 +54,7 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("  vercel  ")).toBe("vercel");
     expect(resolveSandboxBackendName("  opencomputer  ")).toBe("opencomputer");
     expect(resolveSandboxBackendName("  e2b  ")).toBe("e2b");
+    expect(resolveSandboxBackendName("  superserve  ")).toBe("superserve");
   });
 
   it("throws for unsupported provider", () => {
@@ -80,5 +86,9 @@ describe("isModalSandboxBackend", () => {
 
   it("returns false for opencomputer", () => {
     expect(isModalSandboxBackend("opencomputer")).toBe(false);
+  });
+
+  it("returns false for superserve", () => {
+    expect(isModalSandboxBackend("superserve")).toBe(false);
   });
 });
