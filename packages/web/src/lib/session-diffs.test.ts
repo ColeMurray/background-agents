@@ -115,6 +115,15 @@ describe("session diff view model", () => {
     ).toMatchObject({ kind: "failed", showManifest: true, canRetry: true });
   });
 
+  it("keeps a cached manifest visible when background revalidation fails", () => {
+    expect(
+      deriveSessionDiffView({
+        ...input(diffState(manifest)),
+        hasError: true,
+      })
+    ).toMatchObject({ kind: "ready", showManifest: true });
+  });
+
   it("distinguishes a successful empty capture from unavailable changes", () => {
     expect(
       deriveSessionDiffView(input(diffState({ ...manifest, repositories: [] })))

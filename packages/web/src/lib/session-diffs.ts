@@ -49,7 +49,7 @@ export function deriveSessionDiffView(input: {
   const base = { showManifest: false, canRetry: false };
   if (!input.hasRepository) return { kind: "hidden", ...base };
   if (input.isLoading) return { kind: "loading", ...base };
-  if (input.hasError || !input.state) return { kind: "error", ...base };
+  if (!input.state) return { kind: "error", ...base };
 
   const { state } = input;
   const showManifest = state.current !== null;
