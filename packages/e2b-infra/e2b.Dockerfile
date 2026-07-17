@@ -14,7 +14,7 @@
 FROM python:3.12-slim-bookworm
 
 # Pinned toolchain versions (keep in sync with daytona-infra/src/toolchain.py).
-ARG OPENCODE_VERSION=1.14.41
+ARG OPENCODE_VERSION=1.17.18
 ARG CODE_SERVER_VERSION=4.109.5
 ARG AGENT_BROWSER_VERSION=0.21.2
 

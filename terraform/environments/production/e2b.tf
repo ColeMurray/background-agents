@@ -3,7 +3,10 @@
 # =============================================================================
 
 # Calculate hash of E2B template source files for change detection.
-# Includes e2b-infra (Dockerfile + launcher) and sandbox-runtime (staged into the image).
+# build-template.py stages the WHOLE sandbox_runtime tree into the image (not just
+# *.py/.ts — skill prompts, assets, etc.), so hash every file under the runtime and
+# the e2b-infra builder, excluding only generated/cache dirs. Exclude-only policy,
+# mirroring the opencomputer builder, so a skill-only change still rebuilds the template.
 data "external" "e2b_source_hash" {
   count = local.use_e2b_backend ? 1 : 0
 
@@ -12,14 +15,16 @@ data "external" "e2b_source_hash" {
     if command -v sha256sum &> /dev/null; then
       hash=$(find packages/e2b-infra packages/sandbox-runtime/src \
         -type f \
-        -not -path 'packages/e2b-infra/.venv/*' -not -path 'packages/e2b-infra/sandbox_runtime/*' -not -path '*/__pycache__/*' \
-        \( -name "*.py" -o -name "*.ts" -o -name "*.js" -o -name "Dockerfile*" -o -name "*.Dockerfile" -o -name "*.toml" -o -name "uv.lock" -o -name "*.sh" \) \
+        -not -path 'packages/e2b-infra/.venv/*' -not -path 'packages/e2b-infra/sandbox_runtime/*' \
+        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
+        -not -name '*.pyc' -not -name '.DS_Store' \
         -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
     else
       hash=$(find packages/e2b-infra packages/sandbox-runtime/src \
         -type f \
-        -not -path 'packages/e2b-infra/.venv/*' -not -path 'packages/e2b-infra/sandbox_runtime/*' -not -path '*/__pycache__/*' \
-        \( -name "*.py" -o -name "*.ts" -o -name "*.js" -o -name "Dockerfile*" -o -name "*.Dockerfile" -o -name "*.toml" -o -name "uv.lock" -o -name "*.sh" \) \
+        -not -path 'packages/e2b-infra/.venv/*' -not -path 'packages/e2b-infra/sandbox_runtime/*' \
+        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
+        -not -name '*.pyc' -not -name '.DS_Store' \
         -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"
