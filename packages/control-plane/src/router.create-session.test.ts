@@ -3,6 +3,7 @@ import { generateInternalToken } from "./auth/internal";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
 import { handleRequest } from "./router";
+import { sessionCreateRoutes } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 
@@ -316,5 +317,71 @@ describe("handleCreateSession D1 ordering", () => {
 
     expect(response.status).toBe(201);
     expect(initFetch).toHaveBeenCalledOnce();
+  });
+
+  it("preserves non-GitHub SCM identity when the user also has a linked GitHub identity", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const getIdentitiesForUser = vi.fn(async () => [
+      {
+        provider: "github",
+        providerUserId: "1001",
+        providerLogin: "ada",
+        providerEmail: "private@example.com",
+      },
+    ]);
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        resolveOrCreateUser: async () => ({ id: "user-1" }),
+        getIdentitiesForUser,
+        getUserById: async () => ({ id: "user-1", displayName: "Trusted Ada" }),
+      } as never;
+    });
+    const initFetch = vi.fn(async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        scmUserId: "gitlab-42",
+        scmLogin: "gitlab-ada",
+        scmName: "GitLab Ada",
+        scmEmail: "ada@gitlab.example.com",
+      });
+      return Response.json({ status: "created" });
+    });
+
+    const response = await sessionCreateRoutes[0].handler(
+      new Request("https://test.local/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repoOwner: "acme",
+          repoName: "project",
+          title: "GitLab session",
+          model: "anthropic/claude-haiku-4-5",
+          spawnSource: "user",
+          scmUserId: "gitlab-42",
+          scmLogin: "gitlab-ada",
+          scmName: "GitLab Ada",
+          scmEmail: "ada@gitlab.example.com",
+        }),
+      }),
+      { ...createEnv(initFetch), SCM_PROVIDER: "gitlab" } as never,
+      [] as unknown as RegExpMatchArray,
+      {
+        request_id: "test-request",
+        trace_id: "test-trace",
+        metrics: {
+          d1Queries: [],
+          spans: {},
+          time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
+          summarize: () => ({}),
+        },
+      }
+    );
+
+    expect(response.status).toBe(201);
+    expect(initFetch).toHaveBeenCalledOnce();
+    expect(getIdentitiesForUser).not.toHaveBeenCalled();
   });
 });

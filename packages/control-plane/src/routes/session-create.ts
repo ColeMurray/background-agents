@@ -152,8 +152,10 @@ async function handleCreateSession(
     }
   }
 
-  // Enrich the owner with their linked GitHub identity from D1: fill in SCM
-  // fields the caller didn't provide (email, display name, OAuth token).
+  // On GitHub deployments, enrich the owner with their linked GitHub identity
+  // from D1: fill in SCM fields the caller didn't provide (email, display name,
+  // OAuth token). Other SCM deployments retain their provider-native identity
+  // and credentials unchanged.
   //
   // This intentionally applies even when the session was authenticated via a
   // non-GitHub provider (e.g. Google): if the canonical user has ALSO linked a
@@ -163,7 +165,7 @@ async function handleCreateSession(
   // credential; a user with no linked GitHub identity gets null here and falls
   // back to the App bot. The invariant is "a Google credential is never used as
   // an SCM credential", not "a Google-authenticated session carries no SCM state".
-  if (resolvedUserId) {
+  if (resolvedUserId && githubDeployment) {
     try {
       const enrichment = await resolveGitHubEnrichment(env, userStore, resolvedUserId);
       if (enrichment) {
