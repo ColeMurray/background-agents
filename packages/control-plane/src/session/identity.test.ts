@@ -4,9 +4,80 @@ import type { Env } from "../types";
 import {
   deriveParticipantUserId,
   parseAuthorId,
+  resolveGitAuthorIdentity,
   resolveGitHubEnrichment,
   resolveProviderIdentity,
 } from "./identity";
+
+describe("resolveGitAuthorIdentity", () => {
+  it("derives a canonical noreply author from a trusted GitHub id and login", () => {
+    expect(
+      resolveGitAuthorIdentity({
+        scmProvider: "github",
+        scmUserId: "1001",
+        scmLogin: "ada",
+        scmName: "Ada Lovelace",
+        scmEmail: "ada@private.example",
+      })
+    ).toEqual({
+      name: "Ada Lovelace",
+      email: "1001+ada@users.noreply.github.com",
+    });
+  });
+
+  it("rejects a non-numeric GitHub user id", () => {
+    expect(
+      resolveGitAuthorIdentity({
+        scmProvider: "github",
+        scmUserId: "caller-supplied",
+        scmLogin: "ada",
+        scmName: "Ada Lovelace",
+        scmEmail: "ada@example.com",
+      })
+    ).toBeNull();
+  });
+
+  it("rejects a value that is not a GitHub login", () => {
+    expect(
+      resolveGitAuthorIdentity({
+        scmProvider: "github",
+        scmUserId: "1001",
+        scmLogin: "ada@example.com",
+        scmName: "Ada Lovelace",
+      })
+    ).toBeNull();
+  });
+
+  it("preserves existing GitLab author metadata", () => {
+    expect(
+      resolveGitAuthorIdentity({
+        scmProvider: "gitlab",
+        scmUserId: "gitlab-user-1",
+        scmLogin: "group-user",
+        scmName: "Grace Hopper",
+        scmEmail: "grace@gitlab.example",
+      })
+    ).toEqual({
+      name: "Grace Hopper",
+      email: "grace@gitlab.example",
+    });
+  });
+
+  it("preserves GitLab's field-by-field fallback behavior", () => {
+    expect(
+      resolveGitAuthorIdentity({
+        scmProvider: "gitlab",
+        scmUserId: "gitlab-user-1",
+        scmLogin: "group-user",
+        scmName: "Grace Hopper",
+        scmEmail: null,
+      })
+    ).toEqual({
+      name: "Grace Hopper",
+      email: "open-inspect@noreply.github.com",
+    });
+  });
+});
 
 describe("parseAuthorId", () => {
   it("parses github authorId", () => {
@@ -376,5 +447,23 @@ describe("resolveGitHubEnrichment", () => {
     expect(enrichment!.scmLogin).toBe("pm-dev");
     // No token-encryption key configured → no token material leaks in.
     expect(enrichment!.accessTokenEncrypted).toBeUndefined();
+  });
+
+  it("uses the canonical GitHub noreply address instead of a stored private email", async () => {
+    const store = fakeStore(
+      [
+        {
+          provider: "github",
+          providerUserId: "42",
+          providerLogin: "pm-dev",
+          providerEmail: "private@example.com",
+        },
+      ],
+      { id: "user-1", displayName: "PM Person" }
+    );
+
+    const enrichment = await resolveGitHubEnrichment(env, store, "user-1");
+
+    expect(enrichment?.email).toBe("42+pm-dev@users.noreply.github.com");
   });
 });

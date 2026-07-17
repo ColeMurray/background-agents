@@ -2,7 +2,7 @@
  * GitHub authentication utilities.
  */
 
-import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import { DEFAULT_APP_NAME, formatGitHubNoreplyEmail } from "@open-inspect/shared";
 import { z } from "zod";
 import { decryptToken, encryptToken } from "./crypto";
 import { githubTokenResponseSchema, type GitHubUser, type GitHubTokenResponse } from "../types";
@@ -201,7 +201,7 @@ export async function getValidAccessToken(
  * Generate noreply email for users with private email.
  */
 export function generateNoreplyEmail(githubUser: GitHubUser): string {
-  return `${githubUser.id}+${githubUser.login}@users.noreply.github.com`;
+  return formatGitHubNoreplyEmail(githubUser);
 }
 
 /**

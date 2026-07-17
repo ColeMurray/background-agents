@@ -30,6 +30,7 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { EnqueuePromptRequest } from "./services/message.service";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
+import { resolveGitAuthorIdentity } from "./identity";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -182,6 +183,13 @@ export class SessionMessageQueue {
     }
 
     const author = this.deps.repository.getParticipantById(message.author_id);
+    const gitAuthor = resolveGitAuthorIdentity({
+      scmProvider: this.deps.scmProvider,
+      scmUserId: author?.scm_user_id,
+      scmLogin: author?.scm_login,
+      scmName: author?.scm_name,
+      scmEmail: author?.scm_email,
+    });
     const session = this.deps.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     const resolvedEffort =
@@ -197,8 +205,13 @@ export class SessionMessageQueue {
       reasoningEffort: resolvedEffort,
       author: {
         userId: author?.user_id ?? "unknown",
-        scmName: author?.scm_name ?? null,
-        scmEmail: author?.scm_email ?? null,
+        gitIdentity: gitAuthor
+          ? {
+              mode: "attributed-user",
+              name: gitAuthor.name,
+              email: gitAuthor.email,
+            }
+          : { mode: "agent-only" },
       },
       attachments: parseStoredSessionAttachments(message.attachments, () =>
         this.deps.log.error("prompt.invalid_stored_attachments")
@@ -352,27 +365,33 @@ export class SessionMessageQueue {
     if (!participant) {
       participant = this.deps.participantService.create(
         data.authorId,
-        data.authorDisplayName || data.authorId
+        data.scmIdentity?.name || data.authorId
       );
     }
 
-    // COALESCE update: populate identity fields on non-owner participants
-    const hasEnrichment =
-      data.authorDisplayName ||
-      data.authorEmail ||
-      data.authorLogin ||
-      data.scmUserId ||
-      data.scmAccessTokenEncrypted;
-    if (hasEnrichment) {
+    const hasIdentityEnrichment = data.scmIdentity !== undefined;
+    if (hasIdentityEnrichment) {
+      const identity = data.scmIdentity;
+      this.deps.repository.replaceParticipantScmIdentity(participant.id, {
+        scmName: identity?.name ?? null,
+        scmEmail: identity?.email ?? null,
+        scmLogin: identity?.login ?? null,
+        scmUserId: identity?.userId ?? null,
+      });
+    }
+
+    const hasTokenEnrichment =
+      data.scmAccessTokenEncrypted !== undefined ||
+      data.scmRefreshTokenEncrypted !== undefined ||
+      data.scmTokenExpiresAt !== undefined;
+    if (hasTokenEnrichment) {
       this.deps.repository.updateParticipantCoalesce(participant.id, {
-        scmName: data.authorDisplayName ?? null,
-        scmEmail: data.authorEmail ?? null,
-        scmLogin: data.authorLogin ?? null,
-        scmUserId: data.scmUserId ?? null,
         scmAccessTokenEncrypted: data.scmAccessTokenEncrypted ?? null,
         scmRefreshTokenEncrypted: data.scmRefreshTokenEncrypted ?? null,
         scmTokenExpiresAt: data.scmTokenExpiresAt ?? null,
       });
+    }
+    if (hasIdentityEnrichment || hasTokenEnrichment) {
       participant = this.deps.repository.getParticipantById(participant.id) ?? participant;
     }
 

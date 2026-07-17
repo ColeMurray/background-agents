@@ -146,8 +146,13 @@ export interface PromptCommand {
   reasoningEffort?: string; // Reasoning effort level
   author: {
     userId: string;
-    scmName: string | null;
-    scmEmail: string | null;
+    gitIdentity:
+      | {
+          mode: "attributed-user";
+          name: string;
+          email: string;
+        }
+      | { mode: "agent-only" };
   };
   attachments?: ResolvedSessionAttachment[];
 }

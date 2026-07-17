@@ -157,6 +157,13 @@ export interface UpdateParticipantData {
   scmTokenExpiresAt?: number | null;
 }
 
+export interface ReplaceParticipantScmIdentityData {
+  scmUserId: string | null;
+  scmLogin: string | null;
+  scmName: string | null;
+  scmEmail: string | null;
+}
+
 /**
  * Data for creating a message.
  */
@@ -664,6 +671,25 @@ export class SessionRepository {
       data.scmAccessTokenEncrypted ?? null,
       data.scmRefreshTokenEncrypted ?? null,
       data.scmTokenExpiresAt ?? null,
+      participantId
+    );
+  }
+
+  replaceParticipantScmIdentity(
+    participantId: string,
+    data: ReplaceParticipantScmIdentityData
+  ): void {
+    this.sql.exec(
+      `UPDATE participants SET
+         scm_user_id = ?,
+         scm_login = ?,
+         scm_name = ?,
+         scm_email = ?
+       WHERE id = ?`,
+      data.scmUserId,
+      data.scmLogin,
+      data.scmName,
+      data.scmEmail,
       participantId
     );
   }

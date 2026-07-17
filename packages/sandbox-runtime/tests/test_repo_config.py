@@ -13,6 +13,7 @@ from sandbox_runtime.repo_config import (
     is_safe_repo_segment,
     load_repo_manifest,
     parse_repositories,
+    read_repo_manifest,
 )
 
 WORKSPACE = Path("/workspace")
@@ -146,6 +147,21 @@ class TestRepoManifest:
         manifest.write_text("{not json")
 
         assert load_repo_manifest(manifest) == []
+
+    def test_strict_reader_accepts_an_explicit_empty_manifest(self, tmp_path):
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text('{"repositories": []}')
+
+        assert read_repo_manifest(manifest) == []
+
+    @pytest.mark.parametrize("content", [None, "{not json", "{}", '{"repositories": {}}'])
+    def test_strict_reader_rejects_missing_or_malformed_manifests(self, tmp_path, content):
+        manifest = tmp_path / "manifest.json"
+        if content is not None:
+            manifest.write_text(content)
+
+        with pytest.raises(RepoConfigError, match="repository manifest"):
+            read_repo_manifest(manifest)
 
     def test_skips_incomplete_entries(self, tmp_path):
         manifest = tmp_path / "manifest.json"

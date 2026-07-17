@@ -847,6 +847,7 @@ class TestSSEStreaming:
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
                 "model": "anthropic/claude-haiku-4-5",
+                "author": {"gitIdentity": {"mode": "agent-only"}},
             }
         )
 

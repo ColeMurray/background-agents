@@ -206,4 +206,13 @@ export type {
   AnalyticsPullRequestsResponse,
 } from "./analytics";
 
+export {
+  MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH,
+  commitSigningMetadataSchema,
+  commitSigningWriteRequestSchema,
+} from "./commit-signing";
+export type { CommitSigningMetadata, CommitSigningWriteRequest } from "./commit-signing";
+
+export { formatGitHubNoreplyEmail, githubLoginSchema } from "./github-identity";
+
 export * from "./integrations";

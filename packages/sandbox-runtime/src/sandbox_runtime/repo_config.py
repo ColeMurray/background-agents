@@ -150,12 +150,7 @@ def dump_repo_manifest(repositories: list[RepoEntry]) -> str:
     )
 
 
-def load_repo_manifest(path: str | Path = REPO_MANIFEST_FILE_PATH) -> list[RepoEntry]:
-    """Read the supervisor-written manifest; empty when missing or malformed."""
-    try:
-        data = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return []
+def _manifest_entries(data: object) -> list[RepoEntry]:
     raw = data.get("repositories") if isinstance(data, dict) else None
     entries: list[RepoEntry] = []
     if isinstance(raw, list):
@@ -170,3 +165,31 @@ def load_repo_manifest(path: str | Path = REPO_MANIFEST_FILE_PATH) -> list[RepoE
             branch = _str_field(item, "branch") or "main"
             entries.append(RepoEntry(owner=owner, name=name, branch=branch, path=Path(path_value)))
     return entries
+
+
+def read_repo_manifest(path: str | Path = REPO_MANIFEST_FILE_PATH) -> list[RepoEntry]:
+    """Read a complete supervisor manifest or reject it as unusable."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        raise RepoConfigError("repository manifest is missing or invalid") from None
+
+    raw = data.get("repositories") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        raise RepoConfigError("repository manifest must contain a repository list")
+
+    entries = _manifest_entries(data)
+    if len(entries) != len(raw):
+        raise RepoConfigError("repository manifest contains an incomplete entry")
+    for entry in entries:
+        _require_safe(owner=entry.owner, name=entry.name)
+    return entries
+
+
+def load_repo_manifest(path: str | Path = REPO_MANIFEST_FILE_PATH) -> list[RepoEntry]:
+    """Read the supervisor-written manifest; empty when missing or malformed."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return []
+    return _manifest_entries(data)

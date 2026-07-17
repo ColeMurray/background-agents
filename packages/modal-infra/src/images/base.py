@@ -37,8 +37,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v54: upgrade OpenCode after upstream SSE fixes
-CACHE_BUSTER = "v54-opencode-1-17-18"
+# v55: install the commit-signing broker client and Git runtime configuration
+CACHE_BUSTER = "v55-commit-signing"
 
 # Base image with all development tools
 base_image = (

@@ -129,6 +129,7 @@ class TestIsFatalConnectionError:
             bridge.shutdown_event.set()
 
         bridge.log = MagicMock()
+        bridge.git_signing.initialize = AsyncMock()
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = connect_and_run
         monkeypatch.setattr(

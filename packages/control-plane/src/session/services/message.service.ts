@@ -15,13 +15,16 @@ export interface EnqueuePromptRequest {
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
 
-  // Identity enrichment (from router D1 lookup at prompt time)
-  authorDisplayName?: string;
-  authorEmail?: string;
-  authorLogin?: string;
+  // Trusted identity enrichment (from router D1 lookup at prompt time).
+  // `undefined` leaves the stored identity unchanged; `null` clears it.
+  scmIdentity?: {
+    userId: string | null;
+    login: string | null;
+    name: string | null;
+    email: string | null;
+  } | null;
 
   // SCM token enrichment (from cross-provider identity resolution)
-  scmUserId?: string;
   scmAccessTokenEncrypted?: string;
   scmRefreshTokenEncrypted?: string;
   scmTokenExpiresAt?: number;

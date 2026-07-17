@@ -70,6 +70,22 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
   });
 
+  it("returns an explicit disabled signing state for GitLab sandboxes", async () => {
+    const { env } = createEnv();
+    const token = await generateInternalToken(secret);
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/commit-signing", {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({ enabled: false });
+  });
+
   it("continues blocking unrelated GitLab session routes", async () => {
     const { env, fetch } = createEnv();
     const token = await generateInternalToken(secret);

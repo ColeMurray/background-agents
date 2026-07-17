@@ -16,7 +16,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -35,15 +34,39 @@ from .attachment_processor import (
     parse_session_image_attachments,
 )
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
+from .git_signing import UNSIGNED_GIT_USER, GitSigningError, GitSigningRuntime
 from .log_config import configure_logging, get_logger
 from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
 
 configure_logging()
 
-# Fallback git identity when prompt author has no SCM name/email configured.
-# Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
-FALLBACK_GIT_USER = GitUser(name="OpenInspect", email="open-inspect@noreply.github.com")
+# Compatibility alias for the runtime's unsigned fallback identity.
+FALLBACK_GIT_USER = UNSIGNED_GIT_USER
+
+
+def parse_prompt_git_author(author_data: object) -> GitUser | None:
+    """Parse the control plane's explicit Git author mode without inference."""
+    if not isinstance(author_data, dict):
+        raise GitSigningError("Invalid prompt Git identity")
+
+    identity = author_data.get("gitIdentity")
+    if not isinstance(identity, dict):
+        raise GitSigningError("Invalid prompt Git identity")
+
+    mode = identity.get("mode")
+    if mode == "agent-only":
+        return None
+    if mode != "attributed-user":
+        raise GitSigningError("Invalid prompt Git identity")
+
+    name = identity.get("name")
+    email = identity.get("email")
+    if not isinstance(name, str) or not name.strip():
+        raise GitSigningError("Invalid prompt Git identity")
+    if not isinstance(email, str) or not email.strip():
+        raise GitSigningError("Invalid prompt Git identity")
+    return GitUser(name=name.strip(), email=email.strip())
 
 
 @dataclass(frozen=True)
@@ -211,7 +234,6 @@ class AgentBridge:
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
-    GIT_CONFIG_TIMEOUT_SECONDS = 10.0
     MAX_PENDING_PART_EVENTS = 2000
     MAX_EVENT_BUFFER_SIZE = 1000
     OPENCODE_DEFAULT_TITLE_RE = re.compile(
@@ -275,6 +297,13 @@ class AgentBridge:
         # member checkout paths through it rather than joining spec-supplied
         # names into the filesystem.
         self.repo_manifest_path = Path(REPO_MANIFEST_FILE_PATH)
+        self.git_signing = GitSigningRuntime(
+            control_plane_url=control_plane_url,
+            session_id=session_id,
+            auth_token=auth_token,
+            repo_manifest_path=self.repo_manifest_path,
+            log=self.log,
+        )
 
         # HTTP client for OpenCode API
         self.http_client: httpx.AsyncClient | None = None
@@ -318,18 +347,19 @@ class AgentBridge:
         """
         self.log.info("bridge.run_start")
 
-        self.http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                self.HTTP_DEFAULT_TIMEOUT,
-                connect=self.HTTP_CONNECT_TIMEOUT,
-            )
-        )
-        await self._load_session_id()
-
         reconnect_attempts = 0
         run_outcome = "shutdown"
 
         try:
+            self.http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    self.HTTP_DEFAULT_TIMEOUT,
+                    connect=self.HTTP_CONNECT_TIMEOUT,
+                )
+            )
+            await self.git_signing.initialize(None)
+            await self._load_session_id()
+
             while not self.shutdown_event.is_set():
                 run_outcome = "shutdown"
                 try:
@@ -798,14 +828,8 @@ class AgentBridge:
         )
 
         try:
-            scm_name = author_data.get("scmName")
-            scm_email = author_data.get("scmEmail")
-            await self._configure_git_identity(
-                GitUser(
-                    name=scm_name or FALLBACK_GIT_USER.name,
-                    email=scm_email or FALLBACK_GIT_USER.email,
-                )
-            )
+            prompt_author = parse_prompt_git_author(author_data)
+            await self._configure_git_identity(prompt_author)
 
             if not self.opencode_session_id:
                 await self._create_opencode_session()
@@ -1905,54 +1929,9 @@ class AgentBridge:
             }
         )
 
-    async def _configure_git_identity(self, user: GitUser) -> None:
-        """Configure git identity for commit attribution in every member checkout."""
-        self.log.debug("git.identity_configure", git_name=user.name, git_email=user.email)
-
-        repo_dirs = list(self.repo_path.glob("*/.git"))
-        if not repo_dirs:
-            self.log.debug("git.identity_skip", reason="no_repo_configured")
-            return
-
-        async def _run_git_config(repo_dir: Path, *args: str) -> None:
-            cmd = ["git", "config", "--local", *args]
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=repo_dir,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            try:
-                _, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=self.GIT_CONFIG_TIMEOUT_SECONDS,
-                )
-            except TimeoutError as e:
-                process.kill()
-                with contextlib.suppress(ProcessLookupError):
-                    await process.wait()
-                raise subprocess.TimeoutExpired(
-                    cmd=cmd,
-                    timeout=self.GIT_CONFIG_TIMEOUT_SECONDS,
-                ) from e
-
-            if process.returncode != 0:
-                if process.returncode is None:
-                    raise RuntimeError("git config exited without a return code")
-                raise subprocess.CalledProcessError(
-                    returncode=process.returncode,
-                    cmd=cmd,
-                    stderr=stderr,
-                )
-
-        try:
-            for git_dir in repo_dirs:
-                repo_dir = git_dir.parent
-                await _run_git_config(repo_dir, "user.name", user.name)
-                await _run_git_config(repo_dir, "user.email", user.email)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            self.log.error("git.identity_error", exc=e)
+    async def _configure_git_identity(self, user: GitUser | None) -> None:
+        """Refresh signing state and configure prompt-scoped author identity."""
+        await self.git_signing.refresh(user)
 
     async def _load_session_id(self) -> None:
         """Load OpenCode session ID from file if it exists."""

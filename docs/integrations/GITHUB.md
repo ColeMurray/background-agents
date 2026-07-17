@@ -161,6 +161,56 @@ currently exposes model and reasoning settings on repository overrides. If globa
 defaults exist in integration settings, GitHub-started sessions honor them. If neither a repository
 override nor global default sets a model, sessions use the deployment default model.
 
+### Commit Signing
+
+Open-Inspect can sign normal agent-created commits with one deployment-wide OpenSSH Ed25519 key. The
+identities remain deliberately separate:
+
+| Git/GitHub role      | Identity                                                                                |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect               |
+| Committer and signer | The dedicated Open-Inspect signing account                                              |
+| Branch pusher        | The existing GitHub App                                                                 |
+| Pull request author  | The prompting user's OAuth identity when available; otherwise the existing App fallback |
+
+This makes the signature an attestation by the Open-Inspect deployment, not a cryptographic claim
+that the attributed user personally signed the commit. GitHub repository rules remain the
+server-side enforcement boundary for rejecting unsigned commits.
+
+To configure signing, open **Settings > Integrations > GitHub > Commit signing**:
+
+1. Create or recover a dedicated GitHub account for the signing identity. It does not need
+   repository access because the GitHub App continues to push branches.
+2. Generate an unencrypted OpenSSH Ed25519 key and add its public key to that account as a **signing
+   key**.
+3. Enter the dedicated account login, fixed committer name/email, and private key in the write-only
+   form. The committer email must belong to the dedicated account.
+4. Save, then create a commit in a non-critical repository. Confirm the expected author, committer,
+   signature, PR author, and contribution attribution in GitHub before requiring signed commits.
+
+The private key is encrypted in the control-plane database. The settings page reads back only the
+derived public key, fingerprint, fixed identity, and validation timestamps; it never repopulates the
+private-key field.
+
+For rotation, register the replacement public key on GitHub before replacing the private key in
+Open-Inspect. Verify a new commit, then remove the old public key. For suspected compromise, disable
+signing in the web app, remove the public key from GitHub immediately, audit the exposure window,
+and configure a new key. Disabling deletes the active database ciphertext; running sandboxes remove
+local signing state on their next prompt refresh.
+
+Important limitations:
+
+- GitHub vigilant mode shows attributed commits as **Partially verified** because the author and
+  committer are intentionally different.
+- GitHub-created merge or squash commits follow the repository's merge-signing behavior; the
+  signature on the branch commit does not automatically carry onto a newly created merge commit.
+- Provider filesystem snapshots may retain historical copies of a runtime key under the existing
+  provider access controls. A signing-aware runtime removes its known key path before fetching the
+  current configuration at boot, but this does not purge old snapshots.
+- After deploying the first signing-capable runtime, drain or recreate sessions restored from older
+  runtime snapshots before configuring a key. Repeat the runtime qualification if the deployment
+  changes sandbox provider.
+
 ---
 
 ## Admin and Safety Notes

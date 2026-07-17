@@ -272,6 +272,7 @@ class TestPromptTaskDecoupling:
             await asyncio.sleep(3600)
 
         bridge._handle_prompt = slow_prompt
+        bridge.git_signing.initialize = AsyncMock()
 
         await bridge._handle_command({"type": "prompt", "messageId": "msg-1", "content": "test"})
         task = bridge._current_prompt_task

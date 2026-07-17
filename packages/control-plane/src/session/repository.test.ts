@@ -551,6 +551,27 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("replaceParticipantScmIdentity", () => {
+    it("overwrites all SCM attribution fields including nulls", () => {
+      repo.replaceParticipantScmIdentity("p-1", {
+        scmUserId: "1001",
+        scmLogin: "octocat",
+        scmName: null,
+        scmEmail: "1001+octocat@users.noreply.github.com",
+      });
+
+      expect(mock.calls).toHaveLength(1);
+      expect(mock.calls[0].query).not.toContain("COALESCE");
+      expect(mock.calls[0].params).toEqual([
+        "1001",
+        "octocat",
+        null,
+        "1001+octocat@users.noreply.github.com",
+        "p-1",
+      ]);
+    });
+  });
+
   describe("updateParticipantWsToken", () => {
     it("sets token hash and timestamp", () => {
       repo.updateParticipantWsToken("p-1", "new-hash", 8000);

@@ -40,6 +40,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { CommitSigningSettings } from "./commit-signing-settings";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
@@ -100,6 +101,8 @@ export function GitHubIntegrationSettings() {
           </p>
         )}
       </Section>
+
+      <CommitSigningSettings />
 
       <GlobalSettingsSection settings={settings} availableRepos={availableRepos} />
 

@@ -23,6 +23,7 @@ import {
   HttpError,
 } from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
+import { commitSigningRoutes } from "./routes/commit-signing";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
 import { secretsRoutes } from "./routes/secrets";
@@ -73,6 +74,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
+  /^\/sessions\/[^/]+\/commit-signing$/, // Commit signing configuration broker
   /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
   /^\/sessions\/[^/]+\/attachments\/[^/]+$/, // Session attachment download from sandbox bridge
@@ -142,7 +144,7 @@ function isScmAgnosticRoute(path: string): boolean {
     // Identity upserts are independent of the SCM provider. Only the known auth
     // providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
     /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
-    /^\/sessions\/[^/]+\/tunnel-urls$/.test(path)
+    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path)
   );
 }
 
@@ -319,6 +321,9 @@ const routes: Route[] = [
 
   // Integration settings
   ...integrationSettingsRoutes,
+
+  // Deployment-wide commit signing identity
+  ...commitSigningRoutes,
 
   // Automations
   ...automationRoutes,

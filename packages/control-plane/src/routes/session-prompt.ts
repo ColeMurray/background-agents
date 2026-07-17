@@ -59,12 +59,18 @@ async function handleSessionPrompt(
 
   let enrichment: GitHubEnrichment | undefined;
   const parsed = parseAuthorId(authorId);
-  if (parsed) {
+  if (authorId !== "anonymous") {
     try {
       const userStore = new UserStore(env.DB);
-      const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
-      if (identity) {
-        enrichment = (await resolveGitHubEnrichment(env, userStore, identity.userId)) ?? undefined;
+      let userId: string | undefined;
+      if (parsed) {
+        const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
+        userId = identity?.userId;
+      } else {
+        userId = (await userStore.getUserById(authorId))?.id;
+      }
+      if (userId) {
+        enrichment = (await resolveGitHubEnrichment(env, userStore, userId)) ?? undefined;
       }
     } catch (e) {
       logger.warn("Failed to enrich prompt with GitHub identity", {
@@ -85,10 +91,14 @@ async function handleSessionPrompt(
       reasoningEffort: body.reasoningEffort,
       attachments,
       callbackContext: body.callbackContext,
-      authorDisplayName: enrichment?.displayName,
-      authorEmail: enrichment?.email,
-      authorLogin: enrichment?.scmLogin,
-      scmUserId: enrichment?.scmUserId,
+      scmIdentity: enrichment
+        ? {
+            userId: enrichment.scmUserId,
+            login: enrichment.scmLogin ?? null,
+            name: enrichment.displayName ?? null,
+            email: enrichment.email ?? null,
+          }
+        : null,
       scmAccessTokenEncrypted: enrichment?.accessTokenEncrypted,
       scmRefreshTokenEncrypted: enrichment?.refreshTokenEncrypted,
       scmTokenExpiresAt: enrichment?.tokenExpiresAt,

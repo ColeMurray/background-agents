@@ -1,12 +1,17 @@
 """Tests for git identity configuration in bridge prompt handling."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sandbox_runtime.bridge import FALLBACK_GIT_USER, AgentBridge
+from sandbox_runtime.git_signing import GitSigningError
 from sandbox_runtime.types import GitUser
+
+
+async def empty_event_stream(*_args, **_kwargs):
+    if False:
+        yield {}
 
 
 @pytest.fixture
@@ -27,14 +32,10 @@ class TestGitIdentityConfiguration:
 
     @pytest.mark.asyncio
     async def test_uses_author_identity_when_provided(self, bridge: AgentBridge):
-        """Should use scmName/scmEmail from the prompt author when both are present."""
+        """Should use the attributed-user identity selected by the control plane."""
         bridge._configure_git_identity = AsyncMock()
-        bridge._stream_opencode_response_sse = AsyncMock(
-            return_value=AsyncMock(
-                __aiter__=lambda s: s, __anext__=AsyncMock(side_effect=StopAsyncIteration)
-            )
-        )
-        bridge._send_execution_complete = AsyncMock()
+        bridge._stream_opencode_response_sse = empty_event_stream
+        bridge._send_event = AsyncMock()
 
         cmd = {
             "messageId": "msg-1",
@@ -42,8 +43,11 @@ class TestGitIdentityConfiguration:
             "model": "claude-sonnet-4-6",
             "author": {
                 "userId": "user-1",
-                "scmName": "Jane Dev",
-                "scmEmail": "jane@example.com",
+                "gitIdentity": {
+                    "mode": "attributed-user",
+                    "name": "Jane Dev",
+                    "email": "jane@example.com",
+                },
             },
         }
 
@@ -55,14 +59,9 @@ class TestGitIdentityConfiguration:
         assert git_user.email == "jane@example.com"
 
     @pytest.mark.asyncio
-    async def test_falls_back_when_both_missing(self, bridge: AgentBridge):
-        """Should use fallback identity when both scmName and scmEmail are null."""
+    async def test_uses_agent_only_mode_when_selected(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge._stream_opencode_response_sse = AsyncMock(
-            return_value=AsyncMock(
-                __aiter__=lambda s: s, __anext__=AsyncMock(side_effect=StopAsyncIteration)
-            )
-        )
+        bridge._stream_opencode_response_sse = empty_event_stream
         bridge._send_execution_complete = AsyncMock()
 
         cmd = {
@@ -71,28 +70,19 @@ class TestGitIdentityConfiguration:
             "model": "claude-sonnet-4-6",
             "author": {
                 "userId": "user-1",
-                "scmName": None,
-                "scmEmail": None,
+                "gitIdentity": {"mode": "agent-only"},
             },
         }
 
         await bridge._handle_prompt(cmd)
 
-        bridge._configure_git_identity.assert_called_once()
-        git_user = bridge._configure_git_identity.call_args[0][0]
-        assert git_user.name == FALLBACK_GIT_USER.name
-        assert git_user.email == FALLBACK_GIT_USER.email
+        bridge._configure_git_identity.assert_awaited_once_with(None)
 
     @pytest.mark.asyncio
-    async def test_falls_back_email_when_only_email_missing(self, bridge: AgentBridge):
-        """Should use fallback email when scmEmail is null but scmName is present."""
+    async def test_rejects_an_incomplete_attributed_identity(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge._stream_opencode_response_sse = AsyncMock(
-            return_value=AsyncMock(
-                __aiter__=lambda s: s, __anext__=AsyncMock(side_effect=StopAsyncIteration)
-            )
-        )
-        bridge._send_execution_complete = AsyncMock()
+        bridge._stream_opencode_response_sse = empty_event_stream
+        bridge._send_event = AsyncMock()
 
         cmd = {
             "messageId": "msg-1",
@@ -100,28 +90,27 @@ class TestGitIdentityConfiguration:
             "model": "claude-sonnet-4-6",
             "author": {
                 "userId": "user-1",
-                "scmName": "Jane Dev",
-                "scmEmail": None,
+                "gitIdentity": {"mode": "attributed-user", "name": "Jane Dev"},
             },
         }
 
         await bridge._handle_prompt(cmd)
 
-        bridge._configure_git_identity.assert_called_once()
-        git_user = bridge._configure_git_identity.call_args[0][0]
-        assert git_user.name == "Jane Dev"
-        assert git_user.email == FALLBACK_GIT_USER.email
+        bridge._configure_git_identity.assert_not_awaited()
+        bridge._send_event.assert_awaited_once_with(
+            {
+                "type": "execution_complete",
+                "messageId": "msg-1",
+                "success": False,
+                "error": "Invalid prompt Git identity",
+            }
+        )
 
     @pytest.mark.asyncio
-    async def test_falls_back_name_when_only_name_missing(self, bridge: AgentBridge):
-        """Should use fallback name when scmName is null but scmEmail is present."""
+    async def test_rejects_an_unknown_identity_mode(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge._stream_opencode_response_sse = AsyncMock(
-            return_value=AsyncMock(
-                __aiter__=lambda s: s, __anext__=AsyncMock(side_effect=StopAsyncIteration)
-            )
-        )
-        bridge._send_execution_complete = AsyncMock()
+        bridge._stream_opencode_response_sse = empty_event_stream
+        bridge._send_event = AsyncMock()
 
         cmd = {
             "messageId": "msg-1",
@@ -129,28 +118,27 @@ class TestGitIdentityConfiguration:
             "model": "claude-sonnet-4-6",
             "author": {
                 "userId": "user-1",
-                "scmName": None,
-                "scmEmail": "jane@example.com",
+                "gitIdentity": {"mode": "surprise"},
             },
         }
 
         await bridge._handle_prompt(cmd)
 
-        bridge._configure_git_identity.assert_called_once()
-        git_user = bridge._configure_git_identity.call_args[0][0]
-        assert git_user.name == FALLBACK_GIT_USER.name
-        assert git_user.email == "jane@example.com"
+        bridge._configure_git_identity.assert_not_awaited()
+        bridge._send_event.assert_awaited_once_with(
+            {
+                "type": "execution_complete",
+                "messageId": "msg-1",
+                "success": False,
+                "error": "Invalid prompt Git identity",
+            }
+        )
 
     @pytest.mark.asyncio
-    async def test_falls_back_when_no_author_data(self, bridge: AgentBridge):
-        """Should use fallback identity when author dict has no SCM fields."""
+    async def test_rejects_a_missing_git_identity_mode(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge._stream_opencode_response_sse = AsyncMock(
-            return_value=AsyncMock(
-                __aiter__=lambda s: s, __anext__=AsyncMock(side_effect=StopAsyncIteration)
-            )
-        )
-        bridge._send_execution_complete = AsyncMock()
+        bridge._stream_opencode_response_sse = empty_event_stream
+        bridge._send_event = AsyncMock()
 
         cmd = {
             "messageId": "msg-1",
@@ -161,10 +149,15 @@ class TestGitIdentityConfiguration:
 
         await bridge._handle_prompt(cmd)
 
-        bridge._configure_git_identity.assert_called_once()
-        git_user = bridge._configure_git_identity.call_args[0][0]
-        assert git_user.name == FALLBACK_GIT_USER.name
-        assert git_user.email == FALLBACK_GIT_USER.email
+        bridge._configure_git_identity.assert_not_awaited()
+        bridge._send_event.assert_awaited_once_with(
+            {
+                "type": "execution_complete",
+                "messageId": "msg-1",
+                "success": False,
+                "error": "Invalid prompt Git identity",
+            }
+        )
 
 
 class TestFallbackGitUserConstant:
@@ -177,109 +170,55 @@ class TestFallbackGitUserConstant:
 
 
 class TestConfigureGitIdentity:
-    """Tests for non-blocking git identity configuration."""
+    """Tests for the bridge-to-signing-runtime boundary."""
 
     @pytest.mark.asyncio
-    async def test_configures_name_and_email_with_async_subprocess(
-        self,
-        bridge: AgentBridge,
-        tmp_path,
-    ):
-        repo_dir = tmp_path / "repo"
-        (repo_dir / ".git").mkdir(parents=True)
-        bridge.repo_path = tmp_path
+    async def test_delegates_to_the_signing_runtime(self, bridge: AgentBridge):
+        bridge.git_signing.refresh = AsyncMock()
+        user = GitUser(name="Jane Dev", email="jane@example.com")
 
-        name_proc = MagicMock()
-        name_proc.communicate = AsyncMock(return_value=(b"", b""))
-        name_proc.returncode = 0
+        await bridge._configure_git_identity(user)
 
-        email_proc = MagicMock()
-        email_proc.communicate = AsyncMock(return_value=(b"", b""))
-        email_proc.returncode = 0
+        bridge.git_signing.refresh.assert_awaited_once_with(user)
 
-        with patch(
-            "sandbox_runtime.bridge.asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            side_effect=[name_proc, email_proc],
-        ) as mock_exec:
-            await bridge._configure_git_identity(GitUser(name="Jane Dev", email="jane@example.com"))
-
-        mock_exec.assert_has_awaits(
-            [
-                call(
-                    "git",
-                    "config",
-                    "--local",
-                    "user.name",
-                    "Jane Dev",
-                    cwd=repo_dir,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                ),
-                call(
-                    "git",
-                    "config",
-                    "--local",
-                    "user.email",
-                    "jane@example.com",
-                    cwd=repo_dir,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                ),
-            ]
+    @pytest.mark.asyncio
+    async def test_propagates_broker_or_git_failures(self, bridge: AgentBridge):
+        bridge.git_signing.refresh = AsyncMock(
+            side_effect=GitSigningError("Commit signing configuration unavailable")
         )
 
-    @pytest.mark.asyncio
-    async def test_logs_error_when_git_config_fails(
-        self,
-        bridge: AgentBridge,
-        tmp_path,
-    ):
-        repo_dir = tmp_path / "repo"
-        (repo_dir / ".git").mkdir(parents=True)
-        bridge.repo_path = tmp_path
-        bridge.log = MagicMock()
-
-        failed_proc = MagicMock()
-        failed_proc.communicate = AsyncMock(return_value=(b"", b"invalid config"))
-        failed_proc.returncode = 1
-
-        with patch(
-            "sandbox_runtime.bridge.asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            return_value=failed_proc,
-        ) as mock_exec:
+        with pytest.raises(GitSigningError, match="configuration unavailable"):
             await bridge._configure_git_identity(GitUser(name="Jane Dev", email="jane@example.com"))
 
-        mock_exec.assert_awaited_once()
-        bridge.log.error.assert_called_once()
-        assert bridge.log.error.call_args.args[0] == "git.identity_error"
-
     @pytest.mark.asyncio
-    async def test_logs_error_when_git_config_times_out(
-        self,
-        bridge: AgentBridge,
-        tmp_path,
-    ):
-        repo_dir = tmp_path / "repo"
-        (repo_dir / ".git").mkdir(parents=True)
-        bridge.repo_path = tmp_path
-        bridge.log = MagicMock()
+    async def test_prompt_is_blocked_before_opencode_when_refresh_fails(self, bridge: AgentBridge):
+        bridge.git_signing.refresh = AsyncMock(
+            side_effect=GitSigningError("Commit signing configuration unavailable")
+        )
+        stream = MagicMock()
+        bridge._stream_opencode_response_sse = stream
+        bridge._send_event = AsyncMock()
 
-        hanging_proc = MagicMock()
-        hanging_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-        hanging_proc.wait = AsyncMock(return_value=0)
-        hanging_proc.kill = MagicMock()
+        await bridge._handle_prompt(
+            {
+                "messageId": "msg-1",
+                "content": "fix the bug",
+                "author": {
+                    "gitIdentity": {
+                        "mode": "attributed-user",
+                        "name": "Jane Dev",
+                        "email": "jane@example.com",
+                    }
+                },
+            }
+        )
 
-        with patch(
-            "sandbox_runtime.bridge.asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            return_value=hanging_proc,
-        ) as mock_exec:
-            await bridge._configure_git_identity(GitUser(name="Jane Dev", email="jane@example.com"))
-
-        mock_exec.assert_awaited_once()
-        hanging_proc.kill.assert_called_once()
-        hanging_proc.wait.assert_awaited_once()
-        bridge.log.error.assert_called_once()
-        assert bridge.log.error.call_args.args[0] == "git.identity_error"
+        stream.assert_not_called()
+        bridge._send_event.assert_awaited_once_with(
+            {
+                "type": "execution_complete",
+                "messageId": "msg-1",
+                "success": False,
+                "error": "Commit signing configuration unavailable",
+            }
+        )

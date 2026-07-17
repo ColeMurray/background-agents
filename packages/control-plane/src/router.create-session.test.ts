@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateInternalToken } from "./auth/internal";
 import { SessionIndexStore } from "./db/session-index";
+import { UserStore } from "./db/user-store";
 import { handleRequest } from "./router";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
+}));
+
+vi.mock("./db/user-store", () => ({
+  UserStore: vi.fn(),
 }));
 
 vi.mock("./routes/shared", async (importOriginal) => {
@@ -232,5 +237,84 @@ describe("handleCreateSession D1 ordering", () => {
     expect(create).toHaveBeenCalledOnce();
     expect(initFetch).toHaveBeenCalledOnce();
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(initFetch.mock.invocationCallOrder[0]);
+  });
+
+  it("replaces caller author fields with the linked GitHub identity", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        resolveOrCreateUser: async () => ({ id: "user-1" }),
+        getIdentitiesForUser: async () => [
+          {
+            provider: "github",
+            providerUserId: "1001",
+            providerLogin: "ada",
+            providerEmail: "private@example.com",
+          },
+        ],
+        getUserById: async () => ({ id: "user-1", displayName: "Trusted Ada" }),
+      } as never;
+    });
+    const initFetch = vi.fn(async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        scmUserId: "1001",
+        scmLogin: "ada",
+        scmName: "Trusted Ada",
+        scmEmail: "1001+ada@users.noreply.github.com",
+      });
+      return Response.json({ status: "created" });
+    });
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      title: "Attributed session",
+      model: "anthropic/claude-haiku-4-5",
+      spawnSource: "user",
+      scmUserId: "1001",
+      scmLogin: "caller-login",
+      scmName: "Caller Name",
+      scmEmail: "caller@example.com",
+    });
+
+    expect(response.status).toBe(201);
+    expect(initFetch).toHaveBeenCalledOnce();
+  });
+
+  it("does not retain caller GitHub attribution when D1 identity resolution fails", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        resolveOrCreateUser: async () => {
+          throw new Error("D1 unavailable");
+        },
+      } as never;
+    });
+    const initFetch = vi.fn(async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      expect(body.scmUserId).toBeUndefined();
+      expect(body.scmLogin).toBeUndefined();
+      expect(body.scmName).toBeUndefined();
+      expect(body.scmEmail).toBeUndefined();
+      return Response.json({ status: "created" });
+    });
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      title: "Unresolved identity session",
+      model: "anthropic/claude-haiku-4-5",
+      spawnSource: "user",
+      scmUserId: "1001",
+      scmLogin: "caller-login",
+      scmName: "Caller Name",
+      scmEmail: "caller@example.com",
+    });
+
+    expect(response.status).toBe(201);
+    expect(initFetch).toHaveBeenCalledOnce();
   });
 });
