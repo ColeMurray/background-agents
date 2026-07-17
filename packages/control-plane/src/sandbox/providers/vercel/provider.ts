@@ -45,7 +45,8 @@ const TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env";
 const TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
 const DEFAULT_SNAPSHOT_EXPIRATION_MS = 0;
-const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
+// Exported for the stale-threshold ceiling assertion in image-builds/maintenance.test.ts.
+export const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
 const VERCEL_MEMORY_MIB_PER_VCPU = 2048;
 const VERCEL_SUPPORTED_VCPUS: readonly VercelVcpus[] = [1, 2, 4, 8];
 const VERCEL_MAX_VCPUS = VERCEL_SUPPORTED_VCPUS[VERCEL_SUPPORTED_VCPUS.length - 1];

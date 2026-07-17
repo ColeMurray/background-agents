@@ -17,6 +17,7 @@ import { EnvironmentStore } from "../../src/db/environments";
 import { RepoMetadataStore } from "../../src/db/repo-metadata";
 import { computeRepositoriesFingerprint } from "../../src/image-builds/fingerprint";
 import { hashImageBuildCallbackToken } from "../../src/image-builds/callback-auth";
+import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "../../src/image-builds/maintenance";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   repoImageBuildScope,
@@ -28,6 +29,7 @@ import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import type { AnyImageBuildAdapter, DeleteImageInput } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
+import { ImageBuildWorkflow } from "../../src/image-builds/workflow";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
 
@@ -754,6 +756,127 @@ describe("Image builds", () => {
         status: "failed",
         scope_id: environmentId,
       });
+    });
+  });
+
+  describe("lazy trigger-time stale recovery over real D1", () => {
+    const TWO_HOURS_AGO = () => Date.now() - 2 * 60 * 60 * 1000;
+
+    /**
+     * Workflow wired to the real D1 store with the provider layers stubbed
+     * out (the harness has no live provider): a no-op adapter and a planner
+     * echoing a fixed modal plan. The casts confine the stub shapes to this
+     * one seam.
+     */
+    function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
+      const adapter = { async startBuild() {} } as unknown as AnyImageBuildAdapter;
+      const factory = { create: () => adapter } as ImageBuildAdapterFactory;
+      const planner = {
+        resolveTarget: async () => ({
+          repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+          repositoriesFingerprint: "fp-heal",
+        }),
+        createCallbackAuth: async () => ({ kind: "none" }),
+        planBuild: async () => ({
+          plan: {
+            buildId: "imgb-heal-plan",
+            scope,
+            repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+            repositoriesFingerprint: "fp-heal",
+            callbackUrl: "https://worker.test/image-builds/build-complete",
+            failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+            buildTimeoutMs: 1800_000,
+            correlation: { trace_id: "trace-heal", request_id: "req-heal" },
+            provider: "modal",
+            callbackMode: "provider_image",
+          },
+          callbackAuth: { type: "none" },
+        }),
+      } as unknown as ConstructorParameters<typeof ImageBuildWorkflow>[4];
+      return new ImageBuildWorkflow(
+        { ...env, WORKER_URL: "https://worker.test" } as Env,
+        new ImageBuildStore(env.DB),
+        factory,
+        "modal",
+        planner
+      );
+    }
+
+    it("markScopeStaleBuildFailed fails only the scope+provider's timed-out building rows", async () => {
+      const environmentId = await seedEnvironment();
+      const otherEnvironmentId = await seedEnvironment();
+      await seedImageRow({
+        id: "lazy-stale",
+        environmentId,
+        status: "building",
+        createdAt: TWO_HOURS_AGO(),
+      });
+      await seedImageRow({ id: "lazy-fresh", environmentId, status: "building" });
+      await seedImageRow({
+        id: "lazy-other-scope",
+        environmentId: otherEnvironmentId,
+        status: "building",
+        createdAt: TWO_HOURS_AGO(),
+      });
+      await seedImageRow({
+        id: "lazy-other-provider",
+        environmentId,
+        status: "building",
+        provider: "vercel",
+        createdAt: TWO_HOURS_AGO(),
+      });
+
+      const marked = await new ImageBuildStore(env.DB).markScopeStaleBuildFailed(
+        environmentScope(environmentId),
+        "modal",
+        DEFAULT_STALE_BUILD_MAX_AGE_MS
+      );
+
+      expect(marked).toBe(1);
+      const stale = await getRow("lazy-stale");
+      expect(stale?.status).toBe("failed");
+      expect(stale?.error_message).toBe("build timed out (no callback received)");
+      expect((await getRow("lazy-fresh"))?.status).toBe("building");
+      expect((await getRow("lazy-other-scope"))?.status).toBe("building");
+      expect((await getRow("lazy-other-provider"))?.status).toBe("building");
+    });
+
+    it("triggerBuild heals a wedged scope: dead row failed, fresh build registered", async () => {
+      const environmentId = await seedEnvironment();
+      const scope = environmentScope(environmentId);
+      await seedImageRow({
+        id: "wedged",
+        environmentId,
+        status: "building",
+        createdAt: TWO_HOURS_AGO(),
+      });
+
+      const workflow = createTriggerWorkflow(scope);
+
+      const result = await workflow.triggerBuild(scope, {
+        request_id: "req-heal",
+        trace_id: "trace-heal",
+      });
+
+      expect(result.type).toBe("triggered");
+      if (result.type !== "triggered") throw new Error("unreachable");
+      expect((await getRow("wedged"))?.status).toBe("failed");
+      expect((await getRow(result.buildId))?.status).toBe("building");
+    });
+
+    it("triggerBuild still yields to a live in-flight build", async () => {
+      const environmentId = await seedEnvironment();
+      await seedImageRow({ id: "live-build", environmentId, status: "building" });
+
+      const workflow = createTriggerWorkflow(environmentScope(environmentId));
+
+      await expect(
+        workflow.triggerBuild(environmentScope(environmentId), {
+          request_id: "req-live",
+          trace_id: "trace-live",
+        })
+      ).resolves.toEqual({ type: "already_building", buildId: "live-build" });
+      expect((await getRow("live-build"))?.status).toBe("building");
     });
   });
 
