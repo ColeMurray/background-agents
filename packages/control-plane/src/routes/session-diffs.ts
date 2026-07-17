@@ -10,6 +10,8 @@ import { sessionRoute, type SessionRouteContext } from "./session-route";
 import type { Env } from "../types";
 
 const DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
+export const SESSION_DIFF_COMPLETE_BODY_MAX_BYTES = 5 * 1_024 * 1_024;
+export const SESSION_DIFF_FAILURE_BODY_MAX_BYTES = 16 * 1_024;
 
 function routeId(match: RegExpMatchArray, name: string): string | null {
   const value = match.groups?.[name];
@@ -17,6 +19,8 @@ function routeId(match: RegExpMatchArray, name: string): string | null {
 }
 
 async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array | null> {
+  const declaredLength = Number(request.headers.get("Content-Length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) return null;
   const reader = request.body?.getReader();
   if (!reader) return new Uint8Array();
   const chunks: Uint8Array[] = [];
@@ -38,6 +42,20 @@ async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint
     offset += chunk.byteLength;
   }
   return bytes;
+}
+
+async function readBoundedJson(
+  request: Request,
+  maxBytes: number,
+  bodyName: string
+): Promise<unknown | Response> {
+  const bytes = await readBoundedBody(request, maxBytes);
+  if (!bytes) return error(`${bodyName} must be ${maxBytes} bytes or smaller`, 413);
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
 }
 
 async function runtimeJson(
@@ -155,12 +173,12 @@ async function handleDiffComplete(
   const sessionId = match.groups?.id;
   const captureId = routeId(match, "captureId");
   if (!sessionId || !captureId) return error("Invalid diff capture identity", 400);
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await readBoundedJson(
+    request,
+    SESSION_DIFF_COMPLETE_BODY_MAX_BYTES,
+    "Diff capture manifests"
+  );
+  if (body instanceof Response) return body;
   const parsed = diffCaptureCompleteRequestSchema.safeParse(body);
   if (!parsed.success) return error("Invalid diff capture manifest", 400);
   const response = await runtimeJson(
@@ -182,12 +200,12 @@ async function handleDiffFailed(
   const sessionId = match.groups?.id;
   const captureId = routeId(match, "captureId");
   if (!sessionId || !captureId) return error("Invalid diff capture identity", 400);
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await readBoundedJson(
+    request,
+    SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
+    "Diff capture failure bodies"
+  );
+  if (body instanceof Response) return body;
   const parsed = diffCaptureFailureRequestSchema.safeParse(body);
   if (!parsed.success) return error("Invalid diff capture failure", 400);
   const response = await runtimeJson(

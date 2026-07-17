@@ -3,6 +3,10 @@ import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import { generateInternalToken } from "../../src/auth/internal";
 import {
+  SESSION_DIFF_COMPLETE_BODY_MAX_BYTES,
+  SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
+} from "../../src/routes/session-diffs";
+import {
   collectMessages,
   initNamedSession,
   openSandboxWs,
@@ -17,6 +21,37 @@ async function internalAuthHeaders(): Promise<Record<string, string>> {
 }
 
 describe("session diff routes", () => {
+  it("rejects oversized capture completion and failure bodies before parsing", async () => {
+    const sessionName = `diff-body-limit-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    const auth = { authToken: "diff-body-limit-token", sandboxId: "sandbox-body-limit" };
+    await seedSandboxAuth(stub, auth);
+    const headers = {
+      Authorization: `Bearer ${auth.authToken}`,
+      "Content-Type": "application/json",
+    };
+
+    const complete = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/diff-captures/capture-limit/complete`,
+      {
+        method: "POST",
+        headers,
+        body: " ".repeat(SESSION_DIFF_COMPLETE_BODY_MAX_BYTES + 1),
+      }
+    );
+    expect(complete.status).toBe(413);
+
+    const failed = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/diff-captures/capture-limit/failed`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ error: "x".repeat(SESSION_DIFF_FAILURE_BODY_MAX_BYTES) }),
+      }
+    );
+    expect(failed.status).toBe(413);
+  });
+
   it("exposes a pending diff state for a newly initialized repository session", async () => {
     const sessionName = `diff-pending-${Date.now()}`;
     await initNamedSession(sessionName);
