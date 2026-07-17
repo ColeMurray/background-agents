@@ -20,7 +20,11 @@ const providerConfig: E2BProviderConfig = {
 function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
   return {
     config: { apiUrl: "https://api.e2b.app", apiKey: "secret", templateId: "tmpl" },
-    createSandbox: vi.fn(async () => ({ sandboxID: "e2b-id", templateID: "tmpl" })),
+    createSandbox: vi.fn(async () => ({
+      sandboxID: "e2b-id",
+      templateID: "tmpl",
+      envdAccessToken: "envd-token",
+    })),
     writeSessionEnv: vi.fn(async () => {}),
     getSandbox: vi.fn(
       async (): Promise<E2BSandboxDetail> => ({
@@ -252,6 +256,7 @@ describe("E2BSandboxProvider", () => {
         sandboxID: "e2b-id",
         templateID: "tmpl",
         domain: "dedicated.example",
+        envdAccessToken: "envd-token",
       })),
       getHostnameForPort: vi.fn(
         (id: string, port: number, domain?: string | null) =>
@@ -263,12 +268,28 @@ describe("E2BSandboxProvider", () => {
     expect(result.codeServerUrl).toBe("https://8080-e2b-id.dedicated.example");
   });
 
-  it("creates with autoPause + autoResume so a lapsed TTL is recoverable", async () => {
+  it("creates with secure envd + autoPause, but NOT provider auto-resume", async () => {
     const client = mockClient();
     await new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig);
     expect(client.createSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ autoPause: true, autoResume: true })
+      expect.objectContaining({ secure: true, autoPause: true, autoResume: false })
     );
+    // secure create returns the token; it must be threaded to the env upload
+    const [, , opts] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    expect(opts).toMatchObject({ envdAccessToken: "envd-token" });
+  });
+
+  it("fails closed (kills the sandbox, no env write) when create returns no envd token", async () => {
+    const client = mockClient({
+      createSandbox: vi.fn(async () => ({ sandboxID: "e2b-id", templateID: "tmpl" })),
+    });
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
+      errorType: "permanent",
+      message: expect.stringMatching(/envd access token/),
+    });
+    expect(client.writeSessionEnv).not.toHaveBeenCalled();
+    expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
   });
 
   it("429 maps to a TRANSIENT SandboxProviderError (not counted toward the circuit breaker)", async () => {

@@ -3,9 +3,10 @@
  *
  * Stop is a resumable pause (like Daytona's stop), so the shared lifecycle
  * manager's persistent-resume path drives idle-pause and resume with no
- * E2B-specific plumbing. Sandboxes are created with auto-pause + auto-resume so
- * a lapsed TTL pauses (recoverable) rather than kills, and inbound activity
- * wakes it. Per-session env is delivered via an envd file write because the
+ * E2B-specific plumbing. Sandboxes are created with auto-pause (a lapsed TTL pauses
+ * recoverably rather than killing) and secure envd access; provider-side auto-resume is
+ * disabled so resume stays control-plane-driven (connectSandbox) and stray traffic can't
+ * wake a paused box. Per-session env is delivered via an envd file write because the
  * template's start command runs at build time.
  */
 
@@ -33,7 +34,7 @@ const log = createLogger("e2b-provider");
 
 /** Sandbox TTL default. Hobby plans (~1h cap) should lower this via config. */
 export const DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS = DEFAULT_SANDBOX_TIMEOUT_SECONDS;
-/** Default to a recoverable stop: pause (and auto-resume) on timeout, not kill. */
+/** Default to a recoverable stop: pause on TTL (not kill), so it stays resumable. */
 export const DEFAULT_E2B_AUTO_PAUSE = true;
 
 export interface E2BProviderConfig {
@@ -41,9 +42,8 @@ export interface E2BProviderConfig {
   codeServerPasswordSecret: string;
   sandboxTimeoutSeconds: number;
   /**
-   * Pause (not kill) when the sandbox TTL expires, so it stays resumable, and
-   * auto-resume it on inbound activity. Auto-resume tracks this flag — there's
-   * no reason to pause without it.
+   * Pause (not kill) when the sandbox TTL expires, so it stays resumable. Resume is
+   * control-plane-driven (connectSandbox); provider-side auto-resume is not used.
    */
   autoPause: boolean;
 }
@@ -88,18 +88,34 @@ export class E2BSandboxProvider implements SandboxProvider {
         metadata,
         timeoutSeconds: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
         autoPause: this.providerConfig.autoPause,
-        // Auto-resume tracks auto-pause: a recoverable pause you can't auto-wake
-        // would be pointless.
-        autoResume: this.providerConfig.autoPause,
+        // Require secure envd access: the per-session env we upload carries
+        // SANDBOX_AUTH_TOKEN + user secrets, so envd must reject writes lacking the
+        // returned access token (otherwise the upload is anonymous over the public host).
+        secure: true,
+        // Deliberately NOT auto-resume: resume is control-plane-driven (resumeSandbox →
+        // connectSandbox). Provider-side auto-resume would wake a paused sandbox from
+        // stray inbound traffic, outside the DO state machine.
+        autoResume: false,
       });
 
       try {
         // Deliver per-session env to the supervisor. E2B's template start command
         // runs once at build and never sees create-time env vars, so the launcher
         // (oi-launch.py) waits for this file and execs the supervisor with it.
+        const envdAccessToken = sandbox.envdAccessToken;
+        if (!envdAccessToken) {
+          // secure:true always returns a token, so a missing one is systemic (secure
+          // unsupported / API change), not intermittent — classify permanent to trip the
+          // circuit breaker rather than looping create→kill. Fail closed: the env write
+          // (SANDBOX_AUTH_TOKEN + secrets) never happens; the catch below kills the sandbox.
+          throw new SandboxProviderError(
+            "E2B create did not return an envd access token (secure access required)",
+            "permanent"
+          );
+        }
         await this.client.writeSessionEnv(sandbox.sandboxID, envVars, {
           domain: sandbox.domain,
-          envdAccessToken: sandbox.envdAccessToken,
+          envdAccessToken,
         });
       } catch (error) {
         // The sandbox exists but will never get its session env — kill it rather
@@ -282,6 +298,8 @@ export class E2BSandboxProvider implements SandboxProvider {
     error: unknown,
     operation: "create" | "resume" | "stop"
   ): SandboxProviderError {
+    // Already classified (e.g. the secure-access guard) — don't double-wrap and lose its message.
+    if (error instanceof SandboxProviderError) return error;
     if (error instanceof E2BApiError) {
       if (error.status === 429) {
         // Rate limiting is temporary — classify transient so it isn't counted

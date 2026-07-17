@@ -24,7 +24,7 @@ e2b_template_id = "open-inspect-sandbox" # template name to build/use
 # Optional
 # e2b_api_url                 = "https://api.e2b.app" # REST API base URL
 # e2b_sandbox_timeout_seconds = 7200                  # sandbox TTL (default 2h)
-# e2b_auto_pause              = true                   # pause (not kill) on TTL; auto-resume on use
+# e2b_auto_pause              = true                   # pause (recoverable), not kill, on TTL lapse
 ```
 
 For GitHub Actions-based deployment, configure the matching repository secrets:
@@ -107,7 +107,7 @@ therefore drives the lifecycle through the shared lifecycle manager, treating E2
 
 - Idle sessions are **paused** after the shared inactivity timeout (default 10 minutes).
 - When the TTL lapses, the sandbox created with `E2B_AUTO_PAUSE=true` **auto-pauses** (recoverable)
-  rather than being killed, and auto-resumes on the next inbound request.
+  rather than being killed.
 - The next prompt **resumes** the paused sandbox in place (workspace state preserved); if E2B has
   since dropped it, the control plane spawns a fresh sandbox.
 - Only sandboxes that fail before becoming usable — a spawn that never connects, or one whose
@@ -115,8 +115,10 @@ therefore drives the lifecycle through the shared lifecycle manager, treating E2
 
 Paused E2B sandboxes are not billed and are retained indefinitely, so pausing is the default
 recoverable stop. `E2B_AUTO_PAUSE` controls the **TTL action** (pause vs kill when the timeout
-lapses) and E2B's auto-resume; the ~10-minute inactivity pause above is driven by the shared
-lifecycle manager and applies regardless of that flag.
+lapses); the ~10-minute inactivity pause above is driven by the shared lifecycle manager and applies
+regardless of that flag. Resume is always control-plane-driven — the next prompt reconnects the
+sandbox through the lifecycle manager. E2B's provider-side auto-resume is deliberately **disabled**
+so stray inbound traffic to an old tunnel can't wake a paused sandbox outside that state machine.
 
 ## Required Secrets
 

@@ -66,6 +66,7 @@ describe("E2BRestClient", () => {
       envVars: { FOO: "bar" },
       metadata: { k: "v" },
       timeout: 3300,
+      secure: false,
       autoPause: false,
       autoResume: { enabled: false },
     });
@@ -83,6 +84,22 @@ describe("E2BRestClient", () => {
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     expect(body.autoPause).toBe(true);
     expect(body.autoResume).toEqual({ enabled: true });
+  });
+
+  it("sends secure:true when requested", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-new", templateID: "tmpl-123" }));
+    await client.createSandbox({ templateID: "tmpl-123", secure: true });
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body).secure).toBe(true);
+  });
+
+  it("writeSessionEnv sends the X-Access-Token header (never anonymous)", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(new Response("[]", { status: 200 }));
+    await client.writeSessionEnv("sb-1", { FOO: "bar" }, { envdAccessToken: "tok-123" });
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toContain("49983-sb-1.e2b.app");
+    expect((init.headers as Record<string, string>)["X-Access-Token"]).toBe("tok-123");
   });
 
   it("connect + timeout endpoints", async () => {

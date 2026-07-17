@@ -38,7 +38,7 @@ export interface E2BSandboxCreated {
   templateID: string;
   /** Custom envd domain for dedicated clusters; null/absent on the default cloud. */
   domain?: string | null;
-  /** Token required to reach envd on secure sandboxes; null/absent on Hobby. */
+  /** envd access token; returned only when the sandbox is created with secure:true, null otherwise. */
   envdAccessToken?: string | null;
 }
 
@@ -61,6 +61,11 @@ export interface E2BCreateSandboxParams {
   autoPause?: boolean;
   /** Wake a paused sandbox on inbound activity (only meaningful with autoPause). */
   autoResume?: boolean;
+  /**
+   * Require an access token to reach envd (returned as `envdAccessToken`). Without it,
+   * envd accepts unauthenticated reads/writes of the uploaded session env.
+   */
+  secure?: boolean;
 }
 
 export class E2BNotFoundError extends Error {
@@ -106,6 +111,7 @@ export class E2BRestClient {
         envVars: params.envVars,
         metadata: params.metadata,
         timeout: params.timeoutSeconds,
+        secure: params.secure ?? false,
         autoPause: params.autoPause ?? false,
         autoResume: { enabled: params.autoResume ?? false },
       });
@@ -129,9 +135,9 @@ export class E2BRestClient {
   async writeSessionEnv(
     sandboxId: string,
     env: Record<string, string>,
-    opts?: { domain?: string | null; envdAccessToken?: string | null }
+    opts: { domain?: string | null; envdAccessToken: string }
   ): Promise<void> {
-    const domain = opts?.domain || DEFAULT_SANDBOX_DOMAIN;
+    const domain = opts.domain || DEFAULT_SANDBOX_DOMAIN;
     // envd requires the in-sandbox user to write the file as. "user" is E2B's
     // fixed non-root runtime user — the launcher that reads this file runs as it.
     const url =
@@ -150,8 +156,8 @@ export class E2BRestClient {
     const startMs = Date.now();
     try {
       // Do NOT set Content-Type — fetch derives the multipart boundary itself.
-      const headers: Record<string, string> = {};
-      if (opts?.envdAccessToken) headers["X-Access-Token"] = opts.envdAccessToken;
+      // envd requires the access token from create (secure:true); never write anonymously.
+      const headers: Record<string, string> = { "X-Access-Token": opts.envdAccessToken };
 
       const response = await fetch(url, {
         method: "POST",
