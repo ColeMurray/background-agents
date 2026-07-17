@@ -50,6 +50,31 @@ describe("CommitSigningSettings", () => {
     expect(screen.queryByDisplayValue(/OPENSSH PRIVATE KEY/)).not.toBeInTheDocument();
   });
 
+  it("renders loading separately and disables configuration controls", () => {
+    useSWRMock.mockReturnValue({ data: undefined, isLoading: true, mutate: mutateMock });
+
+    render(<CommitSigningSettings />);
+
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.getByLabelText("GitHub signing account")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save signing configuration" })).toBeDisabled();
+  });
+
+  it("renders fetch failures separately and disables configuration controls", () => {
+    useSWRMock.mockReturnValue({
+      data: undefined,
+      error: new Error("unavailable"),
+      isLoading: false,
+      mutate: mutateMock,
+    });
+
+    render(<CommitSigningSettings />);
+
+    expect(screen.getByText("Unable to load configuration")).toBeInTheDocument();
+    expect(screen.getByLabelText("GitHub signing account")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save signing configuration" })).toBeDisabled();
+  });
+
   it("submits the transient key, clears it, and caches only returned metadata", async () => {
     const user = userEvent.setup();
     const metadata = {
@@ -181,7 +206,9 @@ describe("CommitSigningSettings", () => {
 
     render(<CommitSigningSettings />);
 
-    expect(screen.getByText("Not configured")).toBeInTheDocument();
+    expect(screen.getByText("Invalid service response")).toBeInTheDocument();
+    expect(screen.getByLabelText("GitHub signing account")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save signing configuration" })).toBeDisabled();
     expect(screen.queryByText("secret")).not.toBeInTheDocument();
   });
 });

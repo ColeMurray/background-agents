@@ -21,12 +21,29 @@ import {
 
 const SETTINGS_KEY = "/api/commit-signing";
 
+type SigningViewStateKind = "loading" | "error" | "invalid" | "disabled" | "enabled";
+
+const STATUS_LABELS: Record<SigningViewStateKind, string> = {
+  loading: "Loading…",
+  error: "Unable to load configuration",
+  invalid: "Invalid service response",
+  disabled: "Not configured",
+  enabled: "Configured",
+};
+
 export function CommitSigningSettings() {
-  const { data: rawData, isLoading, mutate } = useSWR<unknown>(SETTINGS_KEY);
-  const data = useMemo(() => {
+  const { data: rawData, error, isLoading, mutate } = useSWR<unknown>(SETTINGS_KEY);
+  const viewState = useMemo(() => {
+    if (isLoading) return { kind: "loading" } as const;
+    if (error) return { kind: "error" } as const;
     const result = commitSigningMetadataSchema.safeParse(rawData);
-    return result.success ? result.data : undefined;
-  }, [rawData]);
+    if (!result.success) return { kind: "invalid" } as const;
+    return result.data.enabled
+      ? ({ kind: "enabled", data: result.data } as const)
+      : ({ kind: "disabled" } as const);
+  }, [error, isLoading, rawData]);
+  const data = viewState.kind === "enabled" ? viewState.data : undefined;
+  const configurationKnown = viewState.kind === "enabled" || viewState.kind === "disabled";
   const [githubLogin, setGithubLogin] = useState("");
   const [committerName, setCommitterName] = useState("");
   const [committerEmail, setCommitterEmail] = useState("");
@@ -112,9 +129,7 @@ export function CommitSigningSettings() {
         as commit authors.
       </p>
 
-      <p className="mt-4 text-sm font-medium text-foreground">
-        {isLoading ? "Loading…" : data?.enabled ? "Configured" : "Not configured"}
-      </p>
+      <p className="mt-4 text-sm font-medium text-foreground">{STATUS_LABELS[viewState.kind]}</p>
 
       {data?.enabled && (
         <dl className="mt-3 grid gap-2 text-sm">
@@ -161,6 +176,7 @@ export function CommitSigningSettings() {
             value={githubLogin}
             onChange={(event) => setGithubLogin(event.target.value)}
             autoComplete="off"
+            disabled={!configurationKnown}
           />
         </label>
         <label className="grid gap-1.5 text-sm">
@@ -169,6 +185,7 @@ export function CommitSigningSettings() {
             value={committerName}
             onChange={(event) => setCommitterName(event.target.value)}
             autoComplete="off"
+            disabled={!configurationKnown}
           />
         </label>
         <label className="grid gap-1.5 text-sm">
@@ -178,6 +195,7 @@ export function CommitSigningSettings() {
             value={committerEmail}
             onChange={(event) => setCommitterEmail(event.target.value)}
             autoComplete="off"
+            disabled={!configurationKnown}
           />
         </label>
         <label className="grid gap-1.5 text-sm">
@@ -187,13 +205,21 @@ export function CommitSigningSettings() {
             onChange={(event) => setPrivateKey(event.target.value)}
             autoComplete="off"
             spellCheck={false}
+            disabled={!configurationKnown}
           />
         </label>
         <div>
           <Button
             type="button"
             onClick={handleSave}
-            disabled={saving || !privateKey || !githubLogin || !committerName || !committerEmail}
+            disabled={
+              !configurationKnown ||
+              saving ||
+              !privateKey ||
+              !githubLogin ||
+              !committerName ||
+              !committerEmail
+            }
           >
             {saving ? "Saving…" : "Save signing configuration"}
           </Button>
@@ -222,7 +248,9 @@ export function CommitSigningSettings() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDisable}>Disable signing</AlertDialogAction>
+            <AlertDialogAction onClick={handleDisable} disabled={!configurationKnown || saving}>
+              Disable signing
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
