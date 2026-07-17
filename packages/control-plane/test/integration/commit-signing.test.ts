@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
 
 import { generateInternalToken } from "../../src/auth/internal";
+import { signGitPayloadWithOpenSshEd25519PrivateKey } from "../../src/auth/openssh-ed25519";
 import { CommitSigningStore } from "../../src/db/commit-signing";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, seedSandboxAuth } from "./helpers";
@@ -13,6 +14,9 @@ pwAAAAtzc2gtZWQyNTUxOQAAACAWjNIIM/EVjs9Jat8bPrzT757lrNEkt9LcaUiU29+e6Q
 AAAEDu3j73XlXgmmJ6DeqA0/0I1EGPhOmMnk/be7rZrpUxDBaM0ggz8RWOz0lq3xs+vNPv
 nuWs0SS30txpSJTb357pAAAAGXRlc3Qtc2lnbmluZ0BvcGVuLWluc3BlY3QBAgME
 -----END OPENSSH PRIVATE KEY-----`;
+const PUBLIC_KEY =
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBaM0ggz8RWOz0lq3xs+vNPvnuWs0SS30txpSJTb357p";
+const FINGERPRINT = "SHA256:Cu64KulDfH7B8Mu37+JWepAJ1m59o159Y8RPj5Ta1XM";
 type StoredConfiguration = Parameters<CommitSigningStore["save"]>[0];
 
 const STORED_CONFIGURATION: StoredConfiguration = {
@@ -76,12 +80,20 @@ describe("commit signing store", () => {
     );
   });
 
-  it("decrypts the exact key only through the broker-facing method", async () => {
+  it("returns public-only runtime configuration to the sandbox boundary", async () => {
     const store = await saveConfiguration();
 
-    expect(await store.getDecryptedConfiguration()).toEqual(
-      expect.objectContaining({ enabled: true, privateKey: PRIVATE_KEY })
-    );
+    const configuration = await store.getRuntimeConfiguration();
+
+    expect(configuration).toEqual({
+      enabled: true,
+      committerName: "Open Inspect",
+      committerEmail: "open-inspect@example.com",
+      publicKey: "ssh-ed25519 AAAA test",
+      fingerprint: "SHA256:test",
+    });
+    expect(JSON.stringify(configuration)).not.toContain("privateKey");
+    expect(JSON.stringify(configuration)).not.toContain("OPENSSH PRIVATE KEY");
   });
 
   it("leaves an active row unchanged when encryption fails", async () => {
@@ -264,11 +276,12 @@ describe("commit signing settings API", () => {
 describe("sandbox commit signing broker", () => {
   beforeEach(cleanD1Tables);
 
-  it("rejects a valid shared internal HMAC token", async () => {
+  it.each(["GET", "POST"])("rejects a valid shared internal HMAC token for %s", async (method) => {
     const sessionName = await createSandboxSession("commit-signing-hmac");
     const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
 
     const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
+      method,
       headers: { Authorization: `Bearer ${token}` },
     });
 
@@ -309,7 +322,7 @@ describe("sandbox commit signing broker", () => {
     expect(wrongSession.status).toBe(401);
   });
 
-  it("returns the purpose-specific decrypted configuration with no-store", async () => {
+  it("returns public-only runtime configuration with no-store", async () => {
     const sessionName = await createSandboxSession("commit-signing-active");
     await saveConfiguration({
       publicKey: "ssh-ed25519 AAAA public",
@@ -325,17 +338,14 @@ describe("sandbox commit signing broker", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(await response.json()).toEqual({
       enabled: true,
-      keyFormat: "ssh-ed25519",
-      githubLogin: "open-inspect-bot",
       committerName: "Open Inspect",
       committerEmail: "open-inspect@example.com",
       publicKey: "ssh-ed25519 AAAA public",
       fingerprint: "SHA256:fingerprint",
-      privateKey: PRIVATE_KEY,
     });
   });
 
-  it("returns a bounded error when ciphertext cannot be decrypted", async () => {
+  it("does not decrypt ciphertext when returning runtime configuration", async () => {
     const sessionName = await createSandboxSession("commit-signing-corrupt");
     await saveConfiguration({
       publicKey: "ssh-ed25519 AAAA public",
@@ -350,11 +360,194 @@ describe("sandbox commit signing broker", () => {
       headers: { Authorization: "Bearer sandbox-token" },
     });
 
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual(
+      expect.objectContaining({ enabled: true, fingerprint: "SHA256:fingerprint" })
+    );
+    expect(body).not.toContain("corrupt");
+    expect(body).not.toContain("OPENSSH PRIVATE KEY");
+  });
+
+  it("returns an armored signature for the exact authenticated payload bytes", async () => {
+    const sessionName = await createSandboxSession("commit-signing-sign");
+    await saveConfiguration({
+      publicKey: PUBLIC_KEY,
+      fingerprint: FINGERPRINT,
+      validatedAt: Date.now(),
+    });
+    const payload = new Uint8Array([0, 1, 2, 255, 10]);
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sandbox-token",
+        "Content-Type": "application/octet-stream",
+        "X-Open-Inspect-Signing-Fingerprint": FINGERPRINT,
+      },
+      body: payload,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+    expect(await response.text()).toBe(
+      (await signGitPayloadWithOpenSshEd25519PrivateKey(PRIVATE_KEY, payload)).armoredSignature
+    );
+  });
+
+  it("rejects a streamed payload larger than one MiB", async () => {
+    const sessionName = await createSandboxSession("commit-signing-oversized");
+    await saveConfiguration({
+      publicKey: PUBLIC_KEY,
+      fingerprint: FINGERPRINT,
+      validatedAt: Date.now(),
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(768 * 1024));
+        controller.enqueue(new Uint8Array(256 * 1024 + 1));
+        controller.close();
+      },
+    });
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sandbox-token",
+        "Content-Type": "application/octet-stream",
+        "X-Open-Inspect-Signing-Fingerprint": FINGERPRINT,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(413);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("rejects missing fingerprint and empty signing payloads", async () => {
+    const sessionName = await createSandboxSession("commit-signing-invalid");
+
+    const missingFingerprint = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/commit-signing`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/octet-stream",
+        },
+        body: new Uint8Array([1]),
+      }
+    );
+    const emptyPayload = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/commit-signing`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/octet-stream",
+          "X-Open-Inspect-Signing-Fingerprint": FINGERPRINT,
+        },
+        body: new Uint8Array(),
+      }
+    );
+
+    expect(missingFingerprint.status).toBe(400);
+    expect(emptyPayload.status).toBe(400);
+  });
+
+  it("binds signing to the active fingerprint and rejects requests after disable", async () => {
+    const sessionName = await createSandboxSession("commit-signing-rotation");
+    const store = await saveConfiguration({
+      publicKey: PUBLIC_KEY,
+      fingerprint: FINGERPRINT,
+      validatedAt: Date.now(),
+    });
+
+    await store.save({
+      ...STORED_CONFIGURATION,
+      publicKey: "ssh-ed25519 AAAA replacement",
+      fingerprint: "SHA256:replacement",
+      validatedAt: Date.now(),
+    });
+    const afterReplacement = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/commit-signing`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/octet-stream",
+          "X-Open-Inspect-Signing-Fingerprint": FINGERPRINT,
+        },
+        body: new Uint8Array([1]),
+      }
+    );
+    await store.delete();
+    const afterDisable = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/commit-signing`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/octet-stream",
+          "X-Open-Inspect-Signing-Fingerprint": "SHA256:replacement",
+        },
+        body: new Uint8Array([1]),
+      }
+    );
+
+    expect(afterReplacement.status).toBe(409);
+    expect(afterDisable.status).toBe(409);
+  });
+
+  it("returns a redacted failure when signing ciphertext cannot be decrypted", async () => {
+    const sessionName = await createSandboxSession("commit-signing-corrupt-sign");
+    await saveConfiguration({
+      publicKey: PUBLIC_KEY,
+      fingerprint: FINGERPRINT,
+      validatedAt: Date.now(),
+    });
+    await env.DB.prepare(
+      "UPDATE commit_signing_configuration SET encrypted_private_key = 'corrupt' WHERE singleton_id = 1"
+    ).run();
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sandbox-token",
+        "Content-Type": "application/octet-stream",
+        "X-Open-Inspect-Signing-Fingerprint": FINGERPRINT,
+      },
+      body: new Uint8Array([1]),
+    });
+
     expect(response.status).toBe(503);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     const body = await response.text();
-    expect(body).toContain("configuration unavailable");
     expect(body).not.toContain("corrupt");
     expect(body).not.toContain("OPENSSH PRIVATE KEY");
+  });
+
+  it("rejects a dead sandbox token before signing", async () => {
+    const sessionName = `${"commit-signing-dead"}-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuth(stub, {
+      authToken: "dead-token",
+      sandboxId: "dead-sandbox",
+      status: "stopped",
+    });
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer dead-token",
+        "Content-Type": "application/octet-stream",
+        "X-Open-Inspect-Signing-Fingerprint": FINGERPRINT,
+      },
+      body: new Uint8Array([1]),
+    });
+
+    expect(response.status).toBe(401);
   });
 });

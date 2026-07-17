@@ -2,6 +2,7 @@ import { commitSigningWriteRequestSchema } from "@open-inspect/shared";
 
 import {
   OpenSshKeyValidationError,
+  signGitPayloadWithOpenSshEd25519PrivateKey,
   validateOpenSshEd25519PrivateKey,
 } from "../auth/openssh-ed25519";
 import { CommitSigningStore } from "../db/commit-signing";
@@ -18,6 +19,7 @@ import {
 } from "./shared";
 
 const logger = createLogger("router:commit-signing");
+const MAX_SIGNING_PAYLOAD_BYTES = 1024 * 1024;
 
 function noStore(response: Response): Response {
   const headers = new Headers(response.headers);
@@ -35,6 +37,38 @@ function createStore(env: Env): CommitSigningStore | Response {
     return noStore(error("Commit signing encryption is not configured", 503));
   }
   return new CommitSigningStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+}
+
+function declaredSigningPayloadExceedsLimit(request: Request): boolean {
+  const rawContentLength = request.headers.get("Content-Length");
+  if (!rawContentLength || !/^\d+$/.test(rawContentLength)) return false;
+  return Number(rawContentLength) > MAX_SIGNING_PAYLOAD_BYTES;
+}
+
+async function readSigningPayload(request: Request): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array();
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_SIGNING_PAYLOAD_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  const payload = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    payload.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return payload;
 }
 
 async function handleGetCommitSigning(_request: Request, env: Env): Promise<Response> {
@@ -172,7 +206,7 @@ async function handleGetSandboxCommitSigning(
   if (store instanceof Response) return store;
 
   try {
-    const configuration = await store.getDecryptedConfiguration();
+    const configuration = await store.getRuntimeConfiguration();
     logger.info("commit_signing.configuration_brokered", {
       event: "commit_signing.configuration_brokered",
       session_id: sessionId,
@@ -189,12 +223,85 @@ async function handleGetSandboxCommitSigning(
       event: "commit_signing.configuration_brokered",
       session_id: sessionId,
       outcome: "error",
-      reason: "decryption_failed",
+      reason: "storage_unavailable",
       timestamp: Date.now(),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
     return noStore(error("Commit signing configuration unavailable", 503));
+  }
+}
+
+async function handlePostSandboxCommitSigning(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return noStore(error("Session ID required", 400));
+  if (resolveScmProviderFromEnv(env.SCM_PROVIDER) !== "github") {
+    return noStore(error("Commit signing is disabled", 409));
+  }
+
+  const requestedFingerprint = request.headers.get("X-Open-Inspect-Signing-Fingerprint");
+  if (!requestedFingerprint) {
+    return noStore(error("Commit signing fingerprint required", 400));
+  }
+  if (declaredSigningPayloadExceedsLimit(request)) {
+    return noStore(error("Commit signing payload is too large", 413));
+  }
+  const payload = await readSigningPayload(request);
+  if (!payload) return noStore(error("Commit signing payload is too large", 413));
+  if (payload.length === 0) return noStore(error("Commit signing payload required", 400));
+
+  const store = createStore(env);
+  if (store instanceof Response) return store;
+
+  try {
+    const configuration = await store.getDecryptedSigningConfiguration();
+    if (!configuration.enabled) return noStore(error("Commit signing is disabled", 409));
+    if (configuration.fingerprint !== requestedFingerprint) {
+      return noStore(error("Commit signing key changed", 409));
+    }
+
+    const signature = await signGitPayloadWithOpenSshEd25519PrivateKey(
+      configuration.privateKey,
+      payload
+    );
+    if (
+      signature.fingerprint !== configuration.fingerprint ||
+      signature.publicKey !== configuration.publicKey
+    ) {
+      throw new Error("Configured signing key metadata mismatch");
+    }
+    logger.info("commit_signing.signature_requested", {
+      event: "commit_signing.signature_requested",
+      session_id: sessionId,
+      fingerprint: configuration.fingerprint,
+      outcome: "success",
+      timestamp: Date.now(),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return noStore(
+      new Response(signature.armoredSignature, {
+        status: 200,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      })
+    );
+  } catch {
+    logger.error("commit_signing.signature_requested", {
+      event: "commit_signing.signature_requested",
+      session_id: sessionId,
+      fingerprint: requestedFingerprint,
+      outcome: "error",
+      reason: "signing_unavailable",
+      timestamp: Date.now(),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return noStore(error("Commit signing unavailable", 503));
   }
 }
 
@@ -218,5 +325,10 @@ export const commitSigningRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/sessions/:id/commit-signing"),
     handler: handleGetSandboxCommitSigning,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/commit-signing"),
+    handler: handlePostSandboxCommitSigning,
   },
 ];

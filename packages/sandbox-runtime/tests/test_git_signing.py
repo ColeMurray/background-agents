@@ -1,4 +1,5 @@
 import subprocess
+import textwrap
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -18,13 +19,10 @@ nuWs0SS30txpSJTb357pAAAAGXRlc3Qtc2lnbmluZ0BvcGVuLWluc3BlY3QBAgME
 PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBaM0ggz8RWOz0lq3xs+vNPvnuWs0SS30txpSJTb357p"
 ENABLED_CONFIGURATION = {
     "enabled": True,
-    "keyFormat": "ssh-ed25519",
-    "githubLogin": "open-inspect-bot",
     "committerName": "Open Inspect",
     "committerEmail": "open-inspect@example.com",
     "publicKey": PUBLIC_KEY,
     "fingerprint": "SHA256:fingerprint",
-    "privateKey": PRIVATE_KEY,
 }
 
 
@@ -57,11 +55,47 @@ def create_manifest(tmp_path, repositories=()):
     return manifest
 
 
+def create_remote_signer(tmp_path):
+    private_key = tmp_path / "remote-signing-key"
+    private_key.write_text(f"{PRIVATE_KEY}\n")
+    private_key.chmod(0o600)
+    signer = tmp_path / "oi-git-sign"
+    signer.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            import os
+            import subprocess
+            import sys
+
+            arguments = sys.argv[1:]
+            if arguments[:2] != ["-Y", "sign"]:
+                os.execv("/usr/bin/ssh-keygen", ["/usr/bin/ssh-keygen", *arguments])
+            subprocess.run(
+                [
+                    "/usr/bin/ssh-keygen",
+                    "-Y",
+                    "sign",
+                    "-n",
+                    "git",
+                    "-f",
+                    {str(private_key)!r},
+                    arguments[-1],
+                ],
+                check=True,
+            )
+            """
+        )
+    )
+    signer.chmod(0o755)
+    return signer
+
+
 def create_runtime(
     tmp_path,
     manifest,
     *,
-    key_path=None,
+    signer_path=None,
     log=None,
     control_plane_url="https://control.example.com",
 ):
@@ -70,7 +104,7 @@ def create_runtime(
         session_id="session-1",
         auth_token="sandbox-token",
         repo_manifest_path=manifest,
-        key_path=key_path or tmp_path / "runtime" / "id_ed25519",
+        signer_path=signer_path or tmp_path / "oi-git-sign",
         log=log,
     )
 
@@ -79,19 +113,17 @@ def create_runtime(
 async def test_disabled_configuration_removes_signing_state_and_sets_unsigned_identity(tmp_path):
     repo = create_repository(tmp_path / "repo")
     git(repo, "config", "user.signingkey", "/old/key")
+    git(repo, "config", "gpg.ssh.program", "/old/signer")
     git(repo, "config", "commit.gpgsign", "true")
     manifest = create_manifest(tmp_path, [repo])
-    key_path = tmp_path / "runtime" / "id_ed25519"
-    key_path.parent.mkdir()
-    key_path.write_text("stale-key")
-    runtime = create_runtime(tmp_path, manifest, key_path=key_path)
+    runtime = create_runtime(tmp_path, manifest)
 
     await runtime.apply_configuration(
         {"enabled": False}, GitUser(name="OpenInspect", email="open-inspect@noreply.github.com")
     )
 
-    assert not key_path.exists()
     assert git(repo, "config", "--get", "user.signingkey", check=False).returncode == 1
+    assert git(repo, "config", "--get", "gpg.ssh.program", check=False).returncode == 1
     assert git(repo, "config", "--get", "commit.gpgsign", check=False).returncode == 1
     assert git(repo, "config", "user.name").stdout.strip() == "OpenInspect"
     assert git(repo, "config", "user.email").stdout.strip() == "open-inspect@noreply.github.com"
@@ -104,8 +136,8 @@ async def test_enabled_configuration_creates_a_valid_signed_commit_with_split_id
     allowed_signers.write_text(f"open-inspect@example.com {PUBLIC_KEY}\n")
     git(repo, "config", "gpg.ssh.allowedSignersFile", str(allowed_signers))
     manifest = create_manifest(tmp_path, [repo])
-    key_path = tmp_path / "runtime" / "id_ed25519"
-    runtime = create_runtime(tmp_path, manifest, key_path=key_path)
+    signer_path = create_remote_signer(tmp_path)
+    runtime = create_runtime(tmp_path, manifest, signer_path=signer_path)
 
     await runtime.apply_configuration(
         {
@@ -115,7 +147,8 @@ async def test_enabled_configuration_creates_a_valid_signed_commit_with_split_id
         GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com"),
     )
 
-    assert key_path.stat().st_mode & 0o777 == 0o600
+    assert git(repo, "config", "gpg.ssh.program").stdout.strip() == str(signer_path)
+    assert git(repo, "config", "user.signingkey").stdout.strip() == f"key::{PUBLIC_KEY}"
     (repo / "change.txt").write_text("signed\n")
     git(repo, "add", "change.txt")
     git(repo, "commit", "-m", "signed change")
@@ -130,7 +163,12 @@ async def test_enabled_agent_only_mode_uses_committer_as_author(tmp_path):
     repo = create_repository(tmp_path / "repo")
     manifest = create_manifest(tmp_path, [repo])
     log = MagicMock()
-    runtime = create_runtime(tmp_path, manifest, log=log)
+    runtime = create_runtime(
+        tmp_path,
+        manifest,
+        signer_path=create_remote_signer(tmp_path),
+        log=log,
+    )
 
     await runtime.apply_configuration(ENABLED_CONFIGURATION, None)
 
@@ -146,6 +184,83 @@ async def test_enabled_agent_only_mode_uses_committer_as_author(tmp_path):
         mode="agent-only",
         fingerprint="SHA256:fingerprint",
     )
+
+
+@pytest.mark.asyncio
+async def test_recreated_and_synthesized_commits_remain_signed(tmp_path):
+    repo = create_repository(tmp_path / "repo")
+    main_branch = git(repo, "branch", "--show-current").stdout.strip()
+    allowed_signers = tmp_path / "allowed_signers"
+    allowed_signers.write_text(f"open-inspect@example.com {PUBLIC_KEY}\n")
+    git(repo, "config", "gpg.ssh.allowedSignersFile", str(allowed_signers))
+    manifest = create_manifest(tmp_path, [repo])
+    runtime = create_runtime(
+        tmp_path,
+        manifest,
+        signer_path=create_remote_signer(tmp_path),
+    )
+    await runtime.apply_configuration(
+        ENABLED_CONFIGURATION,
+        GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com"),
+    )
+
+    def commit_file(filename: str, message: str) -> str:
+        (repo / filename).write_text(f"{message}\n")
+        git(repo, "add", filename)
+        git(repo, "commit", "-m", message)
+        return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    commits: list[str] = [commit_file("normal.txt", "normal")]
+    (repo / "normal.txt").write_text("amended\n")
+    git(repo, "add", "normal.txt")
+    git(repo, "commit", "--amend", "--no-edit")
+    commits.append(git(repo, "rev-parse", "HEAD").stdout.strip())
+
+    git(repo, "switch", "-c", "feature")
+    commits.append(commit_file("feature.txt", "feature"))
+    git(repo, "switch", main_branch)
+    commits.append(commit_file("main.txt", "main update"))
+    git(repo, "merge", "--no-ff", "feature", "-m", "merge feature")
+    commits.append(git(repo, "rev-parse", "HEAD").stdout.strip())
+
+    git(repo, "switch", "-c", "cherry-source")
+    cherry_source = commit_file("cherry.txt", "cherry source")
+    git(repo, "switch", main_branch)
+    git(repo, "cherry-pick", cherry_source)
+    commits.append(git(repo, "rev-parse", "HEAD").stdout.strip())
+
+    git(repo, "switch", "-c", "rebase-source")
+    commit_file("rebase.txt", "rebase source")
+    git(repo, "switch", main_branch)
+    commits.append(commit_file("base.txt", "rebase base"))
+    git(repo, "switch", "rebase-source")
+    git(repo, "rebase", main_branch)
+    commits.append(git(repo, "rev-parse", "HEAD").stdout.strip())
+
+    for commit in commits:
+        git(repo, "verify-commit", commit)
+        assert git(repo, "show", "-s", "--format=%an|%cn", commit).stdout.strip() == (
+            "Jane Dev|Open Inspect"
+        )
+
+
+@pytest.mark.asyncio
+async def test_signer_failure_leaves_work_staged_and_uncommitted(tmp_path):
+    repo = create_repository(tmp_path / "repo")
+    manifest = create_manifest(tmp_path, [repo])
+    unavailable_signer = tmp_path / "oi-git-sign"
+    unavailable_signer.write_text("#!/bin/sh\nexit 1\n")
+    unavailable_signer.chmod(0o755)
+    runtime = create_runtime(tmp_path, manifest, signer_path=unavailable_signer)
+    await runtime.apply_configuration(ENABLED_CONFIGURATION, None)
+    (repo / "change.txt").write_text("uncommitted\n")
+    git(repo, "add", "change.txt")
+
+    result = git(repo, "commit", "-m", "must fail", check=False)
+
+    assert result.returncode != 0
+    assert git(repo, "rev-parse", "--verify", "HEAD", check=False).returncode != 0
+    assert git(repo, "diff", "--cached", "--name-only").stdout.strip() == "change.txt"
 
 
 @pytest.mark.asyncio
@@ -200,13 +315,10 @@ async def test_enabled_configuration_applies_to_every_manifest_repository(tmp_pa
 async def test_participant_change_updates_only_author_identity(tmp_path, monkeypatch):
     repo = create_repository(tmp_path / "repo")
     manifest = create_manifest(tmp_path, [repo])
-    key_path = tmp_path / "runtime" / "id_ed25519"
-    runtime = create_runtime(tmp_path, manifest, key_path=key_path)
+    runtime = create_runtime(tmp_path, manifest)
     await runtime.apply_configuration(
         ENABLED_CONFIGURATION, GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com")
     )
-    installed_key = key_path.read_text()
-    installed_key_inode = key_path.stat().st_ino
     set_git_config = AsyncMock(side_effect=runtime._set_git_config)
     monkeypatch.setattr(runtime, "_set_git_config", set_git_config)
 
@@ -226,8 +338,6 @@ async def test_participant_change_updates_only_author_identity(tmp_path, monkeyp
     )
     assert git(repo, "config", "committer.name").stdout.strip() == "Open Inspect"
     assert git(repo, "config", "committer.email").stdout.strip() == ("open-inspect@example.com")
-    assert key_path.read_text() == installed_key
-    assert key_path.stat().st_ino == installed_key_inode
 
 
 @pytest.mark.asyncio
@@ -241,13 +351,11 @@ async def test_participant_change_updates_only_author_identity(tmp_path, monkeyp
             200,
             {
                 "enabled": True,
-                "keyFormat": "ssh-ed25519",
-                "githubLogin": "",
-                "committerName": "",
-                "committerEmail": "",
-                "publicKey": "",
-                "fingerprint": "",
-                "privateKey": "",
+                "committerName": "Open Inspect",
+                "committerEmail": "open-inspect@example.com",
+                "publicKey": PUBLIC_KEY,
+                "fingerprint": "SHA256:fingerprint",
+                "privateKey": PRIVATE_KEY,
             },
         ),
     ],
@@ -292,17 +400,13 @@ async def test_refresh_blocks_when_the_repository_manifest_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_initialize_removes_snapshot_restored_key_before_broker_fetch(
+async def test_initialize_fetches_public_configuration_without_creating_key_files(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
-    key_path = tmp_path / "runtime" / "id_ed25519"
-    key_path.parent.mkdir()
-    key_path.write_text("stale-snapshot-key")
     manifest = create_manifest(tmp_path)
 
     def handler(_request: httpx.Request) -> httpx.Response:
-        assert not key_path.exists()
-        return httpx.Response(200, json={"enabled": False})
+        return httpx.Response(200, json=ENABLED_CONFIGURATION)
 
     real_client = httpx.AsyncClient
     transport = httpx.MockTransport(handler)
@@ -310,8 +414,8 @@ async def test_initialize_removes_snapshot_restored_key_before_broker_fetch(
         "sandbox_runtime.git_signing.httpx.AsyncClient",
         lambda **kwargs: real_client(transport=transport, **kwargs),
     )
-    runtime = create_runtime(tmp_path, manifest, key_path=key_path)
+    runtime = create_runtime(tmp_path, manifest)
 
     await runtime.initialize(GitUser(name="OpenInspect", email="open-inspect@example.com"))
 
-    assert not key_path.exists()
+    assert not (tmp_path / "runtime").exists()

@@ -17,10 +17,16 @@ export type SandboxCommitSigningConfiguration =
   | { enabled: false }
   | {
       enabled: true;
-      keyFormat: "ssh-ed25519";
-      githubLogin: string;
       committerName: string;
       committerEmail: string;
+      publicKey: string;
+      fingerprint: string;
+    };
+
+export type DecryptedCommitSigningConfiguration =
+  | { enabled: false }
+  | {
+      enabled: true;
       publicKey: string;
       fingerprint: string;
       privateKey: string;
@@ -39,8 +45,11 @@ interface MetadataRow {
 
 interface ConfigurationRow {
   encrypted_private_key: string;
-  key_format: "ssh-ed25519";
-  github_login: string;
+  public_key: string;
+  fingerprint: string;
+}
+
+interface RuntimeConfigurationRow {
   committer_name: string;
   committer_email: string;
   public_key: string;
@@ -117,11 +126,28 @@ export class CommitSigningStore {
     return row ? this.toMetadata(row) : { enabled: false };
   }
 
-  async getDecryptedConfiguration(): Promise<SandboxCommitSigningConfiguration> {
+  async getRuntimeConfiguration(): Promise<SandboxCommitSigningConfiguration> {
     const row = await this.db
       .prepare(
-        `SELECT encrypted_private_key, key_format, github_login, committer_name,
-                committer_email, public_key, fingerprint
+        `SELECT committer_name, committer_email, public_key, fingerprint
+         FROM commit_signing_configuration WHERE singleton_id = 1`
+      )
+      .first<RuntimeConfigurationRow>();
+
+    if (!row) return { enabled: false };
+    return {
+      enabled: true,
+      committerName: row.committer_name,
+      committerEmail: row.committer_email,
+      publicKey: row.public_key,
+      fingerprint: row.fingerprint,
+    };
+  }
+
+  async getDecryptedSigningConfiguration(): Promise<DecryptedCommitSigningConfiguration> {
+    const row = await this.db
+      .prepare(
+        `SELECT encrypted_private_key, public_key, fingerprint
          FROM commit_signing_configuration WHERE singleton_id = 1`
       )
       .first<ConfigurationRow>();
@@ -131,10 +157,6 @@ export class CommitSigningStore {
     const privateKey = await decryptToken(row.encrypted_private_key, this.encryptionKey);
     return {
       enabled: true,
-      keyFormat: row.key_format,
-      githubLogin: row.github_login,
-      committerName: row.committer_name,
-      committerEmail: row.committer_email,
       publicKey: row.public_key,
       fingerprint: row.fingerprint,
       privateKey,

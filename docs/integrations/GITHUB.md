@@ -185,18 +185,27 @@ To configure signing, open **Settings > Integrations > GitHub > Commit signing**
    key**.
 3. Enter the dedicated account login, fixed committer name/email, and private key in the write-only
    form. The committer email must belong to the dedicated account.
-4. Save, then create a commit in a non-critical repository. Confirm the expected author, committer,
-   signature, PR author, and contribution attribution in GitHub before requiring signed commits.
+4. Save, then exercise a normal commit and a history rewrite in a non-critical repository before
+   requiring signed commits.
 
 The private key is encrypted in the control-plane database. The settings page reads back only the
 derived public key, fingerprint, fixed identity, and validation timestamps; it never repopulates the
-private-key field.
+private-key field. Sandboxes receive only the public key and fingerprint. For each commit, a
+stateless Git signer sends the bounded unsigned commit buffer to the authenticated control-plane
+signing endpoint, which decrypts the active key in request-local memory and returns a complete
+`git`-namespace SSH signature. The private key is never delivered to a sandbox file, environment,
+process, or provider snapshot.
+
+The unsigned commit buffer contains Git headers, author/committer identities, and the commit
+message. It does not contain file contents or diffs. Open-Inspect does not interpret, retain, or log
+the buffer and does not maintain a signature ledger.
 
 For rotation, register the replacement public key on GitHub before replacing the private key in
-Open-Inspect. Verify a new commit, then remove the old public key. For suspected compromise, disable
-signing in the web app, remove the public key from GitHub immediately, audit the exposure window,
-and configure a new key. Disabling deletes the active database ciphertext; running sandboxes remove
-local signing state on their next prompt refresh.
+Open-Inspect, then remove the old public key after existing signing requests drain. A request that
+already resolved the old key may complete; later requests for that fingerprint fail and retry after
+the next prompt refresh with the new public key. Disabling deletes the active database ciphertext.
+Requests that resolve configuration afterward fail closed, and running sandboxes remove Git signing
+configuration on their next prompt refresh.
 
 Important limitations:
 
@@ -204,12 +213,14 @@ Important limitations:
   committer are intentionally different.
 - GitHub-created merge or squash commits follow the repository's merge-signing behavior; the
   signature on the branch commit does not automatically carry onto a newly created merge commit.
-- Provider filesystem snapshots may retain historical copies of a runtime key under the existing
-  provider access controls. A signing-aware runtime removes its known key path before fetching the
-  current configuration at boot, but this does not purge old snapshots.
+- Commit creation and history rewrites require the control plane to be available. Rewriting multiple
+  commits performs one signing round trip per recreated commit, with no unsigned fallback.
+- Any process in a live sandbox that can use its session token can ask the control plane to sign an
+  arbitrary bounded commit buffer. Remote signing prevents reusable-key extraction; it does not make
+  the sandbox trustworthy or add commit-policy enforcement.
 - After deploying the first signing-capable runtime, drain or recreate sessions restored from older
-  runtime snapshots before configuring a key. Repeat the runtime qualification if the deployment
-  changes sandbox provider.
+  runtime snapshots that do not contain the stateless signer wrapper before configuring a key.
+  Repeat the focused runtime qualification if the deployment changes sandbox provider.
 
 ---
 

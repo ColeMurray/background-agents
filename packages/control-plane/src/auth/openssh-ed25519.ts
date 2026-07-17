@@ -1,5 +1,7 @@
 import { MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH } from "@open-inspect/shared";
 
+import { createArmoredGitSshSig, createGitSshSigSignedData } from "./sshsig";
+
 const OPENSSH_MAGIC = new TextEncoder().encode("openssh-key-v1\0");
 const ED25519_KEY_TYPE = "ssh-ed25519";
 const ED25519_PUBLIC_KEY_BYTES = 32;
@@ -14,6 +16,16 @@ export interface ValidatedOpenSshEd25519Key {
   keyFormat: "ssh-ed25519";
   publicKey: string;
   fingerprint: string;
+}
+
+export interface OpenSshEd25519GitSignature extends ValidatedOpenSshEd25519Key {
+  armoredSignature: string;
+}
+
+interface ParsedOpenSshEd25519Key {
+  publicKeyBlob: Uint8Array;
+  publicKey: Uint8Array;
+  seed: Uint8Array;
 }
 
 export class OpenSshKeyValidationError extends Error {
@@ -150,19 +162,16 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-async function verifyKeyPair(seed: Uint8Array, publicKey: Uint8Array): Promise<void> {
+async function importPrivateCryptoKey(seed: Uint8Array): Promise<CryptoKey> {
   const pkcs8 = new Uint8Array(ED25519_PKCS8_PREFIX.length + seed.length);
   pkcs8.set(ED25519_PKCS8_PREFIX);
   pkcs8.set(seed, ED25519_PKCS8_PREFIX.length);
+  return crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+}
 
+async function verifyKeyPair(seed: Uint8Array, publicKey: Uint8Array): Promise<void> {
   try {
-    const privateCryptoKey = await crypto.subtle.importKey(
-      "pkcs8",
-      pkcs8,
-      { name: "Ed25519" },
-      false,
-      ["sign"]
-    );
+    const privateCryptoKey = await importPrivateCryptoKey(seed);
     const publicCryptoKey = await crypto.subtle.importKey(
       "raw",
       publicKey,
@@ -179,9 +188,7 @@ async function verifyKeyPair(seed: Uint8Array, publicKey: Uint8Array): Promise<v
   }
 }
 
-export async function validateOpenSshEd25519PrivateKey(
-  privateKey: string
-): Promise<ValidatedOpenSshEd25519Key> {
+function parseOpenSshEd25519PrivateKey(privateKey: string): ParsedOpenSshEd25519Key {
   if (new TextEncoder().encode(privateKey).length > MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH) {
     throw new OpenSshKeyValidationError(
       `Signing key exceeds ${MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH} bytes`
@@ -211,12 +218,38 @@ export async function validateOpenSshEd25519PrivateKey(
   if (!equalBytes(innerKey.publicKey, outerPublicKey)) {
     throw new OpenSshKeyValidationError("Inconsistent Ed25519 key material");
   }
-  await verifyKeyPair(innerKey.seed, outerPublicKey);
+  return { publicKeyBlob, publicKey: outerPublicKey, seed: innerKey.seed };
+}
 
+async function describeKey(publicKeyBlob: Uint8Array): Promise<ValidatedOpenSshEd25519Key> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", publicKeyBlob));
   return {
     keyFormat: ED25519_KEY_TYPE,
     publicKey: `${ED25519_KEY_TYPE} ${bytesToBase64(publicKeyBlob)}`,
     fingerprint: `SHA256:${bytesToBase64(digest).replace(/=+$/, "")}`,
+  };
+}
+
+export async function validateOpenSshEd25519PrivateKey(
+  privateKey: string
+): Promise<ValidatedOpenSshEd25519Key> {
+  const parsed = parseOpenSshEd25519PrivateKey(privateKey);
+  await verifyKeyPair(parsed.seed, parsed.publicKey);
+  return describeKey(parsed.publicKeyBlob);
+}
+
+export async function signGitPayloadWithOpenSshEd25519PrivateKey(
+  privateKey: string,
+  payload: Uint8Array
+): Promise<OpenSshEd25519GitSignature> {
+  const parsed = parseOpenSshEd25519PrivateKey(privateKey);
+  const privateCryptoKey = await importPrivateCryptoKey(parsed.seed);
+  const signedData = await createGitSshSigSignedData(payload);
+  const rawSignature = new Uint8Array(
+    await crypto.subtle.sign("Ed25519", privateCryptoKey, signedData)
+  );
+  return {
+    ...(await describeKey(parsed.publicKeyBlob)),
+    armoredSignature: createArmoredGitSshSig(parsed.publicKeyBlob, rawSignature),
   };
 }

@@ -2,9 +2,7 @@
 
 import asyncio
 import contextlib
-import os
 import re
-import tempfile
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -16,7 +14,7 @@ from .constants import REPO_MANIFEST_FILE_PATH
 from .repo_config import RepoConfigError, read_repo_manifest
 from .types import GitUser
 
-DEFAULT_SIGNING_KEY_PATH = Path("/run/oi/commit-signing/id_ed25519")
+DEFAULT_GIT_SIGNER_PATH = Path("/usr/local/bin/oi-git-sign")
 GIT_CONFIG_TIMEOUT_SECONDS = 10.0
 SIGNING_CONFIG_FETCH_TIMEOUT_SECONDS = 30.0
 SIGNING_CONFIG_KEYS = (
@@ -25,6 +23,7 @@ SIGNING_CONFIG_KEYS = (
     "committer.name",
     "committer.email",
     "gpg.format",
+    "gpg.ssh.program",
     "user.signingkey",
     "commit.gpgsign",
 )
@@ -45,27 +44,15 @@ class EnabledCommitSigningConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     enabled: Literal[True]
-    keyFormat: Literal["ssh-ed25519"]
-    githubLogin: str = Field(min_length=1, max_length=39)
     committerName: str = Field(min_length=1, max_length=256)
     committerEmail: str = Field(min_length=3, max_length=320)
     publicKey: str = Field(min_length=1)
     fingerprint: str = Field(min_length=1)
-    privateKey: str = Field(min_length=1, max_length=16_384)
 
     @classmethod
     def _non_blank(cls, value: str, field_name: str) -> str:
         if not value.strip():
             raise ValueError(f"{field_name} must not be blank")
-        return value
-
-    @field_validator("githubLogin")
-    @classmethod
-    def validate_github_login(cls, value: str) -> str:
-        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", value):
-            raise ValueError("invalid GitHub login")
-        if "--" in value:
-            raise ValueError("invalid GitHub login")
         return value
 
     @field_validator("committerName")
@@ -94,17 +81,6 @@ class EnabledCommitSigningConfiguration(BaseModel):
             raise ValueError("invalid SHA256 fingerprint")
         return value
 
-    @field_validator("privateKey")
-    @classmethod
-    def validate_private_key(cls, value: str) -> str:
-        normalized = value.replace("\r\n", "\n").strip()
-        if not (
-            normalized.startswith("-----BEGIN OPENSSH PRIVATE KEY-----\n")
-            and normalized.endswith("\n-----END OPENSSH PRIVATE KEY-----")
-        ):
-            raise ValueError("invalid OpenSSH private key")
-        return value
-
 
 CommitSigningConfiguration = Annotated[
     DisabledCommitSigningConfiguration | EnabledCommitSigningConfiguration,
@@ -130,20 +106,21 @@ class GitSigningRuntime:
         session_id: str,
         auth_token: str,
         repo_manifest_path: str | Path = REPO_MANIFEST_FILE_PATH,
-        key_path: str | Path = DEFAULT_SIGNING_KEY_PATH,
+        signer_path: str | Path = DEFAULT_GIT_SIGNER_PATH,
         log: Any | None = None,
     ) -> None:
         self.control_plane_url = control_plane_url.rstrip("/")
         self.session_id = session_id
         self.auth_token = auth_token
         self.repo_manifest_path = Path(repo_manifest_path)
-        self.key_path = Path(key_path)
+        self.signer_path = Path(signer_path)
         self.log = log
         self._installed_signing_revision: tuple[str, ...] | None = None
         self._installed_repository_paths: tuple[Path, ...] = ()
 
     async def initialize(self, author: GitUser | None) -> None:
-        self.cleanup_before_boot()
+        self._installed_signing_revision = None
+        self._installed_repository_paths = ()
         await self.refresh(author)
 
     async def refresh(self, author: GitUser | None) -> None:
@@ -198,7 +175,6 @@ class GitSigningRuntime:
 
         if isinstance(configuration, DisabledCommitSigningConfiguration):
             effective_author = author or UNSIGNED_GIT_USER
-            self._remove_key_file()
             if signing_state_changed:
                 for repository in repositories:
                     await self._remove_signing_git_config(repository.path)
@@ -213,13 +189,12 @@ class GitSigningRuntime:
             name=configuration.committerName,
             email=configuration.committerEmail,
         )
-        if signing_state_changed:
-            self._write_private_key(configuration.privateKey)
         signing_values = (
             ("committer.name", configuration.committerName),
             ("committer.email", configuration.committerEmail),
             ("gpg.format", "ssh"),
-            ("user.signingkey", str(self.key_path)),
+            ("gpg.ssh.program", str(self.signer_path)),
+            ("user.signingkey", f"key::{configuration.publicKey}"),
             ("commit.gpgsign", "true"),
         )
         author_values = (
@@ -247,8 +222,6 @@ class GitSigningRuntime:
             return ("disabled",)
         return (
             "enabled",
-            configuration.keyFormat,
-            configuration.githubLogin,
             configuration.committerName,
             configuration.committerEmail,
             configuration.publicKey,
@@ -262,38 +235,6 @@ class GitSigningRuntime:
     ) -> None:
         self._installed_signing_revision = signing_revision
         self._installed_repository_paths = repository_paths
-
-    def _remove_key_file(self) -> None:
-        with contextlib.suppress(FileNotFoundError):
-            self.key_path.unlink()
-
-    def _write_private_key(self, private_key: str) -> None:
-        self.key_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.key_path.parent.chmod(0o700)
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=self.key_path.parent,
-                prefix=".commit-signing-",
-                delete=False,
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
-                temporary_path.chmod(0o600)
-                temporary_file.write(private_key)
-                if not private_key.endswith("\n"):
-                    temporary_file.write("\n")
-                temporary_file.flush()
-                os.fsync(temporary_file.fileno())
-            temporary_path.replace(self.key_path)
-            self.key_path.chmod(0o600)
-        except OSError:
-            raise GitSigningError("Unable to install commit signing key") from None
-        finally:
-            if temporary_path is not None:
-                with contextlib.suppress(FileNotFoundError):
-                    temporary_path.unlink()
 
     async def _remove_signing_git_config(self, repository: Path) -> None:
         for key in SIGNING_CONFIG_KEYS:
@@ -331,14 +272,6 @@ class GitSigningRuntime:
         if process.returncode == 0 or (allow_missing and process.returncode in {1, 5}):
             return
         raise GitSigningError("Git signing configuration failed")
-
-    def cleanup_before_boot(self) -> None:
-        """Remove known snapshot-restored key material before any broker fetch."""
-        self._remove_key_file()
-        self._installed_signing_revision = None
-        self._installed_repository_paths = ()
-        with contextlib.suppress(OSError):
-            self.key_path.parent.chmod(0o700)
 
     def _log_applied(self, *, enabled: bool, mode: str, fingerprint: str | None = None) -> None:
         if self.log is None:

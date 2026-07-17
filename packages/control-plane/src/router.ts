@@ -85,7 +85,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
 
 /** Routes that require the session-specific sandbox token and reject internal HMAC auth. */
 const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
-  /^\/sessions\/[^/]+\/commit-signing$/, // Decrypted commit signing configuration broker
+  /^\/sessions\/[^/]+\/commit-signing$/, // Public signing configuration and remote signer
 ];
 
 type CachedScmProvider =
