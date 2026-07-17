@@ -138,6 +138,8 @@ class GitSigningRuntime:
         self.repo_manifest_path = Path(repo_manifest_path)
         self.key_path = Path(key_path)
         self.log = log
+        self._installed_signing_revision: tuple[str, ...] | None = None
+        self._installed_repository_paths: tuple[Path, ...] = ()
 
     async def initialize(self, author: GitUser | None) -> None:
         self.cleanup_before_boot()
@@ -186,13 +188,23 @@ class GitSigningRuntime:
             repositories = read_repo_manifest(self.repo_manifest_path)
         except RepoConfigError:
             raise GitSigningError("Invalid repository manifest") from None
+        repository_paths = tuple(repository.path for repository in repositories)
+        signing_revision = self._signing_revision(configuration)
+        signing_state_changed = (
+            signing_revision != self._installed_signing_revision
+            or repository_paths != self._installed_repository_paths
+        )
+
         if isinstance(configuration, DisabledCommitSigningConfiguration):
             effective_author = author or UNSIGNED_GIT_USER
             self._remove_key_file()
+            if signing_state_changed:
+                for repository in repositories:
+                    await self._remove_signing_git_config(repository.path)
             for repository in repositories:
-                await self._remove_signing_git_config(repository.path)
                 await self._set_git_config(repository.path, "user.name", effective_author.name)
                 await self._set_git_config(repository.path, "user.email", effective_author.email)
+            self._record_installed_state(signing_revision, repository_paths)
             self._log_applied(enabled=False, mode="unsigned")
             return
 
@@ -200,26 +212,55 @@ class GitSigningRuntime:
             name=configuration.committerName,
             email=configuration.committerEmail,
         )
-        self._write_private_key(configuration.privateKey)
-        values = (
-            ("author.name", effective_author.name),
-            ("author.email", effective_author.email),
+        if signing_state_changed:
+            self._write_private_key(configuration.privateKey)
+        signing_values = (
             ("committer.name", configuration.committerName),
             ("committer.email", configuration.committerEmail),
-            ("user.name", effective_author.name),
-            ("user.email", effective_author.email),
             ("gpg.format", "ssh"),
             ("user.signingkey", str(self.key_path)),
             ("commit.gpgsign", "true"),
         )
+        author_values = (
+            ("author.name", effective_author.name),
+            ("author.email", effective_author.email),
+            ("user.name", effective_author.name),
+            ("user.email", effective_author.email),
+        )
         for repository in repositories:
-            for key, value in values:
+            if signing_state_changed:
+                for key, value in signing_values:
+                    await self._set_git_config(repository.path, key, value)
+            for key, value in author_values:
                 await self._set_git_config(repository.path, key, value)
+        self._record_installed_state(signing_revision, repository_paths)
         self._log_applied(
             enabled=True,
             mode="attributed-user" if author is not None else "agent-only",
             fingerprint=configuration.fingerprint,
         )
+
+    @staticmethod
+    def _signing_revision(configuration: CommitSigningConfiguration) -> tuple[str, ...]:
+        if isinstance(configuration, DisabledCommitSigningConfiguration):
+            return ("disabled",)
+        return (
+            "enabled",
+            configuration.keyFormat,
+            configuration.githubLogin,
+            configuration.committerName,
+            configuration.committerEmail,
+            configuration.publicKey,
+            configuration.fingerprint,
+        )
+
+    def _record_installed_state(
+        self,
+        signing_revision: tuple[str, ...],
+        repository_paths: tuple[Path, ...],
+    ) -> None:
+        self._installed_signing_revision = signing_revision
+        self._installed_repository_paths = repository_paths
 
     def _remove_key_file(self) -> None:
         with contextlib.suppress(FileNotFoundError):
@@ -293,6 +334,8 @@ class GitSigningRuntime:
     def cleanup_before_boot(self) -> None:
         """Remove known snapshot-restored key material before any broker fetch."""
         self._remove_key_file()
+        self._installed_signing_revision = None
+        self._installed_repository_paths = ()
         with contextlib.suppress(OSError):
             self.key_path.parent.chmod(0o700)
 

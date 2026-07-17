@@ -1,5 +1,5 @@
 import subprocess
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -197,7 +197,7 @@ async def test_enabled_configuration_applies_to_every_manifest_repository(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_participant_change_updates_only_author_identity(tmp_path):
+async def test_participant_change_updates_only_author_identity(tmp_path, monkeypatch):
     repo = create_repository(tmp_path / "repo")
     manifest = create_manifest(tmp_path, [repo])
     key_path = tmp_path / "runtime" / "id_ed25519"
@@ -206,11 +206,20 @@ async def test_participant_change_updates_only_author_identity(tmp_path):
         ENABLED_CONFIGURATION, GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com")
     )
     installed_key = key_path.read_text()
+    installed_key_inode = key_path.stat().st_ino
+    set_git_config = AsyncMock(side_effect=runtime._set_git_config)
+    monkeypatch.setattr(runtime, "_set_git_config", set_git_config)
 
     await runtime.apply_configuration(
         ENABLED_CONFIGURATION, GitUser(name="Ada Dev", email="456+ada@users.noreply.github.com")
     )
 
+    assert [call.args[1] for call in set_git_config.await_args_list] == [
+        "author.name",
+        "author.email",
+        "user.name",
+        "user.email",
+    ]
     assert git(repo, "config", "author.name").stdout.strip() == "Ada Dev"
     assert git(repo, "config", "author.email").stdout.strip() == (
         "456+ada@users.noreply.github.com"
@@ -218,6 +227,7 @@ async def test_participant_change_updates_only_author_identity(tmp_path):
     assert git(repo, "config", "committer.name").stdout.strip() == "Open Inspect"
     assert git(repo, "config", "committer.email").stdout.strip() == ("open-inspect@example.com")
     assert key_path.read_text() == installed_key
+    assert key_path.stat().st_ino == installed_key_inode
 
 
 @pytest.mark.asyncio
