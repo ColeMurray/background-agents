@@ -439,6 +439,7 @@ export class SessionRepository {
 
   setSessionDiffBaselines(
     repositories: Array<{
+      position: number;
       repoOwner: string;
       repoName: string;
       baseSha: string;
@@ -449,10 +450,9 @@ export class SessionRepository {
       this.sql.exec(
         `UPDATE session_repositories
          SET base_sha = ?
-         WHERE lower(repo_owner) = lower(?) AND lower(repo_name) = lower(?)`,
+         WHERE position = ?`,
         repository.baseSha,
-        repository.repoOwner,
-        repository.repoName
+        repository.position
       );
       if (repository.isPrimary) {
         this.sql.exec(`UPDATE session SET base_sha = ?`, repository.baseSha);

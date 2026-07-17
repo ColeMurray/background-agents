@@ -76,6 +76,7 @@ export class SessionDiffService {
       if (validMembership) {
         this.deps.repository.setSessionDiffBaselines(
           members.map((member, position) => ({
+            position: member.position,
             repoOwner: member.repoOwner,
             repoName: member.repoName,
             baseSha: advertised[position]!.baseSha,

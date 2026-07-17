@@ -299,6 +299,34 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("setSessionDiffBaselines", () => {
+    it("updates each validated repository position independently", () => {
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(mock.calls[0].query).toContain("WHERE position = ?");
+      expect(mock.calls[0].params).toEqual(["a".repeat(40), 0]);
+      expect(mock.calls[1].query).toContain("UPDATE session SET base_sha");
+      expect(mock.calls[1].params).toEqual(["a".repeat(40)]);
+      expect(mock.calls[2].query).toContain("WHERE position = ?");
+      expect(mock.calls[2].params).toEqual(["b".repeat(40), 1]);
+    });
+  });
+
   // === SANDBOX ===
 
   describe("getSandbox", () => {
