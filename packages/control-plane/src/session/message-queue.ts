@@ -62,8 +62,8 @@ interface MessageQueueDeps {
   setSessionStatus: (status: SessionStatus) => Promise<void>;
   reconcileSessionStatusAfterExecution: (success: boolean) => Promise<void>;
   scheduleExecutionTimeout?: (startedAtMs: number) => Promise<void>;
-  getDispatchBlockReason?: () => string | null;
-  beginDiffCapture?: (triggerMessageId: string) => Promise<void>;
+  getDispatchBlockReason: () => string | null;
+  beginDiffCapture: (triggerMessageId: string) => Promise<void>;
 }
 
 interface StopExecutionOptions {
@@ -175,7 +175,7 @@ export class SessionMessageQueue {
       return;
     }
 
-    const dispatchBlockReason = this.deps.getDispatchBlockReason?.();
+    const dispatchBlockReason = this.deps.getDispatchBlockReason();
     if (dispatchBlockReason) {
       this.deps.log.info("prompt.dispatch", {
         event: "prompt.dispatch",
@@ -288,7 +288,7 @@ export class SessionMessageQueue {
         this.deps.callbackService.notifyComplete(processingMessage.id, false, stopError)
       );
 
-      await this.deps.beginDiffCapture?.(processingMessage.id);
+      await this.deps.beginDiffCapture(processingMessage.id);
       if (!options.suppressStatusReconcile) {
         await this.deps.reconcileSessionStatusAfterExecution(false);
       }
@@ -326,7 +326,7 @@ export class SessionMessageQueue {
     this.deps.ctx.waitUntil(
       this.deps.callbackService.notifyComplete(processingMessage.id, false, stuckError)
     );
-    await this.deps.beginDiffCapture?.(processingMessage.id);
+    await this.deps.beginDiffCapture(processingMessage.id);
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
 
