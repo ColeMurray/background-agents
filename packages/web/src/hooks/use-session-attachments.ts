@@ -46,7 +46,10 @@ export function useSessionAttachments() {
   const uploadedByIdRef = useRef(
     new Map<string, { sessionId: string; attachment: SessionAttachmentReference }>()
   );
-  attachmentsRef.current = attachments;
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
 
   // Revoke preview URLs on unmount only — removals revoke their own URL.
   useEffect(() => {

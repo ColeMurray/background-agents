@@ -57,7 +57,9 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
       <div className="h-full flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Automation not found.</p>
         <Link href="/automations">
-          <button className="text-sm text-accent hover:underline">Back to Automations</button>
+          <button type="button" className="text-sm text-accent hover:underline">
+            Back to Automations
+          </button>
         </Link>
       </div>
     );

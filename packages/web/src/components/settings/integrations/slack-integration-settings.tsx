@@ -623,7 +623,8 @@ function RoutingRulesSection({
   };
 
   const addRule = () => {
-    setRules((prev) => [...prev, { id: draftRoutingRuleIdCounter++, keyword: "", target: "" }]);
+    const id = draftRoutingRuleIdCounter++;
+    setRules((prev) => [...prev, { id, keyword: "", target: "" }]);
     setDirty(true);
   };
 
