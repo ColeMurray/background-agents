@@ -74,6 +74,7 @@ function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
 
   return (
     <button
+      type="button"
       onClick={handleSync}
       disabled={syncing}
       className="p-1 hover:bg-muted transition-colors"
