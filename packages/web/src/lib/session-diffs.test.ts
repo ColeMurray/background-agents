@@ -124,6 +124,19 @@ describe("session diff view model", () => {
     ).toMatchObject({ kind: "ready", showManifest: true });
   });
 
+  it("prioritizes active execution over a previous failed capture", () => {
+    const state = diffState(manifest);
+    expect(
+      deriveSessionDiffView({
+        ...input({
+          ...state,
+          attempt: { id: "capture-3", status: "failed", startedAt: 300, error: "timed out" },
+        }),
+        isProcessing: true,
+      })
+    ).toMatchObject({ kind: "working", showManifest: true, canRetry: false });
+  });
+
   it("distinguishes a successful empty capture from unavailable changes", () => {
     expect(
       deriveSessionDiffView(input(diffState({ ...manifest, repositories: [] })))

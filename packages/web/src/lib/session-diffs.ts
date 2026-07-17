@@ -64,6 +64,7 @@ export function deriveSessionDiffView(input: {
   if (state.attempt.status === "capturing") {
     return { kind: "capturing", showManifest, canRetry: false };
   }
+  if (input.isProcessing) return { kind: "working", showManifest, canRetry: false };
   if (state.attempt.status === "failed") {
     return {
       kind: "failed",
@@ -72,7 +73,6 @@ export function deriveSessionDiffView(input: {
       message: state.attempt.error ?? "Changes refresh failed.",
     };
   }
-  if (input.isProcessing) return { kind: "working", showManifest, canRetry: false };
   if (!state.current) return { kind: "available_after_execution", ...base };
   const hasFiles = state.current.repositories.some((repository) => repository.files.length > 0);
   return { kind: hasFiles ? "ready" : "empty", showManifest: true, canRetry: false };
