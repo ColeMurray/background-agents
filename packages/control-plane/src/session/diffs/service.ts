@@ -15,6 +15,8 @@ import type { SessionRepository } from "../repository";
 import type { SessionAlarmCoordinator } from "../alarm/coordinator";
 import type { SessionDiffStore } from "./store";
 
+export const SESSION_DIFF_OBJECT_DELETE_CONCURRENCY = 8;
+
 interface TransactionStorage {
   transactionSync<T>(closure: () => T): T;
 }
@@ -350,17 +352,26 @@ export class SessionDiffService {
   }
 
   private async deleteObjects(objectKeys: string[]): Promise<void> {
-    for (const objectKey of objectKeys) {
-      try {
-        await this.deps.deleteObject(objectKey);
-        this.deps.store.forgetObject(objectKey);
-      } catch (error) {
-        this.deps.store.deferObjectCleanup(objectKey, this.deps.now());
-        this.deps.log.warn("session_diff.cleanup_failed", {
-          object_key: objectKey,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    for (
+      let start = 0;
+      start < objectKeys.length;
+      start += SESSION_DIFF_OBJECT_DELETE_CONCURRENCY
+    ) {
+      const batch = objectKeys.slice(start, start + SESSION_DIFF_OBJECT_DELETE_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (objectKey) => {
+          try {
+            await this.deps.deleteObject(objectKey);
+            this.deps.store.forgetObject(objectKey);
+          } catch (error) {
+            this.deps.store.deferObjectCleanup(objectKey, this.deps.now());
+            this.deps.log.warn("session_diff.cleanup_failed", {
+              object_key: objectKey,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })
+      );
     }
   }
 
