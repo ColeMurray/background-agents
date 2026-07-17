@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { SqlResult, SqlStorage } from "../sql-storage";
 import { SessionAlarmCoordinator } from "./coordinator";
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function harness() {
   const deadlines = new Map<string, number>();
   const sql: SqlStorage = {
@@ -46,6 +54,49 @@ describe("SessionAlarmCoordinator", () => {
     await second.coordinator.schedule("diff_capture", 200);
     await second.coordinator.schedule("lifecycle", 500);
     expect(second.storage.setAlarm).toHaveBeenLastCalledWith(200);
+  });
+
+  it("serializes concurrent deadline mutations through alarm storage", async () => {
+    const { coordinator, storage } = harness();
+    const firstWrite = deferred();
+    const secondWrite = deferred();
+    storage.setAlarm
+      .mockImplementationOnce(async () => firstWrite.promise)
+      .mockImplementationOnce(async () => secondWrite.promise);
+
+    const laterDeadline = coordinator.schedule("lifecycle", 500);
+    await vi.waitFor(() => expect(storage.setAlarm).toHaveBeenCalledTimes(1));
+
+    const earlierDeadline = coordinator.schedule("diff_capture", 200);
+    await Promise.resolve();
+    expect(storage.setAlarm).toHaveBeenCalledTimes(1);
+
+    firstWrite.resolve();
+    await vi.waitFor(() => expect(storage.setAlarm).toHaveBeenCalledTimes(2));
+    secondWrite.resolve();
+    await Promise.all([laterDeadline, earlierDeadline]);
+
+    expect(storage.setAlarm.mock.calls).toEqual([[500], [200]]);
+  });
+
+  it("does not clear an alarm while a preceding schedule is still being written", async () => {
+    const { coordinator, storage } = harness();
+    const scheduleWrite = deferred();
+    const clearWrite = deferred();
+    storage.setAlarm.mockImplementationOnce(async () => scheduleWrite.promise);
+    storage.deleteAlarm.mockImplementationOnce(async () => clearWrite.promise);
+
+    const schedule = coordinator.schedule("lifecycle", 500);
+    await vi.waitFor(() => expect(storage.setAlarm).toHaveBeenCalledTimes(1));
+
+    const clear = coordinator.clear("lifecycle");
+    await Promise.resolve();
+    expect(storage.deleteAlarm).not.toHaveBeenCalled();
+
+    scheduleWrite.resolve();
+    await vi.waitFor(() => expect(storage.deleteAlarm).toHaveBeenCalledTimes(1));
+    clearWrite.resolve();
+    await Promise.all([schedule, clear]);
   });
 
   it("restores the next concern when an earlier deadline is cleared", async () => {

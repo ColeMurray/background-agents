@@ -14,25 +14,31 @@ export interface SessionAlarmTask {
 
 /** Persists independent deadlines and maps their minimum to the one DO alarm. */
 export class SessionAlarmCoordinator {
+  private alarmOperation: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly sql: SqlStorage,
     private readonly storage: AlarmStorage
   ) {}
 
   async schedule(concern: SessionAlarmConcern, deadline: number): Promise<void> {
-    this.sql.exec(
-      `INSERT INTO session_alarm_deadlines (name, deadline)
-       VALUES (?, ?)
-       ON CONFLICT(name) DO UPDATE SET deadline = excluded.deadline`,
-      concern,
-      deadline
-    );
-    await this.rearm();
+    await this.enqueueAlarmOperation(async () => {
+      this.sql.exec(
+        `INSERT INTO session_alarm_deadlines (name, deadline)
+         VALUES (?, ?)
+         ON CONFLICT(name) DO UPDATE SET deadline = excluded.deadline`,
+        concern,
+        deadline
+      );
+      await this.rearmNow();
+    });
   }
 
   async clear(concern: SessionAlarmConcern): Promise<void> {
-    this.sql.exec(`DELETE FROM session_alarm_deadlines WHERE name = ?`, concern);
-    await this.rearm();
+    await this.enqueueAlarmOperation(async () => {
+      this.sql.exec(`DELETE FROM session_alarm_deadlines WHERE name = ?`, concern);
+      await this.rearmNow();
+    });
   }
 
   clearDue(now: number): void {
@@ -66,6 +72,16 @@ export class SessionAlarmCoordinator {
   }
 
   async rearm(): Promise<void> {
+    await this.enqueueAlarmOperation(() => this.rearmNow());
+  }
+
+  private enqueueAlarmOperation(operation: () => Promise<void>): Promise<void> {
+    const result = this.alarmOperation.then(operation, operation);
+    this.alarmOperation = result.catch(() => undefined);
+    return result;
+  }
+
+  private async rearmNow(): Promise<void> {
     const rows = this.sql
       .exec(`SELECT MIN(deadline) AS deadline FROM session_alarm_deadlines`)
       .toArray() as Array<{ deadline: number | null }>;
