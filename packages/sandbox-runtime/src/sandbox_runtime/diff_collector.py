@@ -15,6 +15,8 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypedDict
 
+from .git_excludes import is_runtime_git_excluded, read_runtime_git_excludes
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -484,10 +486,11 @@ async def collect_repository_diff(
         )
     except _GitOutputTooLarge as error:
         raise DiffCaptureError("Repository change metadata exceeded its memory limit") from error
+    runtime_paths = read_runtime_git_excludes(repository.path)
     untracked = [
         _ChangedPath(status="added", path=_decode_path(path))
         for path in untracked_raw.split(b"\0")
-        if path
+        if path and not is_runtime_git_excluded(_decode_path(path), runtime_paths)
     ]
     untracked_paths = {change.path for change in untracked}
     overlay_paths = {

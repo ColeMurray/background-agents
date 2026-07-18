@@ -40,6 +40,44 @@ def _rooted_pattern(path: str) -> str:
     return f"/{normalized}{'/' if trailing_slash else ''}"
 
 
+def _managed_runtime_paths(contents: str) -> frozenset[str]:
+    lines = contents.splitlines()
+    try:
+        start = lines.index(BEGIN_MARKER)
+        end = lines.index(END_MARKER, start + 1)
+    except ValueError:
+        return frozenset()
+
+    paths: set[str] = set()
+    for pattern in lines[start + 1 : end]:
+        if not pattern.startswith("/"):
+            continue
+        path = pattern[1:]
+        try:
+            if _rooted_pattern(path) == pattern:
+                paths.add(path)
+        except ValueError:
+            continue
+    return frozenset(paths)
+
+
+def read_runtime_git_excludes(repository: Path) -> frozenset[str]:
+    """Read the exact runtime-owned paths recorded in the managed exclude block."""
+    try:
+        return _managed_runtime_paths(_git_exclude_path(repository).read_text())
+    except FileNotFoundError:
+        return frozenset()
+
+
+def is_runtime_git_excluded(path: str, runtime_paths: frozenset[str]) -> bool:
+    """Return whether a repository-relative path is covered by runtime ownership."""
+    return any(
+        path == runtime_path.rstrip("/")
+        or (runtime_path.endswith("/") and path.startswith(runtime_path))
+        for runtime_path in runtime_paths
+    )
+
+
 def install_runtime_git_excludes(repository: Path, runtime_paths: Iterable[str]) -> None:
     """Replace our managed ``info/exclude`` block without touching user entries."""
     patterns = sorted({_rooted_pattern(path) for path in runtime_paths})
