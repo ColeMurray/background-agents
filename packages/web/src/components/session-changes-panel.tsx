@@ -5,6 +5,7 @@ import { useTheme } from "next-themes";
 import { mutate } from "swr";
 import useSWR from "swr";
 import { useEffect, useRef } from "react";
+import { formatRepositoryFullName } from "@open-inspect/shared";
 import type { SessionDiffFile, SessionDiffState } from "@open-inspect/shared";
 import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-diff-preferences";
 import { sessionDiffKey } from "@/hooks/use-session-diffs";
@@ -93,9 +94,7 @@ function ChangesPanelHeader({
     <div className="flex min-h-14 items-center gap-2 border-b border-border-muted px-3">
       <div className="min-w-0 flex-1">
         <p className="truncate text-xs font-medium text-muted-foreground">
-          {selected
-            ? `${selected.repository.repoOwner}/${selected.repository.repoName}`
-            : "Changes"}
+          {selected ? formatRepositoryFullName(selected.repository) : "Changes"}
         </p>
         <h2 className="truncate text-sm font-medium" title={selected?.file.path}>
           {selected?.file.path ?? "File no longer changed"}

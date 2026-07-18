@@ -1,11 +1,13 @@
 "use client";
 
 import { useSessionDiffRetry } from "@/hooks/use-session-diffs";
+import { cn } from "@/lib/utils";
 
 /**
- * Diff refresh failure notice with a retry action. The "banner" variant renders
- * a full-width strip for the changes panel; the "inline" variant fits inside a
- * sidebar section.
+ * Diff refresh failure notice with a retry action. One render tree for both
+ * contexts: "banner" lays out as a full-width strip for the changes panel,
+ * "inline" as a stacked block inside a sidebar section — the variant only
+ * selects layout classes.
  */
 export function DiffRetryNotice({
   sessionId,
@@ -17,49 +19,40 @@ export function DiffRetryNotice({
   variant: "banner" | "inline";
 }) {
   const { retry, isRetrying, retryError } = useSessionDiffRetry(sessionId);
-  const retryLabel = isRetrying ? "Retrying…" : "Retry";
-
-  if (variant === "banner") {
-    return (
-      <>
-        <div className="flex items-center gap-2 border-b border-destructive-border bg-destructive-muted px-3 py-2 text-xs text-destructive">
-          <span className="min-w-0 flex-1 truncate">{message}</span>
-          <button
-            type="button"
-            onClick={() => void retry()}
-            disabled={isRetrying}
-            className="font-medium underline underline-offset-2"
-          >
-            {retryLabel}
-          </button>
-        </div>
-        {retryError && (
-          <p
-            role="alert"
-            className="border-b border-destructive-border px-3 py-2 text-xs text-destructive"
-          >
-            {retryError}
-          </p>
-        )}
-      </>
-    );
-  }
+  const banner = variant === "banner";
 
   return (
     <>
-      <div className="space-y-1.5">
-        <p className="text-xs text-destructive">{message}</p>
+      <div
+        className={
+          banner
+            ? "flex items-center gap-2 border-b border-destructive-border bg-destructive-muted px-3 py-2"
+            : "space-y-1.5"
+        }
+      >
+        <p className={cn("text-xs text-destructive", banner && "min-w-0 flex-1 truncate")}>
+          {message}
+        </p>
         <button
           type="button"
           onClick={() => void retry()}
           disabled={isRetrying}
-          className="text-xs font-medium text-accent underline underline-offset-2 disabled:opacity-50"
+          className={cn(
+            "text-xs font-medium underline underline-offset-2 disabled:opacity-50",
+            !banner && "text-accent"
+          )}
         >
-          {retryLabel}
+          {isRetrying ? "Retrying…" : "Retry"}
         </button>
       </div>
       {retryError && (
-        <p role="alert" className="mt-1.5 text-xs text-destructive">
+        <p
+          role="alert"
+          className={cn(
+            "text-xs text-destructive",
+            banner ? "border-b border-destructive-border px-3 py-2" : "mt-1.5"
+          )}
+        >
           {retryError}
         </p>
       )}

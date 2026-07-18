@@ -34,15 +34,19 @@ export function useDiffFileNavigation({
       ) ?? [],
     [manifest]
   );
+  // Depend on the selection's primitives: callers build the selection object
+  // inline per render, which would otherwise defeat this memo.
+  const selectedPosition = selection?.repositoryPosition;
+  const selectedPath = selection?.path;
   const selectedIndex = useMemo(
     () =>
-      selection
-        ? files.findIndex(
+      selectedPosition === undefined || selectedPath === undefined
+        ? -1
+        : files.findIndex(
             ({ repository, file }) =>
-              repository.position === selection.repositoryPosition && file.path === selection.path
-          )
-        : -1,
-    [files, selection]
+              repository.position === selectedPosition && file.path === selectedPath
+          ),
+    [files, selectedPosition, selectedPath]
   );
   const moveSelection = useCallback(
     (offset: number) => {
