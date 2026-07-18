@@ -154,10 +154,10 @@ export class SessionDO extends DurableObject<Env> {
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
-  // Session messenger (lazily initialized)
-  private _messenger: SessionMessenger | null = null;
-  // Session diff service (lazily initialized)
-  private _diffService: SessionDiffService | null = null;
+  // Session messenger (constructed in ensureInitialized once the session logger exists)
+  private messenger!: SessionMessenger;
+  // Session diff service (constructed in ensureInitialized once the session logger exists)
+  private diffService!: SessionDiffService;
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
   // Source control provider (lazily initialized)
@@ -349,33 +349,6 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
     return this._wsManager;
-  }
-
-  /**
-   * Get the session messenger, creating it lazily if needed.
-   * Lazy initialization preserves the WebSocket manager's own lazy
-   * construction so it captures the session_id-scoped logger.
-   */
-  private get messenger(): SessionMessenger {
-    if (!this._messenger) {
-      this._messenger = new SessionMessengerImpl(this.wsManager);
-    }
-    return this._messenger;
-  }
-
-  /**
-   * Get the session diff service, creating it lazily if needed.
-   */
-  private get diffService(): SessionDiffService {
-    if (!this._diffService) {
-      this._diffService = new SessionDiffService(
-        new SessionDiffStore(this.sql),
-        this.repository,
-        this.messenger,
-        this.log
-      );
-    }
-    return this._diffService;
   }
 
   private get executionTimeoutMs(): number {
@@ -885,6 +858,16 @@ export class SessionDO extends DurableObject<Env> {
       "session-do",
       { session_id: sessionId },
       parseLogLevel(this.env.LOG_LEVEL)
+    );
+    // Constructed here rather than in the constructor so they (and the
+    // WebSocket manager they force) capture the session-scoped logger,
+    // never the request-scoped child installed by fetch().
+    this.messenger = new SessionMessengerImpl(this.wsManager);
+    this.diffService = new SessionDiffService(
+      new SessionDiffStore(this.sql),
+      this.repository,
+      this.messenger,
+      this.log
     );
     this.wsManager.enableAutoPingPong();
   }
