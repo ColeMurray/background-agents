@@ -178,26 +178,46 @@ export class SessionDiffStore {
     sha256: string;
     now: number;
   }): boolean {
-    const active = this.sql
-      .exec(
-        `SELECT 1 FROM diff_state
-         WHERE singleton = 1 AND deleted_at IS NULL
-           AND attempt_id = ? AND attempt_status = 'capturing'`,
-        input.captureId
-      )
-      .toArray();
-    if (active.length === 0) return false;
     const inserted = this.sql.exec(
       `INSERT OR IGNORE INTO diff_objects (
-           object_key, capture_id, file_id, status, size_bytes, sha256, cleanup_after, created_at
-         ) VALUES (?, ?, ?, 'staging', ?, ?, NULL, ?)
+         object_key, capture_id, file_id, status, size_bytes, sha256, cleanup_after, created_at
+       )
+       SELECT ?, ?, ?, 'staging', ?, ?, NULL, ?
+       WHERE EXISTS (
+         SELECT 1 FROM diff_state
+         WHERE singleton = 1 AND deleted_at IS NULL
+           AND attempt_id = ? AND attempt_status = 'capturing'
+       )
+       AND (
+         EXISTS (
+           SELECT 1 FROM diff_objects
+           WHERE capture_id = ? AND file_id = ?
+             AND status IN ('staging', 'staged', 'referenced')
+         )
+         OR (
+           SELECT COUNT(DISTINCT file_id) FROM diff_objects
+           WHERE capture_id = ? AND status IN ('staging', 'staged', 'referenced')
+         ) < ?
+       )
+       AND COALESCE((
+         SELECT SUM(size_bytes) FROM diff_objects
+         WHERE capture_id = ? AND status IN ('staging', 'staged', 'referenced')
+       ), 0) + ? <= ?
         `,
       input.objectKey,
       input.captureId,
       input.fileId,
       input.sizeBytes,
       input.sha256,
-      input.now
+      input.now,
+      input.captureId,
+      input.captureId,
+      input.fileId,
+      input.captureId,
+      SESSION_DIFF_MAX_FILES,
+      input.captureId,
+      input.sizeBytes,
+      SESSION_DIFF_MAX_CAPTURE_BYTES
     );
     inserted.toArray();
     return (inserted.rowsWritten ?? 0) > 0;

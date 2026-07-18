@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import { generateInternalToken } from "../../src/auth/internal";
+import { SESSION_DIFF_MAX_CAPTURE_BYTES, SESSION_DIFF_MAX_FILES } from "@open-inspect/shared";
 import {
   SESSION_DIFF_COMPLETE_BODY_MAX_BYTES,
   SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
@@ -67,6 +68,64 @@ describe("session diff routes", () => {
       attempt: { id: null, status: "idle", startedAt: null, error: null },
       current: null,
     });
+  });
+
+  it("rejects staged objects at the advertised capture bounds", async () => {
+    const sessionName = `diff-stage-limits-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    const captureId = "capture-stage-limits";
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(
+        `UPDATE diff_state
+         SET attempt_id = ?, attempt_status = 'capturing', attempt_started_at = ?, updated_at = ?
+         WHERE singleton = 1`,
+        captureId,
+        100,
+        100
+      );
+      instance.ctx.storage.sql.exec(
+        `WITH RECURSIVE file_number(value) AS (
+           VALUES(1)
+           UNION ALL SELECT value + 1 FROM file_number WHERE value < ?
+         )
+         INSERT INTO diff_objects (
+           object_key, capture_id, file_id, status, size_bytes, sha256, created_at
+         )
+         SELECT 'object-' || value, ?, 'file-' || value, 'staging', 1, ?, 100
+         FROM file_number`,
+        SESSION_DIFF_MAX_FILES,
+        captureId,
+        "a".repeat(64)
+      );
+    });
+
+    const stage = (fileId: string, sizeBytes: number) =>
+      stub.fetch("http://internal/internal/diff-stage-object", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          captureId,
+          fileId,
+          sizeBytes,
+          sha256: "b".repeat(64),
+        }),
+      });
+
+    expect((await stage("one-file-too-many", 1)).status).toBe(409);
+
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(`DELETE FROM diff_objects`);
+      instance.ctx.storage.sql.exec(
+        `INSERT INTO diff_objects (
+           object_key, capture_id, file_id, status, size_bytes, sha256, created_at
+         ) VALUES ('capture-byte-limit', ?, 'existing-file', 'staging', ?, ?, 100)`,
+        captureId,
+        SESSION_DIFF_MAX_CAPTURE_BYTES,
+        "c".repeat(64)
+      );
+    });
+
+    expect((await stage("byte-overflow", 1)).status).toBe(409);
   });
 
   it("records the first runtime baselines before work is dispatched", async () => {
