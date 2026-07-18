@@ -87,6 +87,21 @@ export function resolveDiffSelection(
     : { status: "missing", revisionId: manifest.revisionId };
 }
 
+export interface DiffErrorBody {
+  code?: string;
+  error?: string;
+}
+
+/** Narrows an untrusted diff error-response body to the fields the UI reads. */
+export function parseDiffErrorBody(value: unknown): DiffErrorBody {
+  if (typeof value !== "object" || value === null) return {};
+  const record = value as Record<string, unknown>;
+  const body: DiffErrorBody = {};
+  if (typeof record.code === "string") body.code = record.code;
+  if (typeof record.error === "string") body.error = record.error;
+  return body;
+}
+
 export function buildUniquePathLabels(paths: string[]): Record<string, string> {
   const result: Record<string, string> = {};
   for (const path of paths) {

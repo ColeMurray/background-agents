@@ -23,7 +23,7 @@ import type {
 } from "@open-inspect/shared";
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
-import { useSessionDiffRetry } from "@/hooks/use-session-diffs";
+import { DiffRetryNotice } from "@/components/diff-retry-notice";
 
 interface SessionRightSidebarProps {
   sessionId: string;
@@ -73,7 +73,6 @@ export function SessionRightSidebarContent({
     () => buildAuthenticatedUrl(sessionState?.ttydUrl, sessionState?.ttydToken),
     [sessionState?.ttydUrl, sessionState?.ttydToken]
   );
-  const { retry, isRetrying, retryError } = useSessionDiffRetry(sessionId);
   const hasRepository = Boolean(
     sessionState?.repositories?.length || (sessionState?.repoOwner && sessionState.repoName)
   );
@@ -223,19 +222,12 @@ export function SessionRightSidebarContent({
               <p className="text-xs text-muted-foreground">No file changes in the latest diff.</p>
             )}
             {diffView.kind === "failed" && (
-              <div className="space-y-1.5">
-                <p className="text-xs text-destructive">{diffView.message}</p>
-                <button
-                  type="button"
-                  disabled={isRetrying}
-                  onClick={() => void retry()}
-                  className="text-xs font-medium text-accent underline underline-offset-2 disabled:opacity-50"
-                >
-                  {isRetrying ? "Retrying…" : "Retry changes refresh"}
-                </button>
-              </div>
+              <DiffRetryNotice
+                sessionId={sessionId}
+                message={diffView.message ?? ""}
+                variant="inline"
+              />
             )}
-            {retryError && <p className="mt-1.5 text-xs text-destructive">{retryError}</p>}
           </div>
         </CollapsibleSection>
       )}

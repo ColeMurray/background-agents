@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 import { mutate } from "swr";
 import { sessionDiffStateSchema, type SessionDiffState } from "@open-inspect/shared";
+import { parseDiffErrorBody } from "@/lib/session-diffs";
 
 export function sessionDiffKey(sessionId: string): string {
   return `/api/sessions/${sessionId}/diff`;
@@ -41,10 +42,8 @@ export function useSessionDiffRetry(sessionId: string): {
     try {
       const response = await fetch(`/api/sessions/${sessionId}/diff/retry`, { method: "POST" });
       if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setRetryError(
-          body && typeof body.error === "string" ? body.error : "Changes could not be retried."
-        );
+        const body = parseDiffErrorBody(await response.json().catch(() => null));
+        setRetryError(body.error ?? "Changes could not be retried.");
         return false;
       }
       await mutate(sessionDiffKey(sessionId));
