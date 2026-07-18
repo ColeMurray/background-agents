@@ -35,7 +35,7 @@ from .attachment_processor import (
     parse_session_image_attachments,
 )
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
-from .diff_capture import SessionDiffRefreshWorker
+from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .log_config import configure_logging, get_logger
 from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
@@ -284,12 +284,12 @@ class AgentBridge:
         # Track the current prompt task so _handle_stop can cancel it
         self._current_prompt_task: asyncio.Task[None] | None = None
         self.diff_refresh = SessionDiffRefreshWorker(
-            session_id=self.session_id,
-            control_plane_url=self.control_plane_url,
-            auth_token=self.auth_token,
-            load_repositories=lambda: load_repo_manifest(self.repo_manifest_path),
-            is_idle=lambda: self._current_prompt_task is None or self._current_prompt_task.done(),
-            get_http_client=lambda: self.http_client,
+            client=ControlPlaneDiffClient(
+                control_plane_url=self.control_plane_url,
+                session_id=self.session_id,
+                auth_token=self.auth_token,
+            ),
+            manifest_path=self.repo_manifest_path,
             log=self.log,
         )
 
@@ -757,6 +757,9 @@ class AgentBridge:
             self._current_prompt_task = task
 
             def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
+                # Release the diff worker's idle gate before any refresh request
+                # below so the refresh can start immediately.
+                self.diff_refresh.prompt_finished()
                 if self._current_prompt_task is t:
                     self._current_prompt_task = None
                 if t.cancelled():

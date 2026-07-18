@@ -13,13 +13,11 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from .git_excludes import is_runtime_git_excluded, read_runtime_git_excludes
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from .repo_config import RepoEntry
 
 DEFAULT_MAX_FILES = 1_000
@@ -34,13 +32,59 @@ class DiffCaptureError(RuntimeError):
     """A repository could not produce a trustworthy capture."""
 
 
+class DiffFileUpload(TypedDict):
+    """Wire representation of one changed file within a repository upload."""
+
+    id: str
+    path: str
+    status: str
+    additions: int | None
+    deletions: int | None
+    renderState: str
+    oldPath: NotRequired[str]
+    patch: NotRequired[str]
+    oldMode: NotRequired[str]
+    newMode: NotRequired[str]
+    oldSubmoduleSha: NotRequired[str]
+    newSubmoduleSha: NotRequired[str]
+
+
+class ReadyRepositoryUpload(TypedDict):
+    """A repository whose checkout changes were captured successfully."""
+
+    status: Literal["ready"]
+    position: int
+    repoOwner: str
+    repoName: str
+    baseSha: str
+    headSha: str
+    truncated: bool
+    omittedFileCount: int
+    files: list[DiffFileUpload]
+
+
+class UnavailableRepositoryUpload(TypedDict):
+    """A repository whose capture failed; the bundle still uploads atomically."""
+
+    status: Literal["unavailable"]
+    position: int
+    repoOwner: str
+    repoName: str
+    baseSha: str
+    error: str
+    files: list[DiffFileUpload]
+
+
+RepositoryUpload = ReadyRepositoryUpload | UnavailableRepositoryUpload
+
+
 class SessionDiffBundle(TypedDict):
     """Wire representation uploaded atomically for all session repositories."""
 
     version: int
     triggerMessageId: str | None
     capturedAt: int
-    repositories: list[dict[str, object]]
+    repositories: list[RepositoryUpload]
 
 
 class _GitOutputTooLarge(RuntimeError):
@@ -662,13 +706,13 @@ async def collect_repository_diff(
     )
 
 
-def encode_bundle(bundle: Mapping[str, object]) -> bytes:
+def encode_bundle(bundle: SessionDiffBundle) -> bytes:
     """Encode the exact JSON representation measured against the wire limit."""
     return json.dumps(bundle, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
 
-def _file_upload(changed: CapturedFile) -> dict[str, object]:
-    file: dict[str, object] = {
+def _file_upload(changed: CapturedFile) -> DiffFileUpload:
+    file: DiffFileUpload = {
         "id": changed.id,
         "path": changed.path,
         "status": changed.status,
@@ -676,34 +720,33 @@ def _file_upload(changed: CapturedFile) -> dict[str, object]:
         "deletions": changed.deletions,
         "renderState": changed.render_state,
     }
-    optional = {
-        "oldPath": changed.old_path,
-        "patch": changed.patch if changed.render_state == "renderable" else None,
-        "oldMode": changed.old_mode,
-        "newMode": changed.new_mode,
-        "oldSubmoduleSha": changed.old_submodule_sha,
-        "newSubmoduleSha": changed.new_submodule_sha,
-    }
-    file.update({key: value for key, value in optional.items() if value is not None})
+    if changed.old_path is not None:
+        file["oldPath"] = changed.old_path
+    if changed.render_state == "renderable" and changed.patch is not None:
+        file["patch"] = changed.patch
+    if changed.old_mode is not None:
+        file["oldMode"] = changed.old_mode
+    if changed.new_mode is not None:
+        file["newMode"] = changed.new_mode
+    if changed.old_submodule_sha is not None:
+        file["oldSubmoduleSha"] = changed.old_submodule_sha
+    if changed.new_submodule_sha is not None:
+        file["newSubmoduleSha"] = changed.new_submodule_sha
     return file
 
 
 def _bound_encoded_bundle(bundle: SessionDiffBundle, max_bundle_bytes: int) -> None:
     """Shed patches, then trailing metadata records, until the bundle fits."""
-    repositories = bundle["repositories"]
-    if not isinstance(repositories, list):
-        raise DiffCaptureError("Malformed session diff bundle")
+    ready_repositories = [
+        repository for repository in bundle["repositories"] if repository["status"] == "ready"
+    ]
 
-    patches: list[tuple[int, dict[str, object]]] = []
-    for repository in repositories:
-        if not isinstance(repository, dict) or repository.get("status") != "ready":
-            continue
-        files = repository.get("files")
-        if not isinstance(files, list):
-            continue
-        for file in files:
-            if isinstance(file, dict) and isinstance(file.get("patch"), str):
-                patches.append((len(file["patch"].encode("utf-8")), file))
+    patches: list[tuple[int, DiffFileUpload]] = []
+    for repository in ready_repositories:
+        for file in repository["files"]:
+            patch = file.get("patch")
+            if patch is not None:
+                patches.append((len(patch.encode("utf-8")), file))
 
     for _size, file in sorted(patches, key=lambda item: item[0], reverse=True):
         if len(encode_bundle(bundle)) <= max_bundle_bytes:
@@ -714,19 +757,12 @@ def _bound_encoded_bundle(bundle: SessionDiffBundle, max_bundle_bytes: int) -> N
     if len(encode_bundle(bundle)) <= max_bundle_bytes:
         return
 
-    for repository in reversed(repositories):
-        if not isinstance(repository, dict) or repository.get("status") != "ready":
-            continue
-        files = repository.get("files")
-        if not isinstance(files, list):
-            continue
+    for repository in reversed(ready_repositories):
+        files = repository["files"]
         while files and len(encode_bundle(bundle)) > max_bundle_bytes:
             files.pop()
             repository["truncated"] = True
-            omitted_file_count = repository.get("omittedFileCount", 0)
-            repository["omittedFileCount"] = (
-                omitted_file_count if isinstance(omitted_file_count, int) else 0
-            ) + 1
+            repository["omittedFileCount"] += 1
 
     if len(encode_bundle(bundle)) > max_bundle_bytes:
         raise DiffCaptureError("Session diff metadata exceeded the bundle limit")
@@ -743,7 +779,7 @@ async def collect_session_diff_bundle(
     active_limits = limits or CaptureLimits.defaults()
     remaining_files = active_limits.max_files
     remaining_patch_bytes = active_limits.max_capture_bytes
-    outcomes: list[dict[str, object]] = []
+    outcomes: list[RepositoryUpload] = []
 
     for position, repository in enumerate(repositories):
         if not repository.base_sha:
