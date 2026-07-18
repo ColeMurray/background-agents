@@ -3,6 +3,7 @@ import {
   sessionDiffFailureSchema,
   sessionDiffUploadSchema,
   type SandboxEvent,
+  type SessionDiffBaselineRepository,
   type SessionDiffState,
   type SessionDiffUpload,
 } from "@open-inspect/shared";
@@ -10,6 +11,7 @@ import { generateId } from "../../auth/crypto";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
 import type { SessionRepository } from "../repository";
+import { repoIdentityEquals, type SessionRepositoryEntry } from "../repository-target";
 import {
   DiffBaselineMismatchError,
   DiffBaselineUnavailableError,
@@ -20,6 +22,11 @@ import {
   SandboxNotConnectedError,
 } from "./errors";
 import type { SessionDiffStore } from "./store";
+
+/** SHAs are hex, so a plain case-insensitive comparison suffices. */
+function shaEquals(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
 
 /**
  * Owns validation and the single latest-bundle publication boundary.
@@ -52,19 +59,7 @@ export class SessionDiffService {
   pinBaselines(event: Extract<SandboxEvent, { type: "ready" }>): void {
     const sessionRepositories = this.repository.getSessionRepositories();
     const advertised = event.repositories ?? [];
-    const repositoriesMatch =
-      advertised.length === sessionRepositories.length &&
-      sessionRepositories.every((sessionRepository, index) => {
-        const baseline = advertised[index];
-        return (
-          baseline?.position === sessionRepository.position &&
-          baseline.repoOwner.toLocaleLowerCase("en-US") ===
-            sessionRepository.repoOwner.toLocaleLowerCase("en-US") &&
-          baseline.repoName.toLocaleLowerCase("en-US") ===
-            sessionRepository.repoName.toLocaleLowerCase("en-US")
-        );
-      });
-    if (!repositoriesMatch) {
+    if (!this.advertisedMatchesSession(advertised, sessionRepositories)) {
       this.log.warn("session_diff.baseline_repository_mismatch", {
         advertised_repositories: advertised.length,
         session_repositories: sessionRepositories.length,
@@ -72,10 +67,36 @@ export class SessionDiffService {
       return;
     }
 
+    this.logBaselineConflicts(advertised, sessionRepositories);
+    this.repository.setSessionDiffBaselines(
+      this.toBaselineUpdates(advertised, sessionRepositories)
+    );
+  }
+
+  private advertisedMatchesSession(
+    advertised: SessionDiffBaselineRepository[],
+    sessionRepositories: SessionRepositoryEntry[]
+  ): boolean {
+    return (
+      advertised.length === sessionRepositories.length &&
+      sessionRepositories.every((sessionRepository, index) => {
+        const baseline = advertised[index];
+        return (
+          baseline?.position === sessionRepository.position &&
+          repoIdentityEquals(baseline, sessionRepository)
+        );
+      })
+    );
+  }
+
+  private logBaselineConflicts(
+    advertised: SessionDiffBaselineRepository[],
+    sessionRepositories: SessionRepositoryEntry[]
+  ): void {
     for (const [index, sessionRepository] of sessionRepositories.entries()) {
       const existing = sessionRepository.row?.base_sha;
       const next = advertised[index]!.baseSha;
-      if (existing && existing.toLocaleLowerCase("en-US") !== next.toLocaleLowerCase("en-US")) {
+      if (existing && !shaEquals(existing, next)) {
         this.log.warn("session_diff.baseline_conflict", {
           repository_position: sessionRepository.position,
           repo_owner: sessionRepository.repoOwner,
@@ -83,16 +104,19 @@ export class SessionDiffService {
         });
       }
     }
+  }
 
-    this.repository.setSessionDiffBaselines(
-      sessionRepositories.map((sessionRepository, index) => ({
-        position: sessionRepository.position,
-        repoOwner: sessionRepository.repoOwner,
-        repoName: sessionRepository.repoName,
-        baseSha: advertised[index]!.baseSha,
-        isPrimary: sessionRepository.isPrimary,
-      }))
-    );
+  private toBaselineUpdates(
+    advertised: SessionDiffBaselineRepository[],
+    sessionRepositories: SessionRepositoryEntry[]
+  ) {
+    return sessionRepositories.map((sessionRepository, index) => ({
+      position: sessionRepository.position,
+      repoOwner: sessionRepository.repoOwner,
+      repoName: sessionRepository.repoName,
+      baseSha: advertised[index]!.baseSha,
+      isPrimary: sessionRepository.isPrimary,
+    }));
   }
 
   /**
@@ -148,20 +172,14 @@ export class SessionDiffService {
       const repository = bundle.repositories.find(
         (candidate) => candidate.position === sessionRepository.position
       );
-      if (
-        !repository ||
-        repository.repoOwner.toLocaleLowerCase("en-US") !==
-          sessionRepository.repoOwner.toLocaleLowerCase("en-US") ||
-        repository.repoName.toLocaleLowerCase("en-US") !==
-          sessionRepository.repoName.toLocaleLowerCase("en-US")
-      ) {
+      if (!repository || !repoIdentityEquals(repository, sessionRepository)) {
         throw new DiffRepositoryMismatchError();
       }
       const baseSha = sessionRepository.row?.base_sha;
       if (!baseSha) {
         throw new DiffBaselineUnavailableError();
       }
-      if (repository.baseSha.toLocaleLowerCase("en-US") !== baseSha.toLocaleLowerCase("en-US")) {
+      if (!shaEquals(repository.baseSha, baseSha)) {
         throw new DiffBaselineMismatchError();
       }
     }
