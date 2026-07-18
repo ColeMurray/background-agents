@@ -446,31 +446,33 @@ export class SessionRepository {
       isPrimary: boolean;
     }>
   ): void {
-    for (const repository of repositories) {
-      this.sql.exec(
-        `UPDATE session_repositories
-         SET base_sha = ?
-         WHERE position = ?
-           AND repo_owner = ? COLLATE NOCASE
-           AND repo_name = ? COLLATE NOCASE
-           AND base_sha IS NULL`,
-        repository.baseSha,
-        repository.position,
-        repository.repoOwner,
-        repository.repoName
-      );
-      if (repository.isPrimary) {
+    this.transactionSync(() => {
+      for (const repository of repositories) {
         this.sql.exec(
-          `UPDATE session SET base_sha = ?
-           WHERE repo_owner = ? COLLATE NOCASE
+          `UPDATE session_repositories
+           SET base_sha = ?
+           WHERE position = ?
+             AND repo_owner = ? COLLATE NOCASE
              AND repo_name = ? COLLATE NOCASE
              AND base_sha IS NULL`,
           repository.baseSha,
+          repository.position,
           repository.repoOwner,
           repository.repoName
         );
+        if (repository.isPrimary) {
+          this.sql.exec(
+            `UPDATE session SET base_sha = ?
+             WHERE repo_owner = ? COLLATE NOCASE
+               AND repo_name = ? COLLATE NOCASE
+               AND base_sha IS NULL`,
+            repository.baseSha,
+            repository.repoOwner,
+            repository.repoName
+          );
+        }
       }
-    }
+    });
   }
 
   // === SANDBOX ===

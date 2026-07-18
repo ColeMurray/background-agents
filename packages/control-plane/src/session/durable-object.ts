@@ -120,6 +120,7 @@ import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
+import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -150,6 +151,7 @@ export class SessionDO extends DurableObject<Env> {
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private diffService: SessionDiffService;
+  private messenger: SessionMessenger;
   private initialized = false;
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
@@ -244,20 +246,13 @@ export class SessionDO extends DurableObject<Env> {
       this.attachmentRepository
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
-    this.diffService = new SessionDiffService({
-      store: new SessionDiffStore(this.sql),
-      repository: this.repository,
-      storage: ctx.storage,
-      log: this.log,
-      generateId: () => generateId(),
-      now: () => Date.now(),
-      hasSandboxConnection: () => Boolean(this.wsManager.getSandboxSocket()),
-      sendRefreshCommand: (command) => {
-        const sandboxSocket = this.wsManager.getSandboxSocket();
-        return sandboxSocket ? this.wsManager.send(sandboxSocket, command) : false;
-      },
-      broadcast: (message) => this.broadcast(message),
-    });
+    this.messenger = new SessionMessengerImpl(this.wsManager);
+    this.diffService = new SessionDiffService(
+      new SessionDiffStore(this.sql),
+      this.repository,
+      this.messenger,
+      this.log
+    );
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
 
@@ -1548,9 +1543,7 @@ export class SessionDO extends DurableObject<Env> {
    * Broadcast message to all authenticated clients.
    */
   private broadcast(message: ServerMessage): void {
-    this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
-      this.wsManager.send(ws, message);
-    });
+    this.messenger.broadcast(message);
   }
 
   /**
