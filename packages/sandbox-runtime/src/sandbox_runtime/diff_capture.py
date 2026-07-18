@@ -12,12 +12,12 @@ from urllib.parse import quote
 import httpx
 
 from .diff_collector import (
+    SESSION_DIFF_MAX_ERROR_LENGTH,
     CaptureLimits,
     DiffCaptureError,
     SessionDiffBundle,
     collect_session_diff_bundle,
     encode_bundle,
-    truncate_error_message,
 )
 from .repo_config import load_repo_manifest
 
@@ -274,7 +274,7 @@ class SessionDiffRefreshWorker:
         )
 
     async def _report_failure(self, error: Exception) -> None:
-        message = truncate_error_message(str(error)) or "Session diff refresh failed"
+        message = str(error)[:SESSION_DIFF_MAX_ERROR_LENGTH] or "Session diff refresh failed"
         self.log.warn("session_diff.refresh_failed", error=message)
         if self._unsupported:
             return
@@ -283,7 +283,7 @@ class SessionDiffRefreshWorker:
         except Exception as report_error:
             self.log.warn(
                 "session_diff.failure_report_failed",
-                error=truncate_error_message(str(report_error)),
+                error=str(report_error)[:SESSION_DIFF_MAX_ERROR_LENGTH],
             )
         else:
             if outcome is DiffUploadOutcome.UNSUPPORTED:

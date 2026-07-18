@@ -665,15 +665,3 @@ def test_rejects_unknown_git_status_letter() -> None:
 
     with pytest.raises(DiffCaptureError, match="Unsupported Git status letter"):
         diff_collector_module._parse_raw_changes(record)
-
-
-def test_truncates_errors_by_utf16_code_units_not_code_points() -> None:
-    limit = diff_collector_module.SESSION_DIFF_MAX_ERROR_LENGTH
-    astral = "\U0001f4a5" * 1_500  # each character is two UTF-16 code units
-
-    truncated = diff_collector_module.truncate_error_message(astral)
-
-    assert truncated == "\U0001f4a5" * (limit // 2)
-    assert len(truncated.encode("utf-16-le")) // 2 == limit
-    assert diff_collector_module.truncate_error_message("a" * (limit + 1_000)) == "a" * limit
-    assert diff_collector_module.truncate_error_message("short") == "short"

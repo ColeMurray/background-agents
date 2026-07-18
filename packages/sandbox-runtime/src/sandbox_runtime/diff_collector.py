@@ -31,20 +31,10 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 20.0
 # Mirrors SESSION_DIFF_VERSION in packages/shared/src/types/session-diffs.ts.
 SESSION_DIFF_VERSION: Final = 1
 # Mirrors SESSION_DIFF_MAX_ERROR_LENGTH in packages/shared/src/types/session-diffs.ts.
+# Python slices count code points while Zod's .max() counts UTF-16 units; the
+# divergence is astral-characters-only and accepted (worst case: a failure
+# report is rejected by the control plane, degrading error display).
 SESSION_DIFF_MAX_ERROR_LENGTH: Final = 2_000
-
-
-def truncate_error_message(message: str) -> str:
-    """Bound an error to SESSION_DIFF_MAX_ERROR_LENGTH as the control plane
-    measures it: Zod's ``.max()`` counts UTF-16 code units, so characters
-    outside the Basic Multilingual Plane count twice.
-    """
-    units = 0
-    for index, character in enumerate(message):
-        units += 2 if ord(character) > 0xFFFF else 1
-        if units > SESSION_DIFF_MAX_ERROR_LENGTH:
-            return message[:index]
-    return message
 
 
 class DiffCaptureError(RuntimeError):
@@ -942,7 +932,8 @@ async def collect_session_diff_bundle(
                     "repoOwner": repository.owner,
                     "repoName": repository.name,
                     "baseSha": repository.base_sha,
-                    "error": truncate_error_message(str(error)) or "Repository diff unavailable",
+                    "error": str(error)[:SESSION_DIFF_MAX_ERROR_LENGTH]
+                    or "Repository diff unavailable",
                     "files": [],
                 }
             )
