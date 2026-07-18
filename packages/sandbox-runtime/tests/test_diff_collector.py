@@ -255,6 +255,7 @@ async def test_marks_binary_content_without_attempting_to_render_it(tmp_path: Pa
     _git(repository.path, "commit", "-m", "add binary")
     base_sha = _git(repository.path, "rev-parse", "HEAD")
     (repository.path / "asset.bin").write_bytes(b"\x00after")
+    (repository.path / "asset.bin").chmod(0o755)
 
     capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
 
@@ -263,6 +264,8 @@ async def test_marks_binary_content_without_attempting_to_render_it(tmp_path: Pa
     assert changed.additions is None
     assert changed.deletions is None
     assert changed.patch is None
+    assert changed.old_mode == "100644"
+    assert changed.new_mode == "100755"
 
 
 @pytest.mark.asyncio
@@ -279,7 +282,14 @@ async def test_reports_submodule_gitlinks_and_object_ids_as_metadata(tmp_path: P
     base_sha = _git(repository.path, "rev-parse", "HEAD")
     _git(repository.path, "update-index", "--cacheinfo", f"160000,{second},vendor/lib")
 
-    capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+    limits = CaptureLimits(
+        max_files=1_000,
+        max_patch_bytes=1,
+        max_capture_bytes=20_000_000,
+        command_timeout_seconds=5,
+    )
+
+    capture = await collect_repository_diff(repository, base_sha, limits)
 
     changed = next(file for file in capture.files if file.path == "vendor/lib")
     assert changed.status == "submodule"
@@ -292,6 +302,7 @@ async def test_reports_submodule_gitlinks_and_object_ids_as_metadata(tmp_path: P
 async def test_enforces_file_and_capture_byte_limits_with_explicit_states(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository.path / "app.ts").write_text("const changed = 'a fairly long line';\n")
+    (repository.path / "app.ts").chmod(0o755)
     (repository.path / "new.ts").write_text("export const value = 1;\n")
     limits = CaptureLimits(
         max_files=1,
@@ -306,6 +317,8 @@ async def test_enforces_file_and_capture_byte_limits_with_explicit_states(tmp_pa
     assert capture.omitted_file_count == 1
     assert capture.files[0].render_state == "too_large"
     assert capture.files[0].patch is None
+    assert capture.files[0].old_mode == "100644"
+    assert capture.files[0].new_mode == "100755"
 
 
 @pytest.mark.asyncio

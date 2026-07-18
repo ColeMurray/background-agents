@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -86,6 +85,14 @@ class _ChangedPath:
     old_path: str | None = None
 
 
+@dataclass(frozen=True)
+class _TrackedMetadata:
+    old_mode: str
+    new_mode: str
+    old_sha: str
+    new_sha: str
+
+
 async def _git(
     repository: RepoEntry,
     *arguments: str,
@@ -156,39 +163,75 @@ def _decode_path(raw: bytes) -> str:
     return raw.decode("utf-8", errors="surrogateescape")
 
 
-def _parse_name_status(raw: bytes) -> list[_ChangedPath]:
+def _parse_raw_changes(
+    raw: bytes,
+) -> tuple[list[_ChangedPath], dict[tuple[str | None, str], _TrackedMetadata]]:
     fields = raw.split(b"\0")
     if fields and fields[-1] == b"":
         fields.pop()
     changes: list[_ChangedPath] = []
+    metadata: dict[tuple[str | None, str], _TrackedMetadata] = {}
     index = 0
     while index < len(fields):
-        code = _decode_path(fields[index])
+        header = fields[index].split()
         index += 1
-        if not code:
-            continue
-        letter = code[0]
+        if len(header) != 5 or not header[0].startswith(b":"):
+            raise DiffCaptureError("Malformed Git raw diff record")
+        code = _decode_path(header[4])
+        letter = code[0] if code else ""
         if letter in ("R", "C"):
             if index + 1 >= len(fields):
-                raise DiffCaptureError("Malformed Git rename record")
+                raise DiffCaptureError("Malformed Git raw rename record")
             old_path = _decode_path(fields[index])
             path = _decode_path(fields[index + 1])
             index += 2
-            changes.append(_ChangedPath(status="renamed", path=path, old_path=old_path))
-            continue
-        if index >= len(fields):
-            raise DiffCaptureError("Malformed Git name-status record")
-        path = _decode_path(fields[index])
-        index += 1
+        else:
+            if index >= len(fields):
+                raise DiffCaptureError("Malformed Git raw diff record")
+            old_path = None
+            path = _decode_path(fields[index])
+            index += 1
         status = {
             "A": "added",
             "M": "modified",
             "D": "deleted",
             "T": "type_changed",
             "U": "unmerged",
+            "R": "renamed",
+            "C": "renamed",
         }.get(letter, "modified")
-        changes.append(_ChangedPath(status=status, path=path))
-    return changes
+        change = _ChangedPath(status=status, path=path, old_path=old_path)
+        changes.append(change)
+        metadata[(old_path, path)] = _TrackedMetadata(
+            old_mode=_decode_path(header[0][1:]),
+            new_mode=_decode_path(header[1]),
+            old_sha=_decode_path(header[2]),
+            new_sha=_decode_path(header[3]),
+        )
+    return changes, metadata
+
+
+async def _tracked_changes_and_metadata(
+    repository: RepoEntry,
+    base_sha: str,
+    timeout_seconds: float,
+    max_metadata_bytes: int,
+) -> tuple[list[_ChangedPath], dict[tuple[str | None, str], _TrackedMetadata]]:
+    raw = await _git(
+        repository,
+        "--no-pager",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--raw",
+        "-z",
+        "--no-abbrev",
+        "--find-renames",
+        base_sha,
+        timeout_seconds=timeout_seconds,
+        max_stdout_bytes=max_metadata_bytes,
+    )
+    return _parse_raw_changes(raw)
 
 
 def _parse_stat_columns(additions: bytes, deletions: bytes) -> tuple[int | None, int | None]:
@@ -347,20 +390,11 @@ async def collect_repository_diff(
         .strip()
     )
     try:
-        tracked = _parse_name_status(
-            await _git(
-                repository,
-                "--no-pager",
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--name-status",
-                "-z",
-                "--find-renames",
-                base_sha,
-                timeout_seconds=limits.command_timeout_seconds,
-                max_stdout_bytes=limits.max_metadata_bytes,
-            )
+        tracked, tracked_metadata = await _tracked_changes_and_metadata(
+            repository,
+            base_sha,
+            limits.command_timeout_seconds,
+            limits.max_metadata_bytes,
         )
         untracked_raw = await _git(
             repository,
@@ -437,7 +471,27 @@ async def collect_repository_diff(
         new_mode: str | None = None
         old_submodule_sha: str | None = None
         new_submodule_sha: str | None = None
-        if additions is None or deletions is None:
+        metadata = tracked_metadata.get((change.old_path, change.path))
+        if metadata and metadata.old_mode != metadata.new_mode:
+            old_mode = metadata.old_mode if metadata.old_mode != "000000" else None
+            new_mode = metadata.new_mode if metadata.new_mode != "000000" else None
+        is_submodule = bool(
+            metadata and (metadata.old_mode == "160000" or metadata.new_mode == "160000")
+        )
+        if is_submodule and metadata:
+            file_status = "submodule"
+            render_state = "metadata_only"
+            old_submodule_sha = (
+                metadata.old_sha
+                if metadata.old_mode == "160000" and set(metadata.old_sha) != {"0"}
+                else None
+            )
+            new_submodule_sha = (
+                metadata.new_sha
+                if metadata.new_mode == "160000" and set(metadata.new_sha) != {"0"}
+                else None
+            )
+        elif additions is None or deletions is None:
             render_state = "binary"
         elif is_overlay:
             # Git can report a staged deletion and an untracked working-tree
@@ -466,59 +520,33 @@ async def collect_repository_diff(
                 )
             except _GitOutputTooLarge:
                 render_state = "too_large"
-                captured.append(
-                    CapturedFile(
-                        id=str(uuid.uuid4()),
-                        path=change.path,
-                        old_path=change.old_path,
-                        status=file_status,
-                        additions=additions,
-                        deletions=deletions,
-                        render_state=render_state,
-                        patch=None,
-                        patch_bytes=None,
-                    )
-                )
-                continue
-            patch_text = raw_patch.decode("utf-8", errors="replace")
-            old_mode_match = re.search(r"^old mode (\d+)$", patch_text, re.MULTILINE)
-            new_mode_match = re.search(r"^new mode (\d+)$", patch_text, re.MULTILINE)
-            old_mode = old_mode_match.group(1) if old_mode_match else None
-            new_mode = new_mode_match.group(1) if new_mode_match else None
-            old_submodule_match = re.search(
-                r"^-Subproject commit ([0-9a-f]{40,64})", patch_text, re.MULTILINE
-            )
-            new_submodule_match = re.search(
-                r"^\+Subproject commit ([0-9a-f]{40,64})", patch_text, re.MULTILINE
-            )
-            old_submodule_sha = old_submodule_match.group(1) if old_submodule_match else None
-            new_submodule_sha = new_submodule_match.group(1) if new_submodule_match else None
-            # The upload client sends the normalized UTF-8 text, so limits and
-            # manifest metadata must describe those exact bytes rather than
-            # Git's potentially non-UTF-8 stdout.
-            patch_bytes = len(patch_text.encode("utf-8"))
-            if old_submodule_sha or new_submodule_sha:
-                file_status = "submodule"
-                render_state = "metadata_only"
-                patch_bytes = None
-            elif (
-                not is_untracked and additions == 0 and deletions == 0 and "\n@@" not in patch_text
-            ):
-                render_state = "metadata_only"
-                patch_bytes = None
-            elif patch_bytes > limits.max_patch_bytes:
-                render_state = "too_large"
-                patch_bytes = None
-            elif captured_bytes + patch_bytes > limits.max_capture_bytes:
-                render_state = "metadata_only"
-                patch_bytes = None
-            elif raw_patch:
-                render_state = "renderable"
-                captured_bytes += patch_bytes
-                patch = patch_text
             else:
-                render_state = "metadata_only"
-                patch_bytes = None
+                patch_text = raw_patch.decode("utf-8", errors="replace")
+                # The upload client sends the normalized UTF-8 text, so limits and
+                # manifest metadata must describe those exact bytes rather than
+                # Git's potentially non-UTF-8 stdout.
+                patch_bytes = len(patch_text.encode("utf-8"))
+                if (
+                    not is_untracked
+                    and additions == 0
+                    and deletions == 0
+                    and "\n@@" not in patch_text
+                ):
+                    render_state = "metadata_only"
+                    patch_bytes = None
+                elif patch_bytes > limits.max_patch_bytes:
+                    render_state = "too_large"
+                    patch_bytes = None
+                elif captured_bytes + patch_bytes > limits.max_capture_bytes:
+                    render_state = "metadata_only"
+                    patch_bytes = None
+                elif raw_patch:
+                    render_state = "renderable"
+                    captured_bytes += patch_bytes
+                    patch = patch_text
+                else:
+                    render_state = "metadata_only"
+                    patch_bytes = None
 
         captured.append(
             CapturedFile(
