@@ -1,4 +1,8 @@
 import {
+  SESSION_DIFF_FILE_NOT_FOUND_CODE,
+  SESSION_DIFF_REVISION_STALE_CODE,
+} from "@open-inspect/shared";
+import {
   DiffBaselineMismatchError,
   DiffBaselineUnavailableError,
   DiffFileNotFoundError,
@@ -94,7 +98,7 @@ export class SessionDiffsHandler {
       return Response.json(
         {
           error: errorValue.message,
-          code: "diff_revision_stale",
+          code: SESSION_DIFF_REVISION_STALE_CODE,
           currentRevisionId: errorValue.currentRevisionId,
         },
         { status: 409 }
@@ -104,7 +108,7 @@ export class SessionDiffsHandler {
       return Response.json(
         {
           error: errorValue.message,
-          code: "diff_file_not_found",
+          code: SESSION_DIFF_FILE_NOT_FOUND_CODE,
           currentRevisionId: errorValue.currentRevisionId,
         },
         { status: 404 }

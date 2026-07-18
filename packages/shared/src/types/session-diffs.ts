@@ -6,8 +6,15 @@ export const SESSION_DIFF_MAX_FILES = 1_000;
 export const SESSION_DIFF_MAX_FILE_PATCH_BYTES = 512 * 1_024;
 export const SESSION_DIFF_MAX_TOTAL_PATCH_BYTES = 1_024 * 1_024;
 export const SESSION_DIFF_MAX_BUNDLE_BYTES = 1_572_864;
+export const SESSION_DIFF_FAILURE_BODY_MAX_BYTES = 16 * 1_024;
 export const SESSION_DIFF_MAX_ERROR_LENGTH = 2_000;
 export const SESSION_DIFF_REFRESH_TIMEOUT_MS = 60_000;
+
+/** URL-safe id segment for session, revision, and diff file ids: 1-200 chars of A-Za-z0-9._- */
+export const SESSION_DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
+
+export const SESSION_DIFF_REVISION_STALE_CODE = "diff_revision_stale" as const;
+export const SESSION_DIFF_FILE_NOT_FOUND_CODE = "diff_file_not_found" as const;
 
 export const diffRenderStateSchema = z.enum(["renderable", "binary", "too_large", "metadata_only"]);
 export const diffFileStatusSchema = z.enum([
@@ -40,12 +47,14 @@ const repositoryPathSchema = z
   });
 const errorSchema = z.string().trim().min(1).max(SESSION_DIFF_MAX_ERROR_LENGTH);
 
-export const sessionDiffBaselineRepositorySchema = z.object({
+const repositoryIdentityShape = {
   position: z.number().int().nonnegative(),
   repoOwner: repositoryOwnerSchema,
   repoName: repositoryNameSchema,
   baseSha: gitShaSchema,
-});
+};
+
+export const sessionDiffBaselineRepositorySchema = z.object(repositoryIdentityShape);
 
 const sessionDiffFileShape = {
   id: nonEmptyIdSchema,
@@ -65,8 +74,8 @@ function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function validateFilePatch(
-  file: z.infer<z.ZodObject<typeof sessionDiffFileShape & { patch: z.ZodOptional<z.ZodString> }>>,
+function validateOldPathOnlyForRenames(
+  file: { oldPath?: string; status: DiffFileStatus },
   ctx: z.RefinementCtx
 ): void {
   if (file.oldPath !== undefined && file.status !== "renamed") {
@@ -76,6 +85,13 @@ function validateFilePatch(
       path: ["oldPath"],
     });
   }
+}
+
+function validateFilePatch(
+  file: z.infer<z.ZodObject<typeof sessionDiffFileShape & { patch: z.ZodOptional<z.ZodString> }>>,
+  ctx: z.RefinementCtx
+): void {
+  validateOldPathOnlyForRenames(file, ctx);
   if (file.renderState === "renderable" && file.patch === undefined) {
     ctx.addIssue({
       code: "custom",
@@ -106,64 +122,32 @@ export const sessionDiffFileUploadSchema = z
   })
   .superRefine(validateFilePatch);
 
-export const sessionDiffFileSchema = z.object(sessionDiffFileShape).superRefine((file, ctx) => {
-  if (file.oldPath !== undefined && file.status !== "renamed") {
-    ctx.addIssue({
-      code: "custom",
-      message: "oldPath is only valid for renamed files",
-      path: ["oldPath"],
-    });
-  }
-});
+export const sessionDiffFileSchema = z
+  .object(sessionDiffFileShape)
+  .superRefine(validateOldPathOnlyForRenames);
 
-const repositoryIdentityShape = {
-  position: z.number().int().nonnegative(),
-  repoOwner: repositoryOwnerSchema,
-  repoName: repositoryNameSchema,
-  baseSha: gitShaSchema,
-};
+function repositoryUnionSchema<FileSchema extends z.ZodType>(fileSchema: FileSchema) {
+  return z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("ready"),
+      ...repositoryIdentityShape,
+      headSha: gitShaSchema,
+      truncated: z.boolean(),
+      omittedFileCount: z.number().int().nonnegative(),
+      files: z.array(fileSchema),
+    }),
+    z.object({
+      status: z.literal("unavailable"),
+      ...repositoryIdentityShape,
+      error: errorSchema,
+      files: z.tuple([]),
+    }),
+  ]);
+}
 
-const readyRepositoryUploadSchema = z.object({
-  status: z.literal("ready"),
-  ...repositoryIdentityShape,
-  headSha: gitShaSchema,
-  truncated: z.boolean(),
-  omittedFileCount: z.number().int().nonnegative(),
-  files: z.array(sessionDiffFileUploadSchema),
-});
+export const sessionDiffRepositoryUploadSchema = repositoryUnionSchema(sessionDiffFileUploadSchema);
 
-const unavailableRepositoryUploadSchema = z.object({
-  status: z.literal("unavailable"),
-  ...repositoryIdentityShape,
-  error: errorSchema,
-  files: z.tuple([]),
-});
-
-export const sessionDiffRepositoryUploadSchema = z.discriminatedUnion("status", [
-  readyRepositoryUploadSchema,
-  unavailableRepositoryUploadSchema,
-]);
-
-const readyRepositorySchema = z.object({
-  status: z.literal("ready"),
-  ...repositoryIdentityShape,
-  headSha: gitShaSchema,
-  truncated: z.boolean(),
-  omittedFileCount: z.number().int().nonnegative(),
-  files: z.array(sessionDiffFileSchema),
-});
-
-const unavailableRepositorySchema = z.object({
-  status: z.literal("unavailable"),
-  ...repositoryIdentityShape,
-  error: errorSchema,
-  files: z.tuple([]),
-});
-
-export const sessionDiffRepositorySchema = z.discriminatedUnion("status", [
-  readyRepositorySchema,
-  unavailableRepositorySchema,
-]);
+export const sessionDiffRepositorySchema = repositoryUnionSchema(sessionDiffFileSchema);
 
 type BundleRepository = {
   position: number;
