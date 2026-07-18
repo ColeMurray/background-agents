@@ -20,6 +20,7 @@ from .constants import REPO_MANIFEST_FILE_PATH
 # A single path segment with no separators. Leading dots are legal (a repo can
 # be named ".github"); "." and ".." are rejected separately below.
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_GIT_SHA_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
 class RepoConfigError(ValueError):
@@ -72,6 +73,15 @@ def _str_field(item: Mapping[str, Any], key: str) -> str:
     return str(item.get(key) or "").strip()
 
 
+def _optional_git_sha(item: Mapping[str, Any], key: str) -> str | None:
+    value = _str_field(item, key)
+    if not value:
+        return None
+    if not _GIT_SHA_RE.fullmatch(value):
+        raise RepoConfigError(f"invalid {key}")
+    return value
+
+
 def parse_repositories(
     session_config: Mapping[str, Any],
     *,
@@ -106,7 +116,7 @@ def parse_repositories(
                 raise RepoConfigError(f"duplicate repo_name {name!r}: checkout paths would collide")
             seen_names.add(name_key)
             branch = _str_field(item, "branch") or "main"
-            base_sha = _str_field(item, "base_sha") or None
+            base_sha = _optional_git_sha(item, "base_sha")
             entries.append(
                 RepoEntry(
                     owner=owner,
@@ -126,7 +136,7 @@ def parse_repositories(
                 name=scalar_name,
                 branch=scalar_branch,
                 path=workspace_path / scalar_name,
-                base_sha=_str_field(session_config, "base_sha") or None,
+                base_sha=_optional_git_sha(session_config, "base_sha"),
             )
         ]
     return []
@@ -173,23 +183,26 @@ def load_repo_manifest(path: str | Path = REPO_MANIFEST_FILE_PATH) -> list[RepoE
         return []
     raw = data.get("repositories") if isinstance(data, dict) else None
     entries: list[RepoEntry] = []
-    if isinstance(raw, list):
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            owner = _str_field(item, "owner")
-            name = _str_field(item, "name")
-            path_value = _str_field(item, "path")
-            if not owner or not name or not path_value:
-                continue
-            branch = _str_field(item, "branch") or "main"
-            entries.append(
-                RepoEntry(
-                    owner=owner,
-                    name=name,
-                    branch=branch,
-                    path=Path(path_value),
-                    base_sha=_str_field(item, "baseSha") or None,
+    try:
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                owner = _str_field(item, "owner")
+                name = _str_field(item, "name")
+                path_value = _str_field(item, "path")
+                if not owner or not name or not path_value:
+                    continue
+                branch = _str_field(item, "branch") or "main"
+                entries.append(
+                    RepoEntry(
+                        owner=owner,
+                        name=name,
+                        branch=branch,
+                        path=Path(path_value),
+                        base_sha=_optional_git_sha(item, "baseSha"),
+                    )
                 )
-            )
+    except RepoConfigError:
+        return []
     return entries
