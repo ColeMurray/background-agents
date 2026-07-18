@@ -214,6 +214,24 @@ class TestInstallTools:
         assert ".opencode/package-lock.json" in installed
         assert ".opencode/node_modules/" in installed
 
+    def test_does_not_claim_a_divergent_existing_lockfile(self, tmp_path):
+        """A user lockfile is not runtime-owned merely because package.json matches."""
+        deps_cache = tmp_path / "opencode-deps"
+        deps_cache.mkdir()
+        (deps_cache / "package.json").write_text('{"name": "cached"}')
+        (deps_cache / "package-lock.json").write_text('{"runtime": true}')
+
+        opencode_dir = tmp_path / ".opencode"
+        opencode_dir.mkdir()
+        (opencode_dir / "package.json").write_text('{"name": "cached"}')
+        user_lock = opencode_dir / "package-lock.json"
+        user_lock.write_text('{"user": true}')
+
+        installed = SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
+
+        assert installed == {"package.json"}
+        assert user_lock.read_text() == '{"user": true}'
+
     def test_legacy_and_tools_dir_combined(self, tmp_path):
         """Both legacy tool and tools/ directory files should be installed together."""
         sup = _make_supervisor()

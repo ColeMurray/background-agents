@@ -776,12 +776,6 @@ class SandboxSupervisor:
             copied_modules = True
         if copied_modules or (local_modules.is_dir() and "package.json" in installed):
             installed.add("node_modules/")
-        if (
-            "package.json" in installed
-            and (deps_cache / "package-lock.json").is_file()
-            and (dest_dir / "package-lock.json").is_file()
-        ):
-            installed.add("package-lock.json")
         return installed
 
     @staticmethod
