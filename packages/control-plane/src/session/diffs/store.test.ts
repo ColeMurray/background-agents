@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SqlResult, SqlStorage } from "../sql-storage";
+import { DiffFileNotFoundError, DiffRevisionStaleError } from "./errors";
 import { SessionDiffStore } from "./store";
 
 class MemoryDiffSql implements SqlStorage {
@@ -104,10 +105,9 @@ describe("SessionDiffStore", () => {
     });
     expect(JSON.stringify(store.getPublicState(null))).not.toContain("diff --git");
     expect(JSON.parse(String(sql.row?.bundle_json))).not.toHaveProperty("revisionId");
-    expect(store.resolveFile("revision-1", "file-1")).toEqual({
-      ok: true,
-      patch: "diff --git a/src/app.ts b/src/app.ts\n",
-    });
+    expect(store.resolveFile("revision-1", "file-1")).toBe(
+      "diff --git a/src/app.ts b/src/app.ts\n"
+    );
   });
 
   it("records a bounded failure without replacing the prior bundle", () => {
@@ -120,23 +120,22 @@ describe("SessionDiffStore", () => {
       current: { revisionId: "revision-1" },
       lastError: { message: "collector timed out", occurredAt: 300 },
     });
-    expect(store.resolveFile("revision-1", "file-1")).toMatchObject({ ok: true });
+    expect(store.resolveFile("revision-1", "file-1")).toContain("diff --git");
   });
 
   it("pins selected-file reads to the current revision", () => {
     const store = new SessionDiffStore(new MemoryDiffSql());
     store.replaceBundle(upload, "revision-2", 200);
 
-    expect(store.resolveFile("revision-1", "file-1")).toEqual({
-      ok: false,
-      status: 409,
-      currentRevisionId: "revision-2",
-    });
-    expect(store.resolveFile("revision-2", "missing-file")).toEqual({
-      ok: false,
-      status: 404,
-      currentRevisionId: "revision-2",
-    });
+    let stale: unknown;
+    try {
+      store.resolveFile("revision-1", "file-1");
+    } catch (e) {
+      stale = e;
+    }
+    expect(stale).toBeInstanceOf(DiffRevisionStaleError);
+    expect((stale as DiffRevisionStaleError).currentRevisionId).toBe("revision-2");
+    expect(() => store.resolveFile("revision-2", "missing-file")).toThrow(DiffFileNotFoundError);
   });
 
   it("stores a partial multi-repository bundle without mixing prior state", () => {

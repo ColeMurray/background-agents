@@ -10,6 +10,7 @@ import {
   type StoredSessionDiffBundle,
 } from "@open-inspect/shared";
 import type { SqlStorage } from "../sql-storage";
+import { DiffFileNotFoundError, DiffRevisionStaleError } from "./errors";
 
 interface SessionDiffRow {
   revision_id: string | null;
@@ -81,25 +82,23 @@ export class SessionDiffStore {
     });
   }
 
-  /** Resolve a renderable patch from the current revision without accepting stale identities. */
-  resolveFile(
-    revisionId: string,
-    fileId: string
-  ):
-    | { ok: true; patch: string }
-    | { ok: false; status: 404 | 409; currentRevisionId: string | null } {
+  /**
+   * Resolve a renderable patch from the current revision without accepting
+   * stale identities. Throws DiffRevisionStaleError or DiffFileNotFoundError.
+   */
+  resolveFile(revisionId: string, fileId: string): string {
     const bundle = this.parseBundle(this.readRow());
     const currentRevisionId = bundle?.revisionId ?? null;
     if (revisionId !== currentRevisionId) {
-      return { ok: false, status: 409, currentRevisionId };
+      throw new DiffRevisionStaleError(currentRevisionId);
     }
     const file = bundle?.repositories
       .flatMap((repository) => repository.files)
       .find((candidate) => candidate.id === fileId);
     if (!file || file.renderState !== "renderable" || !("patch" in file) || !file.patch) {
-      return { ok: false, status: 404, currentRevisionId };
+      throw new DiffFileNotFoundError(currentRevisionId);
     }
-    return { ok: true, patch: file.patch };
+    return file.patch;
   }
 
   private readRow(): SessionDiffRow | null {

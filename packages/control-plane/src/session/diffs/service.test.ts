@@ -3,6 +3,15 @@ import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
 import type { SessionRepository } from "../repository";
 import type { SqlResult, SqlStorage } from "../sql-storage";
+import {
+  DiffBaselineMismatchError,
+  DiffFileNotFoundError,
+  DiffRepositoryMismatchError,
+  DiffRevisionStaleError,
+  InvalidDiffBundleError,
+  InvalidDiffFileIdentityError,
+  SandboxNotConnectedError,
+} from "./errors";
 import { SessionDiffService } from "./service";
 import { SessionDiffStore } from "./store";
 
@@ -112,25 +121,14 @@ function harness() {
 }
 
 describe("SessionDiffService", () => {
-  it("accepts one matching bundle and serves a revision-pinned patch", async () => {
+  it("publishes one matching bundle and serves a revision-pinned patch", () => {
     const { service, messenger } = harness();
 
-    const uploaded = await service.handleUpload(
-      new Request("http://internal/diff", { method: "POST", body: JSON.stringify(upload) })
-    );
-
-    expect(uploaded.status).toBe(200);
-    await expect(uploaded.json()).resolves.toEqual({ revisionId: "revision-1" });
-    expect(await (await service.handleState()).json()).toMatchObject({
+    expect(service.publishBundle(upload)).toBe("revision-1");
+    expect(service.getPublicState()).toMatchObject({
       current: { revisionId: "revision-1" },
     });
-    expect(
-      await (
-        await service.handleResolveFile(
-          new URL("http://internal/file?revisionId=revision-1&fileId=file-1")
-        )
-      ).text()
-    ).toContain("diff --git");
+    expect(service.resolveFile("revision-1", "file-1")).toContain("diff --git");
     expect(messenger.broadcast).toHaveBeenCalledWith({
       type: "diff_state_changed",
       revisionId: "revision-1",
@@ -138,59 +136,55 @@ describe("SessionDiffService", () => {
     });
   });
 
-  it("rejects a mismatched repository set and immutable baselines", async () => {
+  it("rejects a mismatched repository set and immutable baselines", () => {
     const { service } = harness();
-    const request = (body: unknown) =>
-      service.handleUpload(
-        new Request("http://internal/diff", { method: "POST", body: JSON.stringify(body) })
-      );
 
-    expect((await request({ ...upload, repositories: [] })).status).toBe(400);
-    expect(
-      (
-        await request({
-          ...upload,
-          repositories: [{ ...upload.repositories[0], baseSha: "c".repeat(40) }],
-        })
-      ).status
-    ).toBe(400);
+    expect(() => service.publishBundle(null)).toThrow(InvalidDiffBundleError);
+    expect(() =>
+      service.publishBundle({
+        ...upload,
+        repositories: [{ ...upload.repositories[0], repoOwner: "other" }],
+      })
+    ).toThrow(DiffRepositoryMismatchError);
+    expect(() =>
+      service.publishBundle({
+        ...upload,
+        repositories: [{ ...upload.repositories[0], baseSha: "c".repeat(40) }],
+      })
+    ).toThrow(DiffBaselineMismatchError);
   });
 
-  it("retains a successful bundle when a later refresh fails", async () => {
+  it("retains a successful bundle when a later refresh fails", () => {
     const { service } = harness();
-    await service.handleUpload(
-      new Request("http://internal/diff", { method: "POST", body: JSON.stringify(upload) })
-    );
+    service.publishBundle(upload);
 
-    expect(
-      (
-        await service.handleFailure(
-          new Request("http://internal/failure", {
-            method: "POST",
-            body: JSON.stringify({ error: "collector timed out" }),
-          })
-        )
-      ).status
-    ).toBe(204);
-    expect(await (await service.handleState()).json()).toMatchObject({
+    service.recordRefreshFailure({ error: "collector timed out" });
+
+    expect(service.getPublicState()).toMatchObject({
       current: { revisionId: "revision-1" },
       lastError: { message: "collector timed out", occurredAt: 200 },
     });
   });
 
-  it("accepts retry as a non-blocking refresh command", () => {
-    const { service, messenger } = harness();
+  it("rejects invalid, stale, and unknown file identities", () => {
+    const { service } = harness();
+    service.publishBundle(upload);
 
-    const response = service.handleRetry();
-
-    expect(response.status).toBe(202);
-    expect(messenger.sendToSandbox).toHaveBeenCalledWith({ type: "refresh_diff" });
+    expect(() => service.resolveFile(null, "file-1")).toThrow(InvalidDiffFileIdentityError);
+    expect(() => service.resolveFile("revision-1", "not a valid id!")).toThrow(
+      InvalidDiffFileIdentityError
+    );
+    expect(() => service.resolveFile("revision-0", "file-1")).toThrow(DiffRevisionStaleError);
+    expect(() => service.resolveFile("revision-1", "missing")).toThrow(DiffFileNotFoundError);
   });
 
-  it("rejects retry when the sandbox is not connected", () => {
+  it("requests a refresh only while the sandbox is connected", () => {
     const { service, messenger } = harness();
-    vi.mocked(messenger.sendToSandbox).mockReturnValue(false);
 
-    expect(service.handleRetry().status).toBe(409);
+    service.requestRefresh();
+    expect(messenger.sendToSandbox).toHaveBeenCalledWith({ type: "refresh_diff" });
+
+    vi.mocked(messenger.sendToSandbox).mockReturnValue(false);
+    expect(() => service.requestRefresh()).toThrow(SandboxNotConnectedError);
   });
 });

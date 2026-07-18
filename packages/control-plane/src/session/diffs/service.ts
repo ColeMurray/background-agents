@@ -9,11 +9,24 @@ import { generateId } from "../../auth/crypto";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
 import type { SessionRepository } from "../repository";
+import {
+  DiffBaselineMismatchError,
+  DiffBaselineUnavailableError,
+  DiffRepositoryMismatchError,
+  InvalidDiffBundleError,
+  InvalidDiffFailureError,
+  InvalidDiffFileIdentityError,
+  SandboxNotConnectedError,
+} from "./errors";
 import type { SessionDiffStore } from "./store";
 
 const DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 
-/** Owns validation and the single latest-bundle publication boundary. */
+/**
+ * Owns validation and the single latest-bundle publication boundary.
+ * Domain layer: methods throw SessionDiffError subclasses; the HTTP
+ * handler maps them to responses.
+ */
 export class SessionDiffService {
   constructor(
     private readonly store: SessionDiffStore,
@@ -33,16 +46,11 @@ export class SessionDiffService {
     );
   }
 
-  /** Serialize the browser-safe state returned by the authenticated manifest route. */
-  handleState(): Response {
-    return Response.json(this.getPublicState());
-  }
-
   /**
    * Pin immutable baselines advertised by the sandbox's ready event.
    * Repository order and identity must match the session's configured repositories.
    */
-  async handleReady(event: Extract<SandboxEvent, { type: "ready" }>): Promise<void> {
+  pinBaselines(event: Extract<SandboxEvent, { type: "ready" }>): void {
     const sessionRepositories = this.repository.getSessionRepositories();
     const advertised = event.repositories ?? [];
     const repositoriesMatch =
@@ -88,77 +96,54 @@ export class SessionDiffService {
     );
   }
 
-  /** Validate and atomically publish a sandbox-produced bundle as the latest revision. */
-  async handleUpload(request: Request): Promise<Response> {
-    const parsed = sessionDiffUploadSchema.safeParse(await this.readJson(request));
+  /**
+   * Validate and atomically publish a sandbox-produced bundle as the latest
+   * revision, returning its revision id.
+   */
+  publishBundle(input: unknown): string {
+    const parsed = sessionDiffUploadSchema.safeParse(input);
     if (!parsed.success) {
-      return Response.json({ error: "Invalid session diff bundle" }, { status: 400 });
+      throw new InvalidDiffBundleError();
     }
-    const repositoryError = this.validateRepositorySet(parsed.data);
-    if (repositoryError) {
-      return Response.json({ error: repositoryError.message }, { status: repositoryError.status });
-    }
+    this.assertRepositorySetMatches(parsed.data);
 
     const revisionId = this.generateRevisionId();
     const now = this.now();
     this.store.replaceBundle(parsed.data, revisionId, now);
     this.broadcastState(now);
-    return Response.json({ revisionId });
+    return revisionId;
   }
 
   /** Record a bounded refresh error without discarding the previous successful bundle. */
-  async handleFailure(request: Request): Promise<Response> {
-    const parsed = sessionDiffFailureSchema.safeParse(await this.readJson(request));
+  recordRefreshFailure(input: unknown): void {
+    const parsed = sessionDiffFailureSchema.safeParse(input);
     if (!parsed.success) {
-      return Response.json({ error: "Invalid session diff failure" }, { status: 400 });
+      throw new InvalidDiffFailureError();
     }
     const now = this.now();
     this.store.recordFailure(parsed.data.error, now);
     this.broadcastState(now);
-    return new Response(null, { status: 204 });
   }
 
   /** Resolve a patch only when both its revision and file identity are current. */
-  handleResolveFile(url: URL): Response {
-    const revisionId = this.readId(url.searchParams.get("revisionId"));
-    const fileId = this.readId(url.searchParams.get("fileId"));
-    if (!revisionId || !fileId) {
-      return Response.json({ error: "Invalid diff file identity" }, { status: 400 });
+  resolveFile(revisionId: string | null, fileId: string | null): string {
+    if (!this.isValidId(revisionId) || !this.isValidId(fileId)) {
+      throw new InvalidDiffFileIdentityError();
     }
-    const result = this.store.resolveFile(revisionId, fileId);
-    if (!result.ok) {
-      return Response.json(
-        {
-          error: result.status === 409 ? "Diff revision is stale" : "Diff file not found",
-          code: result.status === 409 ? "diff_revision_stale" : "diff_file_not_found",
-          currentRevisionId: result.currentRevisionId,
-        },
-        { status: result.status }
-      );
-    }
-    return new Response(result.patch, {
-      headers: {
-        "Content-Type": "text/x-diff; charset=utf-8",
-        "Cache-Control": "private, no-store",
-        "X-Content-Type-Options": "nosniff",
-      },
-    });
+    return this.store.resolveFile(revisionId, fileId);
   }
 
-  /** Request a non-blocking refresh when the session sandbox is connected. */
-  handleRetry(): Response {
+  /** Request a non-blocking refresh from the connected session sandbox. */
+  requestRefresh(): void {
     if (!this.messenger.sendToSandbox({ type: "refresh_diff" })) {
-      return Response.json({ error: "Sandbox is not connected" }, { status: 409 });
+      throw new SandboxNotConnectedError();
     }
-    return Response.json({ accepted: true }, { status: 202 });
   }
 
-  private validateRepositorySet(
-    bundle: SessionDiffUpload
-  ): { status: 400 | 409; message: string } | null {
+  private assertRepositorySetMatches(bundle: SessionDiffUpload): void {
     const sessionRepositories = this.repository.getSessionRepositories();
     if (bundle.repositories.length !== sessionRepositories.length) {
-      return { status: 400, message: "Repository set does not match session" };
+      throw new DiffRepositoryMismatchError();
     }
     for (const sessionRepository of sessionRepositories) {
       const repository = bundle.repositories.find(
@@ -171,17 +156,16 @@ export class SessionDiffService {
         repository.repoName.toLocaleLowerCase("en-US") !==
           sessionRepository.repoName.toLocaleLowerCase("en-US")
       ) {
-        return { status: 400, message: "Repository set does not match session" };
+        throw new DiffRepositoryMismatchError();
       }
       const baseSha = sessionRepository.row?.base_sha;
       if (!baseSha) {
-        return { status: 409, message: "Session start baseline is unavailable" };
+        throw new DiffBaselineUnavailableError();
       }
       if (repository.baseSha.toLocaleLowerCase("en-US") !== baseSha.toLocaleLowerCase("en-US")) {
-        return { status: 400, message: "Repository baseline does not match session" };
+        throw new DiffBaselineMismatchError();
       }
     }
-    return null;
   }
 
   private broadcastState(updatedAt: number): void {
@@ -192,15 +176,7 @@ export class SessionDiffService {
     });
   }
 
-  private async readJson(request: Request): Promise<unknown> {
-    try {
-      return await request.json();
-    } catch {
-      return null;
-    }
-  }
-
-  private readId(value: unknown): string | null {
-    return typeof value === "string" && DIFF_ID_PATTERN.test(value) ? value : null;
+  private isValidId(value: string | null): value is string {
+    return typeof value === "string" && DIFF_ID_PATTERN.test(value);
   }
 }

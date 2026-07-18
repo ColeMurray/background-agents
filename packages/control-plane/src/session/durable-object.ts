@@ -120,6 +120,7 @@ import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
+import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 
 /**
@@ -158,6 +159,8 @@ export class SessionDO extends DurableObject<Env> {
   private messenger!: SessionMessenger;
   // Session diff service (constructed in ensureInitialized once the session logger exists)
   private diffService!: SessionDiffService;
+  // Session diffs HTTP handler (constructed in ensureInitialized alongside the service)
+  private diffsHandler!: SessionDiffsHandler;
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
   // Source control provider (lazily initialized)
@@ -231,11 +234,11 @@ export class SessionDO extends DurableObject<Env> {
     childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
-    diffState: () => this.diffService.handleState(),
-    diffStore: (request) => this.diffService.handleUpload(request),
-    diffFailure: (request) => this.diffService.handleFailure(request),
-    diffResolveFile: (_request, url) => this.diffService.handleResolveFile(url),
-    diffRetry: () => this.diffService.handleRetry(),
+    diffState: () => this.diffsHandler.state(),
+    diffStore: (request) => this.diffsHandler.storeBundle(request),
+    diffFailure: (request) => this.diffsHandler.recordFailure(request),
+    diffResolveFile: (_request, url) => this.diffsHandler.resolveFile(url),
+    diffRetry: () => this.diffsHandler.retry(),
   });
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -656,7 +659,7 @@ export class SessionDO extends DurableObject<Env> {
         updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
         scheduleInactivityCheck: () => this.scheduleInactivityCheck(),
         processMessageQueue: () => this.messageQueue.processMessageQueue(),
-        handleReady: (event) => this.diffService.handleReady(event),
+        handleReady: async (event) => this.diffService.pinBaselines(event),
       });
     }
 
@@ -869,6 +872,7 @@ export class SessionDO extends DurableObject<Env> {
       this.messenger,
       this.log
     );
+    this.diffsHandler = new SessionDiffsHandler(this.diffService);
     this.wsManager.enableAutoPingPong();
   }
 
