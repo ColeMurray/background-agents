@@ -172,6 +172,28 @@ async def test_preserves_unicode_whitespace_and_newline_filename_edges(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_treats_repository_filenames_as_literal_git_pathspecs(tmp_path: Path) -> None:
+    repository, _ = _repository(tmp_path)
+    magic_path = ":(glob)*.txt"
+    other_path = "other.txt"
+    (repository.path / magic_path).write_text("magic before\n")
+    (repository.path / other_path).write_text("other before\n")
+    _git(repository.path, "add", "--all")
+    _git(repository.path, "commit", "-m", "add pathspec fixtures")
+    base_sha = _git(repository.path, "rev-parse", "HEAD")
+    (repository.path / magic_path).write_text("magic after\n")
+    (repository.path / other_path).write_text("other after\n")
+
+    capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    changes = {changed.path: changed for changed in capture.files}
+    assert set(changes) == {magic_path, other_path}
+    magic_patch = changes[magic_path].patch or ""
+    assert "+magic after" in magic_patch
+    assert "other.txt" not in magic_patch
+
+
+@pytest.mark.asyncio
 async def test_represents_a_mode_only_change_as_metadata(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository.path / "app.ts").chmod(0o755)
