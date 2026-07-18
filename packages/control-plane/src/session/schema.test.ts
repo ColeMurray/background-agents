@@ -270,4 +270,28 @@ describe("applyMigrations", () => {
       )
     ).toBe(true);
   });
+
+  it("allows generation-specific diff objects for fresh and previously migrated sessions", () => {
+    expect(SCHEMA_SQL).toContain("CREATE INDEX IF NOT EXISTS idx_diff_objects_capture_file");
+    expect(SCHEMA_SQL).not.toContain(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_objects_capture_file"
+    );
+
+    const migration = MIGRATIONS.find((item) => item.id === 37);
+    expect(migration).toBeDefined();
+    expect(typeof migration?.run).toBe("function");
+
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+
+    expect(
+      mock.calls.some((call) => call.query.includes("DROP INDEX IF EXISTS idx_diff_objects"))
+    ).toBe(true);
+    expect(
+      mock.calls.some(
+        (call) =>
+          call.query.includes("CREATE INDEX IF NOT EXISTS idx_diff_objects_capture_file") &&
+          !call.query.includes("CREATE UNIQUE INDEX")
+      )
+    ).toBe(true);
+  });
 });

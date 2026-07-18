@@ -187,43 +187,55 @@ export class SessionDiffStore {
       )
       .toArray();
     if (active.length === 0) return false;
-    this.sql
-      .exec(
-        `INSERT INTO diff_objects (
+    const inserted = this.sql.exec(
+      `INSERT OR IGNORE INTO diff_objects (
            object_key, capture_id, file_id, status, size_bytes, sha256, cleanup_after, created_at
          ) VALUES (?, ?, ?, 'staging', ?, ?, NULL, ?)
-         ON CONFLICT(object_key) DO UPDATE SET
-           size_bytes = excluded.size_bytes,
-           sha256 = excluded.sha256,
-           status = CASE WHEN diff_objects.status = 'referenced' THEN 'referenced' ELSE 'staging' END,
-           cleanup_after = NULL`,
-        input.objectKey,
-        input.captureId,
-        input.fileId,
-        input.sizeBytes,
-        input.sha256,
-        input.now
-      )
-      .toArray();
-    return true;
+        `,
+      input.objectKey,
+      input.captureId,
+      input.fileId,
+      input.sizeBytes,
+      input.sha256,
+      input.now
+    );
+    inserted.toArray();
+    return (inserted.rowsWritten ?? 0) > 0;
   }
 
-  markObjectStaged(captureId: string, fileId: string): boolean {
+  markObjectStaged(captureId: string, fileId: string, objectKey: string): boolean {
     const result = this.sql.exec(
       `UPDATE diff_objects SET status = 'staged'
-       WHERE capture_id = ? AND file_id = ? AND status = 'staging'`,
+       WHERE object_key = ? AND capture_id = ? AND file_id = ? AND status = 'staging'
+         AND EXISTS (
+           SELECT 1 FROM diff_state
+           WHERE singleton = 1 AND deleted_at IS NULL
+             AND attempt_id = ? AND attempt_status = 'capturing'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM diff_objects AS claimed
+           WHERE claimed.capture_id = ? AND claimed.file_id = ?
+             AND claimed.object_key != ?
+             AND claimed.status IN ('staged', 'referenced')
+         )`,
+      objectKey,
       captureId,
-      fileId
+      fileId,
+      captureId,
+      captureId,
+      fileId,
+      objectKey
     );
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }
 
-  abandonObject(captureId: string, fileId: string, now: number): void {
+  abandonObject(captureId: string, fileId: string, objectKey: string, now: number): void {
     this.sql.exec(
       `UPDATE diff_objects SET status = 'cleanup', cleanup_after = ?
-       WHERE capture_id = ? AND file_id = ? AND status != 'referenced'`,
+       WHERE object_key = ? AND capture_id = ? AND file_id = ? AND status != 'referenced'`,
       now,
+      objectKey,
       captureId,
       fileId
     );
@@ -266,7 +278,8 @@ export class SessionDiffStore {
     const staged = this.sql
       .exec(
         `SELECT object_key, capture_id, file_id, status, size_bytes
-         FROM diff_objects WHERE capture_id = ?`,
+         FROM diff_objects
+         WHERE capture_id = ? AND status IN ('staged', 'referenced')`,
         captureId
       )
       .toArray() as unknown as DiffObjectRow[];

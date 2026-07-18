@@ -231,6 +231,19 @@ describe("session diff routes", () => {
     );
     expect(upload.status).toBe(201);
 
+    const duplicateUpload = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/diff-captures/${captureId}/files/${fileId}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${auth.authToken}`,
+          "Content-Type": "text/x-diff; charset=utf-8",
+        },
+        body: patch,
+      }
+    );
+    expect(duplicateUpload.status).toBe(409);
+
     const complete = await SELF.fetch(
       `https://test.local/sessions/${sessionName}/diff-captures/${captureId}/complete`,
       {

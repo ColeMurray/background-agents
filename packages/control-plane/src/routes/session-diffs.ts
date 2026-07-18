@@ -146,18 +146,21 @@ async function handleDiffPatchUpload(
     await runtimeJson(ctx, sessionId, SessionInternalPaths.diffAbandonObject, {
       captureId,
       fileId,
+      objectKey,
     });
     return error("Failed to persist diff patch", 500);
   }
   const committed = await runtimeJson(ctx, sessionId, SessionInternalPaths.diffCommitObject, {
     captureId,
     fileId,
+    objectKey,
   });
   if (!committed.ok) {
     await storage.delete(objectKey);
     await runtimeJson(ctx, sessionId, SessionInternalPaths.diffAbandonObject, {
       captureId,
       fileId,
+      objectKey,
     });
     return error("Diff capture is no longer active", committed.status);
   }

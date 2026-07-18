@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS diff_capture_triggers (
   created_at INTEGER NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_objects_capture_file
+CREATE INDEX IF NOT EXISTS idx_diff_objects_capture_file
 ON diff_objects(capture_id, file_id);
 
 CREATE TABLE IF NOT EXISTS session_alarm_deadlines (
@@ -524,6 +524,17 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         LIMIT 1
       `,
         Date.now()
+      );
+    },
+  },
+  {
+    id: 37,
+    description: "Allow generation-specific session diff uploads",
+    run: (sql) => {
+      sql.exec(`DROP INDEX IF EXISTS idx_diff_objects_capture_file`);
+      sql.exec(
+        `CREATE INDEX IF NOT EXISTS idx_diff_objects_capture_file
+         ON diff_objects(capture_id, file_id)`
       );
     },
   },

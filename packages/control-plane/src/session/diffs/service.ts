@@ -170,7 +170,8 @@ export class SessionDiffService {
       return Response.json({ error: "Invalid diff object metadata" }, { status: 400 });
     }
     const sessionId = encodeURIComponent(this.deps.getPublicSessionId());
-    const objectKey = `session-diffs/${sessionId}/${captureId}/${fileId}.patch`;
+    const uploadId = this.deps.generateId();
+    const objectKey = `session-diffs/${sessionId}/${captureId}/${fileId}/${uploadId}.patch`;
     const staged = this.deps.store.stageObject({
       captureId,
       fileId,
@@ -188,10 +189,11 @@ export class SessionDiffService {
     const body = await this.readJsonRecord(request);
     const captureId = this.readId(body?.captureId);
     const fileId = this.readId(body?.fileId);
-    if (!captureId || !fileId) {
+    const objectKey = typeof body?.objectKey === "string" ? body.objectKey : null;
+    if (!captureId || !fileId || !objectKey) {
       return Response.json({ error: "Invalid diff object identity" }, { status: 400 });
     }
-    return this.deps.store.markObjectStaged(captureId, fileId)
+    return this.deps.store.markObjectStaged(captureId, fileId, objectKey)
       ? new Response(null, { status: 204 })
       : Response.json({ error: "Diff object was not staged" }, { status: 409 });
   }
@@ -200,10 +202,11 @@ export class SessionDiffService {
     const body = await this.readJsonRecord(request);
     const captureId = this.readId(body?.captureId);
     const fileId = this.readId(body?.fileId);
-    if (!captureId || !fileId) {
+    const objectKey = typeof body?.objectKey === "string" ? body.objectKey : null;
+    if (!captureId || !fileId || !objectKey) {
       return Response.json({ error: "Invalid diff object identity" }, { status: 400 });
     }
-    this.deps.store.abandonObject(captureId, fileId, this.deps.now());
+    this.deps.store.abandonObject(captureId, fileId, objectKey, this.deps.now());
     return new Response(null, { status: 204 });
   }
 
