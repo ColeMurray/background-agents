@@ -78,19 +78,27 @@ def is_runtime_git_excluded(path: str, runtime_paths: frozenset[str]) -> bool:
     )
 
 
-def install_runtime_git_excludes(repository: Path, runtime_paths: Iterable[str]) -> None:
-    """Replace our managed ``info/exclude`` block without touching user entries."""
-    patterns = sorted({_rooted_pattern(path) for path in runtime_paths})
-    if not patterns:
-        return
+def _runtime_path_exists(repository: Path, path: str) -> bool:
+    candidate = repository / path.rstrip("/")
+    return candidate.exists() or candidate.is_symlink()
 
+
+def install_runtime_git_excludes(repository: Path, runtime_paths: Iterable[str]) -> None:
+    """Atomically reconcile our managed block without touching user entries."""
+    current_patterns = {_rooted_pattern(path) for path in runtime_paths}
     exclude_path = _git_exclude_path(repository)
     try:
         existing = exclude_path.read_text()
     except FileNotFoundError:
         existing = ""
 
-    block = "\n".join((BEGIN_MARKER, *patterns, END_MARKER)) + "\n"
+    retained_patterns = {
+        _rooted_pattern(path)
+        for path in _managed_runtime_paths(existing)
+        if _runtime_path_exists(repository, path)
+    }
+    patterns = sorted(current_patterns | retained_patterns)
+    block = "\n".join((BEGIN_MARKER, *patterns, END_MARKER)) + "\n" if patterns else ""
     start = existing.find(BEGIN_MARKER)
     end = existing.find(END_MARKER, start + len(BEGIN_MARKER)) if start >= 0 else -1
     if start >= 0 and end >= 0:
@@ -101,10 +109,14 @@ def install_runtime_git_excludes(repository: Path, runtime_paths: Iterable[str])
             suffix_start += 1
         updated = existing[:start] + block + existing[suffix_start:]
     else:
+        if not block:
+            return
         separator = "" if not existing or existing.endswith(("\n", "\r")) else "\n"
         updated = existing + separator + block
 
     if updated == existing:
         return
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
-    exclude_path.write_text(updated)
+    temporary_path = exclude_path.with_name(f".{exclude_path.name}.open-inspect.tmp")
+    temporary_path.write_text(updated)
+    temporary_path.replace(exclude_path)
