@@ -299,6 +299,35 @@ async def test_reports_submodule_gitlinks_and_object_ids_as_metadata(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_resolves_an_unstaged_submodule_head_move(tmp_path: Path) -> None:
+    repository, _ = _repository(tmp_path)
+    submodule_path = repository.path / "vendor/lib"
+    submodule_path.mkdir(parents=True)
+    _git(submodule_path, "init", "-b", "main")
+    _git(submodule_path, "config", "user.name", "Diff Test")
+    _git(submodule_path, "config", "user.email", "diff@example.com")
+    (submodule_path / "value.txt").write_text("first\n")
+    _git(submodule_path, "add", "value.txt")
+    _git(submodule_path, "commit", "-m", "first submodule revision")
+    first = _git(submodule_path, "rev-parse", "HEAD")
+    _git(repository.path, "add", "vendor/lib")
+    _git(repository.path, "commit", "-m", "add submodule checkout")
+    base_sha = _git(repository.path, "rev-parse", "HEAD")
+    (submodule_path / "value.txt").write_text("second\n")
+    _git(submodule_path, "add", "value.txt")
+    _git(submodule_path, "commit", "-m", "second submodule revision")
+    second = _git(submodule_path, "rev-parse", "HEAD")
+
+    capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    changed = next(file for file in capture.files if file.path == "vendor/lib")
+    assert changed.status == "submodule"
+    assert changed.render_state == "metadata_only"
+    assert changed.old_submodule_sha == first
+    assert changed.new_submodule_sha == second
+
+
+@pytest.mark.asyncio
 async def test_enforces_file_and_capture_byte_limits_with_explicit_states(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository.path / "app.ts").write_text("const changed = 'a fairly long line';\n")

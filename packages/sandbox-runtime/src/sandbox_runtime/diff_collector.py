@@ -314,6 +314,30 @@ async def _tracked_patch(
     )
 
 
+async def _submodule_head(repository: RepoEntry, path: str, timeout_seconds: float) -> str:
+    value = (
+        (
+            await _git(
+                repository,
+                "-C",
+                path,
+                "rev-parse",
+                "--verify",
+                "HEAD",
+                timeout_seconds=timeout_seconds,
+                max_stdout_bytes=128,
+            )
+        )
+        .decode("ascii", errors="strict")
+        .strip()
+    )
+    if len(value) not in (40, 64) or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise DiffCaptureError(f"Invalid submodule HEAD for {path}")
+    return value
+
+
 async def _untracked_patch(
     repository: RepoEntry, path: str, timeout_seconds: float, max_patch_bytes: int
 ) -> bytes:
@@ -491,6 +515,10 @@ async def collect_repository_diff(
                 if metadata.new_mode == "160000" and set(metadata.new_sha) != {"0"}
                 else None
             )
+            if metadata.new_mode == "160000" and new_submodule_sha is None:
+                new_submodule_sha = await _submodule_head(
+                    repository, change.path, limits.command_timeout_seconds
+                )
         elif additions is None or deletions is None:
             render_state = "binary"
         elif is_overlay:
