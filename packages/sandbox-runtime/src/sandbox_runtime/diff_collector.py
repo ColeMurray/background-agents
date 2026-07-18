@@ -12,9 +12,9 @@ import asyncio
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, NotRequired, TypedDict
 
 from .git_excludes import is_runtime_git_excluded, read_runtime_git_excludes
 
@@ -27,6 +27,11 @@ DEFAULT_MAX_CAPTURE_BYTES = 1_024 * 1_024
 DEFAULT_MAX_BUNDLE_BYTES = 1_572_864
 DEFAULT_MAX_METADATA_BYTES = 8_000_000
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20.0
+
+# Mirrors SESSION_DIFF_VERSION in packages/shared/src/types/session-diffs.ts.
+SESSION_DIFF_VERSION: Final = 1
+# Mirrors SESSION_DIFF_MAX_ERROR_LENGTH in packages/shared/src/types/session-diffs.ts.
+SESSION_DIFF_MAX_ERROR_LENGTH: Final = 2_000
 
 
 class DiffCaptureError(RuntimeError):
@@ -42,12 +47,25 @@ class RenderState(StrEnum):
     BINARY = "binary"
 
 
+# Mirrors diffFileStatusSchema in packages/shared/src/types/session-diffs.ts.
+class DiffFileStatus(StrEnum):
+    """The kind of change one captured file represents; serialized verbatim."""
+
+    ADDED = "added"
+    MODIFIED = "modified"
+    DELETED = "deleted"
+    TYPE_CHANGED = "type_changed"
+    UNMERGED = "unmerged"
+    RENAMED = "renamed"
+    SUBMODULE = "submodule"
+
+
 class DiffFileUpload(TypedDict):
     """Wire representation of one changed file within a repository upload."""
 
     id: str
     path: str
-    status: str
+    status: DiffFileStatus
     additions: int | None
     deletions: int | None
     renderState: str
@@ -132,7 +150,7 @@ class CapturedFile:
     id: str
     path: str
     old_path: str | None
-    status: str
+    status: DiffFileStatus
     additions: int | None
     deletions: int | None
     render_state: RenderState
@@ -158,7 +176,7 @@ class RepositoryCapture:
 
 @dataclass(frozen=True)
 class _ChangedPath:
-    status: str
+    status: DiffFileStatus
     path: str
     old_path: str | None = None
 
@@ -169,6 +187,23 @@ class _TrackedMetadata:
     new_mode: str
     old_sha: str
     new_sha: str
+
+
+# Git tree entry mode for a submodule gitlink.
+_SUBMODULE_MODE: Final = "160000"
+# Git mode placeholder for a side of the diff where no entry exists.
+_ABSENT_MODE: Final = "000000"
+
+# Git --raw status letters; both rename and copy records carry an old path.
+_STATUS_BY_LETTER: Final[dict[str, DiffFileStatus]] = {
+    "A": DiffFileStatus.ADDED,
+    "M": DiffFileStatus.MODIFIED,
+    "D": DiffFileStatus.DELETED,
+    "T": DiffFileStatus.TYPE_CHANGED,
+    "U": DiffFileStatus.UNMERGED,
+    "R": DiffFileStatus.RENAMED,
+    "C": DiffFileStatus.RENAMED,
+}
 
 
 async def _git(
@@ -269,15 +304,7 @@ def _parse_raw_changes(
             old_path = None
             path = _decode_path(fields[index])
             index += 1
-        status = {
-            "A": "added",
-            "M": "modified",
-            "D": "deleted",
-            "T": "type_changed",
-            "U": "unmerged",
-            "R": "renamed",
-            "C": "renamed",
-        }.get(letter, "modified")
+        status = _STATUS_BY_LETTER.get(letter, DiffFileStatus.MODIFIED)
         change = _ChangedPath(status=status, path=path, old_path=old_path)
         changes.append(change)
         metadata[(old_path, path)] = _TrackedMetadata(
@@ -532,15 +559,15 @@ async def _submodule_shas(
     """
     old_sha = (
         metadata.old_sha
-        if metadata.old_mode == "160000" and set(metadata.old_sha) != {"0"}
+        if metadata.old_mode == _SUBMODULE_MODE and set(metadata.old_sha) != {"0"}
         else None
     )
     new_sha = (
         metadata.new_sha
-        if metadata.new_mode == "160000" and set(metadata.new_sha) != {"0"}
+        if metadata.new_mode == _SUBMODULE_MODE and set(metadata.new_sha) != {"0"}
         else None
     )
-    if metadata.new_mode == "160000" and new_sha is None:
+    if metadata.new_mode == _SUBMODULE_MODE and new_sha is None:
         new_sha = await _submodule_head(repository, change.path, timeout_seconds)
     return old_sha, new_sha
 
@@ -631,10 +658,10 @@ async def _capture_file(
     new_mode: str | None = None
     metadata = tracked_metadata.get((change.old_path, change.path))
     if metadata and metadata.old_mode != metadata.new_mode:
-        old_mode = metadata.old_mode if metadata.old_mode != "000000" else None
-        new_mode = metadata.new_mode if metadata.new_mode != "000000" else None
+        old_mode = metadata.old_mode if metadata.old_mode != _ABSENT_MODE else None
+        new_mode = metadata.new_mode if metadata.new_mode != _ABSENT_MODE else None
 
-    if metadata and (metadata.old_mode == "160000" or metadata.new_mode == "160000"):
+    if metadata and (metadata.old_mode == _SUBMODULE_MODE or metadata.new_mode == _SUBMODULE_MODE):
         old_submodule_sha, new_submodule_sha = await _submodule_shas(
             repository, change, metadata, limits.command_timeout_seconds
         )
@@ -642,7 +669,7 @@ async def _capture_file(
             id=str(uuid.uuid4()),
             path=change.path,
             old_path=change.old_path,
-            status="submodule",
+            status=DiffFileStatus.SUBMODULE,
             additions=additions,
             deletions=deletions,
             render_state=RenderState.METADATA_ONLY,
@@ -745,7 +772,7 @@ async def collect_repository_diff(
         raise DiffCaptureError("Repository change metadata exceeded its memory limit") from error
     runtime_paths = read_runtime_git_excludes(repository.path)
     untracked = [
-        _ChangedPath(status="added", path=_decode_path(path))
+        _ChangedPath(status=DiffFileStatus.ADDED, path=_decode_path(path))
         for path in untracked_raw.split(b"\0")
         if path and not is_runtime_git_excluded(_decode_path(path), runtime_paths)
     ]
@@ -753,14 +780,14 @@ async def collect_repository_diff(
     overlay_paths = {
         change.path
         for change in tracked
-        if change.status == "deleted" and change.path in untracked_paths
+        if change.status == DiffFileStatus.DELETED and change.path in untracked_paths
     }
     normalized_tracked = [
         _ChangedPath(
             status=(
-                "modified"
+                DiffFileStatus.MODIFIED
                 if change.path in overlay_paths
-                else "unmerged"
+                else DiffFileStatus.UNMERGED
                 if change.path in unmerged_paths
                 else change.status
             ),
@@ -886,13 +913,10 @@ async def collect_session_diff_bundle(
             capture = await collect_repository_diff(
                 repository,
                 repository.base_sha,
-                CaptureLimits(
+                replace(
+                    active_limits,
                     max_files=remaining_files,
-                    max_patch_bytes=active_limits.max_patch_bytes,
                     max_capture_bytes=remaining_patch_bytes,
-                    command_timeout_seconds=active_limits.command_timeout_seconds,
-                    max_bundle_bytes=active_limits.max_bundle_bytes,
-                    max_metadata_bytes=active_limits.max_metadata_bytes,
                 ),
             )
         except Exception as error:
@@ -903,7 +927,8 @@ async def collect_session_diff_bundle(
                     "repoOwner": repository.owner,
                     "repoName": repository.name,
                     "baseSha": repository.base_sha,
-                    "error": str(error)[:2_000] or "Repository diff unavailable",
+                    "error": str(error)[:SESSION_DIFF_MAX_ERROR_LENGTH]
+                    or "Repository diff unavailable",
                     "files": [],
                 }
             )
@@ -934,7 +959,7 @@ async def collect_session_diff_bundle(
         )
 
     bundle: SessionDiffBundle = {
-        "version": 1,
+        "version": SESSION_DIFF_VERSION,
         "triggerMessageId": trigger_message_id,
         "capturedAt": captured_at,
         "repositories": outcomes,
