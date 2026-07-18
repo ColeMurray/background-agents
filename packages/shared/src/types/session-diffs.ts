@@ -16,6 +16,10 @@ export const SESSION_DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 export const SESSION_DIFF_REVISION_STALE_CODE = "diff_revision_stale" as const;
 export const SESSION_DIFF_FILE_NOT_FOUND_CODE = "diff_file_not_found" as const;
 
+export type SessionDiffErrorCode =
+  | typeof SESSION_DIFF_REVISION_STALE_CODE
+  | typeof SESSION_DIFF_FILE_NOT_FOUND_CODE;
+
 export const diffRenderStateSchema = z.enum(["renderable", "binary", "too_large", "metadata_only"]);
 export const diffFileStatusSchema = z.enum([
   "added",
@@ -28,6 +32,10 @@ export const diffFileStatusSchema = z.enum([
 ]);
 
 const nonEmptyIdSchema = z.string().trim().min(1).max(200);
+// Ids that are interpolated into diff route paths must satisfy the same
+// contract the routes enforce, or an accepted bundle could publish files
+// whose patch URLs the routes reject.
+const sessionDiffIdSchema = z.string().regex(SESSION_DIFF_ID_PATTERN);
 const gitShaSchema = z.string().regex(/^[0-9a-f]{40,64}$/i, "Expected a Git object SHA");
 const repositoryOwnerSchema = z.string().trim().min(1).max(300);
 const repositoryNameSchema = z
@@ -57,7 +65,7 @@ const repositoryIdentityShape = {
 export const sessionDiffBaselineRepositorySchema = z.object(repositoryIdentityShape);
 
 const sessionDiffFileShape = {
-  id: nonEmptyIdSchema,
+  id: sessionDiffIdSchema,
   path: repositoryPathSchema,
   oldPath: repositoryPathSchema.optional(),
   status: diffFileStatusSchema,
@@ -250,7 +258,7 @@ export const sessionDiffUploadSchema = z.object(uploadShape).superRefine((bundle
 });
 
 export const storedSessionDiffBundleSchema = z
-  .object({ revisionId: nonEmptyIdSchema, ...uploadShape })
+  .object({ revisionId: sessionDiffIdSchema, ...uploadShape })
   .superRefine((bundle, ctx) => {
     validateBundle(bundle, ctx, true);
     const { revisionId: _revisionId, ...storedValue } = bundle;
@@ -259,7 +267,7 @@ export const storedSessionDiffBundleSchema = z
 
 const manifestShape = {
   version: z.literal(SESSION_DIFF_VERSION),
-  revisionId: nonEmptyIdSchema,
+  revisionId: sessionDiffIdSchema,
   triggerMessageId: nonEmptyIdSchema.nullable(),
   capturedAt: z.number().int().nonnegative(),
   repositories: z.array(sessionDiffRepositorySchema).min(1).max(MAX_SESSION_REPOSITORIES),

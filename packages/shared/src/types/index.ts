@@ -132,6 +132,7 @@ export {
   toSessionDiffManifest,
 } from "./session-diffs";
 export type {
+  SessionDiffErrorCode,
   DiffRenderState,
   DiffFileStatus,
   SessionDiffBaselineRepository,
