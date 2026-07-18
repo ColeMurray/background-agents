@@ -13,6 +13,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from .git_excludes import is_runtime_git_excluded, read_runtime_git_excludes
@@ -30,6 +31,15 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 20.0
 
 class DiffCaptureError(RuntimeError):
     """A repository could not produce a trustworthy capture."""
+
+
+class RenderState(StrEnum):
+    """How the client may present one captured file; serialized verbatim."""
+
+    RENDERABLE = "renderable"
+    METADATA_ONLY = "metadata_only"
+    TOO_LARGE = "too_large"
+    BINARY = "binary"
 
 
 class DiffFileUpload(TypedDict):
@@ -125,7 +135,7 @@ class CapturedFile:
     status: str
     additions: int | None
     deletions: int | None
-    render_state: str
+    render_state: RenderState
     patch: str | None
     patch_bytes: int | None
     old_mode: str | None = None
@@ -543,7 +553,7 @@ class _RenderedPatch:
     within the remaining budget.
     """
 
-    render_state: str
+    render_state: RenderState
     patch: str | None = None
     patch_bytes: int | None = None
 
@@ -579,7 +589,7 @@ async def _rendered_patch(
             )
         )
     except _GitOutputTooLarge:
-        return _RenderedPatch("too_large")
+        return _RenderedPatch(RenderState.TOO_LARGE)
 
     patch_text = raw_patch.decode("utf-8", errors="replace")
     # The upload client sends the normalized UTF-8 text, so limits and
@@ -587,12 +597,12 @@ async def _rendered_patch(
     # Git's potentially non-UTF-8 stdout.
     patch_bytes = len(patch_text.encode("utf-8"))
     if not is_untracked and additions == 0 and deletions == 0 and "\n@@" not in patch_text:
-        return _RenderedPatch("metadata_only")
+        return _RenderedPatch(RenderState.METADATA_ONLY)
     if patch_bytes > limits.max_patch_bytes or patch_bytes > remaining_capture_bytes:
-        return _RenderedPatch("too_large")
+        return _RenderedPatch(RenderState.TOO_LARGE)
     if not raw_patch:
-        return _RenderedPatch("metadata_only")
-    return _RenderedPatch("renderable", patch=patch_text, patch_bytes=patch_bytes)
+        return _RenderedPatch(RenderState.METADATA_ONLY)
+    return _RenderedPatch(RenderState.RENDERABLE, patch=patch_text, patch_bytes=patch_bytes)
 
 
 async def _capture_file(
@@ -635,7 +645,7 @@ async def _capture_file(
             status="submodule",
             additions=additions,
             deletions=deletions,
-            render_state="metadata_only",
+            render_state=RenderState.METADATA_ONLY,
             patch=None,
             patch_bytes=None,
             old_mode=old_mode,
@@ -645,13 +655,13 @@ async def _capture_file(
         )
 
     if additions is None or deletions is None:
-        rendered = _RenderedPatch("binary")
+        rendered = _RenderedPatch(RenderState.BINARY)
     elif is_overlay:
         # Git can report a staged deletion and an untracked working-tree
         # file at the same path (for example after ``git rm --cached``).
         # Preserve the meaningful index/worktree change as one path record
         # without publishing two contradictory patches for one file.
-        rendered = _RenderedPatch("metadata_only")
+        rendered = _RenderedPatch(RenderState.METADATA_ONLY)
     else:
         rendered = await _rendered_patch(
             repository,
@@ -780,7 +790,7 @@ async def collect_repository_diff(
             is_untracked=not is_overlay and change in untracked_changes,
             remaining_capture_bytes=remaining_capture_bytes,
         )
-        if file.render_state == "renderable" and file.patch_bytes is not None:
+        if file.render_state == RenderState.RENDERABLE and file.patch_bytes is not None:
             remaining_capture_bytes -= file.patch_bytes
         captured.append(file)
 
@@ -810,7 +820,7 @@ def _file_upload(changed: CapturedFile) -> DiffFileUpload:
     }
     if changed.old_path is not None:
         file["oldPath"] = changed.old_path
-    if changed.render_state == "renderable" and changed.patch is not None:
+    if changed.render_state == RenderState.RENDERABLE and changed.patch is not None:
         file["patch"] = changed.patch
     if changed.old_mode is not None:
         file["oldMode"] = changed.old_mode
@@ -840,7 +850,7 @@ def _bound_encoded_bundle(bundle: SessionDiffBundle, max_bundle_bytes: int) -> N
         if len(encode_bundle(bundle)) <= max_bundle_bytes:
             return
         file.pop("patch", None)
-        file["renderState"] = "too_large"
+        file["renderState"] = RenderState.TOO_LARGE
 
     if len(encode_bundle(bundle)) <= max_bundle_bytes:
         return
@@ -906,7 +916,7 @@ async def collect_session_diff_bundle(
             - sum(
                 len(changed.patch.encode("utf-8"))
                 for changed in capture.files
-                if changed.render_state == "renderable" and changed.patch is not None
+                if changed.render_state == RenderState.RENDERABLE and changed.patch is not None
             ),
         )
         outcomes.append(
