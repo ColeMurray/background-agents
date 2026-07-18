@@ -129,7 +129,7 @@ describe("SessionDiffService", () => {
     });
   });
 
-  it("rejects mismatched membership and immutable baselines", async () => {
+  it("rejects a mismatched repository set and immutable baselines", async () => {
     const { service } = harness();
     const request = (body: unknown) =>
       service.handleUpload(

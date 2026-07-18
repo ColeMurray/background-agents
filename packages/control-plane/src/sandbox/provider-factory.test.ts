@@ -52,4 +52,16 @@ describe("createSandboxProviderFromEnv", () => {
       "DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES must be a valid number"
     );
   });
+
+  it("rejects malformed E2B auto-pause configuration", () => {
+    const env = createEnv({
+      E2B_API_KEY: "e2b-key",
+      E2B_TEMPLATE_ID: "tmpl",
+      E2B_AUTO_PAUSE: "tru",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "e2b")).toThrow(
+      "E2B_AUTO_PAUSE must be a valid boolean"
+    );
+  });
 });

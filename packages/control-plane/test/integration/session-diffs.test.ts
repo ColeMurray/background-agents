@@ -105,16 +105,65 @@ describe("session diff routes", () => {
   it("requires the current sandbox token for writes", async () => {
     const sessionName = `diff-auth-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuth(stub, {
+      authToken: "current-diff-token",
+      sandboxId: "current-diff-sandbox",
+    });
     const baseSha = "a".repeat(40);
     await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
 
     const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        Authorization: "Bearer stale-or-cross-session-token",
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(bundle(baseSha)),
     });
 
     expect(response.status).toBe(401);
+  });
+
+  it("limits sandbox authentication to upload and failure reporting", async () => {
+    const sessionName = `diff-sandbox-scope-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    const auth = { authToken: "diff-sandbox-scope-token", sandboxId: "sandbox-scope" };
+    await seedSandboxAuth(stub, auth);
+    const headers = { Authorization: `Bearer ${auth.authToken}` };
+
+    expect(
+      (
+        await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
+          headers,
+        })
+      ).status
+    ).toBe(401);
+    expect(
+      (
+        await SELF.fetch(`https://test.local/sessions/${sessionName}/diff/retry`, {
+          method: "POST",
+          headers,
+        })
+      ).status
+    ).toBe(401);
+  });
+
+  it("requires internal authentication for browser-facing reads and retries", async () => {
+    const sessionName = `diff-internal-auth-${Date.now()}`;
+    await initNamedSession(sessionName);
+
+    expect((await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`)).status).toBe(401);
+    expect(
+      (await SELF.fetch(`https://test.local/sessions/${sessionName}/diff/revision-1/files/file-1`))
+        .status
+    ).toBe(401);
+    expect(
+      (
+        await SELF.fetch(`https://test.local/sessions/${sessionName}/diff/retry`, {
+          method: "POST",
+        })
+      ).status
+    ).toBe(401);
   });
 
   it("stores one atomic bundle and serves public metadata plus a revision-pinned patch", async () => {
@@ -167,6 +216,7 @@ describe("session diff routes", () => {
     );
     expect(file.status).toBe(200);
     expect(file.headers.get("Content-Type")).toContain("text/x-diff");
+    expect(file.headers.get("X-Content-Type-Options")).toBe("nosniff");
     await expect(file.text()).resolves.toBe(patch);
 
     const stale = await SELF.fetch(

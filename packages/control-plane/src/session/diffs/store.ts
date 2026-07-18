@@ -21,9 +21,11 @@ interface SessionDiffRow {
   updated_at: number;
 }
 
+/** Persists the single latest session-diff bundle in Durable Object SQLite. */
 export class SessionDiffStore {
   constructor(private readonly sql: SqlStorage) {}
 
+  /** Atomically replace the current bundle and clear any prior refresh failure. */
   replaceBundle(bundle: SessionDiffUpload, revisionId: string, now: number): void {
     storedSessionDiffBundleSchema.parse({ ...bundle, revisionId });
     this.sql.exec(
@@ -47,6 +49,7 @@ export class SessionDiffStore {
     );
   }
 
+  /** Retain the current bundle while recording the latest refresh failure. */
   recordFailure(error: string, now: number): void {
     const failure = sessionDiffFailureSchema.parse({ error });
     this.sql.exec(
@@ -63,6 +66,7 @@ export class SessionDiffStore {
     );
   }
 
+  /** Return the patch-free public manifest and current availability metadata. */
   getPublicState(unavailableReason: string | null): SessionDiffState {
     const row = this.readRow();
     const current = this.parseBundle(row);
@@ -77,6 +81,7 @@ export class SessionDiffStore {
     });
   }
 
+  /** Resolve a renderable patch from the current revision without accepting stale identities. */
   resolveFile(
     revisionId: string,
     fileId: string

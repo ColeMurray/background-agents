@@ -15,6 +15,7 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
+import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "../image-builds/maintenance";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   repoImageBuildScope,
@@ -49,7 +50,6 @@ import {
 const logger = createLogger("router:image-builds");
 const MS_PER_SECOND = 1000;
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
-const DEFAULT_STALE_BUILD_MAX_AGE_MS = 4200 * MS_PER_SECOND;
 const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * MS_PER_SECOND;
 
 interface ImageBuildCompleteBody {

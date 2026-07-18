@@ -129,6 +129,73 @@ describe("GitLabSourceControlProvider", () => {
       expect((err as SourceControlProviderError).errorType).toBe("permanent");
       expect((err as SourceControlProviderError).httpStatus).toBe(401);
     });
+
+    it("throws permanent error when the project response shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 42,
+          path: "web",
+          path_with_namespace: "acme/web",
+          namespace: {},
+          default_branch: "main",
+          visibility: "private",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .getRepository({ authType: "pat", token: "user-token" }, { owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
+    });
+
+    it("throws a permission error when the token cannot read repository code", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 42,
+          path: "web",
+          path_with_namespace: "acme/web",
+          namespace: { full_path: "acme" },
+          visibility: "private",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .getRepository({ authType: "pat", token: "user-token" }, { owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("cannot read repository code");
+      expect((err as Error).message).not.toContain("unexpected response shape");
+    });
+
+    it("rejects non-integer project IDs and unsupported visibility values", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 42.5,
+          path: "web",
+          path_with_namespace: "acme/web",
+          namespace: { full_path: "acme" },
+          default_branch: "main",
+          visibility: "restricted",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .getRepository({ authType: "pat", token: "user-token" }, { owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as Error).message).toContain("unexpected response shape");
+      expect((err as Error).message).toContain("id");
+      expect((err as Error).message).toContain("visibility");
+    });
   });
 
   describe("createPullRequest", () => {
@@ -374,6 +441,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "acme", full_path: "acme" },
           path: "web",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -395,6 +463,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "backend", full_path: "acme/backend" },
           path: "web",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -418,10 +487,26 @@ describe("GitLabSourceControlProvider", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
           id: 99,
-          namespace: { path: "acme" },
+          namespace: { path: "acme", full_path: "acme" },
           path: "web",
           default_branch: "main",
           archived: true,
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const result = await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+
+      expect(result).toBeNull();
+    });
+
+    it("returns null when the PAT cannot read repository code", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 99,
+          namespace: { path: "acme", full_path: "acme" },
+          path: "web",
+          archived: false,
         })
       );
 
@@ -450,6 +535,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "ACME", full_path: "ACME" },
           path: "WEB",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -458,6 +544,26 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(result?.repoOwner).toBe("acme");
       expect(result?.repoName).toBe("web");
+    });
+
+    it("throws permanent error when the access response shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 99,
+          namespace: { path: "acme", full_path: "acme" },
+          path: "web",
+          default_branch: "main",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .checkRepositoryAccess({ owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
     });
   });
 
@@ -537,6 +643,37 @@ describe("GitLabSourceControlProvider", () => {
       expect(repos.map((repo) => repo.fullName)).toEqual(["acme/active"]);
     });
 
+    it("excludes projects the PAT cannot read without failing the list", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([
+          {
+            id: 1,
+            path: "active",
+            path_with_namespace: "acme/active",
+            namespace: { full_path: "acme" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+            archived: false,
+          },
+          {
+            id: 2,
+            path: "guest-only",
+            path_with_namespace: "acme/guest-only",
+            namespace: { full_path: "acme" },
+            description: null,
+            visibility: "private",
+            archived: false,
+          },
+        ])
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const repos = await provider.listRepositories();
+
+      expect(repos.map((repo) => repo.fullName)).toEqual(["acme/active"]);
+    });
+
     it("returns the full namespace path as owner for nested-group projects", async () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse([
@@ -588,6 +725,29 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).errorType).toBe("transient");
+    });
+
+    it("throws permanent error when a listed repository shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([
+          {
+            id: 1,
+            path: "web",
+            path_with_namespace: "acme/web",
+            namespace: { path: "acme", full_path: "acme" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+          },
+        ])
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider.listRepositories().catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
     });
   });
 

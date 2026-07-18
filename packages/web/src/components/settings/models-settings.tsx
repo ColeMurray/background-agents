@@ -10,7 +10,9 @@ import { Switch } from "@/components/ui/switch";
 
 export function ModelsSettings() {
   const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
-  const [enabledModels, setEnabledModels] = useState<Set<string>>(new Set(DEFAULT_ENABLED_MODELS));
+  const [enabledModels, setEnabledModels] = useState<Set<string>>(
+    () => new Set(DEFAULT_ENABLED_MODELS)
+  );
   const [initialized, setInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);

@@ -85,6 +85,7 @@ describe("SessionChangesPanel", () => {
     expect(screen.getByText(/modified.*\+2.*-1/i)).toBeVisible();
     expect(screen.getByText("Compared with session start")).toBeVisible();
     expect(screen.getByText(/2 additional files omitted/i)).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "Changed files" })).toHaveClass("w-44");
     await userEvent.click(screen.getByRole("button", { name: /lib\.ts.*modified/i }));
     expect(onSelect).toHaveBeenCalledWith({ repositoryPosition: 0, path: "src/lib.ts" });
   });

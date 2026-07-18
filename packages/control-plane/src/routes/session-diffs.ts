@@ -151,6 +151,7 @@ async function handleDiffFile(
     headers: {
       "Content-Type": response.headers.get("Content-Type") ?? "application/json",
       "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
@@ -172,6 +173,13 @@ async function handleDiffRetry(
   });
 }
 
+/**
+ * Session-diff HTTP routes exposed by the control-plane worker.
+ *
+ * The central router requires internal HMAC authentication for reads and retry.
+ * Only bundle upload and failure reporting additionally accept the per-session
+ * sandbox token; the Session DO validates that token before these handlers run.
+ */
 export const sessionDiffRoutes: Route[] = [
   sessionRoute({
     method: "GET",

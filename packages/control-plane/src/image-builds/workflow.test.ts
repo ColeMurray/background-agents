@@ -11,6 +11,7 @@ import {
   ImageBuildTriggerFailedError,
   ImageBuildWorkflowUnavailableError,
 } from "./errors";
+import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { PlannedImageBuild } from "./types";
@@ -33,6 +34,7 @@ function createStore() {
   return {
     registerBuild: vi.fn().mockResolvedValue(true),
     getActiveBuild: vi.fn().mockResolvedValue(null),
+    markScopeStaleBuildFailed: vi.fn().mockResolvedValue(0),
     hasReadyImageForFingerprint: vi.fn().mockResolvedValue(false),
     getCallbackBuild: vi.fn().mockResolvedValue(null),
     getBuildRow: vi.fn().mockResolvedValue(null),
@@ -192,6 +194,60 @@ describe("ImageBuildWorkflow", () => {
       expect(result).toEqual({ type: "already_building", buildId: "imgb-existing" });
       expect(planBuild).not.toHaveBeenCalled();
       expect(store.registerBuild).not.toHaveBeenCalled();
+    });
+
+    it("lazily fails a timed-out build before the in-flight check", async () => {
+      const store = createStore();
+      store.markScopeStaleBuildFailed.mockResolvedValue(1);
+      const { workflow } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result.type).toBe("triggered");
+      expect(store.markScopeStaleBuildFailed).toHaveBeenCalledWith(
+        ENV_SCOPE,
+        "modal",
+        DEFAULT_STALE_BUILD_MAX_AGE_MS
+      );
+      // The wedged row must be failed before the in-flight read, or the read
+      // still sees it and re-wedges the scope.
+      expect(store.markScopeStaleBuildFailed.mock.invocationCallOrder[0]).toBeLessThan(
+        store.getActiveBuild.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("still reports a fresh in-flight build after the lazy stale check", async () => {
+      const store = createStore();
+      store.getActiveBuild.mockResolvedValue({ id: "imgb-fresh" });
+      const { workflow, planBuild } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result).toEqual({ type: "already_building", buildId: "imgb-fresh" });
+      expect(store.markScopeStaleBuildFailed).toHaveBeenCalled();
+      expect(planBuild).not.toHaveBeenCalled();
+    });
+
+    it("a lazy stale-mark failure never blocks the in-flight report", async () => {
+      const store = createStore();
+      store.markScopeStaleBuildFailed.mockRejectedValue(new Error("D1 unavailable"));
+      store.getActiveBuild.mockResolvedValue({ id: "imgb-existing" });
+      const { workflow } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result).toEqual({ type: "already_building", buildId: "imgb-existing" });
+    });
+
+    it("a lazy stale-mark failure never blocks a fresh trigger", async () => {
+      const store = createStore();
+      store.markScopeStaleBuildFailed.mockRejectedValue(new Error("D1 unavailable"));
+      const { workflow } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result.type).toBe("triggered");
+      expect(store.registerBuild).toHaveBeenCalled();
     });
 
     it("yields to a concurrent trigger that wins the registerBuild guard", async () => {

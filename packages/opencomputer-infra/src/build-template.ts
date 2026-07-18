@@ -152,7 +152,16 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       `ln -sf ${PYTHON_VENV}/bin/python ${USER_BIN}/python`,
       `HOME=${SANDBOX_HOME} UV_CACHE_DIR=${UV_CACHE} uv pip install --python ${PYTHON_VENV}/bin/python httpx websockets "pydantic>=2.0" "PyJWT[crypto]"`,
       `sudo rm -rf /app && sudo ln -s ${SANDBOX_APP_DIR} /app`,
-      `sudo env npm_config_cache=${NPM_CACHE} npm install -g --prefix ${NPM_PREFIX} pnpm@10 opencode-ai@${OPENCODE_VERSION} @opencode-ai/plugin@${OPENCODE_VERSION} zod@4.4.3 agent-browser@${AGENT_BROWSER_VERSION}`
+      // Install the JS toolchain into the sandbox-owned prefix. --allow-scripts=opencode-ai is
+      // REQUIRED: the OpenComputer base image ships npm 12, which does not run package lifecycle
+      // scripts by default. opencode-ai's postinstall copies the real ~180MB native binary over
+      // the shipped bin/opencode.exe stub; without allowing it the stub survives and every
+      // session dies with "Exec format error: opencode". opencode-ai is the only co-installed
+      // package with an install-time lifecycle script.
+      `sudo env npm_config_cache=${NPM_CACHE} npm install -g --prefix ${NPM_PREFIX} --allow-scripts=opencode-ai pnpm@10 opencode-ai@${OPENCODE_VERSION} @opencode-ai/plugin@${OPENCODE_VERSION} zod@4.4.3 agent-browser@${AGENT_BROWSER_VERSION}`,
+      // Fail the build loudly if opencode is still a stub / not runnable (e.g. if the flag above
+      // ever stops taking effect), so a broken image can never ship silently.
+      `${NPM_PREFIX}/bin/opencode --version`
     )
     .runCommands(
       // GitHub CLI — installed to /usr/bin/gh (the path the runtime's gh wrapper expects).

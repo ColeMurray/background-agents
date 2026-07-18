@@ -32,6 +32,7 @@ const DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 export class SessionDiffService {
   constructor(private readonly deps: SessionDiffServiceDeps) {}
 
+  /** Return the latest patch-free manifest and any non-destructive refresh error. */
   getPublicState(): SessionDiffState {
     const repositories = this.deps.repository.getSessionRepositories();
     const missingBaseline = repositories.some((repository) => !repository.row?.base_sha);
@@ -40,66 +41,72 @@ export class SessionDiffService {
     );
   }
 
+  /** Serialize the browser-safe state returned by the authenticated manifest route. */
   handleState(): Response {
     return Response.json(this.getPublicState());
   }
 
+  /**
+   * Pin immutable baselines advertised by the sandbox's ready event.
+   * Repository order and identity must match the session's configured repositories.
+   */
   async handleReady(event: Extract<SandboxEvent, { type: "ready" }>): Promise<void> {
-    const members = this.deps.repository.getSessionRepositories();
+    const sessionRepositories = this.deps.repository.getSessionRepositories();
     const advertised = event.repositories ?? [];
-    const membershipMatches =
-      advertised.length === members.length &&
-      members.every((member, index) => {
+    const repositoriesMatch =
+      advertised.length === sessionRepositories.length &&
+      sessionRepositories.every((sessionRepository, index) => {
         const baseline = advertised[index];
         return (
-          baseline?.position === member.position &&
+          baseline?.position === sessionRepository.position &&
           baseline.repoOwner.toLocaleLowerCase("en-US") ===
-            member.repoOwner.toLocaleLowerCase("en-US") &&
+            sessionRepository.repoOwner.toLocaleLowerCase("en-US") &&
           baseline.repoName.toLocaleLowerCase("en-US") ===
-            member.repoName.toLocaleLowerCase("en-US")
+            sessionRepository.repoName.toLocaleLowerCase("en-US")
         );
       });
-    if (!membershipMatches) {
-      this.deps.log.warn("session_diff.baseline_membership_mismatch", {
+    if (!repositoriesMatch) {
+      this.deps.log.warn("session_diff.baseline_repository_mismatch", {
         advertised_repositories: advertised.length,
-        session_repositories: members.length,
+        session_repositories: sessionRepositories.length,
       });
       return;
     }
 
-    for (const [index, member] of members.entries()) {
-      const existing = member.row?.base_sha;
+    for (const [index, sessionRepository] of sessionRepositories.entries()) {
+      const existing = sessionRepository.row?.base_sha;
       const next = advertised[index]!.baseSha;
       if (existing && existing.toLocaleLowerCase("en-US") !== next.toLocaleLowerCase("en-US")) {
         this.deps.log.warn("session_diff.baseline_conflict", {
-          repository_position: member.position,
-          repo_owner: member.repoOwner,
-          repo_name: member.repoName,
+          repository_position: sessionRepository.position,
+          repo_owner: sessionRepository.repoOwner,
+          repo_name: sessionRepository.repoName,
         });
       }
     }
 
     this.deps.storage.transactionSync(() => {
       this.deps.repository.setSessionDiffBaselines(
-        members.map((member, index) => ({
-          position: member.position,
-          repoOwner: member.repoOwner,
-          repoName: member.repoName,
+        sessionRepositories.map((sessionRepository, index) => ({
+          position: sessionRepository.position,
+          repoOwner: sessionRepository.repoOwner,
+          repoName: sessionRepository.repoName,
           baseSha: advertised[index]!.baseSha,
-          isPrimary: member.isPrimary,
+          isPrimary: sessionRepository.isPrimary,
         }))
       );
     });
   }
 
+  /** Validate and atomically publish a sandbox-produced bundle as the latest revision. */
   async handleUpload(request: Request): Promise<Response> {
     const parsed = sessionDiffUploadSchema.safeParse(await this.readJson(request));
     if (!parsed.success) {
       return Response.json({ error: "Invalid session diff bundle" }, { status: 400 });
     }
-    const membershipError = this.validateMembership(parsed.data);
-    if (membershipError) {
-      return Response.json({ error: membershipError.message }, { status: membershipError.status });
+    const repositoryError = this.validateRepositorySet(parsed.data);
+    if (repositoryError) {
+      return Response.json({ error: repositoryError.message }, { status: repositoryError.status });
     }
 
     const revisionId = this.deps.generateId();
@@ -111,6 +118,7 @@ export class SessionDiffService {
     return Response.json({ revisionId });
   }
 
+  /** Record a bounded refresh error without discarding the previous successful bundle. */
   async handleFailure(request: Request): Promise<Response> {
     const parsed = sessionDiffFailureSchema.safeParse(await this.readJson(request));
     if (!parsed.success) {
@@ -124,6 +132,7 @@ export class SessionDiffService {
     return new Response(null, { status: 204 });
   }
 
+  /** Resolve a patch only when both its revision and file identity are current. */
   handleResolveFile(url: URL): Response {
     const revisionId = this.readId(url.searchParams.get("revisionId"));
     const fileId = this.readId(url.searchParams.get("fileId"));
@@ -145,10 +154,12 @@ export class SessionDiffService {
       headers: {
         "Content-Type": "text/x-diff; charset=utf-8",
         "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   }
 
+  /** Request a non-blocking refresh when the session sandbox is connected. */
   handleRetry(): Response {
     if (!this.deps.hasSandboxConnection()) {
       return Response.json({ error: "Sandbox is not connected" }, { status: 409 });
@@ -159,27 +170,27 @@ export class SessionDiffService {
     return Response.json({ accepted: true }, { status: 202 });
   }
 
-  private validateMembership(
+  private validateRepositorySet(
     bundle: SessionDiffUpload
   ): { status: 400 | 409; message: string } | null {
-    const members = this.deps.repository.getSessionRepositories();
-    if (bundle.repositories.length !== members.length) {
-      return { status: 400, message: "Repository membership does not match session" };
+    const sessionRepositories = this.deps.repository.getSessionRepositories();
+    if (bundle.repositories.length !== sessionRepositories.length) {
+      return { status: 400, message: "Repository set does not match session" };
     }
-    for (const member of members) {
+    for (const sessionRepository of sessionRepositories) {
       const repository = bundle.repositories.find(
-        (candidate) => candidate.position === member.position
+        (candidate) => candidate.position === sessionRepository.position
       );
       if (
         !repository ||
         repository.repoOwner.toLocaleLowerCase("en-US") !==
-          member.repoOwner.toLocaleLowerCase("en-US") ||
+          sessionRepository.repoOwner.toLocaleLowerCase("en-US") ||
         repository.repoName.toLocaleLowerCase("en-US") !==
-          member.repoName.toLocaleLowerCase("en-US")
+          sessionRepository.repoName.toLocaleLowerCase("en-US")
       ) {
-        return { status: 400, message: "Repository membership does not match session" };
+        return { status: 400, message: "Repository set does not match session" };
       }
-      const baseSha = member.row?.base_sha;
+      const baseSha = sessionRepository.row?.base_sha;
       if (!baseSha) {
         return { status: 409, message: "Session start baseline is unavailable" };
       }

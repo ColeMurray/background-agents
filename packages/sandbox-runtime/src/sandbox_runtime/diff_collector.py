@@ -33,6 +33,8 @@ class DiffCaptureError(RuntimeError):
 
 
 class SessionDiffBundle(TypedDict):
+    """Wire representation uploaded atomically for all session repositories."""
+
     version: int
     triggerMessageId: str | None
     capturedAt: int
@@ -45,6 +47,8 @@ class _GitOutputTooLarge(RuntimeError):
 
 @dataclass(frozen=True)
 class CaptureLimits:
+    """Resource ceilings applied while collecting one session diff bundle."""
+
     max_files: int
     max_patch_bytes: int
     max_capture_bytes: int
@@ -54,6 +58,7 @@ class CaptureLimits:
 
     @classmethod
     def defaults(cls) -> CaptureLimits:
+        """Return the production capture limits shared with the API contract."""
         return cls(
             max_files=DEFAULT_MAX_FILES,
             max_patch_bytes=DEFAULT_MAX_PATCH_BYTES,
@@ -66,6 +71,8 @@ class CaptureLimits:
 
 @dataclass(frozen=True)
 class CapturedFile:
+    """One changed path and its optional bounded, renderable patch."""
+
     id: str
     path: str
     old_path: str | None
@@ -83,6 +90,8 @@ class CapturedFile:
 
 @dataclass(frozen=True)
 class RepositoryCapture:
+    """A repository's net checkout changes relative to its immutable baseline."""
+
     repository: RepoEntry
     base_sha: str
     head_sha: str
@@ -727,7 +736,7 @@ async def collect_session_diff_bundle(
     captured_at: int,
     limits: CaptureLimits | None = None,
 ) -> SessionDiffBundle:
-    """Collect every member repository into one coherent, bounded upload bundle."""
+    """Collect all session repositories into one coherent, bounded upload bundle."""
     active_limits = limits or CaptureLimits.defaults()
     remaining_files = active_limits.max_files
     remaining_patch_bytes = active_limits.max_capture_bytes
