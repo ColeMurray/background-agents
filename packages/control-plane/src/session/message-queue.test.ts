@@ -85,10 +85,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
   };
 }
 
-function buildQueue(options?: {
-  getClientInfo?: (ws: WebSocket) => ClientInfo | null;
-  getDispatchBlockReason?: () => string | null;
-}) {
+function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | null }) {
   const repository = {
     createMessageWithAttachments: vi.fn(),
     createEvent: vi.fn(),
@@ -125,7 +122,6 @@ function buildQueue(options?: {
   const spawnSandbox = vi.fn(async () => {});
   const setSessionStatus = vi.fn(async (_status: string) => {});
   const reconcileSessionStatusAfterExecution = vi.fn(async (_success: boolean) => {});
-  const beginDiffCapture = vi.fn(async (_messageId: string) => {});
   const updateLastActivity = vi.fn();
   const waitUntil = vi.fn();
 
@@ -153,8 +149,6 @@ function buildQueue(options?: {
     broadcast,
     setSessionStatus,
     reconcileSessionStatusAfterExecution,
-    getDispatchBlockReason: options?.getDispatchBlockReason ?? (() => null),
-    beginDiffCapture,
   });
 
   return {
@@ -167,7 +161,6 @@ function buildQueue(options?: {
     spawnSandbox,
     setSessionStatus,
     reconcileSessionStatusAfterExecution,
-    beginDiffCapture,
     waitUntil,
     callbackService,
   };
@@ -401,18 +394,6 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
   });
 
-  it("keeps a prompt pending until the runtime establishes its diff baseline", async () => {
-    const h = buildQueue({ getDispatchBlockReason: () => "diff_baseline_pending" });
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
-    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-42" }));
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-
-    await h.queue.processMessageQueue();
-
-    expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
-    expect(h.wsManager.send).not.toHaveBeenCalled();
-  });
-
   it("notifies the integration after a prompt is dispatched to the sandbox", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
@@ -457,10 +438,6 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
-    expect(h.wsManager.send.mock.invocationCallOrder[0]).toBeLessThan(
-      h.beginDiffCapture.mock.invocationCallOrder[0]!
-    );
-    expect(h.beginDiffCapture).toHaveBeenCalledWith("msg-9");
     expect(h.waitUntil).toHaveBeenCalledTimes(1);
     expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(false);
   });
@@ -476,20 +453,11 @@ describe("SessionMessageQueue", () => {
 
   it("reconciles session status when failing a stuck processing message", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
     await h.queue.failStuckProcessingMessage();
 
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
-    expect(h.wsManager.send.mock.invocationCallOrder[0]).toBeLessThan(
-      h.beginDiffCapture.mock.invocationCallOrder[0]!
-    );
     expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(false);
-    expect(h.beginDiffCapture.mock.invocationCallOrder[0]).toBeLessThan(
-      h.reconcileSessionStatusAfterExecution.mock.invocationCallOrder[0]!
-    );
   });
 
   describe("enqueuePromptFromApi", () => {

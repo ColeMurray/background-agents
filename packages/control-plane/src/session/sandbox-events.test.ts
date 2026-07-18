@@ -48,7 +48,6 @@ function createProcessor() {
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const handleReady = vi.fn(async () => {});
-  const beginDiffCapture = vi.fn(async () => {});
   const updateLastActivity = vi.fn();
   const getIsProcessing = vi.fn(() => false);
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
@@ -75,7 +74,6 @@ function createProcessor() {
     scheduleInactivityCheck,
     processMessageQueue,
     handleReady,
-    beginDiffCapture,
   });
 
   return {
@@ -89,7 +87,6 @@ function createProcessor() {
     scheduleInactivityCheck,
     processMessageQueue,
     handleReady,
-    beginDiffCapture,
     updateLastActivity,
     applySessionTitleUpdate,
     waitUntil,
@@ -97,7 +94,7 @@ function createProcessor() {
 }
 
 describe("SessionSandboxEventProcessor", () => {
-  it("starts the terminal diff capture before releasing the next prompt", async () => {
+  it("releases the next prompt without waiting for diff work", async () => {
     const h = createProcessor();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
     h.repository.getMessageTimestamps.mockReturnValue({ created_at: 1000, started_at: 1100 });
@@ -110,16 +107,8 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2000,
     });
 
-    expect(h.beginDiffCapture).toHaveBeenCalledWith("msg-1");
-    expect(h.beginDiffCapture.mock.invocationCallOrder[0]).toBeLessThan(
-      h.processMessageQueue.mock.invocationCallOrder[0]!
-    );
-    expect(h.beginDiffCapture.mock.invocationCallOrder[0]).toBeLessThan(
-      h.reconcileSessionStatusAfterExecution.mock.invocationCallOrder[0]!
-    );
-    expect(h.beginDiffCapture.mock.invocationCallOrder[0]).toBeLessThan(
-      h.scheduleInactivityCheck.mock.invocationCallOrder[0]!
-    );
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(true);
   });
 
   it("updates heartbeat without broadcasting", async () => {

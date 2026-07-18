@@ -80,7 +80,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
   /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
-  /^\/sessions\/[^/]+\/diff-captures\/[^/]+\/(?:files\/[^/]+|complete|failed)$/,
+  /^\/sessions\/[^/]+\/diff(?:\/failure)?$/,
 ];
 
 type CachedScmProvider =
@@ -144,8 +144,7 @@ function isScmAgnosticRoute(path: string): boolean {
     // providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
     /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
     /^\/sessions\/[^/]+\/tunnel-urls$/.test(path) ||
-    /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path) ||
-    /^\/sessions\/[^/]+\/diff-captures\/[^/]+\/(?:files\/[^/]+|complete|failed)$/.test(path)
+    /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
 }
 

@@ -74,25 +74,43 @@ export function FilesChangedSection({
   const labels = useMemo(() => buildUniquePathLabels(paths), [paths]);
   const normalizedQuery = query.trim().toLowerCase();
   const fileCount = paths.length;
-  if (fileCount === 0) return null;
+  if (fileCount === 0 && repositories.every((repository) => repository.status === "ready")) {
+    return null;
+  }
 
   return (
     <div className="space-y-3">
-      <input
-        type="search"
-        aria-label="Filter changed files"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder={`Filter ${fileCount} changed file${fileCount === 1 ? "" : "s"}`}
-        className="h-8 w-full rounded-md border border-border-muted bg-background px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      />
+      {fileCount > 0 && (
+        <input
+          type="search"
+          aria-label="Filter changed files"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={`Filter ${fileCount} changed file${fileCount === 1 ? "" : "s"}`}
+          className="h-8 w-full rounded-md border border-border-muted bg-background px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+      )}
       <div className="space-y-3">
         {repositories.map((repository) => {
+          const key = `${repository.position}:${repository.repoOwner}/${repository.repoName}`;
+          if (repository.status === "unavailable") {
+            const contents = <p className="text-[11px] text-warning">{repository.error}</p>;
+            return repositories.length > 1 ? (
+              <RepositoryGroup
+                key={key}
+                label={`${repository.repoOwner}/${repository.repoName}`}
+                forceOpen
+              >
+                {contents}
+              </RepositoryGroup>
+            ) : (
+              <div key={key}>{contents}</div>
+            );
+          }
           const files = repository.files.filter((file) =>
             normalizedQuery ? file.path.toLowerCase().includes(normalizedQuery) : true
           );
           if (files.length === 0) return null;
-          const key = `${repository.position}:${repository.repoOwner}/${repository.repoName}`;
           const contents = (
             <>
               <div className="space-y-1">

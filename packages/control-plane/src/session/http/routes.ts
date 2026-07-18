@@ -40,14 +40,10 @@ export interface SessionInternalRouteHandlers {
   cancel: SessionInternalRouteHandler;
   childSessionUpdate: SessionInternalRouteHandler;
   diffState: SessionInternalRouteHandler;
-  diffStageObject: SessionInternalRouteHandler;
-  diffCommitObject: SessionInternalRouteHandler;
-  diffAbandonObject: SessionInternalRouteHandler;
-  diffComplete: SessionInternalRouteHandler;
-  diffFailed: SessionInternalRouteHandler;
+  diffStore: SessionInternalRouteHandler;
+  diffFailure: SessionInternalRouteHandler;
   diffResolveFile: SessionInternalRouteHandler;
   diffRetry: SessionInternalRouteHandler;
-  diffDelete: SessionInternalRouteHandler;
 }
 
 /**
@@ -122,29 +118,13 @@ export function createSessionInternalRoutes(
       handler: handlers.childSessionUpdate,
     },
     { method: "GET", path: SessionInternalPaths.diffState, handler: handlers.diffState },
-    {
-      method: "POST",
-      path: SessionInternalPaths.diffStageObject,
-      handler: handlers.diffStageObject,
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.diffCommitObject,
-      handler: handlers.diffCommitObject,
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.diffAbandonObject,
-      handler: handlers.diffAbandonObject,
-    },
-    { method: "POST", path: SessionInternalPaths.diffComplete, handler: handlers.diffComplete },
-    { method: "POST", path: SessionInternalPaths.diffFailed, handler: handlers.diffFailed },
+    { method: "POST", path: SessionInternalPaths.diffStore, handler: handlers.diffStore },
+    { method: "POST", path: SessionInternalPaths.diffFailure, handler: handlers.diffFailure },
     {
       method: "GET",
       path: SessionInternalPaths.diffResolveFile,
       handler: handlers.diffResolveFile,
     },
     { method: "POST", path: SessionInternalPaths.diffRetry, handler: handlers.diffRetry },
-    { method: "POST", path: SessionInternalPaths.diffDelete, handler: handlers.diffDelete },
   ];
 }

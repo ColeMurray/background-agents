@@ -24,7 +24,7 @@ describe("session diff API route", () => {
   it("proxies the latest manifest with private caching", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneFetch).mockResolvedValueOnce(
-      Response.json({ version: 1, baseline: { status: "ready" }, current: null })
+      Response.json({ version: 1, current: null, lastError: null, unavailableReason: null })
     );
     const context = { params: Promise.resolve({ id: "session-1" }) };
 

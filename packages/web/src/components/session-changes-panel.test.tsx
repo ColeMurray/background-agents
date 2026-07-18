@@ -19,10 +19,11 @@ afterEach(() => {
 
 const state: SessionDiffState = {
   version: 1,
-  baseline: { status: "ready", reason: null },
-  attempt: { id: null, status: "idle", startedAt: null, error: null },
+  lastError: null,
+  unavailableReason: null,
   current: {
-    revisionId: "capture-1",
+    version: 1,
+    revisionId: "revision-1",
     capturedAt: 100,
     triggerMessageId: "message-1",
     repositories: [
@@ -32,12 +33,9 @@ const state: SessionDiffState = {
         repoName: "web",
         baseSha: "a".repeat(40),
         headSha: "b".repeat(40),
-        capturedAt: 100,
-        status: "stale",
-        sourceCaptureId: "capture-1",
+        status: "ready",
         truncated: true,
         omittedFileCount: 2,
-        error: "latest capture failed",
         files: [
           {
             id: "file-1",
@@ -62,6 +60,8 @@ const state: SessionDiffState = {
     ],
   },
 };
+const readyRepository = state.current!.repositories[0]!;
+if (readyRepository.status !== "ready") throw new Error("Expected a ready repository fixture");
 
 describe("SessionChangesPanel", () => {
   it("keeps searchable file navigation and selected-file context in the panel", async () => {
@@ -72,9 +72,9 @@ describe("SessionChangesPanel", () => {
         state={state}
         resolved={{
           status: "ready",
-          revisionId: "capture-1",
-          repository: state.current!.repositories[0]!,
-          file: state.current!.repositories[0]!.files[0]!,
+          revisionId: "revision-1",
+          repository: readyRepository,
+          file: readyRepository.files[0]!,
         }}
         onClose={vi.fn()}
         onSelect={onSelect}
@@ -84,7 +84,6 @@ describe("SessionChangesPanel", () => {
     expect(screen.getByText("acme/web")).toBeVisible();
     expect(screen.getByText(/modified.*\+2.*-1/i)).toBeVisible();
     expect(screen.getByText("Compared with session start")).toBeVisible();
-    expect(screen.getByText(/latest capture failed/i)).toBeVisible();
     expect(screen.getByText(/2 additional files omitted/i)).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: /lib\.ts.*modified/i }));
     expect(onSelect).toHaveBeenCalledWith({ repositoryPosition: 0, path: "src/lib.ts" });
@@ -95,7 +94,7 @@ describe("SessionChangesPanel", () => {
       <SessionChangesPanel
         sessionId="session-1"
         state={state}
-        resolved={{ status: "missing", revisionId: "capture-1" }}
+        resolved={{ status: "missing", revisionId: "revision-1" }}
         onClose={vi.fn()}
         onSelect={vi.fn()}
       />
@@ -114,9 +113,9 @@ describe("SessionChangesPanel", () => {
         state={state}
         resolved={{
           status: "ready",
-          revisionId: "capture-1",
-          repository: state.current!.repositories[0]!,
-          file: state.current!.repositories[0]!.files[0]!,
+          revisionId: "revision-1",
+          repository: readyRepository,
+          file: readyRepository.files[0]!,
         }}
         onClose={vi.fn()}
         onSelect={vi.fn()}
@@ -137,13 +136,13 @@ describe("SessionChangesPanel", () => {
         sessionId="session-1"
         state={{
           ...state,
-          attempt: { id: "capture-2", status: "failed", startedAt: 200, error: "timed out" },
+          lastError: { message: "timed out", occurredAt: 200 },
         }}
         resolved={{
           status: "ready",
-          revisionId: "capture-1",
-          repository: state.current!.repositories[0]!,
-          file: state.current!.repositories[0]!.files[0]!,
+          revisionId: "revision-1",
+          repository: readyRepository,
+          file: readyRepository.files[0]!,
         }}
         onClose={vi.fn()}
         onSelect={vi.fn()}

@@ -66,8 +66,7 @@ describe("swrKeysToRevalidate", () => {
       swrKeysToRevalidate(
         {
           type: "diff_state_changed",
-          attemptStatus: "idle",
-          revisionId: "capture-2",
+          revisionId: "revision-2",
           updatedAt: 200,
         },
         SESSION_ID

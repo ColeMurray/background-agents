@@ -9,23 +9,34 @@ shell command.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from .repo_config import RepoEntry
 
 DEFAULT_MAX_FILES = 1_000
-DEFAULT_MAX_PATCH_BYTES = 1_000_000
-DEFAULT_MAX_CAPTURE_BYTES = 20_000_000
+DEFAULT_MAX_PATCH_BYTES = 512 * 1_024
+DEFAULT_MAX_CAPTURE_BYTES = 1_024 * 1_024
+DEFAULT_MAX_BUNDLE_BYTES = 1_572_864
 DEFAULT_MAX_METADATA_BYTES = 8_000_000
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20.0
 
 
 class DiffCaptureError(RuntimeError):
     """A repository could not produce a trustworthy capture."""
+
+
+class SessionDiffBundle(TypedDict):
+    version: int
+    triggerMessageId: str | None
+    capturedAt: int
+    repositories: list[dict[str, object]]
 
 
 class _GitOutputTooLarge(RuntimeError):
@@ -38,6 +49,7 @@ class CaptureLimits:
     max_patch_bytes: int
     max_capture_bytes: int
     command_timeout_seconds: float
+    max_bundle_bytes: int = DEFAULT_MAX_BUNDLE_BYTES
     max_metadata_bytes: int = DEFAULT_MAX_METADATA_BYTES
 
     @classmethod
@@ -47,6 +59,7 @@ class CaptureLimits:
             max_patch_bytes=DEFAULT_MAX_PATCH_BYTES,
             max_capture_bytes=DEFAULT_MAX_CAPTURE_BYTES,
             command_timeout_seconds=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            max_bundle_bytes=DEFAULT_MAX_BUNDLE_BYTES,
             max_metadata_bytes=DEFAULT_MAX_METADATA_BYTES,
         )
 
@@ -289,6 +302,26 @@ async def _tracked_line_stats(
     return _parse_numstat(raw)
 
 
+async def _unmerged_paths(
+    repository: RepoEntry,
+    timeout_seconds: float,
+    max_metadata_bytes: int,
+) -> set[str]:
+    raw = await _git(
+        repository,
+        "--no-pager",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--name-only",
+        "--diff-filter=U",
+        "-z",
+        timeout_seconds=timeout_seconds,
+        max_stdout_bytes=max_metadata_bytes,
+    )
+    return {_decode_path(path) for path in raw.split(b"\0") if path}
+
+
 async def _tracked_patch(
     repository: RepoEntry,
     base_sha: str,
@@ -435,6 +468,11 @@ async def collect_repository_diff(
             limits.command_timeout_seconds,
             limits.max_metadata_bytes,
         )
+        unmerged_paths = await _unmerged_paths(
+            repository,
+            limits.command_timeout_seconds,
+            limits.max_metadata_bytes,
+        )
     except _GitOutputTooLarge as error:
         raise DiffCaptureError("Repository change metadata exceeded its memory limit") from error
     untracked = [
@@ -449,9 +487,17 @@ async def collect_repository_diff(
         if change.status == "deleted" and change.path in untracked_paths
     }
     normalized_tracked = [
-        _ChangedPath(status="modified", path=change.path, old_path=change.old_path)
-        if change.path in overlay_paths
-        else change
+        _ChangedPath(
+            status=(
+                "modified"
+                if change.path in overlay_paths
+                else "unmerged"
+                if change.path in unmerged_paths
+                else change.status
+            ),
+            path=change.path,
+            old_path=change.old_path,
+        )
         for change in tracked
     ]
     all_changes = normalized_tracked + [
@@ -562,11 +608,11 @@ async def collect_repository_diff(
                 ):
                     render_state = "metadata_only"
                     patch_bytes = None
-                elif patch_bytes > limits.max_patch_bytes:
+                elif (
+                    patch_bytes > limits.max_patch_bytes
+                    or captured_bytes + patch_bytes > limits.max_capture_bytes
+                ):
                     render_state = "too_large"
-                    patch_bytes = None
-                elif captured_bytes + patch_bytes > limits.max_capture_bytes:
-                    render_state = "metadata_only"
                     patch_bytes = None
                 elif raw_patch:
                     render_state = "renderable"
@@ -602,3 +648,150 @@ async def collect_repository_diff(
         truncated=len(all_changes) > len(selected_changes),
         omitted_file_count=len(all_changes) - len(selected_changes),
     )
+
+
+def encode_bundle(bundle: Mapping[str, object]) -> bytes:
+    """Encode the exact JSON representation measured against the wire limit."""
+    return json.dumps(bundle, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+
+
+def _file_upload(changed: CapturedFile) -> dict[str, object]:
+    file: dict[str, object] = {
+        "id": changed.id,
+        "path": changed.path,
+        "status": changed.status,
+        "additions": changed.additions,
+        "deletions": changed.deletions,
+        "renderState": changed.render_state,
+    }
+    optional = {
+        "oldPath": changed.old_path,
+        "patch": changed.patch if changed.render_state == "renderable" else None,
+        "oldMode": changed.old_mode,
+        "newMode": changed.new_mode,
+        "oldSubmoduleSha": changed.old_submodule_sha,
+        "newSubmoduleSha": changed.new_submodule_sha,
+    }
+    file.update({key: value for key, value in optional.items() if value is not None})
+    return file
+
+
+def _bound_encoded_bundle(bundle: SessionDiffBundle, max_bundle_bytes: int) -> None:
+    """Shed patches, then trailing metadata records, until the bundle fits."""
+    repositories = bundle["repositories"]
+    if not isinstance(repositories, list):
+        raise DiffCaptureError("Malformed session diff bundle")
+
+    patches: list[tuple[int, dict[str, object]]] = []
+    for repository in repositories:
+        if not isinstance(repository, dict) or repository.get("status") != "ready":
+            continue
+        files = repository.get("files")
+        if not isinstance(files, list):
+            continue
+        for file in files:
+            if isinstance(file, dict) and isinstance(file.get("patch"), str):
+                patches.append((len(file["patch"].encode("utf-8")), file))
+
+    for _size, file in sorted(patches, key=lambda item: item[0], reverse=True):
+        if len(encode_bundle(bundle)) <= max_bundle_bytes:
+            return
+        file.pop("patch", None)
+        file["renderState"] = "too_large"
+
+    if len(encode_bundle(bundle)) <= max_bundle_bytes:
+        return
+
+    for repository in reversed(repositories):
+        if not isinstance(repository, dict) or repository.get("status") != "ready":
+            continue
+        files = repository.get("files")
+        if not isinstance(files, list):
+            continue
+        while files and len(encode_bundle(bundle)) > max_bundle_bytes:
+            files.pop()
+            repository["truncated"] = True
+            omitted_file_count = repository.get("omittedFileCount", 0)
+            repository["omittedFileCount"] = (
+                omitted_file_count if isinstance(omitted_file_count, int) else 0
+            ) + 1
+
+    if len(encode_bundle(bundle)) > max_bundle_bytes:
+        raise DiffCaptureError("Session diff metadata exceeded the bundle limit")
+
+
+async def collect_session_diff_bundle(
+    repositories: list[RepoEntry],
+    *,
+    trigger_message_id: str | None,
+    captured_at: int,
+    limits: CaptureLimits | None = None,
+) -> SessionDiffBundle:
+    """Collect every member repository into one coherent, bounded upload bundle."""
+    active_limits = limits or CaptureLimits.defaults()
+    remaining_files = active_limits.max_files
+    remaining_patch_bytes = active_limits.max_capture_bytes
+    outcomes: list[dict[str, object]] = []
+
+    for position, repository in enumerate(repositories):
+        if not repository.base_sha:
+            raise DiffCaptureError("Session start baseline is unavailable")
+        try:
+            capture = await collect_repository_diff(
+                repository,
+                repository.base_sha,
+                CaptureLimits(
+                    max_files=remaining_files,
+                    max_patch_bytes=active_limits.max_patch_bytes,
+                    max_capture_bytes=remaining_patch_bytes,
+                    command_timeout_seconds=active_limits.command_timeout_seconds,
+                    max_bundle_bytes=active_limits.max_bundle_bytes,
+                    max_metadata_bytes=active_limits.max_metadata_bytes,
+                ),
+            )
+        except Exception as error:
+            outcomes.append(
+                {
+                    "status": "unavailable",
+                    "position": position,
+                    "repoOwner": repository.owner,
+                    "repoName": repository.name,
+                    "baseSha": repository.base_sha,
+                    "error": str(error)[:2_000] or "Repository diff unavailable",
+                    "files": [],
+                }
+            )
+            continue
+
+        remaining_files = max(0, remaining_files - len(capture.files))
+        remaining_patch_bytes = max(
+            0,
+            remaining_patch_bytes
+            - sum(
+                len(changed.patch.encode("utf-8"))
+                for changed in capture.files
+                if changed.render_state == "renderable" and changed.patch is not None
+            ),
+        )
+        outcomes.append(
+            {
+                "status": "ready",
+                "position": position,
+                "repoOwner": repository.owner,
+                "repoName": repository.name,
+                "baseSha": repository.base_sha,
+                "headSha": capture.head_sha,
+                "truncated": capture.truncated,
+                "omittedFileCount": capture.omitted_file_count,
+                "files": [_file_upload(changed) for changed in capture.files],
+            }
+        )
+
+    bundle: SessionDiffBundle = {
+        "version": 1,
+        "triggerMessageId": trigger_message_id,
+        "capturedAt": captured_at,
+        "repositories": outcomes,
+    }
+    _bound_encoded_bundle(bundle, active_limits.max_bundle_bytes)
+    return bundle

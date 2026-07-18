@@ -120,7 +120,7 @@ function SessionPageContent() {
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
   const diffReturnFocusRef = useRef<DiffSelection | null>(null);
-  const { state: diffState, isLoading: diffLoading, error: diffError } = useSessionDiffs(sessionId);
+  const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
@@ -281,7 +281,6 @@ function SessionPageContent() {
                 onOpenMedia={setSelectedMediaArtifactId}
                 diffState={diffState}
                 diffLoading={diffLoading}
-                diffError={diffError}
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
               />
@@ -314,7 +313,6 @@ function SessionPageContent() {
               onOpenMedia={setSelectedMediaArtifactId}
               diffState={diffState}
               diffLoading={diffLoading}
-              diffError={diffError}
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
             />
@@ -338,7 +336,6 @@ function SessionPageContent() {
           onOpenMedia={setSelectedMediaArtifactId}
           diffState={diffState}
           diffLoading={diffLoading}
-          diffError={diffError}
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
         />

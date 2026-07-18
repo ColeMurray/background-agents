@@ -7,19 +7,18 @@ import {
 } from "./session-diffs";
 
 const manifest: SessionDiffManifest = {
-  revisionId: "capture-2",
+  version: 1,
+  revisionId: "revision-2",
   capturedAt: 200,
   triggerMessageId: "message-2",
   repositories: [
     {
+      status: "ready",
       position: 0,
       repoOwner: "acme",
       repoName: "web",
       baseSha: "a".repeat(40),
       headSha: "b".repeat(40),
-      capturedAt: 200,
-      status: "ready",
-      sourceCaptureId: "capture-2",
       truncated: false,
       omittedFileCount: 0,
       files: [
@@ -30,7 +29,6 @@ const manifest: SessionDiffManifest = {
           additions: 2,
           deletions: 1,
           renderState: "renderable",
-          patchBytes: 100,
         },
       ],
     },
@@ -41,13 +39,13 @@ describe("session diff view model", () => {
   it("keeps a selection by repository and path across latest revisions", () => {
     expect(
       resolveDiffSelection(manifest, { repositoryPosition: 0, path: "packages/web/src/index.ts" })
-    ).toMatchObject({ revisionId: "capture-2", file: { id: "new-file-id" } });
+    ).toMatchObject({ revisionId: "revision-2", file: { id: "new-file-id" } });
   });
 
   it("reports a selected path that disappeared from the latest revision", () => {
     expect(resolveDiffSelection(manifest, { repositoryPosition: 0, path: "removed.ts" })).toEqual({
       status: "missing",
-      revisionId: "capture-2",
+      revisionId: "revision-2",
     });
   });
 
@@ -68,99 +66,72 @@ describe("session diff view model", () => {
         isProcessing: false,
         state: null,
         isLoading: false,
-        hasError: false,
       })
     ).toEqual({ kind: "hidden", showManifest: false, canRetry: false });
   });
 
-  it("distinguishes first execution, active work, and capture refresh states", () => {
+  it("shows availability after execution and never derives a persistent capture state", () => {
     const state = diffState();
     expect(deriveSessionDiffView(input(state))).toMatchObject({
       kind: "available_after_execution",
     });
     expect(deriveSessionDiffView({ ...input(state), isProcessing: true })).toMatchObject({
       kind: "working",
+      showManifest: false,
     });
-    expect(
-      deriveSessionDiffView({
-        ...input({
-          ...state,
-          attempt: { id: "capture-3", status: "capturing", startedAt: 300, error: null },
-        }),
-      })
-    ).toMatchObject({ kind: "capturing", showManifest: false });
   });
 
-  it("keeps a previous manifest visible while working, capturing, or failed", () => {
-    const state = diffState(manifest);
-    expect(deriveSessionDiffView({ ...input(state), isProcessing: true })).toMatchObject({
-      kind: "working",
-      showManifest: true,
-    });
+  it("keeps the previous bundle visible while the agent is working", () => {
     expect(
-      deriveSessionDiffView({
-        ...input({
-          ...state,
-          attempt: { id: "capture-3", status: "capturing", startedAt: 300, error: null },
-        }),
-      })
-    ).toMatchObject({ kind: "capturing", showManifest: true });
-    expect(
-      deriveSessionDiffView({
-        ...input({
-          ...state,
-          attempt: { id: "capture-3", status: "failed", startedAt: 300, error: "timed out" },
-        }),
-      })
-    ).toMatchObject({ kind: "failed", showManifest: true, canRetry: true });
-  });
-
-  it("keeps a cached manifest visible when background revalidation fails", () => {
-    expect(
-      deriveSessionDiffView({
-        ...input(diffState(manifest)),
-        hasError: true,
-      })
-    ).toMatchObject({ kind: "ready", showManifest: true });
-  });
-
-  it("prioritizes active execution over a previous failed capture", () => {
-    const state = diffState(manifest);
-    expect(
-      deriveSessionDiffView({
-        ...input({
-          ...state,
-          attempt: { id: "capture-3", status: "failed", startedAt: 300, error: "timed out" },
-        }),
-        isProcessing: true,
-      })
+      deriveSessionDiffView({ ...input(diffState(manifest)), isProcessing: true })
     ).toMatchObject({ kind: "working", showManifest: true, canRetry: false });
   });
 
-  it("distinguishes a successful empty capture from unavailable changes", () => {
-    expect(
-      deriveSessionDiffView(input(diffState({ ...manifest, repositories: [] })))
-    ).toMatchObject({
-      kind: "empty",
-    });
+  it("keeps a previous bundle visible with a refresh failure and retry", () => {
     expect(
       deriveSessionDiffView(
         input({
-          ...diffState(),
-          baseline: { status: "unavailable", reason: "legacy session" },
+          ...diffState(manifest),
+          lastError: { message: "timed out", occurredAt: 300 },
         })
       )
-    ).toMatchObject({ kind: "unavailable", message: "legacy session" });
+    ).toMatchObject({
+      kind: "failed",
+      showManifest: true,
+      canRetry: true,
+      message: "timed out",
+    });
+  });
+
+  it("prioritizes active execution over the previous refresh failure", () => {
+    const state: SessionDiffState = {
+      ...diffState(manifest),
+      lastError: { message: "timed out", occurredAt: 300 },
+    };
+    expect(deriveSessionDiffView({ ...input(state), isProcessing: true })).toMatchObject({
+      kind: "working",
+      showManifest: true,
+      canRetry: false,
+    });
+  });
+
+  it("distinguishes a successful empty bundle from a missing baseline", () => {
+    expect(
+      deriveSessionDiffView(input(diffState({ ...manifest, repositories: [] })))
+    ).toMatchObject({ kind: "empty" });
+    expect(
+      deriveSessionDiffView(
+        input({ ...diffState(), unavailableReason: "Changes unavailable for this session" })
+      )
+    ).toMatchObject({
+      kind: "unavailable",
+      message: "Changes unavailable for this session",
+    });
   });
 });
 
 function diffState(current: SessionDiffManifest | null = null): SessionDiffState {
-  return {
-    version: 1,
-    baseline: { status: "ready", reason: null },
-    attempt: { id: null, status: "idle", startedAt: null, error: null },
-    current,
-  };
+  return { version: 1, current, lastError: null, unavailableReason: null };
 }
 
 function input(state: SessionDiffState) {
@@ -169,6 +140,5 @@ function input(state: SessionDiffState) {
     isProcessing: false,
     state,
     isLoading: false,
-    hasError: false,
   };
 }

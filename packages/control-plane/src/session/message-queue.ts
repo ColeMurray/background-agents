@@ -62,8 +62,6 @@ interface MessageQueueDeps {
   setSessionStatus: (status: SessionStatus) => Promise<void>;
   reconcileSessionStatusAfterExecution: (success: boolean) => Promise<void>;
   scheduleExecutionTimeout?: (startedAtMs: number) => Promise<void>;
-  getDispatchBlockReason: () => string | null;
-  beginDiffCapture: (triggerMessageId: string) => Promise<void>;
 }
 
 interface StopExecutionOptions {
@@ -175,17 +173,6 @@ export class SessionMessageQueue {
       return;
     }
 
-    const dispatchBlockReason = this.deps.getDispatchBlockReason();
-    if (dispatchBlockReason) {
-      this.deps.log.info("prompt.dispatch", {
-        event: "prompt.dispatch",
-        message_id: message.id,
-        outcome: "deferred",
-        reason: dispatchBlockReason,
-      });
-      return;
-    }
-
     this.deps.repository.updateMessageToProcessing(message.id, now);
     this.deps.broadcast({ type: "processing_status", isProcessing: true });
     this.deps.updateLastActivity(now);
@@ -252,12 +239,6 @@ export class SessionMessageQueue {
     const processingMessage = this.deps.repository.getProcessingMessage();
 
     if (processingMessage) {
-      const sandboxWs = this.deps.wsManager.getSandboxSocket();
-      if (sandboxWs) {
-        // WebSocket commands are ordered. Stop the mutating prompt before the
-        // capture command that beginDiffCapture sends.
-        this.deps.wsManager.send(sandboxWs, { type: "stop" });
-      }
       this.deps.repository.updateMessageCompletion(processingMessage.id, "failed", now);
       this.deps.log.info("prompt.stopped", {
         event: "prompt.stopped",
@@ -288,21 +269,25 @@ export class SessionMessageQueue {
         this.deps.callbackService.notifyComplete(processingMessage.id, false, stopError)
       );
 
-      await this.deps.beginDiffCapture(processingMessage.id);
       if (!options.suppressStatusReconcile) {
         await this.deps.reconcileSessionStatusAfterExecution(false);
       }
     }
 
     this.deps.broadcast({ type: "processing_status", isProcessing: false });
+
+    const sandboxWs = this.deps.wsManager.getSandboxSocket();
+    if (sandboxWs) {
+      this.deps.wsManager.send(sandboxWs, { type: "stop" });
+    }
   }
 
   /**
    * Fail a stuck processing message (defense-in-depth for execution timeout).
    *
-   * Stops the mutating prompt before capturing its terminal checkout state. It
-   * does not call processMessageQueue(); the existing capture barrier and
-   * lifecycle flow continue to own later dispatch.
+   * Only marks the message as failed and broadcasts — does NOT send a stop command
+   * to the sandbox or call processMessageQueue(). This avoids races where a new
+   * prompt could be dispatched to a sandbox being shut down.
    */
   async failStuckProcessingMessage(): Promise<void> {
     const now = Date.now();
@@ -326,11 +311,6 @@ export class SessionMessageQueue {
     this.deps.ctx.waitUntil(
       this.deps.callbackService.notifyComplete(processingMessage.id, false, stuckError)
     );
-    const sandboxWs = this.deps.wsManager.getSandboxSocket();
-    if (sandboxWs) {
-      this.deps.wsManager.send(sandboxWs, { type: "stop" });
-    }
-    await this.deps.beginDiffCapture(processingMessage.id);
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
 

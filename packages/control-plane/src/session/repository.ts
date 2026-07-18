@@ -450,12 +450,25 @@ export class SessionRepository {
       this.sql.exec(
         `UPDATE session_repositories
          SET base_sha = ?
-         WHERE position = ?`,
+         WHERE position = ?
+           AND repo_owner = ? COLLATE NOCASE
+           AND repo_name = ? COLLATE NOCASE
+           AND base_sha IS NULL`,
         repository.baseSha,
-        repository.position
+        repository.position,
+        repository.repoOwner,
+        repository.repoName
       );
       if (repository.isPrimary) {
-        this.sql.exec(`UPDATE session SET base_sha = ?`, repository.baseSha);
+        this.sql.exec(
+          `UPDATE session SET base_sha = ?
+           WHERE repo_owner = ? COLLATE NOCASE
+             AND repo_name = ? COLLATE NOCASE
+             AND base_sha IS NULL`,
+          repository.baseSha,
+          repository.repoOwner,
+          repository.repoName
+        );
       }
     }
   }

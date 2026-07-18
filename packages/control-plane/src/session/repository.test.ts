@@ -300,7 +300,7 @@ describe("SessionRepository", () => {
   });
 
   describe("setSessionDiffBaselines", () => {
-    it("updates each validated repository position independently", () => {
+    it("writes each baseline once using position and repository identity", () => {
       repo.setSessionDiffBaselines([
         {
           position: 0,
@@ -319,11 +319,15 @@ describe("SessionRepository", () => {
       ]);
 
       expect(mock.calls[0].query).toContain("WHERE position = ?");
-      expect(mock.calls[0].params).toEqual(["a".repeat(40), 0]);
+      expect(mock.calls[0].query).toContain("repo_owner = ?");
+      expect(mock.calls[0].query).toContain("repo_name = ?");
+      expect(mock.calls[0].query).toContain("base_sha IS NULL");
+      expect(mock.calls[0].params).toEqual(["a".repeat(40), 0, "acme", "web"]);
       expect(mock.calls[1].query).toContain("UPDATE session SET base_sha");
-      expect(mock.calls[1].params).toEqual(["a".repeat(40)]);
+      expect(mock.calls[1].query).toContain("base_sha IS NULL");
+      expect(mock.calls[1].params).toEqual(["a".repeat(40), "acme", "web"]);
       expect(mock.calls[2].query).toContain("WHERE position = ?");
-      expect(mock.calls[2].params).toEqual(["b".repeat(40), 1]);
+      expect(mock.calls[2].params).toEqual(["b".repeat(40), 1, "acme", "web"]);
     });
   });
 

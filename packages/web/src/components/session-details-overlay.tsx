@@ -45,7 +45,6 @@ export function SessionDetailsOverlay({
   onOpenMedia,
   diffState,
   diffLoading,
-  diffError,
   selectedDiff,
   onOpenDiff,
 }: SessionDetailsOverlayProps) {
@@ -173,7 +172,6 @@ export function SessionDetailsOverlay({
       onOpenMedia={onOpenMedia}
       diffState={diffState}
       diffLoading={diffLoading}
-      diffError={diffError}
       selectedDiff={selectedDiff}
       onOpenDiff={onOpenDiff}
     />

@@ -1,16 +1,15 @@
 import {
-  SESSION_DIFF_MAX_PATCH_BYTES,
-  diffCaptureCompleteRequestSchema,
-  diffCaptureFailureRequestSchema,
+  SESSION_DIFF_MAX_BUNDLE_BYTES,
+  sessionDiffFailureSchema,
+  sessionDiffUploadSchema,
 } from "@open-inspect/shared";
 import { SessionInternalPaths } from "../session/contracts";
-import { createMediaObjectStorage } from "../storage/object-storage";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 import type { Env } from "../types";
 
 const DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
-export const SESSION_DIFF_COMPLETE_BODY_MAX_BYTES = 5 * 1_024 * 1_024;
+export const SESSION_DIFF_UPLOAD_BODY_MAX_BYTES = SESSION_DIFF_MAX_BUNDLE_BYTES;
 export const SESSION_DIFF_FAILURE_BODY_MAX_BYTES = 16 * 1_024;
 
 function routeId(match: RegExpMatchArray, name: string): string | null {
@@ -62,19 +61,13 @@ async function runtimeJson(
   ctx: SessionRouteContext,
   sessionId: string,
   path: (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths],
-  body: unknown,
-  search?: string
+  body: unknown
 ): Promise<Response> {
-  return ctx.sessionRuntime.fetch(
-    sessionId,
-    path,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
-    search
-  );
+  return ctx.sessionRuntime.fetch(sessionId, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 async function handleDiffState(
@@ -93,137 +86,53 @@ async function handleDiffState(
   }
   return new Response(response.body, {
     status: response.status,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "private, no-store",
-    },
+    headers: { "Content-Type": "application/json", "Cache-Control": "private, no-store" },
   });
 }
 
-async function handleDiffPatchUpload(
-  request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: SessionRouteContext
-): Promise<Response> {
-  const sessionId = match.groups?.id;
-  const captureId = routeId(match, "captureId");
-  const fileId = routeId(match, "fileId");
-  if (!sessionId || !captureId || !fileId) return error("Invalid diff object identity", 400);
-  if (!request.headers.get("Content-Type")?.toLowerCase().startsWith("text/x-diff")) {
-    return error("Diff patches must use text/x-diff", 415);
-  }
-  const declaredLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(declaredLength) && declaredLength > SESSION_DIFF_MAX_PATCH_BYTES) {
-    return error(`Diff patches must be ${SESSION_DIFF_MAX_PATCH_BYTES} bytes or smaller`, 413);
-  }
-  const bytes = await readBoundedBody(request, SESSION_DIFF_MAX_PATCH_BYTES);
-  if (!bytes || bytes.byteLength === 0) {
-    return error(
-      bytes
-        ? "Diff patch is empty"
-        : `Diff patches must be ${SESSION_DIFF_MAX_PATCH_BYTES} bytes or smaller`,
-      bytes ? 400 : 413
-    );
-  }
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  const sha256 = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
-  const staged = await runtimeJson(ctx, sessionId, SessionInternalPaths.diffStageObject, {
-    captureId,
-    fileId,
-    sizeBytes: bytes.byteLength,
-    sha256,
-  });
-  if (!staged.ok)
-    return new Response(staged.body, { status: staged.status, headers: staged.headers });
-  const { objectKey } = await staged.json<{ objectKey: string }>();
-  const storage = createMediaObjectStorage(env);
-  try {
-    await storage.put(objectKey, bytes, { contentType: "text/x-diff; charset=utf-8" });
-  } catch {
-    await runtimeJson(ctx, sessionId, SessionInternalPaths.diffAbandonObject, {
-      captureId,
-      fileId,
-      objectKey,
-    });
-    return error("Failed to persist diff patch", 500);
-  }
-  const committed = await runtimeJson(ctx, sessionId, SessionInternalPaths.diffCommitObject, {
-    captureId,
-    fileId,
-    objectKey,
-  });
-  if (!committed.ok) {
-    await storage.delete(objectKey);
-    await runtimeJson(ctx, sessionId, SessionInternalPaths.diffAbandonObject, {
-      captureId,
-      fileId,
-      objectKey,
-    });
-    return error("Diff capture is no longer active", committed.status);
-  }
-  return new Response(null, { status: 201 });
-}
-
-async function handleDiffComplete(
+async function handleDiffUpload(
   request: Request,
   _env: Env,
   match: RegExpMatchArray,
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
-  const captureId = routeId(match, "captureId");
-  if (!sessionId || !captureId) return error("Invalid diff capture identity", 400);
+  if (!sessionId) return error("Session ID required", 400);
   const body = await readBoundedJson(
     request,
-    SESSION_DIFF_COMPLETE_BODY_MAX_BYTES,
-    "Diff capture manifests"
+    SESSION_DIFF_UPLOAD_BODY_MAX_BYTES,
+    "Session diff bundles"
   );
   if (body instanceof Response) return body;
-  const parsed = diffCaptureCompleteRequestSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid diff capture manifest", 400);
-  const response = await runtimeJson(
-    ctx,
-    sessionId,
-    SessionInternalPaths.diffComplete,
-    parsed.data,
-    `?captureId=${encodeURIComponent(captureId)}`
-  );
+  const parsed = sessionDiffUploadSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid session diff bundle", 400);
+  const response = await runtimeJson(ctx, sessionId, SessionInternalPaths.diffStore, parsed.data);
   return new Response(response.body, { status: response.status, headers: response.headers });
 }
 
-async function handleDiffFailed(
+async function handleDiffFailure(
   request: Request,
   _env: Env,
   match: RegExpMatchArray,
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
-  const captureId = routeId(match, "captureId");
-  if (!sessionId || !captureId) return error("Invalid diff capture identity", 400);
+  if (!sessionId) return error("Session ID required", 400);
   const body = await readBoundedJson(
     request,
     SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
-    "Diff capture failure bodies"
+    "Session diff failure bodies"
   );
   if (body instanceof Response) return body;
-  const parsed = diffCaptureFailureRequestSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid diff capture failure", 400);
-  const response = await runtimeJson(
-    ctx,
-    sessionId,
-    SessionInternalPaths.diffFailed,
-    parsed.data,
-    `?captureId=${encodeURIComponent(captureId)}`
-  );
+  const parsed = sessionDiffFailureSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid session diff failure", 400);
+  const response = await runtimeJson(ctx, sessionId, SessionInternalPaths.diffFailure, parsed.data);
   return new Response(response.body, { status: response.status, headers: response.headers });
 }
 
 async function handleDiffFile(
   _request: Request,
-  env: Env,
+  _env: Env,
   match: RegExpMatchArray,
   ctx: SessionRouteContext
 ): Promise<Response> {
@@ -231,31 +140,19 @@ async function handleDiffFile(
   const revisionId = routeId(match, "revisionId");
   const fileId = routeId(match, "fileId");
   if (!sessionId || !revisionId || !fileId) return error("Invalid diff file identity", 400);
-  const resolved = await ctx.sessionRuntime.fetch(
+  const response = await ctx.sessionRuntime.fetch(
     sessionId,
     SessionInternalPaths.diffResolveFile,
     undefined,
     `?revisionId=${encodeURIComponent(revisionId)}&fileId=${encodeURIComponent(fileId)}`
   );
-  if (!resolved.ok) {
-    return new Response(resolved.body, {
-      status: resolved.status,
-      headers: { "Content-Type": "application/json", "Cache-Control": "private, no-store" },
-    });
-  }
-  const { objectKey, patchBytes } = await resolved.json<{
-    objectKey: string;
-    patchBytes: number;
-  }>();
-  const object = await createMediaObjectStorage(env).get(objectKey);
-  if (!object) return error("Diff patch not found", 404);
-  const headers = new Headers({
-    "Content-Type": "text/x-diff; charset=utf-8",
-    "Content-Length": String(patchBytes),
-    "Cache-Control": "private, no-store",
-    ETag: object.httpEtag,
+  return new Response(response.body, {
+    status: response.status,
+    headers: {
+      "Content-Type": response.headers.get("Content-Type") ?? "application/json",
+      "Cache-Control": "private, no-store",
+    },
   });
-  return new Response(object.body, { headers });
 }
 
 async function handleDiffRetry(
@@ -283,18 +180,13 @@ export const sessionDiffRoutes: Route[] = [
   }),
   sessionRoute({
     method: "PUT",
-    pattern: parsePattern("/sessions/:id/diff-captures/:captureId/files/:fileId"),
-    handler: handleDiffPatchUpload,
+    pattern: parsePattern("/sessions/:id/diff"),
+    handler: handleDiffUpload,
   }),
   sessionRoute({
     method: "POST",
-    pattern: parsePattern("/sessions/:id/diff-captures/:captureId/complete"),
-    handler: handleDiffComplete,
-  }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/diff-captures/:captureId/failed"),
-    handler: handleDiffFailed,
+    pattern: parsePattern("/sessions/:id/diff/failure"),
+    handler: handleDiffFailure,
   }),
   sessionRoute({
     method: "GET",

@@ -1,358 +1,311 @@
 import { describe, expect, it } from "vitest";
-import {
-  diffCaptureCompleteRequestSchema,
-  diffCaptureFailureRequestSchema,
-  sessionDiffManifestSchema,
-  sessionDiffStateSchema,
-} from "./session-diffs";
-import { MAX_SESSION_REPOSITORIES } from "./repositories";
 import { sandboxEventSchema } from "./sandbox-events";
 import { serverMessageSchema } from "./server-messages";
+import {
+  SESSION_DIFF_MAX_BUNDLE_BYTES,
+  SESSION_DIFF_MAX_FILE_PATCH_BYTES,
+  SESSION_DIFF_MAX_TOTAL_PATCH_BYTES,
+  sessionDiffFailureSchema,
+  sessionDiffStateSchema,
+  sessionDiffUploadSchema,
+  storedSessionDiffBundleSchema,
+  toSessionDiffManifest,
+} from "./session-diffs";
+
+const readyRepository = {
+  status: "ready" as const,
+  position: 0,
+  repoOwner: "open-inspect",
+  repoName: "open-inspect",
+  baseSha: "a".repeat(40),
+  headSha: "b".repeat(40),
+  truncated: false,
+  omittedFileCount: 0,
+  files: [
+    {
+      id: "file-1",
+      path: "packages/web/src/app.tsx",
+      status: "modified" as const,
+      additions: 2,
+      deletions: 1,
+      renderState: "renderable" as const,
+      patch: "diff --git a/app.tsx b/app.tsx\n",
+    },
+  ],
+};
+
+const upload = {
+  version: 1 as const,
+  triggerMessageId: "message-1",
+  capturedAt: 100,
+  repositories: [readyRepository],
+};
 
 describe("session diff contracts", () => {
-  it("parses a latest session diff manifest", () => {
-    const result = sessionDiffStateSchema.safeParse({
-      version: 1,
-      baseline: { status: "ready", reason: null },
-      attempt: { id: null, status: "idle", startedAt: null, error: null },
-      current: {
-        revisionId: "capture-1",
-        capturedAt: 100,
-        triggerMessageId: "message-1",
-        repositories: [
-          {
-            position: 0,
-            repoOwner: "open-inspect",
-            repoName: "open-inspect",
-            baseSha: "a".repeat(40),
-            headSha: "b".repeat(40),
-            capturedAt: 100,
-            status: "ready",
-            sourceCaptureId: "capture-1",
-            truncated: false,
-            omittedFileCount: 0,
-            files: [
-              {
-                id: "file-1",
-                path: "packages/web/src/app.tsx",
-                status: "modified",
-                additions: 2,
-                deletions: 1,
-                renderState: "renderable",
-                patchBytes: 128,
-              },
-            ],
-          },
-        ],
-      },
-    });
-
-    expect(result.success).toBe(true);
+  it("accepts one bounded bundle containing renderable patches", () => {
+    expect(sessionDiffUploadSchema.parse(upload)).toEqual(upload);
   });
 
-  it("rejects duplicate file ids and paths inside a repository", () => {
-    const result = sessionDiffStateSchema.safeParse({
-      version: 1,
-      baseline: { status: "ready", reason: null },
-      attempt: { id: null, status: "idle", startedAt: null, error: null },
-      current: {
-        revisionId: "capture-1",
-        capturedAt: 100,
-        triggerMessageId: null,
-        repositories: [
-          {
-            position: 0,
-            repoOwner: "open-inspect",
-            repoName: "open-inspect",
-            baseSha: "a".repeat(40),
-            headSha: "b".repeat(40),
-            capturedAt: 100,
-            status: "ready",
-            sourceCaptureId: "capture-1",
-            truncated: false,
-            omittedFileCount: 0,
-            files: [
-              {
-                id: "file-1",
-                path: "src/app.ts",
-                status: "modified",
-                additions: 1,
-                deletions: 0,
-                renderState: "renderable",
-                patchBytes: 10,
-              },
-              {
-                id: "file-1",
-                path: "src/app.ts",
-                status: "modified",
-                additions: 1,
-                deletions: 0,
-                renderState: "renderable",
-                patchBytes: 10,
-              },
-            ],
-          },
-        ],
-      },
-    });
-
-    expect(result.success).toBe(false);
-  });
-
-  it("preserves session diff capability and immutable baselines on ready", () => {
-    const result = sandboxEventSchema.parse({
-      type: "ready",
-      sandboxId: "sandbox-1",
-      timestamp: 100,
-      capabilities: ["session_diff_v1"],
+  it("accepts a coherent partial multi-repository bundle", () => {
+    const result = sessionDiffUploadSchema.parse({
+      ...upload,
       repositories: [
+        readyRepository,
         {
-          position: 0,
-          repoOwner: "open-inspect",
-          repoName: "open-inspect",
-          baseSha: "a".repeat(40),
-        },
-      ],
-    });
-
-    expect(result).toMatchObject({
-      capabilities: ["session_diff_v1"],
-      repositories: [{ baseSha: "a".repeat(40) }],
-    });
-  });
-
-  it("parses lightweight session diff invalidation messages", () => {
-    const result = serverMessageSchema.safeParse({
-      type: "diff_state_changed",
-      attemptStatus: "capturing",
-      revisionId: "capture-1",
-      updatedAt: 100,
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("validates successful and failed repository capture outcomes", () => {
-    const result = diffCaptureCompleteRequestSchema.parse({
-      repositories: [
-        {
-          position: 0,
-          repoOwner: "acme",
-          repoName: "web",
-          baseSha: "a".repeat(40),
-          headSha: "b".repeat(40),
-          truncated: false,
-          omittedFileCount: 0,
-          files: [
-            {
-              id: "file-1",
-              path: "src/app.ts",
-              status: "modified",
-              additions: 1,
-              deletions: 1,
-              renderState: "renderable",
-              patchBytes: 120,
-            },
-          ],
-        },
-        {
+          status: "unavailable",
           position: 1,
-          repoOwner: "acme",
+          repoOwner: "group/subgroup",
           repoName: "api",
           baseSha: "c".repeat(40),
-          error: "checkout unavailable",
+          error: "start commit is unavailable",
+          files: [],
         },
       ],
     });
 
     expect(result.repositories).toHaveLength(2);
-    expect(diffCaptureFailureRequestSchema.parse({ error: "timed out" })).toEqual({
-      error: "timed out",
-    });
+    expect(result.repositories[1]).toMatchObject({ status: "unavailable", files: [] });
   });
 
-  it("rejects duplicate repository positions in a capture", () => {
-    const outcome = {
+  it("removes patch text from the public manifest", () => {
+    const stored = storedSessionDiffBundleSchema.parse({ revisionId: "revision-1", ...upload });
+    const manifest = toSessionDiffManifest(stored);
+
+    expect(manifest.repositories[0]?.files[0]).not.toHaveProperty("patch");
+    expect(JSON.stringify(manifest)).not.toContain("diff --git");
+  });
+
+  it("rejects duplicate repository positions, identities, file ids, and current paths", () => {
+    const unavailable = {
+      status: "unavailable" as const,
       position: 0,
-      repoOwner: "acme",
+      repoOwner: "group/subgroup",
       repoName: "web",
       baseSha: "a".repeat(40),
-      error: "failed",
+      error: "missing commit",
+      files: [] as [],
     };
-
     expect(() =>
-      diffCaptureCompleteRequestSchema.parse({ repositories: [outcome, outcome] })
+      sessionDiffUploadSchema.parse({
+        ...upload,
+        repositories: [unavailable, { ...unavailable, repoOwner: "other" }],
+      })
     ).toThrow(/Duplicate repository position/);
-  });
-
-  it("bounds repository counts in capture requests and persisted manifests", () => {
-    const captureRepositories = Array.from(
-      { length: MAX_SESSION_REPOSITORIES + 1 },
-      (_, position) => ({
-        position,
-        repoOwner: "acme",
-        repoName: `repo-${position}`,
-        baseSha: "a".repeat(40),
-        error: "unavailable",
-      })
-    );
     expect(() =>
-      diffCaptureCompleteRequestSchema.parse({ repositories: captureRepositories })
-    ).toThrow();
-
-    expect(() =>
-      sessionDiffManifestSchema.parse({
-        revisionId: "capture-1",
-        capturedAt: 100,
-        triggerMessageId: null,
-        repositories: captureRepositories.map((repository) => ({
-          ...repository,
-          headSha: "b".repeat(40),
-          capturedAt: 100,
-          status: "unavailable",
-          sourceCaptureId: "capture-1",
-          truncated: false,
-          omittedFileCount: 0,
-          files: [],
-        })),
-      })
-    ).toThrow();
-  });
-
-  it("rejects duplicate file ids across repositories", () => {
-    const file = {
-      id: "shared-file-id",
-      path: "src/app.ts",
-      status: "modified" as const,
-      additions: 1,
-      deletions: 1,
-      renderState: "renderable" as const,
-      patchBytes: 120,
-    };
-
-    expect(() =>
-      diffCaptureCompleteRequestSchema.parse({
+      sessionDiffUploadSchema.parse({
+        ...upload,
         repositories: [
-          {
-            position: 0,
-            repoOwner: "acme",
-            repoName: "web",
-            baseSha: "a".repeat(40),
-            headSha: "b".repeat(40),
-            truncated: false,
-            omittedFileCount: 0,
-            files: [file],
-          },
-          {
-            position: 1,
-            repoOwner: "acme",
-            repoName: "api",
-            baseSha: "c".repeat(40),
-            headSha: "d".repeat(40),
-            truncated: false,
-            omittedFileCount: 0,
-            files: [{ ...file, path: "src/server.ts" }],
-          },
+          unavailable,
+          { ...unavailable, position: 1, repoOwner: "GROUP/SUBGROUP", repoName: "WEB" },
         ],
       })
-    ).toThrow(/Duplicate diff file id/);
-  });
-
-  it("rejects duplicate file paths inside a capture repository", () => {
-    const file = {
-      path: "src/app.ts",
-      status: "modified" as const,
-      additions: 1,
-      deletions: 1,
-      renderState: "renderable" as const,
-      patchBytes: 120,
-    };
-
+    ).toThrow(/Duplicate repository identity/);
     expect(() =>
-      diffCaptureCompleteRequestSchema.parse({
+      sessionDiffUploadSchema.parse({
+        ...upload,
+        repositories: [readyRepository, { ...readyRepository, position: 1, repoName: "api" }],
+      })
+    ).toThrow(/Duplicate diff file id/);
+    expect(() =>
+      sessionDiffUploadSchema.parse({
+        ...upload,
         repositories: [
           {
-            position: 0,
-            repoOwner: "acme",
-            repoName: "web",
-            baseSha: "a".repeat(40),
-            headSha: "b".repeat(40),
-            truncated: false,
-            omittedFileCount: 0,
-            files: [
-              { ...file, id: "deleted-file" },
-              { ...file, id: "untracked-file", status: "added" as const },
-            ],
+            ...readyRepository,
+            files: [readyRepository.files[0], { ...readyRepository.files[0], id: "file-2" }],
           },
         ],
       })
     ).toThrow(/Duplicate diff file path/);
   });
 
-  it("enforces capture-wide file and patch-byte budgets", () => {
-    const repository = (position: number, count: number, patchBytes: number) => ({
-      position,
-      repoOwner: "acme",
-      repoName: `repo-${position}`,
-      baseSha: "a".repeat(40),
-      headSha: "b".repeat(40),
-      truncated: false,
-      omittedFileCount: 0,
-      files: Array.from({ length: count }, (_, index) => ({
-        id: `file-${position}-${index}`,
-        path: `src/${index}.ts`,
-        status: "modified" as const,
-        additions: 1,
-        deletions: 1,
-        renderState: "renderable" as const,
-        patchBytes,
-      })),
-    });
+  it("requires patches only for renderable files and old paths only for renames", () => {
+    const parseFile = (file: Record<string, unknown>) =>
+      sessionDiffUploadSchema.parse({
+        ...upload,
+        repositories: [{ ...readyRepository, files: [file] }],
+      });
 
-    expect(() =>
-      diffCaptureCompleteRequestSchema.parse({
-        repositories: [repository(0, 600, 1), repository(1, 401, 1)],
-      })
-    ).toThrow(/capture.*1,000 files/i);
-    expect(() =>
-      diffCaptureCompleteRequestSchema.parse({
-        repositories: [repository(0, 21, 1_000_000)],
-      })
-    ).toThrow(/capture.*20,000,000 patch bytes/i);
-  });
-
-  it("requires patch metadata only for renderable files", () => {
-    const outcome = {
-      position: 0,
-      repoOwner: "acme",
-      repoName: "web",
-      baseSha: "a".repeat(40),
-      headSha: "b".repeat(40),
-      truncated: false,
-      omittedFileCount: 0,
-      files: [
-        {
-          id: "file-1",
-          path: "src/app.ts",
-          status: "modified",
-          additions: 1,
-          deletions: 1,
-          renderState: "renderable",
-        },
-      ],
-    };
-    expect(() => diffCaptureCompleteRequestSchema.parse({ repositories: [outcome] })).toThrow(
-      /Renderable files require patchBytes/
+    expect(() => parseFile({ ...readyRepository.files[0], patch: undefined })).toThrow(
+      /require a patch/
     );
     expect(() =>
-      diffCaptureCompleteRequestSchema.parse({
+      parseFile({ ...readyRepository.files[0], renderState: "binary", patch: "not allowed" })
+    ).toThrow(/cannot include a patch/);
+    expect(() => parseFile({ ...readyRepository.files[0], oldPath: "src/old.ts" })).toThrow(
+      /oldPath is only valid for renamed files/
+    );
+  });
+
+  it("measures per-file and aggregate patch limits as UTF-8 bytes", () => {
+    const emoji = "😀";
+    expect(() =>
+      sessionDiffUploadSchema.parse({
+        ...upload,
         repositories: [
           {
-            ...outcome,
-            files: [{ ...outcome.files[0], renderState: "binary", patchBytes: 10 }],
+            ...readyRepository,
+            files: [
+              {
+                ...readyRepository.files[0],
+                patch: emoji.repeat(SESSION_DIFF_MAX_FILE_PATCH_BYTES / 4 + 1),
+              },
+            ],
           },
         ],
       })
-    ).toThrow(/Non-renderable files cannot include patchBytes/);
+    ).toThrow(/Patch exceeds/);
+
+    const patch = "x".repeat(Math.floor(SESSION_DIFF_MAX_TOTAL_PATCH_BYTES / 3));
+    expect(() =>
+      sessionDiffUploadSchema.parse({
+        ...upload,
+        repositories: [
+          {
+            ...readyRepository,
+            files: Array.from({ length: 4 }, (_, index) => ({
+              ...readyRepository.files[0],
+              id: `file-${index}`,
+              path: `src/${index}.ts`,
+              patch,
+            })),
+          },
+        ],
+      })
+    ).toThrow(/patch bytes/);
+  });
+
+  it("rejects an encoded bundle above the storage budget", () => {
+    const files = Array.from({ length: 400 }, (_, index) => ({
+      id: `file-${index}`,
+      path: `${"nested/".repeat(580)}${index}.ts`,
+      status: "modified" as const,
+      additions: null,
+      deletions: null,
+      renderState: "metadata_only" as const,
+    }));
+    const oversized = { ...upload, repositories: [{ ...readyRepository, files }] };
+
+    expect(new TextEncoder().encode(JSON.stringify(oversized)).byteLength).toBeGreaterThan(
+      SESSION_DIFF_MAX_BUNDLE_BYTES
+    );
+    expect(() => sessionDiffUploadSchema.parse(oversized)).toThrow(/Encoded bundle exceeds/);
+  });
+
+  it("does not charge the separately stored revision id against bundle_json", () => {
+    const files: Array<{
+      id: string;
+      path: string;
+      status: "modified";
+      additions: null;
+      deletions: null;
+      renderState: "metadata_only";
+    }> = [];
+    const withFiles = () => ({
+      ...upload,
+      repositories: [{ ...readyRepository, files }],
+    });
+    const bytes = () => new TextEncoder().encode(JSON.stringify(withFiles())).byteLength;
+    const targetBytes = SESSION_DIFF_MAX_BUNDLE_BYTES - 20;
+    while (true) {
+      const index = files.length;
+      const next = {
+        id: `file-${index}`,
+        path: `${index}-${"x".repeat(4_000)}`,
+        status: "modified" as const,
+        additions: null,
+        deletions: null,
+        renderState: "metadata_only" as const,
+      };
+      files.push(next);
+      if (bytes() <= targetBytes) continue;
+      files.pop();
+      break;
+    }
+    const index = files.length;
+    let low = 1;
+    let high = 4_000;
+    let best = 0;
+    while (low <= high) {
+      const length = Math.floor((low + high) / 2);
+      files.push({
+        id: `file-${index}`,
+        path: `${index}-${"y".repeat(length)}`,
+        status: "modified",
+        additions: null,
+        deletions: null,
+        renderState: "metadata_only",
+      });
+      const fits = bytes() <= targetBytes;
+      files.pop();
+      if (fits) {
+        best = length;
+        low = length + 1;
+      } else {
+        high = length - 1;
+      }
+    }
+    if (best > 0) {
+      files.push({
+        id: `file-${index}`,
+        path: `${index}-${"y".repeat(best)}`,
+        status: "modified",
+        additions: null,
+        deletions: null,
+        renderState: "metadata_only",
+      });
+    }
+    expect(SESSION_DIFF_MAX_BUNDLE_BYTES - bytes()).toBeLessThan(220);
+    const parsedUpload = sessionDiffUploadSchema.parse(withFiles());
+
+    expect(() =>
+      storedSessionDiffBundleSchema.parse({
+        revisionId: "r".repeat(200),
+        ...parsedUpload,
+      })
+    ).not.toThrow();
+  });
+
+  it("parses the public state and bounded failure request", () => {
+    const current = toSessionDiffManifest(
+      storedSessionDiffBundleSchema.parse({ revisionId: "revision-1", ...upload })
+    );
+    expect(
+      sessionDiffStateSchema.parse({
+        version: 1,
+        current,
+        lastError: { message: "latest refresh failed", occurredAt: 200 },
+        unavailableReason: null,
+      })
+    ).toMatchObject({ current: { revisionId: "revision-1" } });
+    expect(sessionDiffFailureSchema.parse({ error: "timed out" })).toEqual({ error: "timed out" });
+  });
+
+  it("reports immutable baselines on ready without a diff capability gate", () => {
+    expect(
+      sandboxEventSchema.parse({
+        type: "ready",
+        sandboxId: "sandbox-1",
+        timestamp: 100,
+        repositories: [
+          {
+            position: 0,
+            repoOwner: "open-inspect",
+            repoName: "open-inspect",
+            baseSha: "a".repeat(40),
+          },
+        ],
+      })
+    ).toMatchObject({ repositories: [{ baseSha: "a".repeat(40) }] });
+  });
+
+  it("parses lightweight invalidations without capture attempt state", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "diff_state_changed",
+        revisionId: "revision-1",
+        updatedAt: 100,
+      })
+    ).toEqual({ type: "diff_state_changed", revisionId: "revision-1", updatedAt: 100 });
   });
 });

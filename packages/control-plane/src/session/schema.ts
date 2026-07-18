@@ -29,46 +29,15 @@ const ATTACHMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS attachments (
   created_at INTEGER NOT NULL
 )`;
 
-const SESSION_DIFF_TABLES_SQL = `
-CREATE TABLE IF NOT EXISTS diff_state (
+const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  baseline_status TEXT NOT NULL DEFAULT 'pending',
-  baseline_reason TEXT,
-  attempt_id TEXT,
-  attempt_trigger_message_id TEXT,
-  attempt_status TEXT NOT NULL DEFAULT 'idle',
-  attempt_started_at INTEGER,
-  attempt_error TEXT,
-  ready_manifest TEXT,
-  ready_updated_at INTEGER,
-  deleted_at INTEGER,
+  revision_id TEXT,
+  trigger_message_id TEXT,
+  bundle_json TEXT,
+  captured_at INTEGER,
+  last_error TEXT,
+  error_at INTEGER,
   updated_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS diff_objects (
-  object_key TEXT PRIMARY KEY,
-  capture_id TEXT NOT NULL,
-  file_id TEXT NOT NULL,
-  status TEXT NOT NULL,
-  size_bytes INTEGER,
-  sha256 TEXT,
-  cleanup_after INTEGER,
-  cleanup_attempts INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS diff_capture_triggers (
-  trigger_message_id TEXT PRIMARY KEY,
-  capture_id TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_diff_objects_capture_file
-ON diff_objects(capture_id, file_id);
-
-CREATE TABLE IF NOT EXISTS session_alarm_deadlines (
-  name TEXT PRIMARY KEY,
-  deadline INTEGER NOT NULL
 );`;
 
 export const SCHEMA_SQL = `
@@ -201,8 +170,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
 -- overlaid with the session scalar branch/sha columns at read time.
 ${SESSION_REPOSITORIES_TABLE_SQL};
 
--- Latest durable checkout diff state and private object recovery ledger.
-${SESSION_DIFF_TABLES_SQL}
+-- Latest durable checkout diff bundle. Source patches live only in this bounded row.
+${SESSION_DIFF_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -508,35 +477,8 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 36,
-    description: "Add durable latest session diff state",
-    run: (sql) => {
-      sql.exec(SESSION_DIFF_TABLES_SQL);
-      // Schema setup runs before /internal/init. A session row here therefore
-      // proves this is a migrated DO whose original post-sync baseline is not
-      // trustworthy. New sessions receive a pending row in their init handler.
-      sql.exec(
-        `
-        INSERT OR IGNORE INTO diff_state (
-          singleton, baseline_status, baseline_reason, attempt_status, updated_at
-        )
-        SELECT 1, 'unavailable', 'Changes were not captured when this session started', 'idle', ?
-        FROM session
-        LIMIT 1
-      `,
-        Date.now()
-      );
-    },
-  },
-  {
-    id: 37,
-    description: "Allow generation-specific session diff uploads",
-    run: (sql) => {
-      sql.exec(`DROP INDEX IF EXISTS idx_diff_objects_capture_file`);
-      sql.exec(
-        `CREATE INDEX IF NOT EXISTS idx_diff_objects_capture_file
-         ON diff_objects(capture_id, file_id)`
-      );
-    },
+    description: "Add durable latest session diff bundle",
+    run: SESSION_DIFF_TABLE_SQL,
   },
 ];
 

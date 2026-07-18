@@ -35,7 +35,7 @@ from .attachment_processor import (
     parse_session_image_attachments,
 )
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
-from .diff_capture import SessionDiffCaptureClient
+from .diff_capture import SessionDiffRefreshWorker
 from .log_config import configure_logging, get_logger
 from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
@@ -213,6 +213,7 @@ class AgentBridge:
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
     GIT_CONFIG_TIMEOUT_SECONDS = 10.0
+    DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
     MAX_PENDING_PART_EVENTS = 2000
     MAX_EVENT_BUFFER_SIZE = 1000
     OPENCODE_DEFAULT_TITLE_RE = re.compile(
@@ -282,6 +283,15 @@ class AgentBridge:
 
         # Track the current prompt task so _handle_stop can cancel it
         self._current_prompt_task: asyncio.Task[None] | None = None
+        self.diff_refresh = SessionDiffRefreshWorker(
+            session_id=self.session_id,
+            control_plane_url=self.control_plane_url,
+            auth_token=self.auth_token,
+            load_repositories=lambda: load_repo_manifest(self.repo_manifest_path),
+            is_idle=lambda: self._current_prompt_task is None or self._current_prompt_task.done(),
+            get_http_client=lambda: self.http_client,
+            log=self.log,
+        )
 
         # Event buffer: survives WS reconnection, flushed on reconnect
         self._event_buffer: list[dict[str, Any]] = []
@@ -308,7 +318,6 @@ class AgentBridge:
             "type": "ready",
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": self.opencode_session_id,
-            "capabilities": ["session_diff_v1"],
             "repositories": [
                 {
                     "position": position,
@@ -399,6 +408,9 @@ class AgentBridge:
                 self._current_prompt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._current_prompt_task
+            await self.diff_refresh.close(
+                timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
+            )
             if self.http_client:
                 await self.http_client.aclose()
             self.log.info(
@@ -740,6 +752,7 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
+            self.diff_refresh.prompt_started()
             task = asyncio.create_task(self._handle_prompt(cmd))
             self._current_prompt_task = task
 
@@ -748,7 +761,7 @@ class AgentBridge:
                     self._current_prompt_task = None
                 if t.cancelled():
                     asyncio.create_task(
-                        self._send_event(
+                        self._send_terminal_event_and_refresh(
                             {
                                 "type": "execution_complete",
                                 "messageId": mid,
@@ -759,7 +772,7 @@ class AgentBridge:
                     )
                 elif exc := t.exception():
                     asyncio.create_task(
-                        self._send_event(
+                        self._send_terminal_event_and_refresh(
                             {
                                 "type": "execution_complete",
                                 "messageId": mid,
@@ -768,6 +781,8 @@ class AgentBridge:
                             }
                         )
                     )
+                else:
+                    self.diff_refresh.request(mid)
 
             task.add_done_callback(handle_task_exception)
             # Don't return the task — prompt tasks must survive WS disconnects.
@@ -784,15 +799,8 @@ class AgentBridge:
             self.git_sync_complete.set()
         elif cmd_type == "push":
             await self._handle_push(cmd)
-        elif cmd_type == "capture_diff":
-            await SessionDiffCaptureClient(
-                session_id=self.session_id,
-                control_plane_url=self.control_plane_url,
-                auth_token=self.auth_token,
-                repo_manifest_path=self.repo_manifest_path,
-                http_client=self.http_client,
-                log=self.log,
-            ).handle(cmd)
+        elif cmd_type == "refresh_diff":
+            self.diff_refresh.request(None)
         elif cmd_type == "ack":
             ack_id = cmd.get("ackId")
             if ack_id and ack_id in self._pending_acks:
@@ -801,6 +809,10 @@ class AgentBridge:
         else:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
+
+    async def _send_terminal_event_and_refresh(self, event: dict[str, Any]) -> None:
+        await self._send_event(event)
+        self.diff_refresh.request(str(event.get("messageId") or "") or None)
 
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
         """Handle prompt command - send to OpenCode and stream response."""

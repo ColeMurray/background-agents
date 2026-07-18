@@ -1,24 +1,35 @@
-"""Session diff capture command handling and control-plane upload client."""
+"""Best-effort, non-blocking session diff refresh worker."""
 
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+import time
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from .diff_collector import CaptureLimits, DiffCaptureError, collect_repository_diff
-from .repo_config import load_repo_manifest
+from .diff_collector import (
+    CaptureLimits,
+    DiffCaptureError,
+    SessionDiffBundle,
+    collect_session_diff_bundle,
+    encode_bundle,
+)
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import httpx
 
     from .log_config import StructuredLogger
+    from .repo_config import RepoEntry
+
+DEFAULT_REFRESH_TIMEOUT_SECONDS = 60.0
+DEFAULT_IDLE_POLL_SECONDS = 0.05
+
+BundleCollector = Callable[..., Awaitable[SessionDiffBundle]]
 
 
-class SessionDiffCaptureClient:
-    """Executes one bounded capture command without coupling it to the bridge loop."""
+class SessionDiffRefreshWorker:
+    """Coalesces terminal executions into one eventual idle checkout refresh."""
 
     def __init__(
         self,
@@ -26,185 +37,184 @@ class SessionDiffCaptureClient:
         session_id: str,
         control_plane_url: str,
         auth_token: str,
-        repo_manifest_path: Path,
-        http_client: httpx.AsyncClient | None,
+        load_repositories: Callable[[], list[RepoEntry]],
+        is_idle: Callable[[], bool],
+        get_http_client: Callable[[], httpx.AsyncClient | None],
         log: StructuredLogger,
+        collector: BundleCollector = collect_session_diff_bundle,
+        limits: CaptureLimits | None = None,
+        refresh_timeout_seconds: float = DEFAULT_REFRESH_TIMEOUT_SECONDS,
+        idle_poll_seconds: float = DEFAULT_IDLE_POLL_SECONDS,
     ) -> None:
         self.session_id = session_id
-        self.control_plane_url = control_plane_url
+        self.control_plane_url = control_plane_url.rstrip("/")
         self.auth_token = auth_token
-        self.repo_manifest_path = repo_manifest_path
-        self.http_client = http_client
+        self.load_repositories = load_repositories
+        self.is_idle = is_idle
+        self.get_http_client = get_http_client
         self.log = log
+        self.collector = collector
+        self.limits = limits or CaptureLimits.defaults()
+        self.refresh_timeout_seconds = refresh_timeout_seconds
+        self.idle_poll_seconds = idle_poll_seconds
 
-    async def handle(self, command: dict[str, Any]) -> None:
-        """Capture and upload one bounded checkout revision.
+        self._requested_generation = 0
+        self._settled_generation = 0
+        self._activity_generation = 0
+        self._trigger_message_id: str | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._unsupported = False
+        self._closed = False
 
-        Failure is reported to the diff endpoint and never escapes to terminate
-        the bridge or change the completed agent execution's outcome.
-        """
-        capture_id = str(command.get("captureId") or "")
-        timeout_ms = int((command.get("limits") or {}).get("timeoutMs") or 0)
+    def prompt_started(self) -> None:
+        """Invalidate any collection that overlaps a newly mutating prompt."""
+        self._activity_generation += 1
+
+    def request(self, trigger_message_id: str | None) -> None:
+        """Request a refresh without waiting for Git or the control plane."""
+        if self._unsupported or self._closed:
+            return
+        self._requested_generation += 1
+        self._trigger_message_id = trigger_message_id
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
+
+    async def flush(self, *, timeout_seconds: float) -> None:
+        """Best-effort wait for pending work, bounded for graceful shutdown."""
+        task = self._task
+        if task is None:
+            return
         try:
-            if not capture_id or timeout_ms <= 0:
-                raise DiffCaptureError("Invalid capture command")
-            await asyncio.wait_for(self._capture_and_finalize(command), timeout=timeout_ms / 1_000)
-        except Exception as error:
-            self.log.warn(
-                "session_diff.capture_failed",
-                capture_id=capture_id,
-                error=str(error),
-            )
-            if capture_id:
-                try:
-                    await self._request(
-                        "POST",
-                        f"/sessions/{quote(self.session_id, safe='')}/diff-captures/"
-                        f"{quote(capture_id, safe='')}/failed",
-                        json_body={"error": str(error)[:2_000]},
-                    )
-                except Exception as report_error:
-                    self.log.warn(
-                        "session_diff.failure_report_failed",
-                        capture_id=capture_id,
-                        error=str(report_error),
-                    )
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+        except TimeoutError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
-    async def _request(
-        self, method: str, path: str, *, content: bytes | None = None, json_body: Any = None
-    ) -> httpx.Response:
-        if self.http_client is None:
+    async def close(self, *, timeout_seconds: float) -> None:
+        self._closed = True
+        await self.flush(timeout_seconds=timeout_seconds)
+
+    async def _run(self) -> None:
+        try:
+            while not self._unsupported and self._settled_generation < self._requested_generation:
+                while not self.is_idle():
+                    await asyncio.sleep(self.idle_poll_seconds)
+
+                generation = self._requested_generation
+                activity_generation = self._activity_generation
+                trigger_message_id = self._trigger_message_id
+                repositories = self.load_repositories()
+                if not repositories:
+                    self._settled_generation = generation
+                    continue
+
+                try:
+                    bundle = await asyncio.wait_for(
+                        self.collector(
+                            repositories,
+                            trigger_message_id=trigger_message_id,
+                            captured_at=int(time.time() * 1_000),
+                            limits=self.limits,
+                        ),
+                        timeout=self.refresh_timeout_seconds,
+                    )
+                    ready_count = sum(
+                        1
+                        for repository in bundle["repositories"]
+                        if isinstance(repository, dict) and repository.get("status") == "ready"
+                    )
+                    if ready_count == 0:
+                        raise DiffCaptureError("All repositories failed to collect changes")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    if self._is_stale(generation, activity_generation):
+                        continue
+                    await self._report_failure(error)
+                    self._settled_generation = generation
+                    continue
+
+                if self._is_stale(generation, activity_generation):
+                    self.log.info(
+                        "session_diff.refresh_discarded",
+                        generation=generation,
+                    )
+                    continue
+
+                try:
+                    supported = await self._upload(bundle)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    await self._report_failure(error)
+                else:
+                    if supported:
+                        self.log.info(
+                            "session_diff.collection_completed",
+                            repository_count=len(bundle["repositories"]),
+                            encoded_bytes=len(encode_bundle(bundle)),
+                        )
+                self._settled_generation = generation
+        finally:
+            self._task = None
+            if (
+                not self._unsupported
+                and not self._closed
+                and self._settled_generation < self._requested_generation
+            ):
+                self._task = asyncio.create_task(self._run())
+
+    def _is_stale(self, generation: int, activity_generation: int) -> bool:
+        return (
+            not self.is_idle()
+            or generation != self._requested_generation
+            or activity_generation != self._activity_generation
+        )
+
+    async def _upload(self, bundle: SessionDiffBundle) -> bool:
+        client = self.get_http_client()
+        if client is None:
             raise DiffCaptureError("Bridge HTTP client is unavailable")
-        response = await self.http_client.request(
-            method,
-            f"{self.control_plane_url.rstrip('/')}{path}",
+        response = await client.request(
+            "PUT",
+            f"{self.control_plane_url}/sessions/{quote(self.session_id, safe='')}/diff",
             headers={
                 "Authorization": f"Bearer {self.auth_token}",
-                **(
-                    {"Content-Type": "text/x-diff; charset=utf-8"}
-                    if content is not None
-                    else {"Content-Type": "application/json"}
-                ),
+                "Content-Type": "application/json",
             },
-            content=content,
-            json=json_body,
+            content=encode_bundle(bundle),
+            timeout=self.refresh_timeout_seconds,
         )
+        if response.status_code == 404:
+            self._unsupported = True
+            self.log.info("session_diff.unsupported")
+            return False
         response.raise_for_status()
-        return response
+        return True
 
-    async def _capture_and_finalize(self, command: dict[str, Any]) -> None:
-        capture_id = str(command["captureId"])
-        raw_limits = command["limits"]
-        remaining_files = int(raw_limits["maxFiles"])
-        remaining_capture_bytes = int(raw_limits["maxCaptureBytes"])
-        max_patch_bytes = int(raw_limits["maxPatchBytes"])
-        command_timeout_seconds = max(1.0, int(raw_limits["timeoutMs"]) / 1_000)
-        repositories = load_repo_manifest(self.repo_manifest_path)
-        baselines = command.get("baselines")
-        if not isinstance(baselines, list) or len(baselines) != len(repositories):
-            raise DiffCaptureError("Capture baselines do not match repository membership")
-
-        outcomes: list[dict[str, Any]] = []
-        for position, repository in enumerate(repositories):
-            baseline = baselines[position]
-            if not isinstance(baseline, dict):
-                raise DiffCaptureError("Malformed capture baseline")
-            expected = (
-                position,
-                repository.owner.lower(),
-                repository.name.lower(),
-                repository.base_sha,
+    async def _report_failure(self, error: Exception) -> None:
+        message = str(error)[:2_000] or "Session diff refresh failed"
+        self.log.warn("session_diff.refresh_failed", error=message)
+        client = self.get_http_client()
+        if client is None or self._unsupported:
+            return
+        try:
+            response = await client.request(
+                "POST",
+                f"{self.control_plane_url}/sessions/{quote(self.session_id, safe='')}/diff/failure",
+                headers={
+                    "Authorization": f"Bearer {self.auth_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"error": message},
+                timeout=self.refresh_timeout_seconds,
             )
-            received = (
-                baseline.get("position"),
-                str(baseline.get("repoOwner") or "").lower(),
-                str(baseline.get("repoName") or "").lower(),
-                baseline.get("baseSha"),
+            if response.status_code == 404:
+                self._unsupported = True
+                return
+            response.raise_for_status()
+        except Exception as report_error:
+            self.log.warn(
+                "session_diff.failure_report_failed",
+                error=str(report_error)[:2_000],
             )
-            if received != expected or not repository.base_sha:
-                raise DiffCaptureError("Capture baseline conflicts with the runtime manifest")
-
-            try:
-                capture = await collect_repository_diff(
-                    repository,
-                    repository.base_sha,
-                    CaptureLimits(
-                        max_files=remaining_files,
-                        max_patch_bytes=max_patch_bytes,
-                        max_capture_bytes=remaining_capture_bytes,
-                        command_timeout_seconds=command_timeout_seconds,
-                    ),
-                )
-                remaining_files = max(0, remaining_files - len(capture.files))
-                remaining_capture_bytes = max(
-                    0,
-                    remaining_capture_bytes
-                    - sum(
-                        changed.patch_bytes or 0
-                        for changed in capture.files
-                        if changed.render_state == "renderable"
-                    ),
-                )
-                files: list[dict[str, Any]] = []
-                for changed in capture.files:
-                    if changed.render_state == "renderable" and changed.patch is not None:
-                        await self._request(
-                            "PUT",
-                            f"/sessions/{quote(self.session_id, safe='')}/diff-captures/"
-                            f"{quote(capture_id, safe='')}/files/{quote(changed.id, safe='')}",
-                            content=changed.patch.encode("utf-8"),
-                        )
-                    file_manifest: dict[str, Any] = {
-                        "id": changed.id,
-                        "path": changed.path,
-                        "status": changed.status,
-                        "additions": changed.additions,
-                        "deletions": changed.deletions,
-                        "renderState": changed.render_state,
-                    }
-                    optional_fields = {
-                        "oldPath": changed.old_path,
-                        "patchBytes": changed.patch_bytes,
-                        "oldMode": changed.old_mode,
-                        "newMode": changed.new_mode,
-                        "oldSubmoduleSha": changed.old_submodule_sha,
-                        "newSubmoduleSha": changed.new_submodule_sha,
-                    }
-                    file_manifest.update(
-                        {key: value for key, value in optional_fields.items() if value is not None}
-                    )
-                    files.append(file_manifest)
-                outcomes.append(
-                    {
-                        "position": position,
-                        "repoOwner": repository.owner,
-                        "repoName": repository.name,
-                        "baseSha": repository.base_sha,
-                        "headSha": capture.head_sha,
-                        "truncated": capture.truncated,
-                        "omittedFileCount": capture.omitted_file_count,
-                        "files": files,
-                    }
-                )
-            except Exception as error:
-                outcomes.append(
-                    {
-                        "position": position,
-                        "repoOwner": repository.owner,
-                        "repoName": repository.name,
-                        "baseSha": repository.base_sha,
-                        "error": str(error)[:2_000],
-                    }
-                )
-
-        await self._request(
-            "POST",
-            f"/sessions/{quote(self.session_id, safe='')}/diff-captures/"
-            f"{quote(capture_id, safe='')}/complete",
-            json_body={"repositories": outcomes},
-        )
-        self.log.info(
-            "session_diff.capture_published",
-            capture_id=capture_id,
-            repository_count=len(outcomes),
-        )

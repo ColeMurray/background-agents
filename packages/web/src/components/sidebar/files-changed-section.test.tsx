@@ -15,9 +15,7 @@ const repositories: SessionDiffRepository[] = [
     repoName: "web",
     baseSha: "a".repeat(40),
     headSha: "b".repeat(40),
-    capturedAt: 100,
     status: "ready",
-    sourceCaptureId: "capture-1",
     truncated: false,
     omittedFileCount: 0,
     files: [
@@ -28,7 +26,6 @@ const repositories: SessionDiffRepository[] = [
         additions: 2,
         deletions: 1,
         renderState: "renderable",
-        patchBytes: 100,
       },
       {
         id: "file-2",
@@ -39,6 +36,15 @@ const repositories: SessionDiffRepository[] = [
         renderState: "binary",
       },
     ],
+  },
+  {
+    position: 1,
+    repoOwner: "acme",
+    repoName: "api",
+    baseSha: "c".repeat(40),
+    status: "unavailable",
+    error: "Repository checkout is unavailable",
+    files: [],
   },
 ];
 
@@ -61,5 +67,12 @@ describe("FilesChangedSection", () => {
 
     expect(screen.queryByRole("button", { name: /web\/index\.ts/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /api\/index\.ts/i })).toBeVisible();
+  });
+
+  it("shows a repository-level error for a partial multi-repository bundle", () => {
+    render(<FilesChangedSection repositories={repositories} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("acme/api")).toBeVisible();
+    expect(screen.getByText("Repository checkout is unavailable")).toBeVisible();
   });
 });

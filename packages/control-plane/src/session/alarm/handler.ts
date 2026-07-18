@@ -14,8 +14,6 @@ export interface AlarmHandlerDeps {
 }
 
 export interface AlarmHandler {
-  handleExecutionTimeout: () => Promise<void>;
-  handleLifecycle: () => Promise<void>;
   handle: () => Promise<void>;
 }
 
@@ -26,39 +24,32 @@ export interface AlarmHandler {
  * before delegating to lifecycle alarm processing.
  */
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
-  const handleExecutionTimeout = async (): Promise<void> => {
-    // Execution timeout check: if a message has been in 'processing' longer than
-    // the configured timeout, fail it. This is idempotent - if the message was
-    // already failed (by onSandboxTerminating or a prior alarm),
-    // getProcessingMessageWithStartedAt() returns null.
-    const processing = deps.repository.getProcessingMessageWithStartedAt();
-    if (processing?.started_at) {
-      const now = deps.now();
-      const result = evaluateExecutionTimeout(
-        processing.started_at,
-        { timeoutMs: deps.executionTimeoutMs },
-        now
-      );
-      if (result.isTimedOut) {
-        deps.getLog().warn("Execution timeout: message stuck in processing", {
-          event: "execution.timeout",
-          message_id: processing.id,
-          elapsed_ms: result.elapsedMs,
-          timeout_ms: deps.executionTimeoutMs,
-        });
-        await deps.messageQueue.failStuckProcessingMessage();
-      }
-    }
-  };
-
-  const handleLifecycle = (): Promise<void> => deps.lifecycleManager.handleAlarm();
-
   return {
-    handleExecutionTimeout,
-    handleLifecycle,
     async handle(): Promise<void> {
-      await handleExecutionTimeout();
-      await handleLifecycle();
+      // Execution timeout check: if a message has been in 'processing' longer than
+      // the configured timeout, fail it. This is idempotent - if the message was
+      // already failed (by onSandboxTerminating or a prior alarm),
+      // getProcessingMessageWithStartedAt() returns null.
+      const processing = deps.repository.getProcessingMessageWithStartedAt();
+      if (processing?.started_at) {
+        const now = deps.now();
+        const result = evaluateExecutionTimeout(
+          processing.started_at,
+          { timeoutMs: deps.executionTimeoutMs },
+          now
+        );
+        if (result.isTimedOut) {
+          deps.getLog().warn("Execution timeout: message stuck in processing", {
+            event: "execution.timeout",
+            message_id: processing.id,
+            elapsed_ms: result.elapsedMs,
+            timeout_ms: deps.executionTimeoutMs,
+          });
+          await deps.messageQueue.failStuckProcessingMessage();
+        }
+      }
+
+      await deps.lifecycleManager.handleAlarm();
     },
   };
 }

@@ -20,7 +20,6 @@ const PierreDiffRenderer = dynamic(() => import("./pierre-diff-renderer"), {
 class DiffPatchError extends Error {
   constructor(
     message: string,
-    readonly status: number,
     readonly code?: string
   ) {
     super(message);
@@ -36,7 +35,7 @@ async function fetchPatch(url: string): Promise<string> {
     } catch {
       // Non-JSON errors still retain their HTTP status.
     }
-    throw new DiffPatchError("Failed to load diff patch", response.status, code);
+    throw new DiffPatchError("Failed to load diff patch", code);
   }
   return response.text();
 }
@@ -239,20 +238,9 @@ export function SessionChangesPanel({
         </label>
       </div>
 
-      {state.attempt.status === "capturing" && (
-        <p
-          role="status"
-          aria-live="polite"
-          className="border-b border-border-muted bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
-        >
-          Refreshing changes after the latest execution…
-        </p>
-      )}
-      {state.attempt.status === "failed" && (
+      {state.lastError && (
         <div className="flex items-center gap-2 border-b border-destructive-border bg-destructive-muted px-3 py-2 text-xs text-destructive">
-          <span className="min-w-0 flex-1 truncate">
-            {state.attempt.error ?? "Changes refresh failed"}
-          </span>
+          <span className="min-w-0 flex-1 truncate">{state.lastError.message}</span>
           <button
             type="button"
             onClick={() => void retry()}
@@ -269,15 +257,6 @@ export function SessionChangesPanel({
           className="border-b border-destructive-border px-3 py-2 text-xs text-destructive"
         >
           {retryError}
-        </p>
-      )}
-
-      {selected?.repository.status === "stale" && (
-        <p
-          role="status"
-          className="border-b border-warning-border bg-warning-muted px-3 py-2 text-xs text-warning"
-        >
-          Showing the previous capture for this repository. {selected.repository.error}
         </p>
       )}
 
@@ -303,7 +282,7 @@ export function SessionChangesPanel({
         </aside>
         <div className="min-h-0 min-w-0 flex-1 overflow-auto bg-muted/20">
           {resolved.status === "missing" ? (
-            <PanelMessage>This file is no longer part of the latest captured changes.</PanelMessage>
+            <PanelMessage>This file is no longer part of the latest changes.</PanelMessage>
           ) : resolved.file.renderState !== "renderable" ? (
             <PanelMessage>{fileMessage(resolved.file)}</PanelMessage>
           ) : isLoading ? (

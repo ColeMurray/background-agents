@@ -118,7 +118,6 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
-import { SessionAlarmCoordinator } from "./alarm/coordinator";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
 
@@ -151,7 +150,6 @@ export class SessionDO extends DurableObject<Env> {
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private diffService: SessionDiffService;
-  private alarmCoordinator: SessionAlarmCoordinator;
   private initialized = false;
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
@@ -229,15 +227,11 @@ export class SessionDO extends DurableObject<Env> {
     childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
-    diffState: () => Response.json(this.diffService.getPublicState()),
-    diffStageObject: (request) => this.diffService.handleStageObject(request),
-    diffCommitObject: (request) => this.diffService.handleCommitObject(request),
-    diffAbandonObject: (request) => this.diffService.handleAbandonObject(request),
-    diffComplete: (request) => this.diffService.handleComplete(request),
-    diffFailed: (request) => this.diffService.handleFailed(request),
+    diffState: () => this.diffService.handleState(),
+    diffStore: (request) => this.diffService.handleUpload(request),
+    diffFailure: (request) => this.diffService.handleFailure(request),
     diffResolveFile: (_request, url) => this.diffService.handleResolveFile(url),
     diffRetry: () => this.diffService.handleRetry(),
-    diffDelete: () => this.diffService.handleDelete(),
   });
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -249,25 +243,20 @@ export class SessionDO extends DurableObject<Env> {
       (closure) => ctx.storage.transactionSync(closure),
       this.attachmentRepository
     );
-    this.alarmCoordinator = new SessionAlarmCoordinator(this.sql, ctx.storage);
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     this.diffService = new SessionDiffService({
       store: new SessionDiffStore(this.sql),
       repository: this.repository,
-      alarms: this.alarmCoordinator,
       storage: ctx.storage,
       log: this.log,
       generateId: () => generateId(),
       now: () => Date.now(),
-      getPublicSessionId: () => this.getPublicSessionId(),
       hasSandboxConnection: () => Boolean(this.wsManager.getSandboxSocket()),
-      sendCaptureCommand: (command) => {
+      sendRefreshCommand: (command) => {
         const sandboxSocket = this.wsManager.getSandboxSocket();
         return sandboxSocket ? this.wsManager.send(sandboxSocket, command) : false;
       },
-      deleteObject: (objectKey) => this.env.MEDIA_BUCKET.delete(objectKey),
       broadcast: (message) => this.broadcast(message),
-      processMessageQueue: () => this.messageQueue.processMessageQueue(),
     });
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -402,10 +391,11 @@ export class SessionDO extends DurableObject<Env> {
         },
         scheduleExecutionTimeout: async (startedAtMs: number) => {
           const deadline = startedAtMs + this.executionTimeoutMs;
-          await this.alarmCoordinator.schedule("execution", deadline);
+          const currentAlarm = await this.ctx.storage.getAlarm();
+          if (!currentAlarm || deadline < currentAlarm) {
+            await this.ctx.storage.setAlarm(deadline);
+          }
         },
-        getDispatchBlockReason: () => this.diffService.getDispatchBlockReason(),
-        beginDiffCapture: (triggerMessageId) => this.diffService.beginCapture(triggerMessageId),
       });
     }
 
@@ -538,7 +528,6 @@ export class SessionDO extends DurableObject<Env> {
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
         updateSandboxStatus: (status) => this.updateSandboxStatus(status),
-        initializeDiffState: (now) => this.diffService.initializeNewSession(now),
       });
     }
 
@@ -678,7 +667,6 @@ export class SessionDO extends DurableObject<Env> {
         scheduleInactivityCheck: () => this.scheduleInactivityCheck(),
         processMessageQueue: () => this.messageQueue.processMessageQueue(),
         handleReady: (event) => this.diffService.handleReady(event),
-        beginDiffCapture: (triggerMessageId) => this.diffService.beginCapture(triggerMessageId),
       });
     }
 
@@ -770,7 +758,7 @@ export class SessionDO extends DurableObject<Env> {
     // Alarm scheduler adapter
     const alarmScheduler: AlarmScheduler = {
       scheduleAlarm: async (timestamp) => {
-        await this.alarmCoordinator.schedule("lifecycle", timestamp);
+        await this.ctx.storage.setAlarm(timestamp);
       },
     };
 
@@ -1153,11 +1141,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   async alarm(): Promise<void> {
     this.ensureInitialized();
-    await this.alarmCoordinator.run(Date.now(), [
-      { name: "session diffs", run: () => this.diffService.maintain() },
-      { name: "execution timeout", run: () => this.alarmHandler.handleExecutionTimeout() },
-      { name: "sandbox lifecycle", run: () => this.alarmHandler.handleLifecycle() },
-    ]);
+    await this.alarmHandler.handle();
   }
 
   /**

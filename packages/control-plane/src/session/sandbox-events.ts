@@ -32,7 +32,6 @@ interface SessionSandboxEventProcessorDeps {
   scheduleInactivityCheck: () => Promise<void>;
   processMessageQueue: () => Promise<void>;
   handleReady: (event: Extract<SandboxEvent, { type: "ready" }>) => Promise<void>;
-  beginDiffCapture: (triggerMessageId: string) => Promise<void>;
 }
 
 /** How long a pending push waits for its terminal event before rejecting. */
@@ -189,13 +188,6 @@ export class SessionSandboxEventProcessor {
       if (messageId) {
         this.deps.repository.upsertExecutionCompleteEvent(messageId, event, now);
       }
-      if (completionMessageId) {
-        // beginDiffCapture persists the dispatch barrier synchronously before
-        // its first external await. Do this before status/index synchronization
-        // so another request cannot dispatch the next prompt into the gap.
-        await this.deps.beginDiffCapture(completionMessageId);
-      }
-
       const isStillProcessing =
         completionMessageId != null && processingMessage?.id === completionMessageId;
 

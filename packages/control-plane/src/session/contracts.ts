@@ -33,14 +33,10 @@ export const SessionInternalPaths = {
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",
   diffState: "/internal/diff-state",
-  diffStageObject: "/internal/diff-stage-object",
-  diffCommitObject: "/internal/diff-commit-object",
-  diffAbandonObject: "/internal/diff-abandon-object",
-  diffComplete: "/internal/diff-complete",
-  diffFailed: "/internal/diff-failed",
+  diffStore: "/internal/diff-store",
+  diffFailure: "/internal/diff-failure",
   diffResolveFile: "/internal/diff-resolve-file",
   diffRetry: "/internal/diff-retry",
-  diffDelete: "/internal/diff-delete",
 } as const;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];

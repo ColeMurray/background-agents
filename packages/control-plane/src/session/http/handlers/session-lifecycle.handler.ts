@@ -81,7 +81,6 @@ export interface SessionLifecycleHandlerDeps {
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
   updateSandboxStatus: (status: SandboxStatus) => void;
-  initializeDiffState?: (now: number) => void;
 }
 
 function sessionTitleUpdateStatus(
@@ -221,8 +220,6 @@ export function createSessionLifecycleHandler(
           baseBranch: repo.baseBranch,
         }))
       );
-      deps.initializeDiffState?.(now);
-
       const sandboxId = deps.generateId();
       deps.repository.createSandbox({
         id: sandboxId,

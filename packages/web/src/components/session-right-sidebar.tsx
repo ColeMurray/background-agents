@@ -38,7 +38,6 @@ interface SessionRightSidebarProps {
   onOpenMedia: (artifactId: string) => void;
   diffState?: SessionDiffState | null;
   diffLoading?: boolean;
-  diffError?: Error | null;
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
 }
@@ -56,7 +55,6 @@ export function SessionRightSidebarContent({
   onOpenMedia,
   diffState,
   diffLoading,
-  diffError,
   selectedDiff,
   onOpenDiff,
 }: SessionRightSidebarContentProps) {
@@ -86,7 +84,6 @@ export function SessionRightSidebarContent({
     isProcessing: sessionState?.isProcessing ?? false,
     state: diffState ?? null,
     isLoading: diffLoading ?? false,
-    hasError: Boolean(diffError),
   });
 
   if (!sessionState) {
@@ -209,9 +206,6 @@ export function SessionRightSidebarContent({
             {diffView.kind === "error" && (
               <p className="text-xs text-destructive">Unable to load changes.</p>
             )}
-            {diffView.kind === "preparing" && (
-              <p className="text-xs text-muted-foreground">Preparing session baseline…</p>
-            )}
             {diffView.kind === "unavailable" && (
               <p className="text-xs text-muted-foreground">{diffView.message}</p>
             )}
@@ -223,21 +217,12 @@ export function SessionRightSidebarContent({
             {diffView.kind === "working" && (
               <p className="text-xs text-muted-foreground">
                 {diffView.showManifest
-                  ? "Agent working — showing the previous capture."
+                  ? "Agent working — showing the previous changes."
                   : "Changes will be available after this execution."}
               </p>
             )}
-            {diffView.kind === "capturing" && (
-              <p className="text-xs text-muted-foreground">
-                {diffView.showManifest
-                  ? "Refreshing changes — showing the previous capture."
-                  : "Capturing changes after execution…"}
-              </p>
-            )}
             {diffView.kind === "empty" && (
-              <p className="text-xs text-muted-foreground">
-                No file changes in the latest capture.
-              </p>
+              <p className="text-xs text-muted-foreground">No file changes in the latest diff.</p>
             )}
             {diffView.kind === "failed" && (
               <div className="space-y-1.5">
@@ -248,25 +233,12 @@ export function SessionRightSidebarContent({
                   onClick={() => void retry()}
                   className="text-xs font-medium text-accent underline underline-offset-2 disabled:opacity-50"
                 >
-                  {isRetrying ? "Retrying…" : "Retry changes capture"}
+                  {isRetrying ? "Retrying…" : "Retry changes refresh"}
                 </button>
               </div>
             )}
             {retryError && <p className="mt-1.5 text-xs text-destructive">{retryError}</p>}
           </div>
-          {diffView.showManifest &&
-            diffState?.current?.repositories.map(
-              (repository) =>
-                repository.status !== "ready" && (
-                  <p key={repository.position} className="mt-2 text-[11px] text-warning">
-                    {repository.repoOwner}/{repository.repoName}:{" "}
-                    {repository.status === "stale"
-                      ? "showing the previous capture"
-                      : "changes unavailable"}
-                    {repository.error ? ` — ${repository.error}` : ""}
-                  </p>
-                )
-            )}
         </CollapsibleSection>
       )}
 
@@ -304,7 +276,6 @@ export function SessionRightSidebar({
   onOpenMedia,
   diffState,
   diffLoading,
-  diffError,
   selectedDiff,
   onOpenDiff,
 }: SessionRightSidebarProps) {
@@ -321,7 +292,6 @@ export function SessionRightSidebar({
         onOpenMedia={onOpenMedia}
         diffState={diffState}
         diffLoading={diffLoading}
-        diffError={diffError}
         selectedDiff={selectedDiff}
         onOpenDiff={onOpenDiff}
       />
