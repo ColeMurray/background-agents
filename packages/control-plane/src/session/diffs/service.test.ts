@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Logger } from "../../logger";
+import type { SessionMessenger } from "../messenger";
 import type { SessionRepository } from "../repository";
 import type { SqlResult, SqlStorage } from "../sql-storage";
 import { SessionDiffService } from "./service";
@@ -87,24 +89,31 @@ function harness() {
     ],
     setSessionDiffBaselines: vi.fn(),
   } as unknown as SessionRepository;
-  const broadcast = vi.fn();
-  const service = new SessionDiffService({
-    store: new SessionDiffStore(sql),
+  const messenger: SessionMessenger = {
+    broadcast: vi.fn(),
+    sendToSandbox: vi.fn(() => true),
+  };
+  const log: Logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => log,
+  };
+  const service = new SessionDiffService(
+    new SessionDiffStore(sql),
     repository,
-    storage: { transactionSync: <T>(closure: () => T) => closure() },
-    log: { warn: vi.fn() },
-    generateId: () => "revision-1",
-    now: () => 200,
-    hasSandboxConnection: () => true,
-    sendRefreshCommand: vi.fn(() => true),
-    broadcast,
-  });
-  return { service, repository, broadcast };
+    messenger,
+    log,
+    () => "revision-1",
+    () => 200
+  );
+  return { service, repository, messenger };
 }
 
 describe("SessionDiffService", () => {
   it("accepts one matching bundle and serves a revision-pinned patch", async () => {
-    const { service, broadcast } = harness();
+    const { service, messenger } = harness();
 
     const uploaded = await service.handleUpload(
       new Request("http://internal/diff", { method: "POST", body: JSON.stringify(upload) })
@@ -122,7 +131,7 @@ describe("SessionDiffService", () => {
         )
       ).text()
     ).toContain("diff --git");
-    expect(broadcast).toHaveBeenCalledWith({
+    expect(messenger.broadcast).toHaveBeenCalledWith({
       type: "diff_state_changed",
       revisionId: "revision-1",
       updatedAt: 200,
@@ -170,10 +179,18 @@ describe("SessionDiffService", () => {
   });
 
   it("accepts retry as a non-blocking refresh command", () => {
-    const { service } = harness();
+    const { service, messenger } = harness();
 
     const response = service.handleRetry();
 
     expect(response.status).toBe(202);
+    expect(messenger.sendToSandbox).toHaveBeenCalledWith({ type: "refresh_diff" });
+  });
+
+  it("rejects retry when the sandbox is not connected", () => {
+    const { service, messenger } = harness();
+    vi.mocked(messenger.sendToSandbox).mockReturnValue(false);
+
+    expect(service.handleRetry().status).toBe(409);
   });
 });

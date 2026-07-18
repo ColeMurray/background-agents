@@ -120,6 +120,7 @@ import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
+import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -149,11 +150,14 @@ export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
-  private diffService: SessionDiffService;
   private initialized = false;
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
+  // Session messenger (constructed in ensureInitialized once the session logger exists)
+  private messenger!: SessionMessenger;
+  // Session diff service (constructed in ensureInitialized once the session logger exists)
+  private diffService!: SessionDiffService;
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
   // Source control provider (lazily initialized)
@@ -244,20 +248,6 @@ export class SessionDO extends DurableObject<Env> {
       this.attachmentRepository
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
-    this.diffService = new SessionDiffService({
-      store: new SessionDiffStore(this.sql),
-      repository: this.repository,
-      storage: ctx.storage,
-      log: this.log,
-      generateId: () => generateId(),
-      now: () => Date.now(),
-      hasSandboxConnection: () => Boolean(this.wsManager.getSandboxSocket()),
-      sendRefreshCommand: (command) => {
-        const sandboxSocket = this.wsManager.getSandboxSocket();
-        return sandboxSocket ? this.wsManager.send(sandboxSocket, command) : false;
-      },
-      broadcast: (message) => this.broadcast(message),
-    });
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
 
@@ -868,6 +858,16 @@ export class SessionDO extends DurableObject<Env> {
       "session-do",
       { session_id: sessionId },
       parseLogLevel(this.env.LOG_LEVEL)
+    );
+    // Constructed here rather than in the constructor so they (and the
+    // WebSocket manager they force) capture the session-scoped logger,
+    // never the request-scoped child installed by fetch().
+    this.messenger = new SessionMessengerImpl(this.wsManager);
+    this.diffService = new SessionDiffService(
+      new SessionDiffStore(this.sql),
+      this.repository,
+      this.messenger,
+      this.log
     );
     this.wsManager.enableAutoPingPong();
   }
@@ -1548,9 +1548,7 @@ export class SessionDO extends DurableObject<Env> {
    * Broadcast message to all authenticated clients.
    */
   private broadcast(message: ServerMessage): void {
-    this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
-      this.wsManager.send(ws, message);
-    });
+    this.messenger.broadcast(message);
   }
 
   /**

@@ -329,6 +329,38 @@ describe("SessionRepository", () => {
       expect(mock.calls[2].query).toContain("WHERE position = ?");
       expect(mock.calls[2].params).toEqual(["b".repeat(40), 1, "acme", "web"]);
     });
+
+    it("applies all baseline updates in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
+
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "api",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(transactions).toBe(1);
+      expect(mock.calls).toHaveLength(3);
+    });
   });
 
   // === SANDBOX ===
