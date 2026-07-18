@@ -5,6 +5,10 @@ import { controlPlaneFetch } from "@/lib/control-plane";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 
+/**
+ * Return the latest patch-free diff manifest for an authenticated browser session.
+ * The upstream request uses the server-held control-plane HMAC and is never cacheable.
+ */
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }

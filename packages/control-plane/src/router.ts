@@ -80,7 +80,12 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
   /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
-  /^\/sessions\/[^/]+\/diff(?:\/failure)?$/,
+];
+
+/** Diff endpoints the sandbox needs, constrained by both path and method. */
+const SANDBOX_DIFF_AUTH_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
+  { method: "PUT", pattern: /^\/sessions\/[^/]+\/diff$/ },
+  { method: "POST", pattern: /^\/sessions\/[^/]+\/diff\/failure$/ },
 ];
 
 type CachedScmProvider =
@@ -133,8 +138,11 @@ function isPublicRoute(path: string): boolean {
 /**
  * Check if a path matches any sandbox auth route pattern.
  */
-function isSandboxAuthRoute(path: string): boolean {
-  return SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path));
+function isSandboxAuthRoute(path: string, method: string): boolean {
+  return (
+    SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path)) ||
+    SANDBOX_DIFF_AUTH_ROUTES.some((route) => route.method === method && route.pattern.test(path))
+  );
 }
 
 function isScmAgnosticRoute(path: string): boolean {
@@ -379,7 +387,7 @@ export async function handleRequest(
 
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
-    const acceptsSandboxAuth = isSandboxAuthRoute(path);
+    const acceptsSandboxAuth = isSandboxAuthRoute(path, method);
     // First try HMAC auth (for web app, slack bot, etc.)
     const hmacAuthError = await requireInternalAuth(request, env, ctx);
     let authError = hmacAuthError;

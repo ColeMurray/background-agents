@@ -39,6 +39,7 @@ describe("session diff file API route", () => {
       "/sessions/session-1/diff/capture-1/files/file-1"
     );
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("Vary")).toBe("Cookie");
     await expect(response.text()).resolves.toContain("diff --git");
   });

@@ -312,6 +312,7 @@ export type SessionDiffManifest = z.infer<typeof sessionDiffManifestSchema>;
 export type SessionDiffState = z.infer<typeof sessionDiffStateSchema>;
 export type SessionDiffFailure = z.infer<typeof sessionDiffFailureSchema>;
 
+/** Strip every patch body before a stored bundle crosses the browser-facing boundary. */
 export function toSessionDiffManifest(bundle: StoredSessionDiffBundle): SessionDiffManifest {
   return sessionDiffManifestSchema.parse({
     ...bundle,

@@ -5,6 +5,10 @@ import { controlPlaneFetch } from "@/lib/control-plane";
 
 const ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 
+/**
+ * Stream one revision-pinned patch to an authenticated browser.
+ * Route identities are validated before the server authenticates to the control plane.
+ */
 export async function GET(
   _request: Request,
   {
@@ -26,6 +30,7 @@ export async function GET(
         upstream.headers.get("Content-Type") ??
         (upstream.ok ? "text/x-diff; charset=utf-8" : "application/json"),
       "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
       Vary: "Cookie",
     });
     for (const name of ["Content-Length", "ETag"]) {

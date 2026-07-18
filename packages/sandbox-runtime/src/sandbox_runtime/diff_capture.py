@@ -91,6 +91,7 @@ class SessionDiffRefreshWorker:
             await asyncio.gather(task, return_exceptions=True)
 
     async def close(self, *, timeout_seconds: float) -> None:
+        """Stop accepting refreshes and bound shutdown waiting to ``timeout_seconds``."""
         self._closed = True
         await self.flush(timeout_seconds=timeout_seconds)
 

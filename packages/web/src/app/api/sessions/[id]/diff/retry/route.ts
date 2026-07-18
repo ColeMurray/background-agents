@@ -5,6 +5,7 @@ import { controlPlaneFetch } from "@/lib/control-plane";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 
+/** Request a best-effort diff refresh after verifying the browser's NextAuth session. */
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
