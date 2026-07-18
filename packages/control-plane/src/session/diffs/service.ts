@@ -287,6 +287,9 @@ export class SessionDiffService {
     if (state.attempt.status !== "failed") {
       return Response.json({ error: "Only a failed diff capture can be retried" }, { status: 409 });
     }
+    if (this.deps.repository.getProcessingMessage()) {
+      return Response.json({ error: "Agent execution is in progress" }, { status: 409 });
+    }
     if (!this.deps.hasSandboxConnection()) {
       return Response.json({ error: "Sandbox is not connected" }, { status: 409 });
     }

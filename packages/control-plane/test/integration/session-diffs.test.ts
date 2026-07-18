@@ -222,6 +222,48 @@ describe("session diff routes", () => {
     expect(retry.status).toBe(200);
   });
 
+  it("rejects manual diff retries while an agent execution is processing", async () => {
+    const sessionName = `diff-retry-processing-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    const baseSha = "6".repeat(40);
+    await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "ready",
+        sandboxId: "sandbox-retry-processing",
+        timestamp: 100,
+        capabilities: ["session_diff_v1"],
+        repositories: [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }],
+      }),
+    });
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(
+        `UPDATE diff_state
+         SET attempt_id = 'failed-capture', attempt_status = 'failed',
+             attempt_error = 'Previous capture failed', updated_at = 200
+         WHERE singleton = 1`
+      );
+    });
+    const participants = await queryDO<{ id: string }>(stub, "SELECT id FROM participants LIMIT 1");
+    await seedMessage(stub, {
+      id: "processing-message",
+      authorId: participants[0]!.id,
+      content: "Continue changing the worktree",
+      source: "web",
+      status: "processing",
+      createdAt: 300,
+      startedAt: 300,
+    });
+
+    const retry = await stub.fetch("http://internal/internal/diff-retry", { method: "POST" });
+
+    expect(retry.status).toBe(409);
+    await expect(retry.json()).resolves.toEqual({
+      error: "Agent execution is in progress",
+    });
+  });
+
   it("records the first runtime baselines before work is dispatched", async () => {
     const sessionName = `diff-baseline-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);
