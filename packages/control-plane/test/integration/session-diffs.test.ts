@@ -128,6 +128,100 @@ describe("session diff routes", () => {
     expect((await stage("byte-overflow", 1)).status).toBe(409);
   });
 
+  it("rejects manifests that cannot fit safely in one Durable Object row", async () => {
+    const sessionName = `diff-manifest-limit-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    const baseSha = "4".repeat(40);
+    const captureId = "capture-manifest-limit";
+    await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "ready",
+        sandboxId: "sandbox-manifest-limit",
+        timestamp: 100,
+        capabilities: ["session_diff_v1"],
+        repositories: [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }],
+      }),
+    });
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(
+        `UPDATE diff_state
+         SET attempt_id = ?, attempt_trigger_message_id = ?, attempt_status = 'capturing',
+             attempt_started_at = ?, updated_at = ?
+         WHERE singleton = 1`,
+        captureId,
+        "message-manifest-limit",
+        200,
+        200
+      );
+    });
+    const pathPadding = "x".repeat(2_000);
+    const files = Array.from({ length: SESSION_DIFF_MAX_FILES }, (_, index) => ({
+      id: `large-file-${index}`,
+      path: `${index}-${pathPadding}`,
+      status: "modified",
+      additions: 0,
+      deletions: 0,
+      renderState: "metadata_only",
+    }));
+
+    const complete = await stub.fetch(
+      `http://internal/internal/diff-complete?captureId=${captureId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repositories: [
+            {
+              position: 0,
+              repoOwner: "acme",
+              repoName: "web-app",
+              baseSha,
+              headSha: "5".repeat(40),
+              truncated: false,
+              omittedFileCount: 0,
+              files,
+            },
+          ],
+        }),
+      }
+    );
+
+    expect(complete.status).toBe(400);
+    await expect(complete.json()).resolves.toEqual({
+      error: "Diff manifest exceeds the storage limit",
+    });
+    const state = await queryDO<{ ready_manifest: string | null }>(
+      stub,
+      "SELECT ready_manifest FROM diff_state"
+    );
+    expect(state).toEqual([{ ready_manifest: null }]);
+
+    const retry = await stub.fetch(
+      `http://internal/internal/diff-complete?captureId=${captureId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repositories: [
+            {
+              position: 0,
+              repoOwner: "acme",
+              repoName: "web-app",
+              baseSha,
+              headSha: "5".repeat(40),
+              truncated: false,
+              omittedFileCount: 0,
+              files: files.map((file, index) => ({ ...file, path: `src/file-${index}.ts` })),
+            },
+          ],
+        }),
+      }
+    );
+    expect(retry.status).toBe(200);
+  });
+
   it("records the first runtime baselines before work is dispatched", async () => {
     const sessionName = `diff-baseline-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);

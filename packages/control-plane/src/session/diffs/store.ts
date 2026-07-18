@@ -11,6 +11,9 @@ import {
 import type { SqlStorage } from "../sql-storage";
 
 export const SESSION_DIFF_OBJECT_CLEANUP_GRACE_MS = 5 * 60 * 1_000;
+// Durable Object SQLite values cap at 2 MB. Keep enough headroom for SQLite
+// encoding and future schema fields while still supporting 1,000 normal paths.
+export const SESSION_DIFF_MAX_MANIFEST_BYTES = 1_500_000;
 const SESSION_DIFF_OBJECT_CLEANUP_RETRY_BASE_MS = 1_000;
 const SESSION_DIFF_OBJECT_CLEANUP_RETRY_MAX_MS = 5 * 60 * 1_000;
 
@@ -382,6 +385,10 @@ export class SessionDiffStore {
       triggerMessageId: this.getAttemptTriggerMessageId(),
       repositories: nextRepositories.sort((left, right) => left.position - right.position),
     };
+    const serializedManifest = JSON.stringify(next);
+    if (new TextEncoder().encode(serializedManifest).byteLength > SESSION_DIFF_MAX_MANIFEST_BYTES) {
+      return { ok: false, status: 400, error: "Diff manifest exceeds the storage limit" };
+    }
     const nextObjectKeys = new Set(this.objectKeys(next));
     for (const objectKey of this.objectKeys(prior)) {
       if (!nextObjectKeys.has(objectKey)) {
@@ -411,7 +418,7 @@ export class SessionDiffStore {
        SET attempt_status = 'idle', attempt_error = NULL, ready_manifest = ?,
            ready_updated_at = ?, updated_at = ?
        WHERE singleton = 1 AND attempt_id = ? AND attempt_status = 'capturing'`,
-      JSON.stringify(next),
+      serializedManifest,
       now,
       now,
       captureId
