@@ -3,6 +3,7 @@ import type { SqlStorage } from "../sql-storage";
 export type SessionAlarmConcern = "lifecycle" | "execution" | "diff_capture" | "diff_cleanup";
 
 interface AlarmStorage {
+  getAlarm(): Promise<number | null>;
   setAlarm(timestamp: number | Date): Promise<void>;
   deleteAlarm(): Promise<void>;
 }
@@ -15,6 +16,7 @@ export interface SessionAlarmTask {
 /** Persists independent deadlines and maps their minimum to the one DO alarm. */
 export class SessionAlarmCoordinator {
   private alarmOperation: Promise<void> = Promise.resolve();
+  private legacyAlarmChecked = false;
 
   constructor(
     private readonly sql: SqlStorage,
@@ -23,6 +25,7 @@ export class SessionAlarmCoordinator {
 
   async schedule(concern: SessionAlarmConcern, deadline: number): Promise<void> {
     await this.enqueueAlarmOperation(async () => {
+      await this.adoptLegacyAlarmNow();
       this.sql.exec(
         `INSERT INTO session_alarm_deadlines (name, deadline)
          VALUES (?, ?)
@@ -36,6 +39,7 @@ export class SessionAlarmCoordinator {
 
   async clear(concern: SessionAlarmConcern): Promise<void> {
     await this.enqueueAlarmOperation(async () => {
+      await this.adoptLegacyAlarmNow();
       this.sql.exec(`DELETE FROM session_alarm_deadlines WHERE name = ?`, concern);
       await this.rearmNow();
     });
@@ -47,7 +51,10 @@ export class SessionAlarmCoordinator {
 
   /** Runs independent alarm concerns in order without letting one suppress the rest. */
   async run(now: number, tasks: SessionAlarmTask[]): Promise<void> {
-    this.clearDue(now);
+    await this.enqueueAlarmOperation(async () => {
+      await this.adoptLegacyAlarmNow();
+      this.clearDue(now);
+    });
     const failures: Error[] = [];
 
     for (const task of tasks) {
@@ -72,7 +79,10 @@ export class SessionAlarmCoordinator {
   }
 
   async rearm(): Promise<void> {
-    await this.enqueueAlarmOperation(() => this.rearmNow());
+    await this.enqueueAlarmOperation(async () => {
+      await this.adoptLegacyAlarmNow();
+      await this.rearmNow();
+    });
   }
 
   private enqueueAlarmOperation(operation: () => Promise<void>): Promise<void> {
@@ -82,14 +92,33 @@ export class SessionAlarmCoordinator {
   }
 
   private async rearmNow(): Promise<void> {
-    const rows = this.sql
-      .exec(`SELECT MIN(deadline) AS deadline FROM session_alarm_deadlines`)
-      .toArray() as Array<{ deadline: number | null }>;
-    const deadline = rows[0]?.deadline ?? null;
+    const deadline = this.getMinimumDeadline();
     if (deadline == null) {
       await this.storage.deleteAlarm();
     } else {
       await this.storage.setAlarm(deadline);
     }
+  }
+
+  private async adoptLegacyAlarmNow(): Promise<void> {
+    if (this.legacyAlarmChecked) return;
+    if (this.getMinimumDeadline() == null) {
+      const deadline = await this.storage.getAlarm();
+      if (deadline != null) {
+        this.sql.exec(
+          `INSERT OR IGNORE INTO session_alarm_deadlines (name, deadline) VALUES (?, ?)`,
+          "legacy",
+          deadline
+        );
+      }
+    }
+    this.legacyAlarmChecked = true;
+  }
+
+  private getMinimumDeadline(): number | null {
+    const rows = this.sql
+      .exec(`SELECT MIN(deadline) AS deadline FROM session_alarm_deadlines`)
+      .toArray() as Array<{ deadline: number | null }>;
+    return rows[0]?.deadline ?? null;
   }
 }

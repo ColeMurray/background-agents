@@ -10,11 +10,11 @@ function deferred() {
   return { promise, resolve };
 }
 
-function harness() {
+function harness(legacyAlarm: number | null = null) {
   const deadlines = new Map<string, number>();
   const sql: SqlStorage = {
     exec: vi.fn((query: string, ...params: unknown[]) => {
-      if (query.includes("INSERT INTO session_alarm_deadlines")) {
+      if (query.includes("INSERT") && query.includes("session_alarm_deadlines (name, deadline)")) {
         deadlines.set(params[0] as string, params[1] as number);
       } else if (query.includes("DELETE FROM session_alarm_deadlines WHERE name =")) {
         deadlines.delete(params[0] as string);
@@ -37,6 +37,7 @@ function harness() {
     }),
   };
   const storage = {
+    getAlarm: vi.fn(async () => legacyAlarm),
     setAlarm: vi.fn(async () => {}),
     deleteAlarm: vi.fn(async () => {}),
   };
@@ -44,6 +45,25 @@ function harness() {
 }
 
 describe("SessionAlarmCoordinator", () => {
+  it("adopts a legacy physical alarm before the first named deadline mutation", async () => {
+    const { coordinator, storage } = harness(100);
+
+    await coordinator.schedule("lifecycle", 500);
+
+    expect(storage.getAlarm).toHaveBeenCalledTimes(1);
+    expect(storage.setAlarm).toHaveBeenLastCalledWith(100);
+  });
+
+  it("clears an adopted legacy deadline when its alarm runs", async () => {
+    const { coordinator, storage } = harness(100);
+
+    await coordinator.run(100, []);
+
+    expect(storage.getAlarm).toHaveBeenCalledTimes(1);
+    expect(storage.deleteAlarm).toHaveBeenCalledTimes(1);
+    expect(storage.setAlarm).not.toHaveBeenCalled();
+  });
+
   it("keeps the earliest named deadline regardless of scheduling order", async () => {
     const first = harness();
     await first.coordinator.schedule("lifecycle", 500);
