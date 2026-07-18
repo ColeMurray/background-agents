@@ -11,6 +11,8 @@ import {
 import type { SqlStorage } from "../sql-storage";
 
 export const SESSION_DIFF_OBJECT_CLEANUP_GRACE_MS = 5 * 60 * 1_000;
+const SESSION_DIFF_OBJECT_CLEANUP_RETRY_BASE_MS = 1_000;
+const SESSION_DIFF_OBJECT_CLEANUP_RETRY_MAX_MS = 5 * 60 * 1_000;
 
 type InternalSessionDiffFile = SessionDiffFile & { patchObjectKey?: string };
 type InternalSessionDiffManifest = Omit<SessionDiffManifest, "repositories"> & {
@@ -456,7 +458,10 @@ export class SessionDiffStore {
       .exec(`SELECT cleanup_attempts FROM diff_objects WHERE object_key = ?`, objectKey)
       .toArray() as Array<{ cleanup_attempts: number }>;
     const attempts = rows[0]?.cleanup_attempts ?? 0;
-    const retryDelay = Math.min(5 * 60_000, 1_000 * 2 ** Math.min(attempts, 8));
+    const retryDelay = Math.min(
+      SESSION_DIFF_OBJECT_CLEANUP_RETRY_MAX_MS,
+      SESSION_DIFF_OBJECT_CLEANUP_RETRY_BASE_MS * 2 ** Math.min(attempts, 8)
+    );
     this.sql.exec(
       `UPDATE diff_objects
        SET status = 'cleanup', cleanup_attempts = cleanup_attempts + 1, cleanup_after = ?
