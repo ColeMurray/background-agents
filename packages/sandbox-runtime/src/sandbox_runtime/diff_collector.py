@@ -535,6 +535,19 @@ async def _submodule_shas(
     return old_sha, new_sha
 
 
+@dataclass(frozen=True)
+class _RenderedPatch:
+    """Outcome of rendering one file's patch against the capture limits.
+
+    The patch text and its size are only present when the file is renderable
+    within the remaining budget.
+    """
+
+    render_state: str
+    patch: str | None = None
+    patch_bytes: int | None = None
+
+
 async def _rendered_patch(
     repository: RepoEntry,
     change: _ChangedPath,
@@ -545,12 +558,8 @@ async def _rendered_patch(
     deletions: int | None,
     limits: CaptureLimits,
     remaining_capture_bytes: int,
-) -> tuple[str, str | None, int | None]:
-    """Fetch one file's patch and decide its render state.
-
-    Returns ``(render_state, patch, patch_bytes)``; the patch and its size are
-    only present when the file is renderable within the remaining budget.
-    """
+) -> _RenderedPatch:
+    """Fetch one file's patch and decide its render state."""
     try:
         raw_patch = (
             await _untracked_patch(
@@ -570,7 +579,7 @@ async def _rendered_patch(
             )
         )
     except _GitOutputTooLarge:
-        return "too_large", None, None
+        return _RenderedPatch("too_large")
 
     patch_text = raw_patch.decode("utf-8", errors="replace")
     # The upload client sends the normalized UTF-8 text, so limits and
@@ -578,12 +587,12 @@ async def _rendered_patch(
     # Git's potentially non-UTF-8 stdout.
     patch_bytes = len(patch_text.encode("utf-8"))
     if not is_untracked and additions == 0 and deletions == 0 and "\n@@" not in patch_text:
-        return "metadata_only", None, None
+        return _RenderedPatch("metadata_only")
     if patch_bytes > limits.max_patch_bytes or patch_bytes > remaining_capture_bytes:
-        return "too_large", None, None
+        return _RenderedPatch("too_large")
     if not raw_patch:
-        return "metadata_only", None, None
-    return "renderable", patch_text, patch_bytes
+        return _RenderedPatch("metadata_only")
+    return _RenderedPatch("renderable", patch=patch_text, patch_bytes=patch_bytes)
 
 
 async def _capture_file(
@@ -636,15 +645,15 @@ async def _capture_file(
         )
 
     if additions is None or deletions is None:
-        render_state, patch, patch_bytes = "binary", None, None
+        rendered = _RenderedPatch("binary")
     elif is_overlay:
         # Git can report a staged deletion and an untracked working-tree
         # file at the same path (for example after ``git rm --cached``).
         # Preserve the meaningful index/worktree change as one path record
         # without publishing two contradictory patches for one file.
-        render_state, patch, patch_bytes = "metadata_only", None, None
+        rendered = _RenderedPatch("metadata_only")
     else:
-        render_state, patch, patch_bytes = await _rendered_patch(
+        rendered = await _rendered_patch(
             repository,
             change,
             base_sha=base_sha,
@@ -662,9 +671,9 @@ async def _capture_file(
         status=change.status,
         additions=additions,
         deletions=deletions,
-        render_state=render_state,
-        patch=patch,
-        patch_bytes=patch_bytes,
+        render_state=rendered.render_state,
+        patch=rendered.patch,
+        patch_bytes=rendered.patch_bytes,
         old_mode=old_mode,
         new_mode=new_mode,
     )
