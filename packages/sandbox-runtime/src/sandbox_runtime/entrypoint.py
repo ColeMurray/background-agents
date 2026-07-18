@@ -774,7 +774,7 @@ class SandboxSupervisor:
         if cached_modules.is_dir() and not local_modules.exists():
             shutil.copytree(cached_modules, local_modules, symlinks=True)
             copied_modules = True
-        if copied_modules or (local_modules.is_dir() and "package.json" in installed):
+        if copied_modules:
             installed.add("node_modules/")
         return installed
 

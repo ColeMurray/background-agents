@@ -232,6 +232,24 @@ class TestInstallTools:
         assert installed == {"package.json"}
         assert user_lock.read_text() == '{"user": true}'
 
+    def test_does_not_claim_preexisting_modules_from_a_matching_package(self, tmp_path):
+        """A matching package manifest does not establish ownership of a module tree."""
+        deps_cache = tmp_path / "opencode-deps"
+        (deps_cache / "node_modules").mkdir(parents=True)
+        (deps_cache / "package.json").write_text('{"name": "cached"}')
+
+        opencode_dir = tmp_path / ".opencode"
+        user_modules = opencode_dir / "node_modules"
+        user_modules.mkdir(parents=True)
+        (opencode_dir / "package.json").write_text('{"name": "cached"}')
+        user_module = user_modules / "user-package.js"
+        user_module.write_text("user module\n")
+
+        installed = SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
+
+        assert installed == {"package.json"}
+        assert user_module.read_text() == "user module\n"
+
     def test_legacy_and_tools_dir_combined(self, tmp_path):
         """Both legacy tool and tools/ directory files should be installed together."""
         sup = _make_supervisor()
