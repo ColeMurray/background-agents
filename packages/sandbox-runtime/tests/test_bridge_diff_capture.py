@@ -10,6 +10,8 @@ from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.diff_collector import CapturedFile, RepositoryCapture
 from sandbox_runtime.repo_config import RepoEntry, dump_repo_manifest
 
+CAPTURE_TIMEOUT_MS = 60_000
+
 
 def _bridge() -> AgentBridge:
     return AgentBridge(
@@ -103,7 +105,7 @@ async def test_capture_command_uploads_patches_then_finalizes_the_manifest(tmp_p
                 "maxFiles": 1000,
                 "maxPatchBytes": 1_000_000,
                 "maxCaptureBytes": 20_000_000,
-                "timeoutMs": 60_000,
+                "timeoutMs": CAPTURE_TIMEOUT_MS,
             },
         }
     )
@@ -161,7 +163,7 @@ async def test_capture_manifest_size_matches_a_normalized_non_utf8_upload(tmp_pa
                 "maxFiles": 1000,
                 "maxPatchBytes": 1_000_000,
                 "maxCaptureBytes": 20_000_000,
-                "timeoutMs": 60_000,
+                "timeoutMs": CAPTURE_TIMEOUT_MS,
             },
         }
     )
@@ -235,7 +237,7 @@ async def test_capture_limits_are_shared_across_multi_repository_sessions(
                 "maxFiles": 1,
                 "maxPatchBytes": 100,
                 "maxCaptureBytes": 40,
-                "timeoutMs": 60_000,
+                "timeoutMs": CAPTURE_TIMEOUT_MS,
             },
         }
     )
