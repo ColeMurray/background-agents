@@ -34,6 +34,19 @@ SESSION_DIFF_VERSION: Final = 1
 SESSION_DIFF_MAX_ERROR_LENGTH: Final = 2_000
 
 
+def truncate_error_message(message: str) -> str:
+    """Bound an error to SESSION_DIFF_MAX_ERROR_LENGTH as the control plane
+    measures it: Zod's ``.max()`` counts UTF-16 code units, so characters
+    outside the Basic Multilingual Plane count twice.
+    """
+    units = 0
+    for index, character in enumerate(message):
+        units += 2 if ord(character) > 0xFFFF else 1
+        if units > SESSION_DIFF_MAX_ERROR_LENGTH:
+            return message[:index]
+    return message
+
+
 class DiffCaptureError(RuntimeError):
     """A repository could not produce a trustworthy capture."""
 
@@ -304,7 +317,9 @@ def _parse_raw_changes(
             old_path = None
             path = _decode_path(fields[index])
             index += 1
-        status = _STATUS_BY_LETTER.get(letter, DiffFileStatus.MODIFIED)
+        status = _STATUS_BY_LETTER.get(letter)
+        if status is None:
+            raise DiffCaptureError(f"Unsupported Git status letter: {letter!r}")
         change = _ChangedPath(status=status, path=path, old_path=old_path)
         changes.append(change)
         metadata[(old_path, path)] = _TrackedMetadata(
@@ -927,8 +942,7 @@ async def collect_session_diff_bundle(
                     "repoOwner": repository.owner,
                     "repoName": repository.name,
                     "baseSha": repository.base_sha,
-                    "error": str(error)[:SESSION_DIFF_MAX_ERROR_LENGTH]
-                    or "Repository diff unavailable",
+                    "error": truncate_error_message(str(error)) or "Repository diff unavailable",
                     "files": [],
                 }
             )
