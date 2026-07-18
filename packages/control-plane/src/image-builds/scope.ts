@@ -33,6 +33,7 @@ import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors"
 import { computeRepositoriesFingerprint } from "./fingerprint";
 import { parseRepoScopeId, repoImageBuildScope, type ImageBuildScope } from "./model";
 import type { ImageBuildRepository } from "./types";
+import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("image-builds:scope");
 
@@ -160,7 +161,7 @@ async function resolveRepositoryAccess(
  * so serving it would drift unboundedly.
  */
 export async function resolveScopeEnabled(
-  db: D1Database,
+  db: SqlDatabase,
   scope: ImageBuildScope
 ): Promise<boolean> {
   switch (scope.kind) {
@@ -177,7 +178,7 @@ export async function resolveScopeEnabled(
 }
 
 /** Every prebuild-enabled scope, cheap form (ids only) for status aggregation. */
-export async function listEnabledScopes(db: D1Database): Promise<ImageBuildScope[]> {
+export async function listEnabledScopes(db: SqlDatabase): Promise<ImageBuildScope[]> {
   const { environments } = await new EnvironmentStore(db).list();
   const environmentScopes = environments
     .filter((row) => row.prebuild_enabled === 1)
@@ -250,7 +251,7 @@ export async function listEnabledScopeUnits(env: Env): Promise<EnabledScopeUnit[
  * environment scopes (a repo scope has no environment layer by definition).
  */
 export async function resolveScopeSandboxSettings(
-  db: D1Database,
+  db: SqlDatabase,
   scope: ImageBuildScope,
   primary: ImageBuildRepository
 ): Promise<Awaited<ReturnType<typeof resolveSandboxSettings>>> {

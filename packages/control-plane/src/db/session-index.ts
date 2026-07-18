@@ -5,6 +5,7 @@ import type {
   SpawnSource,
 } from "@open-inspect/shared";
 import { SessionPullRequestStore } from "./session-pull-request-store";
+import type { SqlDatabase } from "./sql-database";
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -155,7 +156,7 @@ function normalizeSessionRepository(session: SessionEntry): {
 }
 
 export class SessionIndexStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async create(session: SessionEntry): Promise<void> {
     const repository = normalizeSessionRepository(session);

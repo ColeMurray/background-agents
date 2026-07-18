@@ -1,4 +1,5 @@
 import { isValidModel, normalizeValidModels, type ValidModel } from "@open-inspect/shared";
+import type { SqlDatabase } from "./sql-database";
 
 export class ModelPreferencesValidationError extends Error {
   constructor(message: string) {
@@ -8,7 +9,7 @@ export class ModelPreferencesValidationError extends Error {
 }
 
 export class ModelPreferencesStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Get the list of enabled model IDs, or null if no preferences stored.

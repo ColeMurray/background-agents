@@ -12,6 +12,7 @@ import type {
   MarkImageBuildReadyResult,
   SupersededImageBuild,
 } from "../image-builds/model";
+import type { SqlDatabase } from "./sql-database";
 
 const MS_PER_SECOND = 1000;
 
@@ -119,7 +120,7 @@ export interface ReapableImageBuildRow {
  * question belong to image-builds/scope.ts.
  */
 export class ImageBuildStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Registers a build unless one is already in flight for the same

@@ -1,5 +1,6 @@
 import type { RepoMetadata } from "@open-inspect/shared";
 import { parseJsonStringArray } from "./json-columns";
+import type { SqlDatabase } from "./sql-database";
 
 /** D1 batch() supports at most 100 statements per call. */
 const D1_BATCH_LIMIT = 100;
@@ -37,7 +38,7 @@ function toMetadata(row: RepoMetadataRow): RepoMetadata {
 }
 
 export class RepoMetadataStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async get(owner: string, name: string): Promise<RepoMetadata | null> {
     const row = await this.db

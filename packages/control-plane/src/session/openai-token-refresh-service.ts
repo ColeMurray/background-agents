@@ -6,7 +6,7 @@ import {
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
-import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
 
@@ -35,7 +35,7 @@ export type OpenAITokenRefreshResult =
 
 export class OpenAITokenRefreshService {
   constructor(
-    private readonly db: Env["DB"],
+    private readonly db: SqlDatabase,
     private readonly encryptionKey: string,
     private readonly ensureRepoId: (session: SessionRow) => Promise<number>,
     private readonly log: Logger

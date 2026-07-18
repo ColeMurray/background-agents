@@ -6,8 +6,8 @@
  * RequestMetrics collector. The collector is created once per HTTP request
  * and its summary is spread into the http.request wide event.
  *
- * No changes required to SessionIndexStore, RepoMetadataStore, or
- * RepoSecretsStore — they receive the instrumented DB transparently.
+ * No changes required to the stores — they accept the SqlDatabase port
+ * (which this wrapper satisfies) and receive the instrumented DB transparently.
  */
 
 // ---------------------------------------------------------------------------
@@ -183,9 +183,9 @@ function instrumentStatement(
  * Wrap a D1Database to automatically record timing for all queries.
  *
  * Uses object composition for type safety and simplicity. The stores
- * (SessionIndexStore, RepoMetadataStore, etc.) accept D1Database in their
- * constructor — passing an instrumented DB means all their queries are
- * timed without any changes to the store code.
+ * (SessionIndexStore, RepoMetadataStore, etc.) accept the SqlDatabase port
+ * in their constructor — passing an instrumented DB means all their queries
+ * are timed without any changes to the store code.
  */
 export function instrumentD1(db: D1Database, metrics: RequestMetrics): D1Database {
   return {

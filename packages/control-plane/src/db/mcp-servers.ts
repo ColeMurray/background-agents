@@ -1,6 +1,8 @@
 import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
+import { isUniqueConstraintError } from "./errors";
+import type { SqlDatabase } from "./sql-database";
 
 const log = createLogger("db:mcp-servers");
 
@@ -85,15 +87,9 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
   };
 }
 
-/** D1 doesn't expose structured error codes — string-match the SQLite message. */
-function isUniqueConstraintError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.toLowerCase().includes("unique constraint failed");
-}
-
 export class McpServerStore {
   constructor(
-    private readonly db: D1Database,
+    private readonly db: SqlDatabase,
     private readonly encryptionKey?: string
   ) {}
 

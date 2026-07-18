@@ -47,6 +47,7 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
+import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 
 const logger = createLogger("router:automations");
 
@@ -458,7 +459,8 @@ async function handleCreateAutomation(
     }
   }
 
-  const store = new AutomationStore(env.DB);
+  const db: SqlDatabase = env.DB;
+  const store = new AutomationStore(db);
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
@@ -491,12 +493,12 @@ async function handleCreateAutomation(
     ...store.bindEnvironmentInserts(id, requestedEnvironmentIds, now),
   ];
   if (triggerType === "slack_event") {
-    const slackStore = new SlackChannelStore(env.DB);
+    const slackStore = new SlackChannelStore(db);
     createStatements.push(
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
     );
   }
-  await env.DB.batch(createStatements);
+  await db.batch(createStatements);
 
   const automation = toAutomation(
     (await store.getById(id))!,
@@ -570,7 +572,8 @@ async function handleUpdateAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const db: SqlDatabase = env.DB;
+  const store = new AutomationStore(db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
@@ -775,7 +778,7 @@ async function handleUpdateAutomation(
   // repositories-only edit).
   const resyncSlackChannels =
     existing.trigger_type === "slack_event" && body.triggerConfig !== undefined;
-  const statements: D1PreparedStatement[] = [];
+  const statements: SqlStatement[] = [];
   const updateStatement = store.bindAutomationUpdate(id, updateFields);
   if (updateStatement) statements.push(updateStatement);
   if (replacementRepositories !== null) {
@@ -785,13 +788,13 @@ async function handleUpdateAutomation(
     statements.push(...store.bindReplaceEnvironments(id, replacementEnvironmentIds, Date.now()));
   }
   if (resyncSlackChannels) {
-    const slackStore = new SlackChannelStore(env.DB);
+    const slackStore = new SlackChannelStore(db);
     statements.push(
       ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
     );
   }
   if (statements.length > 0) {
-    await env.DB.batch(statements);
+    await db.batch(statements);
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);

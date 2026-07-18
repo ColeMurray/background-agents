@@ -2,7 +2,7 @@
  * EnvironmentStore — D1 persistence for environments and their repositories.
  *
  * Follows the same pattern as AutomationStore / SessionIndexStore: constructor
- * takes D1Database, snake_case rows in the database, camelCase types at the API
+ * takes SqlDatabase, snake_case rows in the database, camelCase types at the API
  * boundary. Environment secrets live in a separate store (EnvironmentSecretsStore),
  * but their DELETE cascade is composed here so it batches atomically with the
  * repository and image rows (design §7.2).
@@ -10,6 +10,7 @@
 
 import type { Environment, EnvironmentRepository } from "@open-inspect/shared";
 import { parseJsonStringArray } from "./json-columns";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export interface EnvironmentRow {
   id: string;
@@ -75,9 +76,9 @@ const MUTABLE_SCALAR_COLUMNS = [
 ] as const satisfies readonly (keyof EnvironmentScalarFields)[];
 
 export class EnvironmentStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
-  bindEnvironmentInsert(row: EnvironmentRow): D1PreparedStatement {
+  bindEnvironmentInsert(row: EnvironmentRow): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO environments
@@ -139,7 +140,7 @@ export class EnvironmentStore {
     id: string,
     fields: EnvironmentScalarFields,
     now: number
-  ): D1PreparedStatement | null {
+  ): SqlStatement | null {
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -173,7 +174,7 @@ export class EnvironmentStore {
     repositories?: EnvironmentRepositoryInsert[]
   ): Promise<EnvironmentRow | null> {
     const now = Date.now();
-    const statements: D1PreparedStatement[] = [];
+    const statements: SqlStatement[] = [];
 
     const updateStmt = this.bindEnvironmentUpdate(id, fields, now);
     if (updateStmt) statements.push(updateStmt);
@@ -262,7 +263,7 @@ export class EnvironmentStore {
   bindRepositoryInserts(
     environmentId: string,
     repositories: EnvironmentRepositoryInsert[]
-  ): D1PreparedStatement[] {
+  ): SqlStatement[] {
     return repositories.map((repository) =>
       this.db
         .prepare(
@@ -285,7 +286,7 @@ export class EnvironmentStore {
   bindReplaceRepositories(
     environmentId: string,
     repositories: EnvironmentRepositoryInsert[]
-  ): D1PreparedStatement[] {
+  ): SqlStatement[] {
     return [
       this.db
         .prepare("DELETE FROM environment_repositories WHERE environment_id = ?")

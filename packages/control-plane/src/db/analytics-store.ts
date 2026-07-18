@@ -6,6 +6,7 @@ import type {
   AnalyticsTimeseriesResponse,
   SpawnSource,
 } from "@open-inspect/shared";
+import type { SqlDatabase } from "./sql-database";
 
 /** Spawn sources that represent direct human-initiated sessions. */
 export const HUMAN_SPAWN_SOURCES: SpawnSource[] = ["user", "slack-bot", "linear-bot", "github-bot"];
@@ -52,7 +53,7 @@ interface BreakdownRow {
 const NO_REPOSITORY_ANALYTICS_KEY = "No repository";
 
 export class AnalyticsStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async getSummary(filters: AnalyticsFilters): Promise<AnalyticsSummaryResponse> {
     const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
