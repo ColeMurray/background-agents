@@ -3,7 +3,11 @@
 import subprocess
 from pathlib import Path
 
-from sandbox_runtime.git_excludes import install_runtime_git_excludes, read_runtime_git_excludes
+from sandbox_runtime.git_excludes import (
+    install_runtime_git_excludes,
+    is_runtime_git_excluded,
+    read_runtime_git_excludes,
+)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -55,6 +59,14 @@ def test_managed_excludes_hide_only_the_owned_runtime_paths(tmp_path: Path) -> N
     assert _git(repo, "ls-files", "--others", "--exclude-standard") == (
         ".opencode/command/review.md"
     )
+
+
+def test_runtime_directory_ownership_covers_descendants_but_not_siblings() -> None:
+    runtime_paths = frozenset({".opencode/tool"})
+
+    assert is_runtime_git_excluded(".opencode/tool", runtime_paths)
+    assert is_runtime_git_excluded(".opencode/tool/spawn-task.js", runtime_paths)
+    assert not is_runtime_git_excluded(".opencode/toolbox/user.js", runtime_paths)
 
 
 def test_managed_excludes_retain_assets_from_prior_boots_while_they_exist(tmp_path: Path) -> None:

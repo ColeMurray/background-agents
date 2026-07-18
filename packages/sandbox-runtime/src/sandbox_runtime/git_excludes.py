@@ -72,8 +72,7 @@ def read_runtime_git_excludes(repository: Path) -> frozenset[str]:
 def is_runtime_git_excluded(path: str, runtime_paths: frozenset[str]) -> bool:
     """Return whether a repository-relative path is covered by runtime ownership."""
     return any(
-        path == runtime_path.rstrip("/")
-        or (runtime_path.endswith("/") and path.startswith(runtime_path))
+        path == runtime_path.rstrip("/") or path.startswith(runtime_path.rstrip("/") + "/")
         for runtime_path in runtime_paths
     )
 
