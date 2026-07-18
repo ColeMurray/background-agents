@@ -115,20 +115,20 @@ const gitlabProjectLocationSchema = z.object({
 
 /** Wire shape of a GitLab project response, limited to fields used for repo metadata. */
 const gitlabRepositoryInfoSchema = z.object({
-  id: z.number(),
+  id: z.number().int(),
   path: z.string(),
   path_with_namespace: z.string(),
   namespace: z.object({ full_path: z.string() }),
-  default_branch: z.string(),
-  visibility: z.string(),
+  default_branch: z.string().optional(),
+  visibility: z.enum(["private", "internal", "public"]),
 });
 
 /** Wire shape used when validating PAT access to a GitLab project. */
 const gitlabRepositoryAccessSchema = z.object({
-  id: z.number(),
+  id: z.number().int(),
   namespace: z.object({ full_path: z.string() }),
   path: z.string(),
-  default_branch: z.string(),
+  default_branch: z.string().optional(),
   archived: z.boolean(),
 });
 
@@ -137,7 +137,7 @@ const gitlabRepositoryListSchema = z.array(
   gitlabRepositoryAccessSchema.extend({
     path_with_namespace: z.string(),
     description: z.string().nullable(),
-    visibility: z.string(),
+    visibility: z.enum(["private", "internal", "public"]),
   })
 );
 
@@ -205,6 +205,13 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       gitlabRepositoryInfoSchema,
       "Failed to get repository"
     );
+
+    if (data.default_branch === undefined) {
+      throw new SourceControlProviderError(
+        "Failed to get repository: token cannot read repository code",
+        "permanent"
+      );
+    }
 
     // full_path, not path: nested groups ("group/subgroup") need the
     // entire namespace so owner/name lookups reconstruct the project path.
@@ -406,7 +413,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         "Failed to check repository access"
       );
 
-      if (data.archived) {
+      if (data.archived || data.default_branch === undefined) {
         return null;
       }
 
@@ -459,7 +466,10 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       );
 
       return data
-        .filter((project) => !project.archived)
+        .filter(
+          (project): project is typeof project & { default_branch: string } =>
+            !project.archived && project.default_branch !== undefined
+        )
         .map((project) => ({
           id: project.id,
           owner: project.namespace.full_path,
