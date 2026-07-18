@@ -44,6 +44,7 @@ import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/share
 import { SessionChangesPanel } from "@/components/session-changes-panel";
 import { SessionDesktopLayout } from "@/components/session-desktop-layout";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -172,13 +173,14 @@ function SessionPageContent() {
         : null,
     [diffState, selectedDiff]
   );
+  const changesLayoutStorage = useBrowserLayoutStorage();
   const changesLayout = useDefaultLayout({
     id: "session-changes-layout",
     panelIds:
       resolvedDiff && diffState && !isBelowLg
         ? ["session-main", "session-changes"]
         : ["session-main"],
-    storage: typeof window === "undefined" ? undefined : localStorage,
+    storage: changesLayoutStorage,
   });
   const openDiff = useCallback((repository: SessionDiffRepository, file: SessionDiffFile) => {
     const selection = { repositoryPosition: repository.position, path: file.path };
