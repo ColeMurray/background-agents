@@ -3,6 +3,7 @@ import type { SessionDiffManifest, SessionDiffState } from "@open-inspect/shared
 import {
   buildUniquePathLabels,
   deriveSessionDiffView,
+  parseDiffErrorBody,
   resolveDiffSelection,
 } from "./session-diffs";
 
@@ -127,6 +128,22 @@ describe("session diff view model", () => {
       kind: "unavailable",
       message: "Changes unavailable for this session",
     });
+  });
+});
+
+describe("parseDiffErrorBody", () => {
+  it("keeps only string code and error fields from untrusted bodies", () => {
+    expect(parseDiffErrorBody({ code: "diff_revision_stale", error: "stale" })).toEqual({
+      code: "diff_revision_stale",
+      error: "stale",
+    });
+    expect(parseDiffErrorBody({ code: 42, error: { message: "nope" } })).toEqual({});
+  });
+
+  it("returns an empty body for non-object values", () => {
+    expect(parseDiffErrorBody(null)).toEqual({});
+    expect(parseDiffErrorBody("boom")).toEqual({});
+    expect(parseDiffErrorBody(undefined)).toEqual({});
   });
 });
 
