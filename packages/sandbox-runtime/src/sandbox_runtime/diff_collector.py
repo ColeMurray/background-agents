@@ -13,6 +13,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from .git_excludes import is_runtime_git_excluded, read_runtime_git_excludes
@@ -30,6 +31,15 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 20.0
 
 class DiffCaptureError(RuntimeError):
     """A repository could not produce a trustworthy capture."""
+
+
+class RenderState(StrEnum):
+    """How the client may present one captured file; serialized verbatim."""
+
+    RENDERABLE = "renderable"
+    METADATA_ONLY = "metadata_only"
+    TOO_LARGE = "too_large"
+    BINARY = "binary"
 
 
 class DiffFileUpload(TypedDict):
@@ -125,7 +135,7 @@ class CapturedFile:
     status: str
     additions: int | None
     deletions: int | None
-    render_state: str
+    render_state: RenderState
     patch: str | None
     patch_bytes: int | None
     old_mode: str | None = None
@@ -476,6 +486,209 @@ async def _untracked_stats(
         raise DiffCaptureError("Malformed Git numstat record") from error
 
 
+async def _change_line_stats(
+    repository: RepoEntry,
+    change: _ChangedPath,
+    tracked_stats: dict[tuple[str | None, str], tuple[int | None, int | None]],
+    *,
+    is_overlay: bool,
+    is_untracked: bool,
+    timeout_seconds: float,
+) -> tuple[int | None, int | None]:
+    """Added/deleted line counts for one change; ``None`` marks binary content."""
+    if is_overlay:
+        tracked_additions, tracked_deletions = tracked_stats.get(
+            (change.old_path, change.path), (0, 0)
+        )
+        untracked_additions, untracked_deletions = await _untracked_stats(
+            repository, change.path, timeout_seconds
+        )
+        additions = (
+            None
+            if tracked_additions is None or untracked_additions is None
+            else tracked_additions + untracked_additions
+        )
+        deletions = (
+            None
+            if tracked_deletions is None or untracked_deletions is None
+            else tracked_deletions + untracked_deletions
+        )
+        return additions, deletions
+    if is_untracked:
+        return await _untracked_stats(repository, change.path, timeout_seconds)
+    return tracked_stats.get((change.old_path, change.path), (0, 0))
+
+
+async def _submodule_shas(
+    repository: RepoEntry,
+    change: _ChangedPath,
+    metadata: _TrackedMetadata,
+    timeout_seconds: float,
+) -> tuple[str | None, str | None]:
+    """Old/new commit pointers for a submodule entry.
+
+    Git reports the all-zero placeholder for a dirty, uncommitted pointer, in
+    which case the submodule's actual checked-out HEAD is the truthful value.
+    """
+    old_sha = (
+        metadata.old_sha
+        if metadata.old_mode == "160000" and set(metadata.old_sha) != {"0"}
+        else None
+    )
+    new_sha = (
+        metadata.new_sha
+        if metadata.new_mode == "160000" and set(metadata.new_sha) != {"0"}
+        else None
+    )
+    if metadata.new_mode == "160000" and new_sha is None:
+        new_sha = await _submodule_head(repository, change.path, timeout_seconds)
+    return old_sha, new_sha
+
+
+@dataclass(frozen=True)
+class _RenderedPatch:
+    """Outcome of rendering one file's patch against the capture limits.
+
+    The patch text and its size are only present when the file is renderable
+    within the remaining budget.
+    """
+
+    render_state: RenderState
+    patch: str | None = None
+    patch_bytes: int | None = None
+
+
+async def _rendered_patch(
+    repository: RepoEntry,
+    change: _ChangedPath,
+    *,
+    base_sha: str,
+    is_untracked: bool,
+    additions: int | None,
+    deletions: int | None,
+    limits: CaptureLimits,
+    remaining_capture_bytes: int,
+) -> _RenderedPatch:
+    """Fetch one file's patch and decide its render state."""
+    try:
+        raw_patch = (
+            await _untracked_patch(
+                repository,
+                change.path,
+                limits.command_timeout_seconds,
+                limits.max_patch_bytes,
+            )
+            if is_untracked
+            else await _tracked_patch(
+                repository,
+                base_sha,
+                change.path,
+                limits.command_timeout_seconds,
+                limits.max_patch_bytes,
+                change.old_path,
+            )
+        )
+    except _GitOutputTooLarge:
+        return _RenderedPatch(RenderState.TOO_LARGE)
+
+    patch_text = raw_patch.decode("utf-8", errors="replace")
+    # The upload client sends the normalized UTF-8 text, so limits and
+    # manifest metadata must describe those exact bytes rather than
+    # Git's potentially non-UTF-8 stdout.
+    patch_bytes = len(patch_text.encode("utf-8"))
+    if not is_untracked and additions == 0 and deletions == 0 and "\n@@" not in patch_text:
+        return _RenderedPatch(RenderState.METADATA_ONLY)
+    if patch_bytes > limits.max_patch_bytes or patch_bytes > remaining_capture_bytes:
+        return _RenderedPatch(RenderState.TOO_LARGE)
+    if not raw_patch:
+        return _RenderedPatch(RenderState.METADATA_ONLY)
+    return _RenderedPatch(RenderState.RENDERABLE, patch=patch_text, patch_bytes=patch_bytes)
+
+
+async def _capture_file(
+    repository: RepoEntry,
+    change: _ChangedPath,
+    *,
+    base_sha: str,
+    limits: CaptureLimits,
+    tracked_stats: dict[tuple[str | None, str], tuple[int | None, int | None]],
+    tracked_metadata: dict[tuple[str | None, str], _TrackedMetadata],
+    is_overlay: bool,
+    is_untracked: bool,
+    remaining_capture_bytes: int,
+) -> CapturedFile:
+    """Capture one changed path's metadata and, when renderable, its patch."""
+    additions, deletions = await _change_line_stats(
+        repository,
+        change,
+        tracked_stats,
+        is_overlay=is_overlay,
+        is_untracked=is_untracked,
+        timeout_seconds=limits.command_timeout_seconds,
+    )
+
+    old_mode: str | None = None
+    new_mode: str | None = None
+    metadata = tracked_metadata.get((change.old_path, change.path))
+    if metadata and metadata.old_mode != metadata.new_mode:
+        old_mode = metadata.old_mode if metadata.old_mode != "000000" else None
+        new_mode = metadata.new_mode if metadata.new_mode != "000000" else None
+
+    if metadata and (metadata.old_mode == "160000" or metadata.new_mode == "160000"):
+        old_submodule_sha, new_submodule_sha = await _submodule_shas(
+            repository, change, metadata, limits.command_timeout_seconds
+        )
+        return CapturedFile(
+            id=str(uuid.uuid4()),
+            path=change.path,
+            old_path=change.old_path,
+            status="submodule",
+            additions=additions,
+            deletions=deletions,
+            render_state=RenderState.METADATA_ONLY,
+            patch=None,
+            patch_bytes=None,
+            old_mode=old_mode,
+            new_mode=new_mode,
+            old_submodule_sha=old_submodule_sha,
+            new_submodule_sha=new_submodule_sha,
+        )
+
+    if additions is None or deletions is None:
+        rendered = _RenderedPatch(RenderState.BINARY)
+    elif is_overlay:
+        # Git can report a staged deletion and an untracked working-tree
+        # file at the same path (for example after ``git rm --cached``).
+        # Preserve the meaningful index/worktree change as one path record
+        # without publishing two contradictory patches for one file.
+        rendered = _RenderedPatch(RenderState.METADATA_ONLY)
+    else:
+        rendered = await _rendered_patch(
+            repository,
+            change,
+            base_sha=base_sha,
+            is_untracked=is_untracked,
+            additions=additions,
+            deletions=deletions,
+            limits=limits,
+            remaining_capture_bytes=remaining_capture_bytes,
+        )
+
+    return CapturedFile(
+        id=str(uuid.uuid4()),
+        path=change.path,
+        old_path=change.old_path,
+        status=change.status,
+        additions=additions,
+        deletions=deletions,
+        render_state=rendered.render_state,
+        patch=rendered.patch,
+        patch_bytes=rendered.patch_bytes,
+        old_mode=old_mode,
+        new_mode=new_mode,
+    )
+
+
 async def collect_repository_diff(
     repository: RepoEntry, base_sha: str, limits: CaptureLimits
 ) -> RepositoryCapture:
@@ -560,141 +773,26 @@ async def collect_repository_diff(
         change for change in untracked if change.path not in overlay_paths
     ]
     selected_changes = all_changes[: limits.max_files]
+    untracked_changes = set(untracked)
     captured: list[CapturedFile] = []
-    captured_bytes = 0
+    remaining_capture_bytes = limits.max_capture_bytes
 
     for change in selected_changes:
         is_overlay = change.path in overlay_paths
-        is_untracked = not is_overlay and change in untracked
-        file_status = change.status
-        if is_overlay:
-            tracked_additions, tracked_deletions = tracked_stats.get(
-                (change.old_path, change.path), (0, 0)
-            )
-            untracked_additions, untracked_deletions = await _untracked_stats(
-                repository, change.path, limits.command_timeout_seconds
-            )
-            additions = (
-                None
-                if tracked_additions is None or untracked_additions is None
-                else tracked_additions + untracked_additions
-            )
-            deletions = (
-                None
-                if tracked_deletions is None or untracked_deletions is None
-                else tracked_deletions + untracked_deletions
-            )
-        elif is_untracked:
-            additions, deletions = await _untracked_stats(
-                repository, change.path, limits.command_timeout_seconds
-            )
-        else:
-            additions, deletions = tracked_stats.get((change.old_path, change.path), (0, 0))
-
-        patch: str | None = None
-        patch_bytes: int | None = None
-        old_mode: str | None = None
-        new_mode: str | None = None
-        old_submodule_sha: str | None = None
-        new_submodule_sha: str | None = None
-        metadata = tracked_metadata.get((change.old_path, change.path))
-        if metadata and metadata.old_mode != metadata.new_mode:
-            old_mode = metadata.old_mode if metadata.old_mode != "000000" else None
-            new_mode = metadata.new_mode if metadata.new_mode != "000000" else None
-        is_submodule = bool(
-            metadata and (metadata.old_mode == "160000" or metadata.new_mode == "160000")
+        file = await _capture_file(
+            repository,
+            change,
+            base_sha=base_sha,
+            limits=limits,
+            tracked_stats=tracked_stats,
+            tracked_metadata=tracked_metadata,
+            is_overlay=is_overlay,
+            is_untracked=not is_overlay and change in untracked_changes,
+            remaining_capture_bytes=remaining_capture_bytes,
         )
-        if is_submodule and metadata:
-            file_status = "submodule"
-            render_state = "metadata_only"
-            old_submodule_sha = (
-                metadata.old_sha
-                if metadata.old_mode == "160000" and set(metadata.old_sha) != {"0"}
-                else None
-            )
-            new_submodule_sha = (
-                metadata.new_sha
-                if metadata.new_mode == "160000" and set(metadata.new_sha) != {"0"}
-                else None
-            )
-            if metadata.new_mode == "160000" and new_submodule_sha is None:
-                new_submodule_sha = await _submodule_head(
-                    repository, change.path, limits.command_timeout_seconds
-                )
-        elif additions is None or deletions is None:
-            render_state = "binary"
-        elif is_overlay:
-            # Git can report a staged deletion and an untracked working-tree
-            # file at the same path (for example after ``git rm --cached``).
-            # Preserve the meaningful index/worktree change as one path record
-            # without publishing two contradictory patches for one file.
-            render_state = "metadata_only"
-        else:
-            try:
-                raw_patch = (
-                    await _untracked_patch(
-                        repository,
-                        change.path,
-                        limits.command_timeout_seconds,
-                        limits.max_patch_bytes,
-                    )
-                    if is_untracked
-                    else await _tracked_patch(
-                        repository,
-                        base_sha,
-                        change.path,
-                        limits.command_timeout_seconds,
-                        limits.max_patch_bytes,
-                        change.old_path,
-                    )
-                )
-            except _GitOutputTooLarge:
-                render_state = "too_large"
-            else:
-                patch_text = raw_patch.decode("utf-8", errors="replace")
-                # The upload client sends the normalized UTF-8 text, so limits and
-                # manifest metadata must describe those exact bytes rather than
-                # Git's potentially non-UTF-8 stdout.
-                patch_bytes = len(patch_text.encode("utf-8"))
-                if (
-                    not is_untracked
-                    and additions == 0
-                    and deletions == 0
-                    and "\n@@" not in patch_text
-                ):
-                    render_state = "metadata_only"
-                    patch_bytes = None
-                elif (
-                    patch_bytes > limits.max_patch_bytes
-                    or captured_bytes + patch_bytes > limits.max_capture_bytes
-                ):
-                    render_state = "too_large"
-                    patch_bytes = None
-                elif raw_patch:
-                    render_state = "renderable"
-                    captured_bytes += patch_bytes
-                    patch = patch_text
-                else:
-                    render_state = "metadata_only"
-                    patch_bytes = None
-
-        captured.append(
-            CapturedFile(
-                id=str(uuid.uuid4()),
-                path=change.path,
-                old_path=change.old_path,
-                status=file_status,
-                additions=additions,
-                deletions=deletions,
-                render_state=render_state,
-                patch=patch,
-                patch_bytes=patch_bytes,
-                old_mode=old_mode,
-                new_mode=new_mode,
-                old_submodule_sha=old_submodule_sha,
-                new_submodule_sha=new_submodule_sha,
-            )
-        )
+        if file.render_state == RenderState.RENDERABLE and file.patch_bytes is not None:
+            remaining_capture_bytes -= file.patch_bytes
+        captured.append(file)
 
     return RepositoryCapture(
         repository=repository,
@@ -722,7 +820,7 @@ def _file_upload(changed: CapturedFile) -> DiffFileUpload:
     }
     if changed.old_path is not None:
         file["oldPath"] = changed.old_path
-    if changed.render_state == "renderable" and changed.patch is not None:
+    if changed.render_state == RenderState.RENDERABLE and changed.patch is not None:
         file["patch"] = changed.patch
     if changed.old_mode is not None:
         file["oldMode"] = changed.old_mode
@@ -752,7 +850,7 @@ def _bound_encoded_bundle(bundle: SessionDiffBundle, max_bundle_bytes: int) -> N
         if len(encode_bundle(bundle)) <= max_bundle_bytes:
             return
         file.pop("patch", None)
-        file["renderState"] = "too_large"
+        file["renderState"] = RenderState.TOO_LARGE
 
     if len(encode_bundle(bundle)) <= max_bundle_bytes:
         return
@@ -818,7 +916,7 @@ async def collect_session_diff_bundle(
             - sum(
                 len(changed.patch.encode("utf-8"))
                 for changed in capture.files
-                if changed.render_state == "renderable" and changed.patch is not None
+                if changed.render_state == RenderState.RENDERABLE and changed.patch is not None
             ),
         )
         outcomes.append(
