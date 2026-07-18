@@ -900,9 +900,7 @@ class SandboxSupervisor:
                 if source.name == ".DS_Store" or source.suffix == ".pyc":
                     continue
                 if source.is_file() or source.is_symlink():
-                    installed.add(
-                        (Path(".opencode/skills") / skill_dir.name / relative).as_posix()
-                    )
+                    installed.add((Path(".opencode/skills") / skill_dir.name / relative).as_posix())
             installed_any = True
 
         if installed_any:
