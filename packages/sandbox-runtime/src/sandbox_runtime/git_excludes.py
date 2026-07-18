@@ -1,0 +1,72 @@
+"""Checkout-local Git exclusions for files installed by the sandbox runtime."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+BEGIN_MARKER = "# BEGIN Open-Inspect runtime assets"
+END_MARKER = "# END Open-Inspect runtime assets"
+
+
+def _git_exclude_path(repository: Path) -> Path:
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-path", "info/exclude"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    path = Path(result.stdout.strip())
+    return path if path.is_absolute() else repository / path
+
+
+def _rooted_pattern(path: str) -> str:
+    trailing_slash = path.endswith("/")
+    candidate = PurePosixPath(path)
+    if (
+        candidate.is_absolute()
+        or not candidate.parts
+        or any(part == ".." for part in candidate.parts)
+    ):
+        raise ValueError(f"Runtime asset path must be repository-relative: {path!r}")
+    normalized = candidate.as_posix()
+    if normalized in ("", "."):
+        raise ValueError(f"Runtime asset path must name a file or directory: {path!r}")
+    return f"/{normalized}{'/' if trailing_slash else ''}"
+
+
+def install_runtime_git_excludes(repository: Path, runtime_paths: Iterable[str]) -> None:
+    """Replace our managed ``info/exclude`` block without touching user entries."""
+    patterns = sorted({_rooted_pattern(path) for path in runtime_paths})
+    if not patterns:
+        return
+
+    exclude_path = _git_exclude_path(repository)
+    try:
+        existing = exclude_path.read_text()
+    except FileNotFoundError:
+        existing = ""
+
+    block = "\n".join((BEGIN_MARKER, *patterns, END_MARKER)) + "\n"
+    start = existing.find(BEGIN_MARKER)
+    end = existing.find(END_MARKER, start + len(BEGIN_MARKER)) if start >= 0 else -1
+    if start >= 0 and end >= 0:
+        suffix_start = end + len(END_MARKER)
+        if existing[suffix_start : suffix_start + 2] == "\r\n":
+            suffix_start += 2
+        elif existing[suffix_start : suffix_start + 1] == "\n":
+            suffix_start += 1
+        updated = existing[:start] + block + existing[suffix_start:]
+    else:
+        separator = "" if not existing or existing.endswith(("\n", "\r")) else "\n"
+        updated = existing + separator + block
+
+    if updated == existing:
+        return
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    exclude_path.write_text(updated)

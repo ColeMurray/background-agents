@@ -14,6 +14,7 @@ from sandbox_runtime.diff_collector import (
     collect_repository_diff,
     collect_session_diff_bundle,
 )
+from sandbox_runtime.git_excludes import install_runtime_git_excludes
 from sandbox_runtime.repo_config import RepoEntry
 
 
@@ -143,6 +144,41 @@ async def test_collects_untracked_files_and_excludes_ignored_files(tmp_path: Pat
     assert capture.files[0].status == "added"
     assert capture.files[0].additions == 2
     assert "new file.txt" in (capture.files[0].patch or "")
+
+
+@pytest.mark.asyncio
+async def test_checkout_local_runtime_excludes_do_not_hide_other_opencode_changes(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    runtime_file = repository.path / ".opencode" / "tool" / "spawn-task.js"
+    runtime_file.parent.mkdir(parents=True)
+    runtime_file.write_text("// runtime\n")
+    user_file = repository.path / ".opencode" / "command" / "review.md"
+    user_file.parent.mkdir(parents=True)
+    user_file.write_text("user-authored command\n")
+    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-task.js"})
+
+    capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    assert [changed.path for changed in capture.files] == [".opencode/command/review.md"]
+
+
+@pytest.mark.asyncio
+async def test_checkout_local_excludes_do_not_hide_tracked_changes(tmp_path: Path) -> None:
+    repository, _ = _repository(tmp_path)
+    runtime_file = repository.path / ".opencode" / "tool" / "spawn-task.js"
+    runtime_file.parent.mkdir(parents=True)
+    runtime_file.write_text("// checked in\n")
+    _git(repository.path, "add", ".opencode/tool/spawn-task.js")
+    _git(repository.path, "commit", "-m", "track opencode tool")
+    base_sha = _git(repository.path, "rev-parse", "HEAD")
+    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-task.js"})
+    runtime_file.write_text("// runtime overwrite\n")
+
+    capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    assert [changed.path for changed in capture.files] == [".opencode/tool/spawn-task.js"]
 
 
 @pytest.mark.asyncio

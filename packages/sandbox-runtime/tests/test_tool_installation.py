@@ -61,11 +61,12 @@ class TestInstallTools:
         legacy_tool.write_text("// legacy tool")
 
         with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools"):
-            sup._install_tools(workdir)
+            installed = sup._install_tools(workdir)
 
         dest = workdir / ".opencode" / "tool" / "create-pull-request.js"
         assert dest.exists()
         assert dest.read_text() == "// legacy tool"
+        assert installed == {".opencode/tool/create-pull-request.js"}
 
     def test_tools_dir_files_copied(self, tmp_path):
         """All .js files from tools/ directory should be copied."""
@@ -164,7 +165,7 @@ class TestInstallTools:
         (nm / "index.js").write_text("module.exports = {}")
 
         with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools", deps_cache=deps_cache):
-            sup._install_tools(workdir)
+            installed = sup._install_tools(workdir)
 
         opencode_dir = workdir / ".opencode"
         # All three artefacts should be present
@@ -174,6 +175,12 @@ class TestInstallTools:
 
         pkg = json.loads((opencode_dir / "package.json").read_text())
         assert "@opencode-ai/plugin" in pkg["dependencies"]
+        assert installed == {
+            ".opencode/tool/create-pull-request.js",
+            ".opencode/package.json",
+            ".opencode/package-lock.json",
+            ".opencode/node_modules/",
+        }
 
     def test_does_not_overwrite_existing_files(self, tmp_path):
         """Pre-existing package.json or node_modules in .opencode/ should not be overwritten."""
@@ -199,10 +206,13 @@ class TestInstallTools:
         existing_pkg.write_text('{"name": "existing"}')
 
         with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools", deps_cache=deps_cache):
-            sup._install_tools(workdir)
+            installed = sup._install_tools(workdir)
 
         # Existing package.json should be preserved, not overwritten by cache
         assert existing_pkg.read_text() == '{"name": "existing"}'
+        assert ".opencode/package.json" not in installed
+        assert ".opencode/package-lock.json" in installed
+        assert ".opencode/node_modules/" in installed
 
     def test_legacy_and_tools_dir_combined(self, tmp_path):
         """Both legacy tool and tools/ directory files should be installed together."""
@@ -412,7 +422,7 @@ class TestInstallSkills:
             tools=tmp_path / "no-tools",
             skills=skills_dir,
         ):
-            sup._install_skills(workdir)
+            installed = sup._install_skills(workdir)
 
         skill_dest = workdir / ".opencode" / "skills" / "agent-browser"
         assert (skill_dest / "SKILL.md").read_text() == "# agent-browser"
@@ -425,6 +435,14 @@ class TestInstallSkills:
         assert (fresh_skill_dest / "helper.txt").read_text() == "fresh install"
         assert not (workdir / ".opencode" / "skills" / "README.md").exists()
         assert not (workdir / ".opencode" / "skills" / "not-a-skill").exists()
+        assert installed == {
+            ".opencode/skills/agent-browser/SKILL.md",
+            ".opencode/skills/agent-browser/references/notes.md",
+            ".opencode/skills/agent-browser/scripts/helper.py",
+            ".opencode/skills/record-video/SKILL.md",
+            ".opencode/skills/record-video/helper.txt",
+        }
+        assert ".opencode/skills/agent-browser/local.txt" not in installed
 
     def test_skills_dir_non_directory_is_ignored(self, tmp_path):
         """A non-directory skills path should not raise or copy files."""
