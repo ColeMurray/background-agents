@@ -1,114 +1,68 @@
 /**
- * Session-diff error taxonomy. The HTTP handler maps codes to statuses;
- * the service and store throw these instead of returning Responses.
+ * Session-diff domain errors. The service and store throw these instead of
+ * returning Responses; the HTTP handler maps each class to a status via
+ * instanceof (see routes/automations.ts TargetSelectionError for precedent).
  */
 
-export type SessionDiffErrorCode =
-  | "invalid_bundle"
-  | "repository_mismatch"
-  | "baseline_unavailable"
-  | "baseline_mismatch"
-  | "invalid_failure"
-  | "invalid_file_identity"
-  | "diff_revision_stale"
-  | "diff_file_not_found"
-  | "sandbox_not_connected";
-
-export abstract class SessionDiffError extends Error {
-  abstract readonly code: SessionDiffErrorCode;
-
-  constructor(message: string, cause?: unknown) {
-    super(message, cause === undefined ? undefined : { cause });
-    this.name = new.target.name;
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, new.target);
-    }
-  }
-}
-
-export class InvalidDiffBundleError extends SessionDiffError {
-  readonly code = "invalid_bundle";
-
+export class InvalidDiffBundleError extends Error {
   constructor() {
     super("Invalid session diff bundle");
+    this.name = "InvalidDiffBundleError";
   }
 }
 
-export class DiffRepositoryMismatchError extends SessionDiffError {
-  readonly code = "repository_mismatch";
-
+export class DiffRepositoryMismatchError extends Error {
   constructor() {
     super("Repository set does not match session");
+    this.name = "DiffRepositoryMismatchError";
   }
 }
 
-export class DiffBaselineUnavailableError extends SessionDiffError {
-  readonly code = "baseline_unavailable";
-
+export class DiffBaselineUnavailableError extends Error {
   constructor() {
     super("Session start baseline is unavailable");
+    this.name = "DiffBaselineUnavailableError";
   }
 }
 
-export class DiffBaselineMismatchError extends SessionDiffError {
-  readonly code = "baseline_mismatch";
-
+export class DiffBaselineMismatchError extends Error {
   constructor() {
     super("Repository baseline does not match session");
+    this.name = "DiffBaselineMismatchError";
   }
 }
 
-export class InvalidDiffFailureError extends SessionDiffError {
-  readonly code = "invalid_failure";
-
+export class InvalidDiffFailureError extends Error {
   constructor() {
     super("Invalid session diff failure");
+    this.name = "InvalidDiffFailureError";
   }
 }
 
-export class InvalidDiffFileIdentityError extends SessionDiffError {
-  readonly code = "invalid_file_identity";
-
+export class InvalidDiffFileIdentityError extends Error {
   constructor() {
     super("Invalid diff file identity");
+    this.name = "InvalidDiffFileIdentityError";
   }
 }
 
-export class DiffRevisionStaleError extends SessionDiffError {
-  readonly code = "diff_revision_stale";
-
+export class DiffRevisionStaleError extends Error {
   constructor(readonly currentRevisionId: string | null) {
     super("Diff revision is stale");
+    this.name = "DiffRevisionStaleError";
   }
 }
 
-export class DiffFileNotFoundError extends SessionDiffError {
-  readonly code = "diff_file_not_found";
-
+export class DiffFileNotFoundError extends Error {
   constructor(readonly currentRevisionId: string | null) {
     super("Diff file not found");
+    this.name = "DiffFileNotFoundError";
   }
 }
 
-export class SandboxNotConnectedError extends SessionDiffError {
-  readonly code = "sandbox_not_connected";
-
+export class SandboxNotConnectedError extends Error {
   constructor() {
     super("Sandbox is not connected");
+    this.name = "SandboxNotConnectedError";
   }
 }
-
-/**
- * Closed union of every concrete session-diff error. Lets handlers switch
- * exhaustively on `code` and reach payload fields like `currentRevisionId`.
- */
-export type SessionDiffDomainError =
-  | InvalidDiffBundleError
-  | DiffRepositoryMismatchError
-  | DiffBaselineUnavailableError
-  | DiffBaselineMismatchError
-  | InvalidDiffFailureError
-  | InvalidDiffFileIdentityError
-  | DiffRevisionStaleError
-  | DiffFileNotFoundError
-  | SandboxNotConnectedError;

@@ -24,8 +24,8 @@ const DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 
 /**
  * Owns validation and the single latest-bundle publication boundary.
- * Domain layer: methods throw SessionDiffError subclasses; the HTTP
- * handler maps them to responses.
+ * Domain layer: methods throw the errors in ./errors; the HTTP handler
+ * maps them to responses.
  */
 export class SessionDiffService {
   constructor(
