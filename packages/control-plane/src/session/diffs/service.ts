@@ -1,4 +1,5 @@
 import {
+  SESSION_DIFF_ID_PATTERN,
   sessionDiffFailureSchema,
   sessionDiffUploadSchema,
   type SandboxEvent,
@@ -21,8 +22,6 @@ import {
   SandboxNotConnectedError,
 } from "./errors";
 import type { SessionDiffStore } from "./store";
-
-const DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 
 /** SHAs are hex, so a plain case-insensitive comparison suffices. */
 function shaEquals(a: string, b: string): boolean {
@@ -195,6 +194,6 @@ export class SessionDiffService {
   }
 
   private isValidId(value: string | null): value is string {
-    return typeof value === "string" && DIFF_ID_PATTERN.test(value);
+    return typeof value === "string" && SESSION_DIFF_ID_PATTERN.test(value);
   }
 }

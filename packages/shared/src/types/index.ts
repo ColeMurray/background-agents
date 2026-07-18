@@ -111,8 +111,12 @@ export {
   SESSION_DIFF_MAX_FILE_PATCH_BYTES,
   SESSION_DIFF_MAX_TOTAL_PATCH_BYTES,
   SESSION_DIFF_MAX_BUNDLE_BYTES,
+  SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
   SESSION_DIFF_MAX_ERROR_LENGTH,
   SESSION_DIFF_REFRESH_TIMEOUT_MS,
+  SESSION_DIFF_ID_PATTERN,
+  SESSION_DIFF_REVISION_STALE_CODE,
+  SESSION_DIFF_FILE_NOT_FOUND_CODE,
   diffRenderStateSchema,
   diffFileStatusSchema,
   sessionDiffBaselineRepositorySchema,
@@ -128,6 +132,7 @@ export {
   toSessionDiffManifest,
 } from "./session-diffs";
 export type {
+  SessionDiffErrorCode,
   DiffRenderState,
   DiffFileStatus,
   SessionDiffBaselineRepository,

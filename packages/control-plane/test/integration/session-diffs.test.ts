@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
-import {
-  SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
-  SESSION_DIFF_UPLOAD_BODY_MAX_BYTES,
-} from "../../src/routes/session-diffs";
+import { SESSION_DIFF_FAILURE_BODY_MAX_BYTES } from "@open-inspect/shared";
+import { SESSION_DIFF_UPLOAD_BODY_MAX_BYTES } from "../../src/routes/session-diffs";
 import {
   collectMessages,
   initNamedSession,

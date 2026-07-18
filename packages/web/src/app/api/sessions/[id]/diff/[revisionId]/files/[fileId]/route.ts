@@ -1,9 +1,8 @@
+import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-
-const ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 
 /**
  * Stream one revision-pinned patch to an authenticated browser.
@@ -20,7 +19,7 @@ export async function GET(
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id, revisionId, fileId } = await params;
-  if (![id, revisionId, fileId].every((value) => ID_PATTERN.test(value))) {
+  if (![id, revisionId, fileId].every((value) => SESSION_DIFF_ID_PATTERN.test(value))) {
     return NextResponse.json({ error: "Invalid diff file identity" }, { status: 400 });
   }
   try {

@@ -119,6 +119,25 @@ describe("session diff contracts", () => {
     ).toThrow(/Duplicate diff file path/);
   });
 
+  it("rejects route-bound ids outside the id segment contract", () => {
+    const fileWithUnsafeId = { ...readyRepository.files[0], id: "a/b" };
+    const uploadWithUnsafeFileId = {
+      ...upload,
+      repositories: [{ ...readyRepository, files: [fileWithUnsafeId] }],
+    };
+    expect(sessionDiffUploadSchema.safeParse(uploadWithUnsafeFileId).success).toBe(false);
+
+    expect(
+      storedSessionDiffBundleSchema.safeParse({ revisionId: "rev/1", ...upload }).success
+    ).toBe(false);
+
+    // triggerMessageId never appears in a route path, so it deliberately
+    // keeps the looser id contract.
+    expect(
+      sessionDiffUploadSchema.safeParse({ ...upload, triggerMessageId: "msg/1" }).success
+    ).toBe(true);
+  });
+
   it("requires patches only for renderable files and old paths only for renames", () => {
     const parseFile = (file: Record<string, unknown>) =>
       sessionDiffUploadSchema.parse({

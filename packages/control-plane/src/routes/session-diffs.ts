@@ -1,4 +1,6 @@
 import {
+  SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
+  SESSION_DIFF_ID_PATTERN,
   SESSION_DIFF_MAX_BUNDLE_BYTES,
   sessionDiffFailureSchema,
   sessionDiffUploadSchema,
@@ -8,13 +10,11 @@ import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 import type { Env } from "../types";
 
-const DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 export const SESSION_DIFF_UPLOAD_BODY_MAX_BYTES = SESSION_DIFF_MAX_BUNDLE_BYTES;
-export const SESSION_DIFF_FAILURE_BODY_MAX_BYTES = 16 * 1_024;
 
 function routeId(match: RegExpMatchArray, name: string): string | null {
   const value = match.groups?.[name];
-  return value && DIFF_ID_PATTERN.test(value) ? value : null;
+  return value && SESSION_DIFF_ID_PATTERN.test(value) ? value : null;
 }
 
 async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array | null> {
