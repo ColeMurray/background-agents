@@ -36,8 +36,10 @@ describe("PierreDiffRenderer", () => {
       />
     );
 
-    expect(screen.getByTestId("patch-diff")).toHaveAttribute("data-font-size", "12px");
-    expect(screen.getByTestId("patch-diff")).toHaveAttribute("data-line-height", "18px");
-    expect(screen.getByTestId("patch-diff")).toHaveAttribute("data-metric-line-height", "18");
+    const diff = screen.getByTestId("patch-diff");
+    expect(diff).toHaveAttribute("data-font-size", "11px");
+    expect(diff).toHaveAttribute("data-line-height", "17px");
+    expect(diff).toHaveAttribute("data-metric-line-height", "17");
+    expect(diff.parentElement).toHaveClass("box-border", "w-full", "pr-3");
   });
 });
