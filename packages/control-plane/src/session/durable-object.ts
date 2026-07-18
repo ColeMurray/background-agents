@@ -150,12 +150,14 @@ export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
-  private diffService: SessionDiffService;
-  private messenger: SessionMessenger;
   private initialized = false;
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
+  // Session messenger (lazily initialized)
+  private _messenger: SessionMessenger | null = null;
+  // Session diff service (lazily initialized)
+  private _diffService: SessionDiffService | null = null;
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
   // Source control provider (lazily initialized)
@@ -246,13 +248,6 @@ export class SessionDO extends DurableObject<Env> {
       this.attachmentRepository
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
-    this.messenger = new SessionMessengerImpl(this.wsManager);
-    this.diffService = new SessionDiffService(
-      new SessionDiffStore(this.sql),
-      this.repository,
-      this.messenger,
-      this.log
-    );
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
 
@@ -354,6 +349,33 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
     return this._wsManager;
+  }
+
+  /**
+   * Get the session messenger, creating it lazily if needed.
+   * Lazy initialization preserves the WebSocket manager's own lazy
+   * construction so it captures the session_id-scoped logger.
+   */
+  private get messenger(): SessionMessenger {
+    if (!this._messenger) {
+      this._messenger = new SessionMessengerImpl(this.wsManager);
+    }
+    return this._messenger;
+  }
+
+  /**
+   * Get the session diff service, creating it lazily if needed.
+   */
+  private get diffService(): SessionDiffService {
+    if (!this._diffService) {
+      this._diffService = new SessionDiffService(
+        new SessionDiffStore(this.sql),
+        this.repository,
+        this.messenger,
+        this.log
+      );
+    }
+    return this._diffService;
   }
 
   private get executionTimeoutMs(): number {
