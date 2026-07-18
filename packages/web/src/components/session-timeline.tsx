@@ -207,7 +207,7 @@ export function SessionTimeline({
   );
 }
 
-export function ThinkingIndicator() {
+function ThinkingIndicator() {
   return (
     <div className="bg-card p-4 flex items-center gap-2">
       <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
@@ -216,7 +216,7 @@ export function ThinkingIndicator() {
   );
 }
 
-export function TimelineSkeleton() {
+function TimelineSkeleton() {
   return (
     <div className="space-y-3 py-2 animate-pulse">
       <div className="bg-card p-4 space-y-2">

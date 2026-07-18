@@ -148,14 +148,6 @@ export function XIcon({ className }: IconProps) {
   );
 }
 
-export function PlayIcon({ className }: IconProps) {
-  return (
-    <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-      <path d="M8 5.14v13.72a1 1 0 001.5.86l10.29-6.86a1 1 0 000-1.72L9.5 4.28A1 1 0 008 5.14z" />
-    </svg>
-  );
-}
-
 export function StopIcon({ className }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
