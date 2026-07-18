@@ -143,19 +143,14 @@ To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATION
 
 ### Fast Startup
 
-Sessions start quickly through provider-specific layers of warming:
+Sessions start near-instantly through multiple layers of warming:
 
-- **Saved or persistent state** — Snapshot-capable providers save filesystem state; Daytona and E2B
-  resume the same persistent sandbox instead
+- **Filesystem snapshots** — After each prompt, sandbox state is saved; follow-up sessions restore
+  instead of re-cloning
 - **Pre-built images** — Toggle per-repo (Settings > Images) or per-environment (Settings >
-  Environments) on Modal, Vercel, and OpenComputer; rebuilt every 30 minutes with latest commits and
-  dependencies
+  Environments); rebuilt every 30 minutes with latest commits and dependencies
 - **Proactive warming** — Sandbox begins spinning up as soon as you start typing, before you hit
   Enter
-
-Supported sandbox backends are Modal, Daytona, Vercel Sandboxes, OpenComputer, and E2B. E2B uses a
-Terraform-built base template and persistent pause/resume; it does not currently support repository
-or environment prebuilt images. See [E2B Sandbox Provider](docs/E2B_SANDBOX_PROVIDER.md).
 
 ### Multi-Repository Sessions & Environments
 
@@ -238,7 +233,7 @@ Every session runs in an isolated sandbox backend with a full development enviro
 - **Browser automation:** agent-browser CLI with headless Chromium for screenshots, visual diffs,
   and UI verification
 - **Code-server:** Optional browser-based VS Code connected to the session workspace
-- **Web terminal:** ttyd-powered terminal accessible from the session UI on providers that expose it
+- **Web terminal:** ttyd-powered terminal accessible from the session UI
 - **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels. URLs are available
   in-sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs
   ([details](docs/HOW_IT_WORKS.md#tunnel-urls-inside-the-sandbox))

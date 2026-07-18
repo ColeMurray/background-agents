@@ -38,9 +38,9 @@ E2B_SANDBOX_TIMEOUT_SECONDS # optional
 E2B_AUTO_PAUSE              # optional
 ```
 
-The E2B provider also needs the normal Open-Inspect values such as Cloudflare, GitHub App, and web
-app configuration. LLM keys are supplied through Open-Inspect global, environment, or repository
-secrets. See [GETTING_STARTED.md](./GETTING_STARTED.md) for the full deployment flow.
+The E2B provider also needs the normal Open-Inspect values such as Cloudflare, GitHub App,
+Anthropic, and web app configuration. See [GETTING_STARTED.md](./GETTING_STARTED.md) for the full
+deployment flow.
 
 > On the **Hobby** tier (~1h runtime cap), lower `e2b_sandbox_timeout_seconds` to `3300`.
 
@@ -51,7 +51,7 @@ E2B sandboxes boot from a **template** image that contains:
 - the Open-Inspect sandbox runtime (`packages/sandbox-runtime`, staged into `/app`)
 - OpenCode and the OpenCode plugin dependencies
 - Python 3.12 and Node 22 runtimes
-- `code-server`, `agent-browser`, and browser tooling used by the agent runtime
+- `code-server`, `agent-browser`, and browser/terminal tooling used by the agent runtime
 - GitHub CLI and a Git credential helper
 
 The template is built programmatically with the E2B Template SDK. There are two supported paths.
@@ -128,11 +128,11 @@ Terraform passes these provider-level values to the control plane:
   authenticate the template build
 - `E2B_TEMPLATE_ID`
 - `E2B_API_URL` (optional)
+- `ANTHROPIC_API_KEY`
 
-The E2B API key is not deliberately exposed inside the sandbox. Repository credentials are fetched
-on demand through Open-Inspect's Git credential helper. Add `ANTHROPIC_API_KEY` and any keys for
-other model providers or custom tools through Open-Inspect's secrets settings; the E2B provider does
-not inject them from Terraform. See [SECRETS.md](./SECRETS.md).
+The runtime also receives repository credentials from Open-Inspect for Git operations. If you use
+additional model providers or custom agent tools, add those keys through Open-Inspect's secrets
+settings. See [SECRETS.md](./SECRETS.md).
 
 ## Verify
 
@@ -179,9 +179,9 @@ debugging E2B.
 
 ### LLM/API Key Problems
 
-If OpenCode reports a model or provider error, confirm the required provider key is available
-through Open-Inspect secrets and that the selected model is available for that account. For Claude,
-add `ANTHROPIC_API_KEY` as a global, environment, or repository secret.
+The control plane passes `ANTHROPIC_API_KEY` for the default Claude models. If OpenCode reports a
+model or provider error, confirm the required provider key is available through Terraform or
+Open-Inspect secrets and that the selected model is available for that account.
 
 ## References
 

@@ -132,7 +132,7 @@ class SandboxSupervisor:
         self.opencode_ready = asyncio.Event()
         self.boot_mode = "unknown"
 
-        # Configuration from environment (set by the selected sandbox provider)
+        # Configuration from environment (set by Modal/SandboxManager)
         self.sandbox_id = os.environ.get("SANDBOX_ID", "unknown")
         self.control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
         self.sandbox_token = os.environ.get("SANDBOX_AUTH_TOKEN", "")
@@ -1697,7 +1697,7 @@ class SandboxSupervisor:
         """Block until TUNNEL_ENV_FILE_PATH contains entries for all expected ports.
 
         On timeout, log and return False so start.sh proceeds with degraded data
-        rather than hanging on a provider or control-plane tunnel outage.
+        rather than hanging on a Modal-side outage.
         """
         if not expected_ports:
             return True

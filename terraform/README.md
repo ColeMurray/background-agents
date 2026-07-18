@@ -7,14 +7,12 @@ Terraform.
 
 The infrastructure spans multiple cloud providers:
 
-| Provider         | Resources                                            | Terraform Support                   |
-| ---------------- | ---------------------------------------------------- | ----------------------------------- |
-| **Cloudflare**   | Workers, KV Namespaces, Durable Objects, D1 Database | Native provider                     |
-| **Vercel**       | Next.js Web App, optional sandbox sessions           | Native provider + Sandbox API calls |
-| **Modal**        | Optional sandbox infrastructure                      | CLI wrapper (no provider exists)    |
-| **Daytona**      | Optional sandbox snapshots                           | REST API wrapper                    |
-| **OpenComputer** | Optional sandbox templates and checkpoints           | REST API + template build wrapper   |
-| **E2B**          | Optional sandbox template and runtime sessions       | REST API + Template SDK wrapper     |
+| Provider       | Resources                                            | Terraform Support                   |
+| -------------- | ---------------------------------------------------- | ----------------------------------- |
+| **Cloudflare** | Workers, KV Namespaces, Durable Objects, D1 Database | Native provider                     |
+| **Vercel**     | Next.js Web App, optional sandbox sessions           | Native provider + Sandbox API calls |
+| **Modal**      | Optional sandbox infrastructure                      | CLI wrapper (no provider exists)    |
+| **Daytona**    | Optional sandbox snapshots                           | REST API wrapper                    |
 
 ## Directory Structure
 
@@ -26,7 +24,6 @@ terraform/
 │   ├── cloudflare-kv/           # KV namespace management
 │   ├── cloudflare-worker/       # Worker deployment with bindings (KV, DO, D1)
 │   ├── daytona-infra/           # Daytona snapshot bootstrap wrapper
-│   ├── e2b-infra/               # E2B Template SDK build wrapper
 │   ├── vercel-project/          # Vercel project + environment vars
 │   └── modal-app/               # Modal CLI wrapper
 │       └── scripts/             # Deployment scripts
@@ -39,7 +36,6 @@ terraform/
 │       ├── workers-*.tf         # Worker builds/deployments per service
 │       ├── web-*.tf             # Web app resources (Vercel/OpenNext)
 │       ├── daytona.tf           # Daytona snapshot resources
-│       ├── e2b.tf               # E2B template resources
 │       ├── modal.tf             # Modal infrastructure
 │       ├── checks.tf            # Terraform check blocks
 │       ├── moved.tf             # State move declarations
@@ -59,8 +55,8 @@ terraform/
 # Terraform >= 1.9.0
 brew install terraform
 
-# Python 3.12 and uv (for Modal deployments and E2B template builds)
-brew install python@3.12 uv
+# Modal CLI (for Modal deployments)
+pip install modal
 
 # Node.js >= 22 (for building workers)
 brew install node@22
@@ -99,17 +95,7 @@ brew install node@22
 1. **Sign up** at [Modal](https://modal.com)
 2. **Create API Token** at Modal Settings
 
-### 5. E2B Setup
-
-1. Create an API key in the [E2B dashboard](https://e2b.dev).
-2. Set `sandbox_provider = "e2b"`, `e2b_api_key`, and `e2b_template_id`.
-3. On plans capped near one hour, set `e2b_sandbox_timeout_seconds = 3300`.
-4. Run `terraform apply`; Terraform builds the E2B template before completing the control-plane
-   deployment.
-
-See [E2B Sandbox Provider](../docs/E2B_SANDBOX_PROVIDER.md) for lifecycle and manual-build details.
-
-### 6. GitHub Apps
+### 5. GitHub Apps
 
 1. **OAuth App** - For user authentication
    - Create at: https://github.com/settings/developers
@@ -122,7 +108,7 @@ See [E2B Sandbox Provider](../docs/E2B_SANDBOX_PROVIDER.md) for lifecycle and ma
      openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
      ```
 
-### 7. Slack App
+### 6. Slack App
 
 Create at [Slack API](https://api.slack.com/apps) and note:
 
@@ -234,13 +220,6 @@ VERCEL_BASE_SNAPSHOT_ID # Optional manual fallback; skips Terraform-managed snap
 VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
-
-# E2B (only if SANDBOX_PROVIDER=e2b)
-E2B_API_KEY
-E2B_TEMPLATE_ID
-E2B_API_URL # Optional; defaults to https://api.e2b.app
-E2B_SANDBOX_TIMEOUT_SECONDS # Optional; defaults to 7200
-E2B_AUTO_PAUSE # Optional; defaults to true
 
 # GitHub OAuth App
 GH_OAUTH_CLIENT_ID
@@ -408,26 +387,6 @@ module "modal" {
 
 **Outputs:** `app_name`, `deploy_id`, `api_health_url`
 
-### e2b-infra
-
-Builds an E2B template through a `null_resource` wrapper around the E2B Template SDK. The module
-runs `uv sync --frozen`, builds `packages/e2b-infra`, and rebuilds when its source hash, template
-settings, or build script changes.
-
-```hcl
-module "e2b" {
-  source = "../../modules/e2b-infra"
-
-  api_key     = var.e2b_api_key
-  api_url     = var.e2b_api_url
-  template_id = var.e2b_template_id
-  deploy_path = "${path.root}/../../../packages/e2b-infra"
-  source_hash = local.e2b_source_hash
-}
-```
-
-**Output:** `template_build_id`
-
 ## Important Notes
 
 ### Durable Objects
@@ -461,12 +420,6 @@ Since Modal has no Terraform provider, the module uses `null_resource` with `loc
 - Changes are detected via source file hashing
 - Manual intervention may be needed for complex updates
 
-### E2B Template Builds
-
-E2B also uses `null_resource` with `local-exec` because Terraform has no native template-build
-resource. The local machine or CI runner must have Python 3.12 and `uv`. E2B runtime operations are
-direct REST calls from the control-plane Worker; there is no separate Open-Inspect E2B service.
-
 ## Verification
 
 After deployment, verify with:
@@ -485,8 +438,7 @@ curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/health
 # Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
 MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suffix>"
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
-# Daytona, Vercel, OpenComputer, and E2B use provider APIs directly, so there is no Open-Inspect
-# shim health URL. For E2B, verify the configured template in the dashboard and launch a session.
+# Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Verify Vercel deployment (replace with your Vercel app URL)
 curl https://<your-vercel-app>.vercel.app
@@ -515,14 +467,6 @@ variables.
 1. Check Modal CLI is installed: `modal --version`
 2. Verify Modal credentials: `modal token show`
 3. Check logs: `modal app logs open-inspect`
-
-### E2B template build fails
-
-1. Verify `uv --version` works on the Terraform runner.
-2. Confirm `E2B_API_KEY` and `E2B_TEMPLATE_ID` are set (or their `TF_VAR_*` equivalents).
-3. Run the manual build in `packages/e2b-infra` to isolate SDK or Dockerfile failures.
-4. Template rebuilds are source-hash driven; changing a file under `packages/e2b-infra` or
-   `packages/sandbox-runtime/src` triggers another build.
 
 ### Worker deployment fails
 

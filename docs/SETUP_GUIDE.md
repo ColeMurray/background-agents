@@ -24,7 +24,7 @@ Required:
 - npm
 - Git
 
-Optional (needed for `modal-infra` or E2B template development):
+Optional (needed for `modal-infra` development):
 
 - Python `3.12+`
 - `uv` (recommended) or `pip`
@@ -57,8 +57,6 @@ What this does:
 - builds `@open-inspect/shared`
 - installs git hooks
 - sets up Python env for `packages/modal-infra` when possible
-
-For E2B template work, run `uv sync --frozen` separately in `packages/e2b-infra`.
 
 ## Path A: Run the Web App Locally (Recommended Quick Start)
 
@@ -212,19 +210,6 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-### E2B template workflow
-
-```bash
-cd packages/e2b-infra
-uv sync --frozen
-export E2B_API_KEY=e2b_...
-export E2B_TEMPLATE_ID=open-inspect-sandbox
-uv run python build-template.py
-```
-
-Provider behavior is covered by the control-plane unit suite. A live E2B template and reachable
-control plane are required to verify the complete sandbox bridge path.
-
 ## Path C: Full Self-Hosted Deployment
 
 For full infrastructure setup, use:
@@ -237,7 +222,6 @@ Critical notes before deploy:
 - Build `@open-inspect/shared` first.
 - Use two-phase Terraform deploy for DO/service bindings.
 - For Modal deployments, deploy with `modal deploy deploy.py` (not `src/app.py`).
-- For E2B deployments, Terraform builds the template automatically when `sandbox_provider = "e2b"`.
 
 ## Common Issues and Fixes
 
@@ -272,7 +256,6 @@ configured/deployed.
 - GitHub integration usage: [docs/integrations/GITHUB.md](./integrations/GITHUB.md)
 - Linear integration usage: [docs/integrations/LINEAR.md](./integrations/LINEAR.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
-- E2B sandbox provider: [docs/E2B_SANDBOX_PROVIDER.md](./E2B_SANDBOX_PROVIDER.md)
 - Available models: [docs/AVAILABLE_MODELS.md](./AVAILABLE_MODELS.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

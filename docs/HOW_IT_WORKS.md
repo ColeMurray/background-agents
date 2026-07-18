@@ -87,13 +87,13 @@ if needed.
 
 ### What's Stored in a Session
 
-| Data          | Description                                                                     |
-| ------------- | ------------------------------------------------------------------------------- |
-| Messages      | Prompts you've sent and their metadata                                          |
-| Events        | Tool calls, token streams, status updates                                       |
-| Artifacts     | PRs created, screenshots captured                                               |
-| Participants  | Users who have joined the session                                               |
-| Sandbox state | Provider object and persistence state (snapshot, checkpoint, or paused sandbox) |
+| Data          | Description                                       |
+| ------------- | ------------------------------------------------- |
+| Messages      | Prompts you've sent and their metadata            |
+| Events        | Tool calls, token streams, status updates         |
+| Artifacts     | PRs created, screenshots captured                 |
+| Participants  | Users who have joined the session                 |
+| Sandbox state | Reference to the current sandbox and its snapshot |
 
 Each session gets its own SQLite database in a Cloudflare Durable Object, ensuring isolation and
 high performance even with hundreds of concurrent sessions.
@@ -176,7 +176,7 @@ The control plane is the coordinator. It doesn't execute code—it manages state
 
 - Session state management (SQLite in Durable Objects)
 - WebSocket connections for real-time streaming
-- Sandbox lifecycle orchestration (spawn, snapshot/restore where supported, pause/resume, stop)
+- Sandbox lifecycle orchestration (spawn, snapshot, restore)
 - GitHub integration (repo listing, PR creation)
 - Authentication and access control
 
@@ -206,14 +206,12 @@ Open-Inspect supports these sandbox backends:
   API
 - **OpenComputer**: template-based sandboxes with checkpoint-backed prebuilt-image builds via the
   OpenComputer REST API
-- **E2B**: template-based fresh starts and persistent pause/resume via direct E2B REST API calls
+- **E2B**: template-based sandboxes with persistent pause/resume via direct E2B REST API calls
 
 Prebuilt-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can
 be restored on those same providers for session resumes; Daytona and E2B use persistent sandboxes
-instead. For both persistent providers, the control plane stops or pauses the sandbox on inactivity
-or stale heartbeat, then resumes that same sandbox later. E2B's Terraform-built template supplies
-the common runtime and toolchain, but E2B does not currently support repository or environment
-prebuilt-image builds.
+instead. For Daytona and E2B, the control plane stops or pauses the sandbox on inactivity or stale
+heartbeat, then resumes that same sandbox later.
 
 ### Clients
 
@@ -283,13 +281,6 @@ When restoring from a previous snapshot:
 Snapshots include installed dependencies, built artifacts, and workspace state. This is why
 follow-up prompts in an existing session are much faster than the first prompt.
 
-### Resume (Persistent Sandbox)
-
-Daytona and E2B preserve the provider sandbox itself rather than restoring a filesystem snapshot.
-When new work arrives, the control plane starts or reconnects the existing sandbox and reuses its
-workspace. For E2B, provider-side auto-resume is disabled: only the control-plane lifecycle manager
-resumes a paused sandbox, so traffic to an old public URL cannot wake it unexpectedly.
-
 ### Prebuilt Image Start
 
 When starting from a pre-built image (built for the session's repository or, for sessions launched
@@ -304,8 +295,6 @@ from a prebuild-enabled environment, the environment's whole repository set):
 If `start.sh` exists and fails, startup fails fast instead of continuing with a broken runtime.
 
 ### When Snapshots Are Taken
-
-On snapshot-capable providers:
 
 - **After successful prompt completion**: Preserves the workspace state
 - **Before sandbox timeout**: Saves state before the sandbox shuts down due to inactivity
@@ -326,7 +315,7 @@ When a session uses the `tunnelPorts` sandbox setting, the resolved tunnel URLs 
 can read them locally.
 
 ```dotenv
-# /workspace/.tunnels.env (Modal example)
+# /workspace/.tunnels.env
 TUNNEL_SANDBOX_ID=sandbox-acme-app-1783614336426
 TUNNEL_3000=https://abc123-3000.modal.host
 TUNNEL_5173=https://abc123-5173.modal.host
@@ -514,10 +503,6 @@ session. OpenComputer uses a managed template plus checkpoints for the same preb
 lifecycle. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md) for provider-specific details.
 
-E2B instead uses a Terraform-built base template for runtime startup and pauses/resumes the same
-sandbox to preserve session state. It does not currently create Open-Inspect repository or
-environment prebuild artifacts. See [E2B Sandbox Provider](E2B_SANDBOX_PROVIDER.md).
-
 ### Image Prebuilding
 
 For frequently-used repositories — and for [environments](#environments) — images can be prebuilt on
@@ -583,9 +568,8 @@ per-environment scope. A session receives global secrets plus its **session targ
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
-> **Non-Modal sandbox users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
-> added through Open-Inspect secrets. Modal injects configured keys through its own secrets
-> mechanism.
+> **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
+> added as global secrets. Modal injects these automatically via its own secrets mechanism.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
 > models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider.

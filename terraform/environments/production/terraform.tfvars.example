@@ -111,8 +111,8 @@ e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # e2b_api_url = "https://api.e2b.app"
 # Sandbox TTL. Default 7200 (paid plans); on a plan with a ~1h cap, set 3300.
 # e2b_sandbox_timeout_seconds = 3300
-# Auto-pause makes a lapsed TTL recoverable (pause, not kill). The control plane
-# resumes the sandbox on the next prompt. Default true; set false to kill on timeout.
+# Auto-pause makes a lapsed TTL recoverable (pause, not kill) and auto-resumes the
+# sandbox on inbound activity. Default true; set false to kill on timeout.
 # e2b_auto_pause = true
 
 # =============================================================================

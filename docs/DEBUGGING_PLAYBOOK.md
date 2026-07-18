@@ -10,13 +10,13 @@ joining across service boundaries.
 
 Every log line includes:
 
-| Field       | Type   | Description                                                                                                       |
-| ----------- | ------ | ----------------------------------------------------------------------------------------------------------------- |
-| `level`     | string | `debug` \| `info` \| `warn` \| `error`                                                                            |
-| `service`   | string | `web` \| `control-plane` \| `modal-infra` \| `slack-bot` (shared sandbox runtime currently logs as `modal-infra`) |
-| `component` | string | Sub-area (e.g. `router`, `session-do`, `bridge`)                                                                  |
-| `msg`       | string | Stable event identifier for querying                                                                              |
-| `ts`        | number | Epoch milliseconds                                                                                                |
+| Field       | Type   | Description                                              |
+| ----------- | ------ | -------------------------------------------------------- |
+| `level`     | string | `debug` \| `info` \| `warn` \| `error`                   |
+| `service`   | string | `web` \| `control-plane` \| `modal-infra` \| `slack-bot` |
+| `component` | string | Sub-area (e.g. `router`, `session-do`, `bridge`)         |
+| `msg`       | string | Stable event identifier for querying                     |
+| `ts`        | number | Epoch milliseconds                                       |
 
 ## Correlation Fields
 
@@ -45,9 +45,7 @@ canonical. Do not mix `traceId`/`requestId` and `trace_id`/`request_id` within t
 ### Joining across services
 
 A prompt run flows through the client, control plane, selected sandbox backend, and sandbox runtime.
-For Slack with Modal, the path is: **slack-bot -> control-plane -> modal-infra -> sandbox**. For
-E2B, provider API events are emitted by **control-plane** and the shared in-sandbox runtime
-currently retains the **modal-infra** service label.
+For Slack with Modal, the path is: **slack-bot -> control-plane -> modal-infra -> sandbox**.
 
 1. Slack-bot generates `trace_id` and sends it as `x-trace-id` header.
 2. Control-plane router propagates `trace_id` into Durable Object and provider calls.
@@ -151,14 +149,11 @@ outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
 
 #### Provider Clients
 
-| Event                     | Level | Key Fields                                                                      | Description                               |
-| ------------------------- | ----- | ------------------------------------------------------------------------------- | ----------------------------------------- |
-| `modal.request`           | info  | `endpoint`, `session_id`, `sandbox_id`, `http_status`, `duration_ms`, `outcome` | One per control-plane -> Modal call       |
-| `vercel_sandbox.request`  | info  | `endpoint`, `session_id`, `http_status`, `duration_ms`, `outcome`               | One per control-plane -> Vercel API call  |
-| `daytona.create_sandbox`  | info  | `sandbox_id`, `target`, `duration_ms`, `outcome`                                | Daytona sandbox create/restore API result |
-| `e2b.create_sandbox`      | info  | `sandbox_id`, `template_id`, `duration_ms`                                      | E2B sandbox creation                      |
-| `e2b.write_session_env`   | info  | `sandbox_id`, `var_count`, `duration_ms`                                        | Secure session environment upload         |
-| `e2b.cleanup_kill_failed` | warn  | `sandbox_id`, `error`                                                           | Cleanup after failed E2B creation failed  |
+| Event                    | Level | Key Fields                                                                      | Description                               |
+| ------------------------ | ----- | ------------------------------------------------------------------------------- | ----------------------------------------- |
+| `modal.request`          | info  | `endpoint`, `session_id`, `sandbox_id`, `http_status`, `duration_ms`, `outcome` | One per control-plane -> Modal call       |
+| `vercel_sandbox.request` | info  | `endpoint`, `session_id`, `http_status`, `duration_ms`, `outcome`               | One per control-plane -> Vercel API call  |
+| `daytona.create_sandbox` | info  | `sandbox_id`, `target`, `duration_ms`, `outcome`                                | Daytona sandbox create/restore API result |
 
 ---
 
@@ -332,10 +327,6 @@ service="control-plane" msg="sandbox.spawned" session_id="<SESSION_ID>"
 # 2. Did the provider create it? Modal example:
 service="modal-infra" msg="sandbox.create" sandbox_id="<SANDBOX_ID>"
 
-# E2B example (control-plane logs):
-service="control-plane" msg="e2b.create_sandbox" sandbox_id="<SANDBOX_ID>"
-service="control-plane" msg="e2b.write_session_env" sandbox_id="<SANDBOX_ID>"
-
 # 3. Did startup succeed?
 service="modal-infra" msg="sandbox.startup" sandbox_id="<SANDBOX_ID>"
 
@@ -370,10 +361,6 @@ If the circuit breaker opened:
 service="control-plane" component="lifecycle-manager" msg="Circuit breaker open"
 ```
 
-For E2B, query `e2b.create_sandbox` and `e2b.write_session_env` in `control-plane` logs. A failed
-environment upload should be followed by cleanup; check `e2b.cleanup_kill_failed` if that also
-fails.
-
 ### "Why did snapshot restore fail?"
 
 ```
@@ -383,19 +370,6 @@ service="control-plane" msg="sandbox.restore" session_id="<SESSION_ID>"
 # Provider side. Modal example:
 service="modal-infra" msg="sandbox.restore" outcome="error"
 ```
-
-### "Why did an E2B resume fail?"
-
-E2B resumes a paused provider object rather than restoring a snapshot. Query the lifecycle result
-and surrounding E2B REST errors in control-plane logs:
-
-```
-service="control-plane" msg="sandbox.restore" session_id="<SESSION_ID>"
-service="control-plane" session_id="<SESSION_ID>" error_message="*E2B*"
-```
-
-A missing E2B sandbox causes a fresh spawn; other connect or timeout-reset failures are surfaced by
-the lifecycle manager and provider circuit breaker.
 
 ### "Slack message isn't getting a response"
 

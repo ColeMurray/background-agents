@@ -486,7 +486,7 @@ variable "e2b_sandbox_timeout_seconds" {
 }
 
 variable "e2b_auto_pause" {
-  description = "Pause (not kill) the sandbox when its TTL expires so the control plane can resume it on the next prompt. Default true."
+  description = "Pause (not kill) the sandbox when its TTL expires, so it stays resumable and auto-resumes on activity. Default true."
   type        = bool
   default     = true
 }
@@ -513,7 +513,7 @@ variable "sandbox_provider" {
 }
 
 variable "sandbox_inactivity_timeout_ms" {
-  description = "Milliseconds of sandbox inactivity before OpenInspect persists state where supported and stops or pauses the sandbox when no clients are connected."
+  description = "Milliseconds of sandbox inactivity before OpenInspect snapshots and stops the sandbox when no clients are connected."
   type        = number
   default     = 600000
 }

@@ -19,8 +19,7 @@ bash .openinspect/setup.sh
 ```
 
 This handles npm dependencies, builds the shared package, configures git hooks (husky +
-lint-staged), and optionally sets up a Python virtualenv for `packages/modal-infra`. For E2B
-template changes, also run `uv sync --frozen` in `packages/e2b-infra`.
+lint-staged), and optionally sets up a Python virtualenv for `packages/modal-infra`.
 
 See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for full deployment instructions. See
 [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for local setup and day-to-day development paths.
@@ -46,16 +45,14 @@ npm test
 
 ## Project Structure
 
-| Package                       | Description                          |
-| ----------------------------- | ------------------------------------ |
-| `packages/control-plane`      | Cloudflare Workers + Durable Objects |
-| `packages/web`                | Next.js web application              |
-| `packages/sandbox-runtime`    | Shared in-sandbox agent runtime      |
-| `packages/modal-infra`        | Modal sandbox infrastructure         |
-| `packages/daytona-infra`      | Daytona snapshot infrastructure      |
-| `packages/e2b-infra`          | E2B sandbox template infrastructure  |
-| `packages/opencomputer-infra` | OpenComputer template infrastructure |
-| `packages/shared`             | Shared types and utilities           |
+| Package                    | Description                          |
+| -------------------------- | ------------------------------------ |
+| `packages/control-plane`   | Cloudflare Workers + Durable Objects |
+| `packages/web`             | Next.js web application              |
+| `packages/sandbox-runtime` | Shared in-sandbox agent runtime      |
+| `packages/modal-infra`     | Modal sandbox infrastructure         |
+| `packages/daytona-infra`   | Daytona snapshot infrastructure      |
+| `packages/shared`          | Shared types and utilities           |
 
 ## Making Changes
 
