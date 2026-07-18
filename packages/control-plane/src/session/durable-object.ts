@@ -41,6 +41,7 @@ import {
 } from "../sandbox/lifecycle/manager";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
+import { ScmSettingsStore } from "../db/scm-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
@@ -570,6 +571,7 @@ export class SessionDO extends DurableObject<Env> {
             },
             appName: resolveAppName(this.env),
             sessionPullRequests: this.env.DB ? new SessionPullRequestStore(this.env.DB) : undefined,
+            resolveAlwaysDraftDefault: () => this.resolveAlwaysDraftDefault(),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -631,6 +633,29 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._participantsHandler;
+  }
+
+  /**
+   * Resolves the "always use draft mode" SCM setting (global default merged
+   * with the per-repo override) for this session's repository. Returns false
+   * when D1 is unavailable so PR creation never blocks on settings.
+   */
+  private async resolveAlwaysDraftDefault(): Promise<boolean> {
+    if (!this.env.DB) return false;
+    const session = this.getSession();
+    if (!session) return false;
+    try {
+      const scmSettingsStore = new ScmSettingsStore(this.env.DB);
+      const settings = await scmSettingsStore.getResolvedSettings(
+        `${session.repo_owner}/${session.repo_name}`
+      );
+      return settings.alwaysUseDraftMode === true;
+    } catch (error) {
+      this.log.error("Failed to resolve always-draft setting", {
+        error: error instanceof Error ? error : String(error),
+      });
+      return false;
+    }
   }
 
   private get alarmHandler(): AlarmHandler {
