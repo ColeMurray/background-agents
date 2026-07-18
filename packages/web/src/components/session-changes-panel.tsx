@@ -264,8 +264,10 @@ export function SessionChangesPanel({
         <aside
           aria-label="Changed files"
           className={cn(
-            "shrink-0 overflow-auto p-3",
-            mobile ? "max-h-48 border-b border-border-muted" : "w-56 border-r border-border-muted"
+            "shrink-0 overflow-auto",
+            mobile
+              ? "max-h-48 border-b border-border-muted p-3"
+              : "w-44 border-r border-border-muted p-2"
           )}
         >
           <FilesChangedSection

@@ -42,7 +42,10 @@ import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
 import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
 import { SessionChangesPanel } from "@/components/session-changes-panel";
-import { SessionDesktopLayout } from "@/components/session-desktop-layout";
+import {
+  SESSION_CHANGES_LAYOUT_ID,
+  SessionDesktopLayout,
+} from "@/components/session-desktop-layout";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 
@@ -175,7 +178,7 @@ function SessionPageContent() {
   );
   const changesLayoutStorage = useBrowserLayoutStorage();
   const changesLayout = useDefaultLayout({
-    id: "session-changes-layout",
+    id: SESSION_CHANGES_LAYOUT_ID,
     panelIds:
       resolvedDiff && diffState && !isBelowLg
         ? ["session-main", "session-changes"]

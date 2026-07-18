@@ -9,13 +9,16 @@ const WRAP_KEY = "session-changes.wrap";
 
 export function useSessionDiffPreferences() {
   const [diffStyle, setDiffStyleState] = useState<DiffStyle>("unified");
-  const [wrap, setWrapState] = useState(false);
+  const [wrap, setWrapState] = useState(true);
 
   useEffect(() => {
     try {
       const storedStyle = localStorage.getItem(STYLE_KEY);
       if (storedStyle === "unified" || storedStyle === "split") setDiffStyleState(storedStyle);
-      setWrapState(localStorage.getItem(WRAP_KEY) === "true");
+      const storedWrap = localStorage.getItem(WRAP_KEY);
+      if (storedWrap === "true" || storedWrap === "false") {
+        setWrapState(storedWrap === "true");
+      }
     } catch {
       // Storage is optional; defaults remain usable in restricted browsers.
     }
