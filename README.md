@@ -120,6 +120,7 @@ built for internal use where all employees are trusted and have access to compan
 | [sandbox-runtime](packages/sandbox-runtime)       | Shared in-sandbox agent runtime             |
 | [modal-infra](packages/modal-infra)               | Modal sandbox infrastructure                |
 | [daytona-infra](packages/daytona-infra)           | Daytona snapshot infrastructure             |
+| [e2b-infra](packages/e2b-infra)                   | E2B sandbox template infrastructure         |
 | [opencomputer-infra](packages/opencomputer-infra) | OpenComputer template infrastructure        |
 | [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
 | [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
@@ -142,14 +143,19 @@ To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATION
 
 ### Fast Startup
 
-Sessions start near-instantly through multiple layers of warming:
+Sessions start quickly through provider-specific layers of warming:
 
-- **Filesystem snapshots** — After each prompt, sandbox state is saved; follow-up sessions restore
-  instead of re-cloning
+- **Saved or persistent state** — Snapshot-capable providers save filesystem state; Daytona and E2B
+  resume the same persistent sandbox instead
 - **Pre-built images** — Toggle per-repo (Settings > Images) or per-environment (Settings >
-  Environments); rebuilt every 30 minutes with latest commits and dependencies
+  Environments) on Modal, Vercel, and OpenComputer; rebuilt every 30 minutes with latest commits and
+  dependencies
 - **Proactive warming** — Sandbox begins spinning up as soon as you start typing, before you hit
   Enter
+
+Supported sandbox backends are Modal, Daytona, Vercel Sandboxes, OpenComputer, and E2B. E2B uses a
+Terraform-built base template and persistent pause/resume; it does not currently support repository
+or environment prebuilt images. See [E2B Sandbox Provider](docs/E2B_SANDBOX_PROVIDER.md).
 
 ### Multi-Repository Sessions & Environments
 
@@ -232,7 +238,7 @@ Every session runs in an isolated sandbox backend with a full development enviro
 - **Browser automation:** agent-browser CLI with headless Chromium for screenshots, visual diffs,
   and UI verification
 - **Code-server:** Optional browser-based VS Code connected to the session workspace
-- **Web terminal:** ttyd-powered terminal accessible from the session UI
+- **Web terminal:** ttyd-powered terminal accessible from the session UI on providers that expose it
 - **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels. URLs are available
   in-sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs
   ([details](docs/HOW_IT_WORKS.md#tunnel-urls-inside-the-sandbox))
@@ -290,6 +296,7 @@ built with:
 - [Daytona](https://www.daytona.io) - Cloud development sandboxes
 - [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) - Cloud sandbox infrastructure
 - [OpenComputer](https://www.opencomputer.dev) - Cloud sandbox infrastructure
+- [E2B](https://e2b.dev) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
 - [OpenCode](https://opencode.ai) - Coding agent runtime
 - [Next.js](https://nextjs.org) - Web framework

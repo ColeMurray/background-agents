@@ -1,5 +1,5 @@
 """
-Structured JSON logging for Open-Inspect modal-infra.
+Structured JSON logging for the shared Open-Inspect sandbox runtime.
 
 Uses Python's standard logging module with a custom JSONFormatter and a thin
 StructuredLogger wrapper for a clean call-site API. Third-party library logs

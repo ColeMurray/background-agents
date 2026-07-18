@@ -38,10 +38,10 @@ strict cross-region lock.
                   eyes  │                                        │
                reaction │                                        │ DO / D1
                         v                                        v
-                 ┌──────────────┐                         ┌──────────────┐
-                 │   GitHub     │  <─── gh CLI ─────────  │    Modal     │
-                 │   REST API   │                         │   Sandbox    │
-                 └──────────────┘                         └──────────────┘
+                 ┌──────────────┐                         ┌─────────────────┐
+                 │   GitHub     │  <─── gh CLI ─────────  │ Selected Sandbox│
+                 │   REST API   │                         │    Provider     │
+                 └──────────────┘                         └─────────────────┘
 ```
 
 Key design decisions:
@@ -95,7 +95,8 @@ The existing GitHub App needs these additions:
 
 For the agent to interact with GitHub from the sandbox, these prerequisites must be met:
 
-1. **`gh` CLI** installed in the sandbox image (`packages/modal-infra/src/images/base.py`)
+1. **`gh` CLI** installed in the provider's base runtime or template (for example,
+   `packages/modal-infra/src/images/base.py` or `packages/e2b-infra/e2b.Dockerfile`)
 2. **Git credential helper** configured in the sandbox image/runtime so git operations can request
    short-lived SCM credentials from the control plane
 

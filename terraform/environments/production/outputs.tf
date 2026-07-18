@@ -119,7 +119,7 @@ output "verification_commands" {
     curl ${module.control_plane_worker.worker_url}/health
 
     # 2. Health check sandbox backend
-    ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : local.use_vercel_backend ? "# Vercel sandboxes use the Vercel Sandbox API directly. Base snapshot: ${var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : module.vercel_sandbox_infra[0].snapshot_name}" : "# Daytona sandboxes use the REST API directly — no health endpoint to check"}
+    ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : local.use_vercel_backend ? "# Vercel sandboxes use the Vercel Sandbox API directly. Base snapshot: ${var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : module.vercel_sandbox_infra[0].snapshot_name}" : local.use_e2b_backend ? "# E2B sandboxes use the REST API directly. Verify template '${var.e2b_template_id}' in the E2B dashboard and launch a test session." : local.use_opencomputer_backend ? "# OpenComputer sandboxes use the REST API directly. Verify the template and launch a test session." : "# Daytona sandboxes use the REST API directly - no health endpoint to check"}
 
     # 3. Verify web app deployment
     curl ${local.web_app_url}

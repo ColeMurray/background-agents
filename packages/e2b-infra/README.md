@@ -50,8 +50,9 @@ Rebuild whenever `packages/sandbox-runtime` or this directory changes.
 
 ## Verification
 
-Unit/integration tests and the template build are covered by CI; the bridge ↔ control-plane
-WebSocket path can only be exercised against a running control plane.
+E2B provider and REST client behavior is covered by the control-plane unit suite. The template
+tooling has no dedicated live integration suite, and the bridge ↔ control-plane WebSocket path can
+only be exercised against a running control plane and E2B account.
 
 Prerequisites: `packages/control-plane/.dev.vars` with `SANDBOX_PROVIDER=e2b`, `E2B_API_KEY`,
 `E2B_TEMPLATE_ID`, and GitHub App credentials (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` in PKCS#8,

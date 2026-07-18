@@ -36,7 +36,9 @@ few minutes of changes.
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
 `sandbox_provider = "vercel"`, or `sandbox_provider = "opencomputer"`. The artifact is stored per
 provider as a Modal image, Vercel snapshot, or OpenComputer checkpoint. Daytona deployments use
-persistent sandboxes instead, so the image settings are disabled for that backend.
+persistent sandboxes instead. E2B deployments use a provider base template plus persistent
+pause/resume. Image settings are disabled for both backends; the E2B template is not a repository-
+or environment-specific prebuilt image.
 
 ### Enable for a Repository
 
@@ -132,6 +134,9 @@ secrets for a repository scope, global + environment secrets for an environment 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
 snapshot, or OpenComputer checkpoint.
+
+E2B's Terraform-built template contains the shared runtime and toolchain only. It does not produce
+the per-repository or per-environment artifacts described in this guide.
 
 ### What Happens When You Start a Session
 

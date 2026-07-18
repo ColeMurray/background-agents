@@ -134,10 +134,10 @@ class SessionRepositoryConfig(TypedDict, total=False):
 class SessionConfig(BaseModel):
     """Configuration passed to sandbox for a session.
 
-    This model is round-tripped by modal-infra (web_api builds it from the
-    create request, the manager serializes it into the SESSION_CONFIG env
-    var), and pydantic silently drops unknown keys — new wire fields MUST be
-    added here or they never reach the sandbox.
+    This model is round-tripped between the control plane, sandbox providers,
+    and the shared runtime through SESSION_CONFIG. Pydantic silently drops
+    unknown keys, so new wire fields MUST be added here or they never reach
+    the sandbox.
     """
 
     session_id: str
