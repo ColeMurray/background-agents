@@ -1,8 +1,11 @@
-import type {
-  SessionDiffFile,
-  SessionDiffManifest,
-  SessionDiffRepository,
-  SessionDiffState,
+import {
+  SESSION_DIFF_FILE_NOT_FOUND_CODE,
+  SESSION_DIFF_REVISION_STALE_CODE,
+  type SessionDiffErrorCode,
+  type SessionDiffFile,
+  type SessionDiffManifest,
+  type SessionDiffRepository,
+  type SessionDiffState,
 } from "@open-inspect/shared";
 
 type ReadySessionDiffRepository = Extract<SessionDiffRepository, { status: "ready" }>;
@@ -88,8 +91,17 @@ export function resolveDiffSelection(
 }
 
 export interface DiffErrorBody {
-  code?: string;
+  code?: SessionDiffErrorCode;
   error?: string;
+}
+
+const SESSION_DIFF_ERROR_CODES: readonly SessionDiffErrorCode[] = [
+  SESSION_DIFF_REVISION_STALE_CODE,
+  SESSION_DIFF_FILE_NOT_FOUND_CODE,
+];
+
+function isSessionDiffErrorCode(value: unknown): value is SessionDiffErrorCode {
+  return (SESSION_DIFF_ERROR_CODES as readonly unknown[]).includes(value);
 }
 
 /** Narrows an untrusted diff error-response body to the fields the UI reads. */
@@ -97,7 +109,7 @@ export function parseDiffErrorBody(value: unknown): DiffErrorBody {
   if (typeof value !== "object" || value === null) return {};
   const record = value as Record<string, unknown>;
   const body: DiffErrorBody = {};
-  if (typeof record.code === "string") body.code = record.code;
+  if (isSessionDiffErrorCode(record.code)) body.code = record.code;
   if (typeof record.error === "string") body.error = record.error;
   return body;
 }

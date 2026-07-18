@@ -132,12 +132,20 @@ describe("session diff view model", () => {
 });
 
 describe("parseDiffErrorBody", () => {
-  it("keeps only string code and error fields from untrusted bodies", () => {
+  it("keeps only known codes and string error fields from untrusted bodies", () => {
     expect(parseDiffErrorBody({ code: "diff_revision_stale", error: "stale" })).toEqual({
       code: "diff_revision_stale",
       error: "stale",
     });
+    expect(parseDiffErrorBody({ code: "diff_file_not_found" })).toEqual({
+      code: "diff_file_not_found",
+    });
     expect(parseDiffErrorBody({ code: 42, error: { message: "nope" } })).toEqual({});
+    // Unknown code strings are dropped: the field is typed as the shared
+    // SessionDiffErrorCode union, so only codes the UI acts on survive.
+    expect(parseDiffErrorBody({ code: "some_future_code", error: "boom" })).toEqual({
+      error: "boom",
+    });
   });
 
   it("returns an empty body for non-object values", () => {

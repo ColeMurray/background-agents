@@ -5,7 +5,8 @@ import { useTheme } from "next-themes";
 import { mutate } from "swr";
 import useSWR from "swr";
 import { useEffect, useRef } from "react";
-import { formatRepositoryFullName } from "@open-inspect/shared";
+import { formatRepositoryFullName, SESSION_DIFF_REVISION_STALE_CODE } from "@open-inspect/shared";
+import type { SessionDiffErrorCode } from "@open-inspect/shared";
 import type { SessionDiffFile, SessionDiffState } from "@open-inspect/shared";
 import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-diff-preferences";
 import { sessionDiffKey } from "@/hooks/use-session-diffs";
@@ -29,7 +30,7 @@ type ReadyDiffSelection = Extract<ResolvedDiffSelection, { status: "ready" }>;
 class DiffPatchError extends Error {
   constructor(
     message: string,
-    readonly code?: string
+    readonly code?: SessionDiffErrorCode
   ) {
     super(message);
   }
@@ -38,7 +39,7 @@ class DiffPatchError extends Error {
 async function fetchPatch(url: string): Promise<string> {
   const response = await fetch(url);
   if (!response.ok) {
-    let code: string | undefined;
+    let code: SessionDiffErrorCode | undefined;
     try {
       code = parseDiffErrorBody(await response.json()).code;
     } catch {
@@ -234,7 +235,8 @@ export function SessionChangesPanel({
   } = useSWR<string>(patchKey, fetchPatch, {
     revalidateOnFocus: false,
   });
-  const stale = patchError instanceof DiffPatchError && patchError.code === "diff_revision_stale";
+  const stale =
+    patchError instanceof DiffPatchError && patchError.code === SESSION_DIFF_REVISION_STALE_CODE;
   const allowSplit = !mobile && panelWidth >= SPLIT_DIFF_MIN_PANEL_WIDTH;
   const effectiveDiffStyle = allowSplit ? diffStyle : "unified";
   const availableDiffStyles: readonly DiffStyle[] = allowSplit ? ["unified", "split"] : ["unified"];
