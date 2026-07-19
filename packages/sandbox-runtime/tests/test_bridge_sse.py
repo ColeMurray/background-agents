@@ -138,7 +138,7 @@ def opencode_message_id(monkeypatch) -> str:
 
 
 class TestSSEParser:
-    """Tests for OpenCodeClient.parse_sse_stream."""
+    """Tests for OpenCodeClient SSE frame decoding."""
 
     @pytest.mark.asyncio
     async def test_parse_single_event(self, bridge: AgentBridge):
@@ -147,7 +147,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_opencode_client().parse_sse_stream(response):
+        async for event in bridge._ensure_opencode_client()._decoded_events(response):
             events.append(event)
 
         assert len(events) == 1
@@ -175,7 +175,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_opencode_client().parse_sse_stream(response):
+        async for event in bridge._ensure_opencode_client()._decoded_events(response):
             events.append(event)
 
         assert len(events) == 3
@@ -193,7 +193,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_opencode_client().parse_sse_stream(response):
+        async for event in bridge._ensure_opencode_client()._decoded_events(response):
             events.append(event)
 
         assert len(events) == 2

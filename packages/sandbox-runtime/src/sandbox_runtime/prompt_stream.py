@@ -9,9 +9,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
-
-from .opencode_client import SSEConnectionError
+from .opencode_client import (
+    SSEConnectionError,
+    SSEInactivityTimeoutError,
+    SSEStreamDisconnectedError,
+)
 from .opencode_identifier import OpenCodeIdentifier
 
 if TYPE_CHECKING:
@@ -163,47 +165,43 @@ class OpenCodePromptStream:
         loop = asyncio.get_running_loop()
 
         try:
-            deadline = loop.time() + self._sse_inactivity_timeout_seconds
-            async with asyncio.timeout_at(deadline) as timeout_ctx:
-                async with self._client.open_event_stream() as sse_response:
-                    prompt_start = loop.time()
-                    await self._client.post_prompt(opencode_session_id, request_body)
+            async with self._client.events(
+                inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
+            ) as sse_events:
+                prompt_start = loop.time()
+                await self._client.post_prompt(opencode_session_id, request_body)
 
-                    async for sse_event in self._client.parse_sse_stream(
-                        sse_response,
-                        timeout_ctx,
-                        inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds,
-                    ):
-                        step = self._apply_sse_event(state, sse_event)
-                        for event in step.events:
-                            yield event
+                async for sse_event in sse_events:
+                    step = self._apply_sse_event(state, sse_event)
+                    for event in step.events:
+                        yield event
 
-                        if step.disposition is _Disposition.FINISHED_IDLE:
-                            async for final_event in self._fetch_final_message_state(state):
-                                yield final_event
-                            return
-                        if step.disposition is _Disposition.FAILED:
-                            return
+                    if step.disposition is _Disposition.FINISHED_IDLE:
+                        async for final_event in self._fetch_final_message_state(state):
+                            yield final_event
+                        return
+                    if step.disposition is _Disposition.FAILED:
+                        return
 
-                        if loop.time() > prompt_start + self._prompt_max_duration_seconds:
-                            elapsed = time.time() - state.start_time
-                            self._log.error(
-                                "bridge.prompt_max_duration_timeout",
-                                timeout_ms=int(self._prompt_max_duration_seconds * 1000),
-                                elapsed_ms=int(elapsed * 1000),
-                                message_id=message_id,
-                            )
-                            await self._client.request_stop(
-                                opencode_session_id, reason="prompt_max_duration_timeout"
-                            )
-                            async for final_event in self._fetch_final_message_state(state):
-                                yield final_event
-                            raise RuntimeError(
-                                f"Prompt exceeded max duration of "
-                                f"{self._prompt_max_duration_seconds:.0f}s."
-                            )
+                    if loop.time() > prompt_start + self._prompt_max_duration_seconds:
+                        elapsed = time.time() - state.start_time
+                        self._log.error(
+                            "bridge.prompt_max_duration_timeout",
+                            timeout_ms=int(self._prompt_max_duration_seconds * 1000),
+                            elapsed_ms=int(elapsed * 1000),
+                            message_id=message_id,
+                        )
+                        await self._client.request_stop(
+                            opencode_session_id, reason="prompt_max_duration_timeout"
+                        )
+                        async for final_event in self._fetch_final_message_state(state):
+                            yield final_event
+                        raise RuntimeError(
+                            f"Prompt exceeded max duration of "
+                            f"{self._prompt_max_duration_seconds:.0f}s."
+                        )
 
-        except TimeoutError:
+        except SSEInactivityTimeoutError:
             elapsed = time.time() - state.start_time
             self._log.error(
                 "bridge.sse_inactivity_timeout",
@@ -221,8 +219,7 @@ class OpenCodePromptStream:
                 f"(no data received). Total elapsed: {elapsed:.0f}s"
             )
 
-        except httpx.TransportError as e:
-            self._log.error("bridge.sse_transport_error", exc=e)
+        except SSEStreamDisconnectedError as e:
             async for final_event in self._fetch_final_message_state(state):
                 yield final_event
             raise SSEConnectionError(

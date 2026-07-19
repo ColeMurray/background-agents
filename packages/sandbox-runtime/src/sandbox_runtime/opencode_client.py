@@ -22,14 +22,22 @@ class SSEConnectionError(Exception):
     """Raised when SSE connection fails."""
 
 
+class SSEStreamDisconnectedError(SSEConnectionError):
+    """Raised when the SSE transport fails while connecting or mid-stream."""
+
+
+class SSEInactivityTimeoutError(Exception):
+    """Raised when no SSE data arrives within the inactivity deadline."""
+
+
 class OpenCodeClient:
     """HTTP/SSE transport for the local OpenCode server.
 
-    Owns the OpenCode base URL and every raw wire concern: opening the
-    ``/event`` SSE stream, parsing SSE frames, kicking off async prompts,
-    aborting sessions, and fetching message state. Prompt-lifecycle policy
-    (inactivity/max-duration timeouts, request-body construction, event
-    translation) stays in ``OpenCodePromptStream``.
+    Owns the OpenCode base URL and every raw wire concern: session
+    creation/lookup, the ``/event`` SSE stream and its frame parsing, kicking
+    off async prompts, aborting sessions, and fetching message state.
+    Prompt-lifecycle policy (inactivity/max-duration values, request-body
+    construction, event translation) stays in ``OpenCodePromptStream``.
     """
 
     def __init__(
@@ -47,17 +55,56 @@ class OpenCodeClient:
         self._connect_timeout_seconds = connect_timeout_seconds
         self._request_timeout_seconds = request_timeout_seconds
 
+    async def create_session(self) -> str | None:
+        """Create a new OpenCode session, returning its id."""
+        response = await self._http_client.post(
+            f"{self._base_url}/session",
+            json={},
+            timeout=self._request_timeout_seconds,
+        )
+        response.raise_for_status()
+        data: dict[str, Any] = response.json()
+        session_id: str | None = data.get("id")
+        return session_id
+
+    async def session_exists(self, opencode_session_id: str) -> bool:
+        """Whether OpenCode still knows the session (a 200 from its lookup)."""
+        response = await self._http_client.get(
+            f"{self._base_url}/session/{opencode_session_id}",
+            timeout=self._request_timeout_seconds,
+        )
+        return response.status_code == 200
+
     @asynccontextmanager
-    async def open_event_stream(self) -> AsyncIterator[httpx.Response]:
-        """Open the ``/event`` SSE stream, failing fast on a non-200 response."""
-        async with self._http_client.stream(
-            "GET",
-            f"{self._base_url}/event",
-            timeout=httpx.Timeout(None, connect=self._connect_timeout_seconds, read=None),
-        ) as response:
-            if response.status_code != 200:
-                raise SSEConnectionError(f"SSE connection failed: {response.status_code}")
-            yield response
+    async def events(
+        self, *, inactivity_timeout_seconds: float
+    ) -> AsyncIterator[AsyncIterator[dict[str, Any]]]:
+        """Open the ``/event`` SSE stream and hand back decoded event dicts.
+
+        Owns the response lifecycle and the inactivity deadline: the deadline
+        is armed before connecting, reset on every chunk received, and covers
+        the caller's body for the lifetime of the context; expiry raises
+        ``SSEInactivityTimeoutError``. A non-200 handshake raises
+        ``SSEConnectionError``; httpx transport failures (while connecting or
+        mid-stream) are translated into ``SSEStreamDisconnectedError``.
+        """
+        try:
+            async with asyncio.timeout(inactivity_timeout_seconds) as timeout_ctx:
+                async with self._http_client.stream(
+                    "GET",
+                    f"{self._base_url}/event",
+                    timeout=httpx.Timeout(None, connect=self._connect_timeout_seconds, read=None),
+                ) as response:
+                    if response.status_code != 200:
+                        raise SSEConnectionError(f"SSE connection failed: {response.status_code}")
+                    yield self._decoded_events(response, timeout_ctx, inactivity_timeout_seconds)
+        except TimeoutError:
+            raise SSEInactivityTimeoutError(
+                f"SSE stream inactive for {inactivity_timeout_seconds:.0f}s (no data received)."
+            )
+        except httpx.TransportError as e:
+            self._log.error("bridge.sse_transport_error", exc=e)
+            raise SSEStreamDisconnectedError(str(e)) from e
 
     async def post_prompt(self, opencode_session_id: str, request_body: dict[str, Any]) -> None:
         """Kick off the async prompt; the response arrives on the SSE stream."""
@@ -106,7 +153,7 @@ class OpenCodeClient:
         messages: list[Any] = response.json()
         return messages
 
-    async def parse_sse_stream(
+    async def _decoded_events(
         self,
         response: httpx.Response,
         timeout_ctx: asyncio.Timeout | None = None,

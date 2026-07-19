@@ -37,11 +37,7 @@ from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
 from .log_config import configure_logging, get_logger
-from .opencode_client import (
-    HTTP_CONNECT_TIMEOUT_SECONDS,
-    OPENCODE_REQUEST_TIMEOUT_SECONDS,
-    OpenCodeClient,
-)
+from .opencode_client import HTTP_CONNECT_TIMEOUT_SECONDS, OpenCodeClient
 from .prompt_stream import OpenCodePromptStream
 from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
@@ -149,7 +145,6 @@ class AgentBridge:
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     HTTP_CONNECT_TIMEOUT = HTTP_CONNECT_TIMEOUT_SECONDS
     HTTP_DEFAULT_TIMEOUT = 30.0
-    OPENCODE_REQUEST_TIMEOUT = OPENCODE_REQUEST_TIMEOUT_SECONDS
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
@@ -730,18 +725,7 @@ class AgentBridge:
 
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""
-        if not self.http_client:
-            raise RuntimeError("HTTP client not initialized")
-
-        resp = await self.http_client.post(
-            f"{self.opencode_base_url}/session",
-            json={},
-            timeout=self.OPENCODE_REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        self.opencode_session_id = data.get("id")
+        self.opencode_session_id = await self._ensure_opencode_client().create_session()
         self.log.info(
             "opencode.session.ensure",
             opencode_session_id=self.opencode_session_id,
@@ -1098,11 +1082,8 @@ class AgentBridge:
 
                 if self.http_client:
                     try:
-                        resp = await self.http_client.get(
-                            f"{self.opencode_base_url}/session/{self.opencode_session_id}",
-                            timeout=self.OPENCODE_REQUEST_TIMEOUT,
-                        )
-                        if resp.status_code != 200:
+                        client = self._ensure_opencode_client()
+                        if not await client.session_exists(self.opencode_session_id):
                             self.log.info(
                                 "opencode.session.invalid",
                                 opencode_session_id=self.opencode_session_id,
