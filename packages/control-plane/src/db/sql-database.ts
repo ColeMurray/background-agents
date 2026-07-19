@@ -21,7 +21,14 @@
  */
 
 export interface SqlResultMeta {
-  changes?: number;
+  /**
+   * Rows written by the statement. Required, not optional: ~38 store call
+   * sites gate correctness on it (CAS conflict detection, guarded lifecycle
+   * transitions, upsert/insert detection), so an engine that omits it would
+   * make successful writes report failure. Implementations must return real
+   * affected-row counts (0 for reads).
+   */
+  changes: number;
 }
 
 export interface SqlResult<T = unknown> {
@@ -38,6 +45,14 @@ export interface SqlStatement {
 
 export interface SqlDatabase {
   prepare(query: string): SqlStatement;
+  /**
+   * Execute the statements in order as a single atomic transaction: either
+   * every statement's effects apply or none do, all statements observe one
+   * consistent snapshot, and the resolved array is positionally 1:1 with the
+   * input. Consumers rely on all three (delete-then-insert replacement
+   * writes, positional result destructuring, multi-query analytics reads) —
+   * an implementation must not emulate this with independent round-trips.
+   */
   batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]>;
 }
 
