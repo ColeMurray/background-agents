@@ -618,9 +618,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     if (normalized.includes("ANTHROPIC")) return ["api.anthropic.com"];
     if (normalized.includes("OPENAI")) return ["api.openai.com"];
     if (normalized.includes("GITHUB") || normalized.includes("VCS_CLONE")) {
-      return this.providerConfig.scmProvider === "gitlab"
-        ? ["gitlab.com", "api.gitlab.com"]
-        : ["github.com", "api.github.com"];
+      return [...scmCloneIdentity(this.providerConfig.scmProvider).secretHosts];
     }
     return undefined;
   }

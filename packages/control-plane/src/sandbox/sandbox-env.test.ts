@@ -101,18 +101,21 @@ describe("buildSessionConfig", () => {
 });
 
 describe("scmCloneIdentity", () => {
-  it("maps each SCM provider to its clone host and username", () => {
+  it("maps each SCM provider to its clone host, username, and secret hosts", () => {
     expect(scmCloneIdentity("github")).toEqual({
       host: "github.com",
       cloneUsername: "x-access-token",
+      secretHosts: ["github.com", "api.github.com"],
     });
     expect(scmCloneIdentity("gitlab")).toEqual({
       host: "gitlab.com",
       cloneUsername: "oauth2",
+      secretHosts: ["gitlab.com", "api.gitlab.com"],
     });
     expect(scmCloneIdentity("bitbucket")).toEqual({
       host: "bitbucket.org",
       cloneUsername: "x-token-auth",
+      secretHosts: ["bitbucket.org", "api.bitbucket.org"],
     });
   });
 });

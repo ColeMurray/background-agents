@@ -104,12 +104,26 @@ export interface ScmCloneIdentity {
   readonly host: string;
   /** `VCS_CLONE_USERNAME` — username git sends alongside the brokered token. */
   readonly cloneUsername: string;
+  /** Hosts an SCM credential secret may be released to (clone host + API host). */
+  readonly secretHosts: readonly string[];
 }
 
 const SCM_CLONE_IDENTITIES: Record<SourceControlProviderName, ScmCloneIdentity> = {
-  github: { host: "github.com", cloneUsername: "x-access-token" },
-  gitlab: { host: "gitlab.com", cloneUsername: "oauth2" },
-  bitbucket: { host: "bitbucket.org", cloneUsername: "x-token-auth" },
+  github: {
+    host: "github.com",
+    cloneUsername: "x-access-token",
+    secretHosts: ["github.com", "api.github.com"],
+  },
+  gitlab: {
+    host: "gitlab.com",
+    cloneUsername: "oauth2",
+    secretHosts: ["gitlab.com", "api.gitlab.com"],
+  },
+  bitbucket: {
+    host: "bitbucket.org",
+    cloneUsername: "x-token-auth",
+    secretHosts: ["bitbucket.org", "api.bitbucket.org"],
+  },
 };
 
 /** Clone identity for an SCM provider (full github/gitlab/bitbucket mapping). */
