@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { automationRoutes } from "./automations";
 import { HttpError, resolveRepoOrError, type RequestContext } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -117,6 +118,7 @@ function createCtx(): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
+    db: { batch: mockBatch } as unknown as SqlDatabase,
     metrics: {
       d1Queries: [],
       spans: {},

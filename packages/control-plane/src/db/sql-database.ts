@@ -29,6 +29,15 @@ export interface SqlResultMeta {
    * affected-row counts (0 for reads).
    */
   changes: number;
+
+  /**
+   * Optional observability metadata, read only by query instrumentation
+   * (instrumented-d1.ts). Engines may omit these; consumers must never gate
+   * correctness on them — `changes` is the only required field.
+   */
+  duration?: number;
+  rows_read?: number;
+  rows_written?: number;
 }
 
 export interface SqlResult<T = unknown> {

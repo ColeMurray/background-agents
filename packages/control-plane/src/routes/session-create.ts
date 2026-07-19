@@ -81,7 +81,7 @@ async function handleCreateSession(
     // Snapshot the environment's members and resolve them like any other list
     // (design §7.6); environment_id records provenance on the session.
     const envInputs = await resolveEnvironmentTarget(
-      new EnvironmentStore(env.DB),
+      new EnvironmentStore(ctx.db),
       body.environmentId
     );
     repositories = await resolveSessionRepositories(env, envInputs, ctx, logger);
@@ -111,7 +111,7 @@ async function handleCreateSession(
 
   // Resolve canonical user model ID (for D1 session index).
   // Best-effort: if resolution fails, the session is created without a user_id.
-  const userStore = new UserStore(env.DB);
+  const userStore = new UserStore(ctx.db);
   let resolvedUserId: string | null = null;
   const providerIdentity = resolveProviderIdentity(body.spawnSource ?? "user", body);
   if (providerIdentity) {
@@ -163,7 +163,7 @@ async function handleCreateSession(
   // an SCM credential", not "a Google-authenticated session carries no SCM state".
   if (resolvedUserId) {
     try {
-      const enrichment = await resolveGitHubEnrichment(env, userStore, resolvedUserId);
+      const enrichment = await resolveGitHubEnrichment(env, ctx.db, userStore, resolvedUserId);
       if (enrichment) {
         scmUserId ??= enrichment.scmUserId;
         scmLogin ??= enrichment.scmLogin;
@@ -195,7 +195,7 @@ async function handleCreateSession(
   // from a saved environment layers its overrides on top (design §13.5).
   const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
   const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
-    env.DB,
+    ctx.db,
     scopeMembers,
     environmentId
   );
@@ -242,7 +242,7 @@ async function handleCreateSession(
   // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
   if (scmUserId && scmToken && scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
     ctx.executionCtx?.waitUntil(
-      new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY)
+      new UserScmTokenStore(ctx.db, env.TOKEN_ENCRYPTION_KEY)
         .upsertTokens(
           scmUserId,
           scmToken,

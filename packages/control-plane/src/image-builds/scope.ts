@@ -70,11 +70,12 @@ export interface EnabledScopeUnit {
 /** The scope's buildable repository set, in position order ([0] = primary). */
 export async function resolveScopeTarget(
   env: Env,
+  db: SqlDatabase,
   scope: ImageBuildScope
 ): Promise<ResolvedImageBuildTarget> {
   switch (scope.kind) {
     case "environment": {
-      const store = new EnvironmentStore(env.DB);
+      const store = new EnvironmentStore(db);
       const environment = await store.getById(scope.id);
       if (!environment) {
         throw new ImageBuildScopeNotFoundError(scope.kind, scope.id);
@@ -197,8 +198,11 @@ export async function listEnabledScopes(db: SqlDatabase): Promise<ImageBuildScop
  * cannot be resolved (uninstalled, source-control outage) is skipped with a
  * warning rather than failing the whole feed.
  */
-export async function listEnabledScopeUnits(env: Env): Promise<EnabledScopeUnit[]> {
-  const store = new EnvironmentStore(env.DB);
+export async function listEnabledScopeUnits(
+  env: Env,
+  db: SqlDatabase
+): Promise<EnabledScopeUnit[]> {
+  const store = new EnvironmentStore(db);
   const { environments } = await store.list();
   const enabled = environments.filter((row) => row.prebuild_enabled === 1);
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
@@ -220,12 +224,12 @@ export async function listEnabledScopeUnits(env: Env): Promise<EnabledScopeUnit[
     })
   );
 
-  const enabledRepos = await new RepoMetadataStore(env.DB).getImageBuildEnabledRepos();
+  const enabledRepos = await new RepoMetadataStore(db).getImageBuildEnabledRepos();
   const repoUnits = await Promise.all(
     enabledRepos.map(async (repo): Promise<EnabledScopeUnit | null> => {
       const scope = repoImageBuildScope(repo.repoOwner, repo.repoName);
       try {
-        const target = await resolveScopeTarget(env, scope);
+        const target = await resolveScopeTarget(env, db, scope);
         return {
           scope,
           repositories: target.repositories,
@@ -273,13 +277,14 @@ export async function resolveScopeSandboxSettings(
  */
 export async function loadScopeBuildSecrets(
   env: Env,
+  db: SqlDatabase,
   scope: ImageBuildScope,
   target: ResolvedImageBuildTarget
 ): Promise<Record<string, string> | undefined> {
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) return undefined;
 
   const { sources, counts } = await loadScopeSecretSources(
-    env,
+    db,
     scope,
     target,
     env.REPO_SECRETS_ENCRYPTION_KEY
@@ -308,14 +313,14 @@ export async function loadScopeBuildSecrets(
 }
 
 async function loadScopeSecretSources(
-  env: Env,
+  db: SqlDatabase,
   scope: ImageBuildScope,
   target: ResolvedImageBuildTarget,
   encryptionKey: string
 ): Promise<{ sources: SecretSource[]; counts: Record<string, number> }> {
   let globalSecrets: Record<string, string> = {};
   try {
-    globalSecrets = await new GlobalSecretsStore(env.DB, encryptionKey).getDecryptedSecrets();
+    globalSecrets = await new GlobalSecretsStore(db, encryptionKey).getDecryptedSecrets();
   } catch (e) {
     logger.warn("image_build.global_secrets_failed", {
       error: errorMessage(e),
@@ -329,7 +334,7 @@ async function loadScopeSecretSources(
       let environmentSecrets: Record<string, string> = {};
       try {
         environmentSecrets = await new EnvironmentSecretsStore(
-          env.DB,
+          db,
           encryptionKey
         ).getDecryptedSecrets(scope.id);
       } catch (e) {
@@ -353,7 +358,7 @@ async function loadScopeSecretSources(
     case "repo": {
       let repoSecrets: Record<string, string> = {};
       try {
-        repoSecrets = await new RepoSecretsStore(env.DB, encryptionKey).getDecryptedSecrets(
+        repoSecrets = await new RepoSecretsStore(db, encryptionKey).getDecryptedSecrets(
           target.repoId
         );
       } catch (e) {

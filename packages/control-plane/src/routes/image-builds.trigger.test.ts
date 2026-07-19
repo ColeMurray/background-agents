@@ -5,6 +5,7 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { imageBuildRoutes } from "./image-builds";
 import type { Env } from "../types";
 import type { RequestContext, Route } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 import type { RepositoryAccessResult } from "../source-control";
 import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
@@ -122,6 +123,7 @@ function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
   return {
     request_id: "request-1",
     trace_id: "trace-1",
+    db: {} as SqlDatabase,
     metrics: createRequestMetrics(),
     executionCtx: {
       waitUntil: (task: Promise<unknown>) => {

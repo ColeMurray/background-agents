@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createRequestMetrics, instrumentD1 } from "./instrumented-d1";
 import type { RequestMetrics } from "./instrumented-d1";
+import type { SqlDatabase } from "./sql-database";
 
 // ---------------------------------------------------------------------------
 // Fake D1 implementation for testing the instrumented wrapper
@@ -165,7 +166,7 @@ describe("createRequestMetrics", () => {
 describe("instrumentD1", () => {
   let fakeDb: FakeD1Database;
   let metrics: RequestMetrics;
-  let db: D1Database;
+  let db: SqlDatabase;
 
   beforeEach(() => {
     fakeDb = new FakeD1Database();
@@ -198,14 +199,6 @@ describe("instrumentD1", () => {
     expect(metrics.d1Queries).toHaveLength(1);
     expect(metrics.d1Queries[0].query_ms).toBeGreaterThanOrEqual(0);
     // first() does not return D1Meta
-    expect(metrics.d1Queries[0].d1_server_ms).toBeUndefined();
-  });
-
-  it("captures timing from raw()", async () => {
-    await db.prepare("SELECT id, name FROM t").raw();
-
-    expect(metrics.d1Queries).toHaveLength(1);
-    expect(metrics.d1Queries[0].query_ms).toBeGreaterThanOrEqual(0);
     expect(metrics.d1Queries[0].d1_server_ms).toBeUndefined();
   });
 
@@ -266,16 +259,6 @@ describe("instrumentD1", () => {
     expect(summary.d1_server_total_ms).toBe(13);
     expect(summary.d1_rows_read).toBe(10);
     expect(summary.d1_rows_written).toBe(1);
-  });
-
-  it("passes through exec() to the underlying database", async () => {
-    const result = await db.exec("CREATE TABLE t (id INT)");
-    expect(result).toEqual({ count: 0, duration: 0 });
-  });
-
-  it("passes through dump() to the underlying database", async () => {
-    const result = await db.dump();
-    expect(result).toBeInstanceOf(ArrayBuffer);
   });
 
   it("summarize includes both D1 and span fields", async () => {

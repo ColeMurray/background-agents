@@ -61,10 +61,11 @@ async function handleSessionPrompt(
   const parsed = parseAuthorId(authorId);
   if (parsed) {
     try {
-      const userStore = new UserStore(env.DB);
+      const userStore = new UserStore(ctx.db);
       const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
       if (identity) {
-        enrichment = (await resolveGitHubEnrichment(env, userStore, identity.userId)) ?? undefined;
+        enrichment =
+          (await resolveGitHubEnrichment(env, ctx.db, userStore, identity.userId)) ?? undefined;
       }
     } catch (e) {
       logger.warn("Failed to enrich prompt with GitHub identity", {
@@ -95,7 +96,7 @@ async function handleSessionPrompt(
     }),
   });
 
-  const store = new SessionIndexStore(env.DB);
+  const store = new SessionIndexStore(ctx.db);
   ctx.executionCtx?.waitUntil(
     store.touchUpdatedAt(sessionId).catch((error) => {
       logger.error("session_index.touch_updated_at.background_error", {

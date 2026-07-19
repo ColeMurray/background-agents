@@ -2,6 +2,7 @@ import { generateId } from "../auth/crypto";
 import { ImageBuildStore, type ImageBuildRegistration } from "../db/image-builds";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import {
   consumeImageBuildCallbackTokenOrThrow,
   ImageBuildCallbackAuthError,
@@ -102,7 +103,7 @@ export class ImageBuildWorkflow {
     private readonly provider: ImageBuildProvider | null,
     planner?: ImageBuildPlannerLike
   ) {
-    this.planner = planner ?? (provider ? new ImageBuildPlanner(env, provider) : null);
+    this.planner = planner ?? null;
     this.reaper = new ImageBuildReaper(store, adapterFactory);
   }
 
@@ -1007,12 +1008,14 @@ export class ImageBuildWorkflow {
   }
 }
 
-export function createImageBuildWorkflowFromEnv(env: Env): ImageBuildWorkflow {
+export function createImageBuildWorkflowFromEnv(env: Env, db: SqlDatabase): ImageBuildWorkflow {
+  const provider = resolveImageBuildProvider(env.SANDBOX_PROVIDER);
   return new ImageBuildWorkflow(
     env,
-    new ImageBuildStore(env.DB),
+    new ImageBuildStore(db),
     createImageBuildAdapterFactory(env),
-    resolveImageBuildProvider(env.SANDBOX_PROVIDER)
+    provider,
+    provider ? new ImageBuildPlanner(env, db, provider) : undefined
   );
 }
 

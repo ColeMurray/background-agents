@@ -2,6 +2,7 @@ import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import {
   generateImageBuildCallbackToken,
   hashImageBuildCallbackToken,
@@ -42,11 +43,12 @@ export type { ResolvedImageBuildTarget } from "./scope";
 export class ImageBuildPlanner {
   constructor(
     private readonly env: Env,
+    private readonly db: SqlDatabase,
     private readonly provider: ImageBuildProvider
   ) {}
 
   async resolveTarget(scope: ImageBuildScope): Promise<ResolvedImageBuildTarget> {
-    return resolveScopeTarget(this.env, scope);
+    return resolveScopeTarget(this.env, this.db, scope);
   }
 
   async createCallbackAuth(): Promise<PlannedCallbackAuth> {
@@ -77,8 +79,8 @@ export class ImageBuildPlanner {
     const callbackAuth = params.callbackAuth;
 
     const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
-      resolveScopeSandboxSettings(this.env.DB, params.scope, primary),
-      loadScopeBuildSecrets(this.env, params.scope, params.target),
+      resolveScopeSandboxSettings(this.db, params.scope, primary),
+      loadScopeBuildSecrets(this.env, this.db, params.scope, params.target),
       this.resolveCloneAuth(params.scope),
     ]);
 

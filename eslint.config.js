@@ -65,6 +65,28 @@ export default tseslint.config(
     },
   },
 
+  // Control-plane data-layer boundary: route and webhook handlers must use the
+  // injected SqlDatabase (ctx.db), never the raw env.DB binding — reading the
+  // binding there would silently bypass per-request query instrumentation.
+  // env.DB is read only at the injection points: the router and the two
+  // Durable Object constructors.
+  {
+    files: [
+      "packages/control-plane/src/routes/**/*.ts",
+      "packages/control-plane/src/webhooks/**/*.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: 'MemberExpression[property.name="DB"]',
+          message:
+            "Use ctx.db (injected SqlDatabase) instead of env.DB in route/webhook handlers so queries stay instrumented.",
+        },
+      ],
+    },
+  },
+
   // React-specific configuration for web package
   {
     files: ["packages/web/**/*.{ts,tsx}"],

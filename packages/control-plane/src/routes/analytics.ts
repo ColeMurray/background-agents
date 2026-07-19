@@ -46,7 +46,7 @@ async function handleSummary(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
@@ -54,7 +54,7 @@ async function handleSummary(
     return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
   }
 
-  const store = new AnalyticsStore(env.DB);
+  const store = new AnalyticsStore(ctx.db);
   return json(await store.getSummary(getFilters(days)));
 }
 
@@ -62,7 +62,7 @@ async function handleTimeseries(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
@@ -70,7 +70,7 @@ async function handleTimeseries(
     return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
   }
 
-  const store = new AnalyticsStore(env.DB);
+  const store = new AnalyticsStore(ctx.db);
   return json(await store.getTimeseries(getFilters(days)));
 }
 
@@ -78,7 +78,7 @@ async function handleBreakdown(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
@@ -92,7 +92,7 @@ async function handleBreakdown(
     return error(`by must be one of: ${ANALYTICS_BREAKDOWN_BY.join(", ")}`, 400);
   }
 
-  const store = new AnalyticsStore(env.DB);
+  const store = new AnalyticsStore(ctx.db);
   return json(await store.getBreakdown(getFilters(days), by));
 }
 
@@ -100,7 +100,7 @@ async function handlePullRequests(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
@@ -108,7 +108,7 @@ async function handlePullRequests(
     return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
   }
 
-  const store = new PullRequestAnalyticsStore(env.DB);
+  const store = new PullRequestAnalyticsStore(ctx.db);
   return json(await store.get(getPullRequestFilters(days)));
 }
 

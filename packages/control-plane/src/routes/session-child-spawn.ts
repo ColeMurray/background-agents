@@ -43,7 +43,7 @@ async function handleSpawnChild(
     return error("title and prompt are required");
   }
 
-  const sessionStore = new SessionIndexStore(env.DB);
+  const sessionStore = new SessionIndexStore(ctx.db);
 
   const parentSession = await sessionStore.get(parentId);
   const parentUserId = parentSession?.userId ?? null;
@@ -52,7 +52,7 @@ async function handleSpawnChild(
   // environment-launched parents, that environment's overrides (design §13.5).
   const childSandboxSettings = parentSession
     ? await resolveSandboxSettings(
-        env.DB,
+        ctx.db,
         parentSession.repoOwner,
         parentSession.repoName,
         parentEnvironmentId
@@ -143,7 +143,7 @@ async function handleSpawnChild(
   });
 
   const childCodeServerEnabled = await resolveCodeServerEnabled(
-    env.DB,
+    ctx.db,
     spawnContext.repoOwner,
     spawnContext.repoName,
     parentEnvironmentId

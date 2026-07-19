@@ -36,6 +36,7 @@ import type {
   ImageBuildWorkflowResult,
 } from "../image-builds/types";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
   type Route,
@@ -72,8 +73,8 @@ function requireImageBuilds(env: Env): Response | null {
   return message ? error(message, 501) : null;
 }
 
-function requireDb(env: Env): Response | null {
-  return env.DB ? null : error("Database not configured", 503);
+function requireDb(db: SqlDatabase): Response | null {
+  return db ? null : error("Database not configured", 503);
 }
 
 function workflowContext(ctx: RequestContext): ImageBuildWorkflowContext {
@@ -275,7 +276,7 @@ async function handleBuildComplete(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const body = await parseCallbackBody<ImageBuildCompleteBody>(request);
@@ -285,7 +286,7 @@ async function handleBuildComplete(
   if (completion instanceof Response) return completion;
 
   try {
-    const result = await createImageBuildWorkflowFromEnv(env).acceptBuildComplete({
+    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildComplete({
       completion,
       authorizationHeader: request.headers.get("Authorization"),
       callbackToken: getImageBuildCallbackBearerToken(request),
@@ -307,7 +308,7 @@ async function handleBuildFailed(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const body = await parseCallbackBody<ImageBuildFailedBody>(request);
@@ -317,7 +318,7 @@ async function handleBuildFailed(
   if (failure instanceof Response) return failure;
 
   try {
-    const result = await createImageBuildWorkflowFromEnv(env).acceptBuildFailed({
+    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildFailed({
       failure,
       authorizationHeader: request.headers.get("Authorization"),
       callbackToken: getImageBuildCallbackBearerToken(request),
@@ -336,7 +337,7 @@ async function triggerBuildForScope(
   ctx: RequestContext
 ): Promise<Response> {
   try {
-    const result = await createImageBuildWorkflowFromEnv(env).triggerBuild(
+    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).triggerBuild(
       scope,
       workflowContext(ctx)
     );
@@ -368,7 +369,7 @@ async function handleTriggerEnvironmentBuild(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const environmentId = match.groups?.id;
@@ -390,7 +391,7 @@ async function handleTriggerRepoBuild(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const params = extractRepoParams(match);
@@ -415,7 +416,7 @@ async function handleToggleRepoImageBuilds(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const params = extractRepoParams(match);
@@ -437,14 +438,14 @@ async function handleToggleRepoImageBuilds(
   // a repo that became unresolvable must remain disableable.
   if (body.enabled) {
     try {
-      await resolveScopeTarget(env, scope);
+      await resolveScopeTarget(env, ctx.db, scope);
     } catch (e) {
       return imageBuildErrorToResponse(e);
     }
   }
 
   try {
-    await new RepoMetadataStore(env.DB).setImageBuildEnabled(owner, name, body.enabled);
+    await new RepoMetadataStore(ctx.db).setImageBuildEnabled(owner, name, body.enabled);
   } catch (e) {
     logger.error("image_build.toggle_error", {
       error: e instanceof Error ? e.message : String(e),
@@ -486,12 +487,12 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
 }
 
 async function readStatusRows(
-  env: Env,
+  db: SqlDatabase,
   scope: ImageBuildScope | null
 ): Promise<ImageBuildRecordView[]> {
-  const store = new ImageBuildStore(env.DB);
+  const store = new ImageBuildStore(db);
   if (scope) return store.getStatus(scope);
-  return store.getStatusForEnabledScopes(await listEnabledScopes(env.DB));
+  return store.getStatusForEnabledScopes(await listEnabledScopes(db));
 }
 
 /**
@@ -512,14 +513,14 @@ async function handleGetStatus(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const scope = parseScopeParams(request);
   if (scope instanceof Response) return scope;
 
   try {
-    return json({ images: await readStatusRows(env, scope) });
+    return json({ images: await readStatusRows(ctx.db, scope) });
   } catch (e) {
     logger.error("image_build.status_error", {
       error: e instanceof Error ? e.message : String(e),
@@ -545,11 +546,11 @@ async function handleGetEnabledUnits(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   try {
-    const units = await listEnabledScopeUnits(env);
+    const units = await listEnabledScopeUnits(env, ctx.db);
     return json({
       units: units.map((unit) => ({
         scopeKind: unit.scope.kind,
@@ -584,11 +585,11 @@ async function handleGetEnabledRepos(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   try {
-    return json({ repos: await new RepoMetadataStore(env.DB).getImageBuildEnabledRepos() });
+    return json({ repos: await new RepoMetadataStore(ctx.db).getImageBuildEnabledRepos() });
   } catch (e) {
     logger.error("image_build.enabled_repos_error", {
       error: e instanceof Error ? e.message : String(e),
@@ -612,13 +613,13 @@ async function handleMarkStale(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_STALE_BUILD_MAX_AGE_MS);
   if (maxAgeMs instanceof Response) return maxAgeMs;
 
-  const store = new ImageBuildStore(env.DB);
+  const store = new ImageBuildStore(ctx.db);
 
   try {
     const count = await store.markStaleBuildsAsFailed(maxAgeMs);
@@ -655,14 +656,14 @@ async function handleCleanup(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(env);
+  const dbError = requireDb(ctx.db);
   if (dbError) return dbError;
 
   const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS);
   if (maxAgeMs instanceof Response) return maxAgeMs;
 
   try {
-    const result = await createImageBuildWorkflowFromEnv(env).cleanupImages(
+    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).cleanupImages(
       maxAgeMs,
       workflowContext(ctx)
     );

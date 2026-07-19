@@ -63,7 +63,7 @@ async function handleSessionWsToken(
 
   if (scmUserId && scmToken && scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
     ctx.executionCtx?.waitUntil(
-      new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY)
+      new UserScmTokenStore(ctx.db, env.TOKEN_ENCRYPTION_KEY)
         .upsertTokens(
           scmUserId,
           scmToken,

@@ -359,17 +359,20 @@ export async function handleRequest(
   const method = request.method;
   const startTime = Date.now();
 
-  // Build correlation context with per-request metrics
+  // Build correlation context with per-request metrics and the instrumented
+  // database handle. Handlers use ctx.db (never env.DB) so all queries are
+  // automatically timed.
   const metrics = createRequestMetrics();
   const ctx: RequestContext = {
     trace_id: request.headers.get("x-trace-id") || crypto.randomUUID(),
     request_id: crypto.randomUUID().slice(0, 8),
     metrics,
+    // env.DB is typed required but some handlers guard its runtime absence
+    // (deployment misconfiguration) with degraded responses. The && preserves
+    // that observable truthiness: ctx.db is undefined exactly when env.DB is.
+    db: env.DB && instrumentD1(env.DB, metrics),
     executionCtx,
   };
-
-  // Instrument D1 so all queries are automatically timed
-  const instrumentedEnv: Env = { ...env, DB: instrumentD1(env.DB, metrics) };
 
   // CORS preflight
   if (method === "OPTIONS") {
@@ -438,7 +441,7 @@ export async function handleRequest(
       let response: Response;
       let outcome: "success" | "error";
       try {
-        response = await route.handler(request, instrumentedEnv, match, ctx);
+        response = await route.handler(request, env, match, ctx);
         outcome = response.status >= 500 ? "error" : "success";
       } catch (e) {
         if (e instanceof HttpError) {

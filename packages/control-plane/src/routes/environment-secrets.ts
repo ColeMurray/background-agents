@@ -23,6 +23,7 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("router:environment-secrets");
 
@@ -40,11 +41,7 @@ async function invalidateImagesAfterSecretsChange(
   ctx: RequestContext
 ): Promise<Response | null> {
   try {
-    await supersedeImageBuildsForSecretsChange(
-      env,
-      { kind: "environment", id: environment.id },
-      ctx
-    );
+    await supersedeImageBuildsForSecretsChange({ kind: "environment", id: environment.id }, ctx);
   } catch (e) {
     logger.error("environment.secrets_image_invalidation_failed", {
       environment_id: environment.id,
@@ -67,8 +64,8 @@ async function invalidateImagesAfterSecretsChange(
  * Require both D1 and the secrets encryption key, returning the resolved key so
  * handlers use `config.key` instead of a non-null assertion on the optional env.
  */
-function requireSecretsConfig(env: Env): { key: string } | Response {
-  if (!env.DB) return error("Secrets storage is not configured", 503);
+function requireSecretsConfig(env: Env, db: SqlDatabase): { key: string } | Response {
+  if (!db) return error("Secrets storage is not configured", 503);
   if (!env.REPO_SECRETS_ENCRYPTION_KEY)
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   return { key: env.REPO_SECRETS_ENCRYPTION_KEY };
@@ -80,17 +77,17 @@ async function handleListEnvironmentSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env);
+  const config = requireSecretsConfig(env, ctx.db);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   if (!(await store.getById(id))) return error("Environment not found", 404);
 
-  const secretsStore = new EnvironmentSecretsStore(env.DB, config.key);
-  const globalStore = new GlobalSecretsStore(env.DB, config.key);
+  const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
+  const globalStore = new GlobalSecretsStore(ctx.db, config.key);
 
   try {
     const [secrets, globalSecrets] = await Promise.all([
@@ -120,13 +117,13 @@ async function handleSetEnvironmentSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env);
+  const config = requireSecretsConfig(env, ctx.db);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   const environment = await store.getById(id);
   if (!environment) return error("Environment not found", 404);
 
@@ -136,7 +133,7 @@ async function handleSetEnvironmentSecrets(
     return error("Request body must include secrets object", 400);
   }
 
-  const secretsStore = new EnvironmentSecretsStore(env.DB, config.key);
+  const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
   try {
     const result = await secretsStore.setSecrets(id, body.secrets);
     logger.info("environment.secrets_updated", {
@@ -175,14 +172,14 @@ async function handleDeleteEnvironmentSecret(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env);
+  const config = requireSecretsConfig(env, ctx.db);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
   const key = match.groups?.key;
   if (!id || !key) return error("Environment ID and key are required", 400);
 
-  const secretsStore = new EnvironmentSecretsStore(env.DB, config.key);
+  const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
   try {
     const normalizedKey = normalizeKey(key);
     validateKey(normalizedKey);
@@ -196,7 +193,7 @@ async function handleDeleteEnvironmentSecret(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    const environment = await new EnvironmentStore(env.DB).getById(id);
+    const environment = await new EnvironmentStore(ctx.db).getById(id);
     if (environment) {
       const invalidationError = await invalidateImagesAfterSecretsChange(env, environment, ctx);
       if (invalidationError) return invalidationError;
@@ -226,13 +223,13 @@ async function handleImportEnvironmentSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env);
+  const config = requireSecretsConfig(env, ctx.db);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   const environment = await store.getById(id);
   if (!environment) return error("Environment not found", 404);
 
@@ -266,7 +263,7 @@ async function handleImportEnvironmentSecrets(
     repoId = (await resolveRepoOrError(env, srcOwner, srcName, ctx, logger)).repoId;
   }
 
-  const secretsStore = new EnvironmentSecretsStore(env.DB, config.key);
+  const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
   try {
     const result = await secretsStore.importFromRepo(id, repoId, body.keys as string[] | undefined);
     logger.info("environment.secrets_imported", {

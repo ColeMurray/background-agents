@@ -3,6 +3,7 @@ import { SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "../media";
 import type { Env } from "../types";
 import { sessionAttachmentRoutes } from "./session-attachments";
 import type { RequestContext } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 
 const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -10,6 +11,7 @@ function createContext(): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "request-1",
+    db: {} as SqlDatabase,
     metrics: {
       d1Queries: [],
       spans: {},

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionInternalPaths } from "../session/contracts";
 import type { RequestContext } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import type { Env } from "../types";
 
@@ -8,6 +9,7 @@ function createCtx(): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
+    db: {} as SqlDatabase,
     metrics: {
       d1Queries: [],
       spans: {},

@@ -56,6 +56,7 @@ import type {
   SessionState,
   SandboxStatus,
 } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
@@ -145,6 +146,12 @@ type BoundarySchema<T> = {
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
+  /**
+   * The DO's global-database handle — the single point where env.DB is read.
+   * Nullable to preserve the existing defensive guards against a missing
+   * binding at runtime. Distinct from `this.sql`, the DO-embedded SQLite.
+   */
+  private readonly db: SqlDatabase | null;
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private initialized = false;
@@ -245,6 +252,7 @@ export class SessionDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.db = env.DB ?? null;
     this.sql = ctx.storage.sql;
     this.attachmentRepository = new SessionAttachmentRepository(this.sql);
     this.repository = new SessionRepository(
@@ -283,8 +291,8 @@ export class SessionDO extends DurableObject<Env> {
   private get participantService(): ParticipantService {
     if (!this._participantService) {
       const userScmTokenStore =
-        this.env.DB && this.env.TOKEN_ENCRYPTION_KEY
-          ? new UserScmTokenStore(this.env.DB, this.env.TOKEN_ENCRYPTION_KEY)
+        this.db && this.env.TOKEN_ENCRYPTION_KEY
+          ? new UserScmTokenStore(this.db, this.env.TOKEN_ENCRYPTION_KEY)
           : null;
       this._participantService = new ParticipantService({
         repository: this.repository,
@@ -373,7 +381,7 @@ export class SessionDO extends DurableObject<Env> {
         this.callbackService,
         this.statusService,
         this.lifecycleManager,
-        this.env.DB ? new SessionIndexStore(this.env.DB) : null,
+        this.db ? new SessionIndexStore(this.db) : null,
         resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
         this.executionTimeoutMs
       );
@@ -438,15 +446,14 @@ export class SessionDO extends DurableObject<Env> {
         getSession: () => this.getSession(),
         refreshOpenAIToken: async (session, log) => {
           const service = new OpenAITokenRefreshService(
-            this.env.DB!,
+            this.db!,
             this.env.REPO_SECRETS_ENCRYPTION_KEY!,
             (sessionRow) => this.ensureRepoId(sessionRow),
             log
           );
           return service.refresh(session);
         },
-        isOpenAISecretsConfigured: () =>
-          Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        isOpenAISecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
         getScmCredentials: (log) =>
           new ScmCredentialsService(this.sourceControlProvider, log).getCredentials(),
         messenger: this.messenger,
@@ -533,7 +540,7 @@ export class SessionDO extends DurableObject<Env> {
             pushBranchToRemote: (pushSpec) => this.pushBranchToRemote(pushSpec),
             messenger: this.messenger,
             appName: resolveAppName(this.env),
-            sessionPullRequests: this.env.DB ? new SessionPullRequestStore(this.env.DB) : undefined,
+            sessionPullRequests: this.db ? new SessionPullRequestStore(this.db) : undefined,
           });
 
           return pullRequestService.createPullRequest(input);
@@ -555,7 +562,7 @@ export class SessionDO extends DurableObject<Env> {
       refreshSessionPullRequests(
         this.repository,
         this.sourceControlProvider,
-        this.env.DB ? new SessionPullRequestStore(this.env.DB) : null
+        this.db ? new SessionPullRequestStore(this.db) : null
       )
         .then(({ updated, failures }) => {
           for (const artifact of updated) {
@@ -641,7 +648,7 @@ export class SessionDO extends DurableObject<Env> {
         this.log,
         this.repository,
         this.messenger,
-        this.env.DB ? new SessionIndexStore(this.env.DB) : null,
+        this.db ? new SessionIndexStore(this.db) : null,
         this.env.SESSION ?? null
       );
     }
@@ -754,8 +761,8 @@ export class SessionDO extends DurableObject<Env> {
 
     // Create D1-backed lookups if database is available
     let mcpServerLookup: McpServerLookup | undefined;
-    if (this.env.DB) {
-      const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    if (this.db) {
+      const mcpStore = new McpServerStore(this.db, this.env.REPO_SECRETS_ENCRYPTION_KEY);
       mcpServerLookup = {
         getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
       };
@@ -766,9 +773,9 @@ export class SessionDO extends DurableObject<Env> {
     // per-feature scope rules. Token absence short-circuits to false so a
     // misconfigured deployment never installs a tool that would 503 on every call.
     let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
-    if (this.env.DB) {
+    if (this.db) {
       const tokenPresent = !!this.env.SLACK_BOT_TOKEN;
-      const settingsStore = new IntegrationSettingsStore(this.env.DB);
+      const settingsStore = new IntegrationSettingsStore(this.db);
       slackAgentNotifyLookup = {
         isEnabledForRepo: async (repoOwner, repoName) => {
           if (!tokenPresent) return false;
@@ -805,8 +812,8 @@ export class SessionDO extends DurableObject<Env> {
     // prebuilt images.
     let imageBuildLookup: ImageBuildLookup | undefined;
     const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
-    if (this.env.DB && imageBuildProvider) {
-      imageBuildLookup = createImageBuildLookup(this.env.DB, imageBuildProvider);
+    if (this.db && imageBuildProvider) {
+      imageBuildLookup = createImageBuildLookup(this.db, imageBuildProvider);
     }
 
     return new SandboxLifecycleManager(
@@ -1552,8 +1559,8 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
-    if (!this.env.DB) return;
-    const sessionStore = new SessionIndexStore(this.env.DB);
+    if (!this.db) return;
+    const sessionStore = new SessionIndexStore(this.db);
     this.ctx.waitUntil(
       sessionStore.updateTitleIfNewer(sessionId, title, updatedAt).catch((error) => {
         this.log.error("session_index.update_title.background_error", {
@@ -1684,11 +1691,11 @@ export class SessionDO extends DurableObject<Env> {
    * lookup failure resolves null rather than failing the whole state read.
    */
   private async resolveEnvironmentName(environmentId: string | null): Promise<string | null> {
-    if (!environmentId || !this.env.DB) {
+    if (!environmentId || !this.db) {
       return null;
     }
     try {
-      const environment = await new EnvironmentStore(this.env.DB).getById(environmentId);
+      const environment = await new EnvironmentStore(this.db).getById(environmentId);
       return environment?.name ?? null;
     } catch (e) {
       this.log.warn("Failed to resolve environment name for session state", {
@@ -1795,9 +1802,9 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    if (!this.env.DB || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+    if (!this.db || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
       this.log.debug("Secrets not configured, skipping", {
-        has_db: !!this.env.DB,
+        has_db: !!this.db,
         has_encryption_key: !!this.env.REPO_SECRETS_ENCRYPTION_KEY,
       });
       return undefined;
@@ -1805,11 +1812,11 @@ export class SessionDO extends DurableObject<Env> {
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
     const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
-    const globalStore = new GlobalSecretsStore(this.env.DB, encryptionKey);
+    const globalStore = new GlobalSecretsStore(this.db, encryptionKey);
     const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    const repoStore = new RepoSecretsStore(this.env.DB, encryptionKey);
-    const environmentSecretsStore = new EnvironmentSecretsStore(this.env.DB, encryptionKey);
+    const repoStore = new RepoSecretsStore(this.db, encryptionKey);
+    const environmentSecretsStore = new EnvironmentSecretsStore(this.db, encryptionKey);
     const sources = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
       globalSecrets,
