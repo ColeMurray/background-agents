@@ -37,8 +37,9 @@ class BufferedEventForwarder:
       bounded buffer that evicts non-critical events first.
     - Critical events carry an ``ackId`` and stay pending until the control
       plane acknowledges them, so they can be re-sent on a new connection.
-    - ``flush_event_buffer`` returns the ackIds it just started tracking so
-      ``flush_pending_acks`` can skip them (no double-send on one reconnect).
+    - ``bind`` is the single reconnect operation: it attaches the connection
+      and recovers the backlog (buffered events, then unacknowledged
+      criticals) without sending anything twice.
 
     The owner drives the connection lifecycle explicitly via ``bind`` /
     ``unbind``; the forwarder never reaches back into its owner.
@@ -64,9 +65,19 @@ class BufferedEventForwarder:
         # receipt.
         self._pending_acks: dict[str, dict[str, Any]] = {}
 
-    def bind(self, ws: ClientConnection) -> None:
-        """Attach a live control-plane connection; sends use it until unbind."""
+    async def bind(self, ws: ClientConnection) -> None:
+        """Attach a live control-plane connection and recover the backlog.
+
+        Recovery order: snapshot the ackIds that were already pending, flush
+        the event buffer (which starts tracking any criticals it sends), then
+        re-send only the snapshotted entries that are still pending. The
+        snapshot is what keeps a critical event flushed from the buffer from
+        being sent a second time on the same reconnect.
+        """
         self._ws = ws
+        pending_before_flush = list(self._pending_acks)
+        await self._flush_buffer()
+        await self._resend_pending(pending_before_flush)
 
     def unbind(self) -> None:
         """Detach the connection; subsequent sends buffer until the next bind."""
@@ -82,85 +93,19 @@ class BufferedEventForwarder:
         if is_critical and "ackId" not in event:
             event["ackId"] = self._make_ack_id(event)
 
-        if not self._ws or self._ws.state != State.OPEN:
+        ws = self._ws
+        if not ws or ws.state != State.OPEN:
             self._buffer_event(event)
             return
 
         try:
-            await self._ws.send(json.dumps(event))
+            await ws.send(json.dumps(event))
             if is_critical:
                 self._pending_acks[event["ackId"]] = event
         except Exception as e:
             self._log.warn("bridge.send_error", event_type=event_type, exc=e)
             self._buffer_event(event)
-
-    async def flush_event_buffer(self) -> set[str]:
-        """Flush buffered events to the control plane after reconnect.
-
-        Returns the set of ackIds that were added to the pending-ACK set
-        during this flush, so the caller can skip them in
-        ``flush_pending_acks`` (avoiding double-send on the same reconnect).
-        """
-        if not self._event_buffer:
-            return set()
-
-        self._log.info("bridge.flush_buffer_start", buffer_size=len(self._event_buffer))
-        flushed = 0
-        just_added: set[str] = set()
-        while self._event_buffer:
-            event = self._event_buffer[0]
-            if not self._ws or self._ws.state != State.OPEN:
-                break
-            try:
-                await self._ws.send(json.dumps(event))
-                self._event_buffer.pop(0)
-                flushed += 1
-                # Track critical events sent from buffer as pending ACKs
-                if event.get("type") in CRITICAL_EVENT_TYPES and "ackId" in event:
-                    self._pending_acks[event["ackId"]] = event
-                    just_added.add(event["ackId"])
-            except Exception as e:
-                self._log.warn("bridge.flush_send_error", exc=e)
-                break
-
-        self._log.info(
-            "bridge.flush_buffer_complete",
-            flushed=flushed,
-            remaining=len(self._event_buffer),
-        )
-        return just_added
-
-    async def flush_pending_acks(self, skip_ack_ids: set[str] | None = None) -> None:
-        """Re-send unacknowledged critical events on a new WS connection.
-
-        Events stay pending until the DO sends an ACK command.
-
-        Args:
-            skip_ack_ids: ackIds to skip (already sent during
-                          ``flush_event_buffer`` on this same reconnect).
-        """
-        if not self._pending_acks:
-            return
-
-        self._log.info("bridge.flush_pending_acks_start", count=len(self._pending_acks))
-        resent = 0
-        for ack_id, event in list(self._pending_acks.items()):
-            if skip_ack_ids and ack_id in skip_ack_ids:
-                continue
-            if not self._ws or self._ws.state != State.OPEN:
-                break
-            try:
-                await self._ws.send(json.dumps(event))
-                resent += 1
-            except Exception as e:
-                self._log.warn("bridge.flush_pending_ack_error", ack_id=ack_id, exc=e)
-                break
-
-        self._log.info(
-            "bridge.flush_pending_acks_complete",
-            resent=resent,
-            total=len(self._pending_acks),
-        )
+            await self._drain_if_rebound(failed_ws=ws)
 
     def acknowledge(self, ack_id: str) -> bool:
         """Drop a pending critical event the control plane confirmed.
@@ -171,6 +116,82 @@ class BufferedEventForwarder:
             del self._pending_acks[ack_id]
             return True
         return False
+
+    async def _drain_if_rebound(self, *, failed_ws: ClientConnection) -> None:
+        """Deliver events stranded by a send that outlived its connection.
+
+        A wedged send can fail only minutes later, after a replacement
+        connection was already bound and its recovery flush ran; the failed
+        event would then sit buffered until a reconnect that may never come.
+        If a different open connection is bound by the time the failure
+        surfaces, drain the buffer through it immediately. A drain failure
+        just leaves events buffered — no retries.
+        """
+        current = self._ws
+        if current is not None and current is not failed_ws and current.state == State.OPEN:
+            await self._flush_buffer()
+
+    async def _flush_buffer(self) -> None:
+        """Flush buffered events over the currently bound connection."""
+        if not self._event_buffer:
+            return
+
+        self._log.info("bridge.flush_buffer_start", buffer_size=len(self._event_buffer))
+        flushed = 0
+        while self._event_buffer:
+            event = self._event_buffer[0]
+            ws = self._ws
+            if not ws or ws.state != State.OPEN:
+                break
+            try:
+                await ws.send(json.dumps(event))
+                self._event_buffer.pop(0)
+                flushed += 1
+                # Track critical events sent from buffer as pending ACKs
+                if event.get("type") in CRITICAL_EVENT_TYPES and "ackId" in event:
+                    self._pending_acks[event["ackId"]] = event
+            except Exception as e:
+                self._log.warn("bridge.flush_send_error", exc=e)
+                break
+
+        self._log.info(
+            "bridge.flush_buffer_complete",
+            flushed=flushed,
+            remaining=len(self._event_buffer),
+        )
+
+    async def _resend_pending(self, ack_ids: list[str]) -> None:
+        """Re-send unacknowledged critical events on a new WS connection.
+
+        Only the given ackIds are considered (the ones pending before the
+        buffer flush), and only if they are still pending. Events stay
+        pending until the DO sends an ACK command.
+        """
+        to_resend = [ack_id for ack_id in ack_ids if ack_id in self._pending_acks]
+        if not to_resend:
+            return
+
+        self._log.info("bridge.flush_pending_acks_start", count=len(to_resend))
+        resent = 0
+        for ack_id in to_resend:
+            event = self._pending_acks.get(ack_id)
+            if event is None:
+                continue
+            ws = self._ws
+            if not ws or ws.state != State.OPEN:
+                break
+            try:
+                await ws.send(json.dumps(event))
+                resent += 1
+            except Exception as e:
+                self._log.warn("bridge.flush_pending_ack_error", ack_id=ack_id, exc=e)
+                break
+
+        self._log.info(
+            "bridge.flush_pending_acks_complete",
+            resent=resent,
+            total=len(self._pending_acks),
+        )
 
     def _buffer_event(self, event: dict[str, Any]) -> None:
         """Buffer an event for later delivery after WS reconnect."""

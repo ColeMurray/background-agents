@@ -1,11 +1,13 @@
 """
 Unit tests for BufferedEventForwarder.
 
-Covers the reconnect-safe delivery state machine on its own: buffering while
-no connection is bound, flushing on bind, the flush ack-skip contract, and
+Covers the reconnect-safe delivery state machine through its public surface:
+buffering while no connection is bound, bind-time backlog recovery (without
+double-sends), the ACK lifecycle, stale-send recovery after a rebind, and
 bounded-buffer overflow eviction.
 """
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -51,7 +53,7 @@ class TestBufferWhileDisconnected:
     @pytest.mark.asyncio
     async def test_send_buffers_after_unbind(self):
         forwarder = make_forwarder()
-        forwarder.bind(open_ws())
+        await forwarder.bind(open_ws())
         forwarder.unbind()
 
         await forwarder.send({"type": "token", "content": "hello"})
@@ -63,7 +65,7 @@ class TestBufferWhileDisconnected:
         forwarder = make_forwarder()
         ws = open_ws()
         ws.state = State.CLOSED
-        forwarder.bind(ws)
+        await forwarder.bind(ws)
 
         await forwarder.send({"type": "token", "content": "hello"})
 
@@ -75,7 +77,7 @@ class TestBufferWhileDisconnected:
         forwarder = make_forwarder()
         ws = open_ws()
         ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
-        forwarder.bind(ws)
+        await forwarder.bind(ws)
 
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
 
@@ -88,7 +90,7 @@ class TestSendWhileConnected:
     async def test_critical_event_gets_ack_id_and_pends(self):
         forwarder = make_forwarder()
         ws = open_ws()
-        forwarder.bind(ws)
+        await forwarder.bind(ws)
 
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
 
@@ -100,7 +102,7 @@ class TestSendWhileConnected:
     async def test_non_critical_event_has_no_ack_id(self):
         forwarder = make_forwarder()
         ws = open_ws()
-        forwarder.bind(ws)
+        await forwarder.bind(ws)
 
         await forwarder.send({"type": "token", "content": "hello"})
 
@@ -109,9 +111,40 @@ class TestSendWhileConnected:
         assert len(forwarder._pending_acks) == 0
 
     @pytest.mark.asyncio
+    async def test_ack_id_is_random_and_unique_without_message_id(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        await forwarder.send({"type": "snapshot_ready"})
+        await forwarder.send({"type": "snapshot_ready"})
+
+        ack_ids = [event["ackId"] for event in sent_events(ws)]
+        for ack_id in ack_ids:
+            prefix, suffix = ack_id.split(":", 1)
+            assert prefix == "snapshot_ready"
+            assert len(suffix) == 16
+            int(suffix, 16)  # Should not raise
+        assert len(set(ack_ids)) == 2
+
+    @pytest.mark.asyncio
+    async def test_existing_ack_id_not_overwritten(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        await forwarder.send(
+            {"type": "execution_complete", "messageId": "msg-1", "ackId": "custom:id"}
+        )
+
+        [event] = sent_events(ws)
+        assert event["ackId"] == "custom:id"
+        assert forwarder.acknowledge("custom:id") is True
+
+    @pytest.mark.asyncio
     async def test_acknowledge_clears_pending(self):
         forwarder = make_forwarder()
-        forwarder.bind(open_ws())
+        await forwarder.bind(open_ws())
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
 
         assert forwarder.acknowledge("execution_complete:msg-1") is True
@@ -120,71 +153,60 @@ class TestSendWhileConnected:
         assert forwarder.acknowledge("execution_complete:msg-1") is False
 
 
-class TestFlushOnBind:
+class TestBindRecovery:
     @pytest.mark.asyncio
-    async def test_flush_after_bind_sends_all_and_clears_buffer(self):
+    async def test_bind_flushes_buffered_events_in_order(self):
         forwarder = make_forwarder()
         await forwarder.send({"type": "token", "content": "a"})
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
 
         ws = open_ws()
-        forwarder.bind(ws)
-        just_added = await forwarder.flush_event_buffer()
+        await forwarder.bind(ws)
 
         assert len(forwarder._event_buffer) == 0
         assert [event["type"] for event in sent_events(ws)] == ["token", "execution_complete"]
-        # The critical event starts pending on flush, and is reported as such
-        assert just_added == {"execution_complete:msg-1"}
-        assert "execution_complete:msg-1" in forwarder._pending_acks
+        # The critical event starts pending on flush, awaiting its ACK
+        assert forwarder.acknowledge("execution_complete:msg-1") is True
 
     @pytest.mark.asyncio
-    async def test_flush_without_bind_keeps_buffer(self):
+    async def test_bind_with_no_backlog_sends_nothing(self):
         forwarder = make_forwarder()
-        await forwarder.send({"type": "token", "content": "a"})
 
-        just_added = await forwarder.flush_event_buffer()
+        ws = open_ws()
+        await forwarder.bind(ws)
 
-        assert just_added == set()
-        assert len(forwarder._event_buffer) == 1
+        ws.send.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_flush_stops_on_send_failure_and_keeps_remainder(self):
+    async def test_bind_flush_stops_on_send_failure_and_keeps_remainder(self):
         forwarder = make_forwarder()
         await forwarder.send({"type": "token", "content": "a"})
         await forwarder.send({"type": "token", "content": "b"})
 
         ws = open_ws()
         ws.send = AsyncMock(side_effect=[None, ConnectionError("broken")])
-        forwarder.bind(ws)
-
-        await forwarder.flush_event_buffer()
+        await forwarder.bind(ws)
 
         assert len(forwarder._event_buffer) == 1
         assert forwarder._event_buffer[0]["content"] == "b"
 
-
-class TestAckSkipContract:
-    """flush_event_buffer reports the ackIds it just started tracking, and
-    flush_pending_acks must skip exactly those to avoid a double-send."""
-
     @pytest.mark.asyncio
-    async def test_reconnect_flush_does_not_double_send_buffered_criticals(self):
+    async def test_bind_does_not_double_send_buffered_criticals(self):
+        """A critical event flushed from the buffer must not also be re-sent
+        by the pending-ack recovery on the same bind."""
         forwarder = make_forwarder()
         # msg-1 was sent on a previous connection and never acknowledged
-        forwarder.bind(open_ws())
+        await forwarder.bind(open_ws())
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
         forwarder.unbind()
         # msg-2 completed while disconnected, so it sits in the buffer
         await forwarder.send({"type": "execution_complete", "messageId": "msg-2"})
 
         ws = open_ws()
-        forwarder.bind(ws)
-        just_flushed = await forwarder.flush_event_buffer()
-        await forwarder.flush_pending_acks(skip_ack_ids=just_flushed)
+        await forwarder.bind(ws)
 
-        events = sent_events(ws)
         # msg-2 once from the buffer, msg-1 once from pending acks — no dupes
-        assert [event["ackId"] for event in events] == [
+        assert [event["ackId"] for event in sent_events(ws)] == [
             "execution_complete:msg-2",
             "execution_complete:msg-1",
         ]
@@ -194,20 +216,87 @@ class TestAckSkipContract:
         }
 
     @pytest.mark.asyncio
-    async def test_flush_pending_acks_resends_everything_without_skip(self):
+    async def test_bind_resends_all_unacknowledged_criticals(self):
         forwarder = make_forwarder()
-        forwarder.bind(open_ws())
+        await forwarder.bind(open_ws())
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
         await forwarder.send({"type": "error", "messageId": "msg-2"})
         forwarder.unbind()
 
         ws = open_ws()
-        forwarder.bind(ws)
-        await forwarder.flush_pending_acks()
+        await forwarder.bind(ws)
 
         assert ws.send.await_count == 2
-        # Pending entries survive the resend; only an ACK command clears them
-        assert len(forwarder._pending_acks) == 2
+        # Both stay pending until an ACK command clears them
+        assert forwarder.acknowledge("execution_complete:msg-1") is True
+        assert forwarder.acknowledge("error:msg-2") is True
+
+    @pytest.mark.asyncio
+    async def test_bind_does_not_resend_acknowledged_events(self):
+        forwarder = make_forwarder()
+        await forwarder.bind(open_ws())
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
+        assert forwarder.acknowledge("execution_complete:msg-1") is True
+        forwarder.unbind()
+
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        ws.send.assert_not_awaited()
+
+
+class TestStaleSendRecovery:
+    @pytest.mark.asyncio
+    async def test_send_failure_after_rebind_drains_through_new_connection(self):
+        """A wedged send can fail only after the watchdog already bound and
+        flushed a replacement connection; the event must be delivered on the
+        new connection instead of sitting stranded in the buffer."""
+        forwarder = make_forwarder()
+
+        release_failure = asyncio.Event()
+        old_ws = MagicMock()
+        old_ws.state = State.OPEN
+
+        async def wedged_send(data):
+            await release_failure.wait()
+            raise ConnectionError("connection timed out")
+
+        old_ws.send = wedged_send
+        await forwarder.bind(old_ws)
+
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
+        )
+        await asyncio.sleep(0)  # the send is now in flight on old_ws
+
+        # Watchdog reconnects: replacement bound, recovery already ran (empty)
+        forwarder.unbind()
+        new_ws = open_ws()
+        await forwarder.bind(new_ws)
+        assert sent_events(new_ws) == []
+
+        # The wedged send finally fails, long after the rebind
+        release_failure.set()
+        await send_task
+
+        assert [event["ackId"] for event in sent_events(new_ws)] == ["execution_complete:msg-1"]
+        assert forwarder._event_buffer == []
+        # Delivered via the buffer drain, so it is tracked for ACK
+        assert forwarder.acknowledge("execution_complete:msg-1") is True
+
+    @pytest.mark.asyncio
+    async def test_send_failure_without_rebind_stays_buffered(self):
+        """When the failed connection is still the bound one there is nothing
+        to drain through — the event stays buffered, with no retry loop."""
+        forwarder = make_forwarder()
+        ws = open_ws()
+        ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
+        await forwarder.bind(ws)
+
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
+
+        assert ws.send.await_count == 1
+        assert len(forwarder._event_buffer) == 1
 
 
 class TestOverflowEviction:

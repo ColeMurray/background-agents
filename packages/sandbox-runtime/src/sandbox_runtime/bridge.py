@@ -489,7 +489,6 @@ class AgentBridge:
                 ping_timeout=10,
             ) as ws:
                 self.ws = ws
-                self.event_forwarder.bind(ws)
                 self._mark_connected()
                 heartbeat_task: asyncio.Task[None] | None = None
                 background_tasks: set[asyncio.Task[None]] = set()
@@ -502,10 +501,9 @@ class AgentBridge:
                         reconnect_count=max(0, self._connection_count - 1),
                         reconnect_attempt_count=self._reconnect_attempt_count,
                     )
+                    await self.event_forwarder.bind(ws)
                     await self._send_event(self._build_ready_event())
                     await self._drain_boot_warnings()
-                    just_flushed = await self.event_forwarder.flush_event_buffer()
-                    await self.event_forwarder.flush_pending_acks(skip_ack_ids=just_flushed)
 
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                     async for message in ws:
