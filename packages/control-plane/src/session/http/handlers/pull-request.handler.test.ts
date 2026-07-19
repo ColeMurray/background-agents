@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Logger } from "../../../logger";
 import type { SessionRepositoryRow } from "../../repository";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "../../repository-target";
 import type { ArtifactRow, ParticipantRow, SessionRow } from "../../types";
@@ -93,8 +94,15 @@ function createHandler() {
   const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const now = vi.fn(() => 5000);
   const triggerPullRequestRefresh = vi.fn();
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn(),
+  } as unknown as Logger;
 
-  const handler = createPullRequestHandler({
+  const pullRequestHandler = createPullRequestHandler({
     getSession,
     getSessionRepositories,
     getPromptingParticipantForPR,
@@ -108,8 +116,16 @@ function createHandler() {
     triggerPullRequestRefresh,
   });
 
+  // Bind the request-scoped log so call sites exercise the threading without
+  // repeating it at every invocation.
+  const handler = {
+    ...pullRequestHandler,
+    createPr: (request: Request) => pullRequestHandler.createPr(request, log),
+  };
+
   return {
     handler,
+    log,
     getSession,
     getSessionRepositories,
     setRepositoryRows: (rows: SessionRepositoryRow[]) => {
@@ -238,6 +254,7 @@ describe("createPullRequestHandler", () => {
       resolveAuthForPR,
       getSessionUrl,
       createPullRequest,
+      log,
     } = createHandler();
     const session = createSession({ base_branch: "develop" });
     const participant = createParticipant({ user_id: "user-123" });
@@ -263,17 +280,20 @@ describe("createPullRequestHandler", () => {
     expect(await response.json()).toEqual({ error: "PR already exists" });
     // Base-branch defaulting is the service's job (per target repo) — the
     // handler forwards the request value untouched.
-    expect(createPullRequest).toHaveBeenCalledWith({
-      title: "PR",
-      body: "desc",
-      headBranch: "feature/pr",
-      baseBranch: undefined,
-      repoOwner: "acme",
-      repoName: "repo",
-      promptingUserId: "user-123",
-      promptingAuth: { authType: "oauth", token: "token" },
-      sessionUrl: "https://app.example.com/session/public-session-1",
-    });
+    expect(createPullRequest).toHaveBeenCalledWith(
+      {
+        title: "PR",
+        body: "desc",
+        headBranch: "feature/pr",
+        baseBranch: undefined,
+        repoOwner: "acme",
+        repoName: "repo",
+        promptingUserId: "user-123",
+        promptingAuth: { authType: "oauth", token: "token" },
+        sessionUrl: "https://app.example.com/session/public-session-1",
+      },
+      log
+    );
   });
 
   it("allows repo sessions with null base branch to use service fallback", async () => {
@@ -284,6 +304,7 @@ describe("createPullRequestHandler", () => {
       resolveAuthForPR,
       getSessionUrl,
       createPullRequest,
+      log,
     } = createHandler();
     const participant = createParticipant({ user_id: "user-123" });
     getSession.mockReturnValue(createSession({ base_branch: null }));
@@ -306,16 +327,19 @@ describe("createPullRequestHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(createPullRequest).toHaveBeenCalledWith({
-      title: "PR",
-      body: "desc",
-      baseBranch: undefined,
-      repoOwner: "acme",
-      repoName: "repo",
-      promptingUserId: "user-123",
-      promptingAuth: null,
-      sessionUrl: "https://app.example.com/session/public-session-1",
-    });
+    expect(createPullRequest).toHaveBeenCalledWith(
+      {
+        title: "PR",
+        body: "desc",
+        baseBranch: undefined,
+        repoOwner: "acme",
+        repoName: "repo",
+        promptingUserId: "user-123",
+        promptingAuth: null,
+        sessionUrl: "https://app.example.com/session/public-session-1",
+      },
+      log
+    );
   });
 
   it("returns mapped success payload", async () => {
@@ -326,6 +350,7 @@ describe("createPullRequestHandler", () => {
       resolveAuthForPR,
       getSessionUrl,
       createPullRequest,
+      log,
     } = createHandler();
     const session = createSession();
     const participant = createParticipant();
@@ -359,17 +384,20 @@ describe("createPullRequestHandler", () => {
       prUrl: "https://github.com/acme/repo/pull/42",
       state: "open",
     });
-    expect(createPullRequest).toHaveBeenCalledWith({
-      title: "PR",
-      body: "desc",
-      baseBranch: "release",
-      headBranch: "feature/pr",
-      repoOwner: "acme",
-      repoName: "repo",
-      promptingUserId: "user-1",
-      promptingAuth: null,
-      sessionUrl: "https://app.example.com/session/public-session-1",
-    });
+    expect(createPullRequest).toHaveBeenCalledWith(
+      {
+        title: "PR",
+        body: "desc",
+        baseBranch: "release",
+        headBranch: "feature/pr",
+        repoOwner: "acme",
+        repoName: "repo",
+        promptingUserId: "user-1",
+        promptingAuth: null,
+        sessionUrl: "https://app.example.com/session/public-session-1",
+      },
+      log
+    );
   });
 
   describe("repository targeting", () => {
@@ -447,7 +475,7 @@ describe("createPullRequestHandler", () => {
     });
 
     it("targets a secondary member with the list's canonical casing", async () => {
-      const { handler, createPullRequest } = createMultiRepoHandler();
+      const { handler, createPullRequest, log } = createMultiRepoHandler();
 
       const response = await postPr(handler, {
         title: "PR",
@@ -458,7 +486,8 @@ describe("createPullRequestHandler", () => {
 
       expect(response.status).toBe(200);
       expect(createPullRequest).toHaveBeenCalledWith(
-        expect.objectContaining({ repoOwner: "acme", repoName: "backend" })
+        expect.objectContaining({ repoOwner: "acme", repoName: "backend" }),
+        log
       );
     });
 
@@ -470,7 +499,8 @@ describe("createPullRequestHandler", () => {
 
       expect(response.status).toBe(200);
       expect(harness.createPullRequest).toHaveBeenCalledWith(
-        expect.objectContaining({ repoOwner: "acme", repoName: "repo" })
+        expect.objectContaining({ repoOwner: "acme", repoName: "repo" }),
+        harness.log
       );
     });
   });
