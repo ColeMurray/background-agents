@@ -31,24 +31,23 @@ export interface SandboxHandlerDeps {
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
   getSession: () => SessionRow | null;
-  refreshOpenAIToken: (session: SessionRow) => Promise<OpenAITokenRefreshResult>;
+  refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAITokenRefreshResult>;
   isOpenAISecretsConfigured: () => boolean;
-  getScmCredentials: () => Promise<ScmCredentialsResult>;
+  getScmCredentials: (log: Logger) => Promise<ScmCredentialsResult>;
   broadcast: (message: ServerMessage) => void;
   generateId: () => string;
   now: () => number;
-  getLog: () => Logger;
 }
 
 export interface SandboxHandler {
   sandboxEvent: (request: Request) => Promise<Response>;
   createMediaArtifact: (request: Request) => Promise<Response>;
   addParticipant: (request: Request) => Promise<Response>;
-  verifySandboxToken: (request: Request) => Promise<Response>;
-  openaiTokenRefresh: () => Promise<Response>;
-  scmCredentials: () => Promise<Response>;
+  verifySandboxToken: (request: Request, log: Logger) => Promise<Response>;
+  openaiTokenRefresh: (log: Logger) => Promise<Response>;
+  scmCredentials: (log: Logger) => Promise<Response>;
   /** Return the sandbox's resolved tunnel URLs as a `{ [port]: url }` map. */
-  tunnelUrls: () => Promise<Response>;
+  tunnelUrls: (log: Logger) => Promise<Response>;
 }
 
 export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
@@ -163,7 +162,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       return Response.json({ id, status: "added" });
     },
 
-    async verifySandboxToken(request: Request): Promise<Response> {
+    async verifySandboxToken(request: Request, log: Logger): Promise<Response> {
       let raw: unknown;
       try {
         raw = await request.json();
@@ -180,7 +179,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
 
       const sandbox = deps.getSandbox();
       if (!sandbox) {
-        deps.getLog().warn("Sandbox token verification failed: no sandbox");
+        log.warn("Sandbox token verification failed: no sandbox");
         return Response.json({ valid: false, error: "No sandbox" }, { status: 404 });
       }
 
@@ -188,7 +187,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       // credential broker is already called during the initial clone, before
       // the WebSocket connect flips the status to ready.
       if (isDeadSandboxStatus(sandbox.status)) {
-        deps.getLog().warn("Sandbox token verification failed: sandbox is dead", {
+        log.warn("Sandbox token verification failed: sandbox is dead", {
           status: sandbox.status,
         });
         return Response.json({ valid: false, error: "Sandbox not active" }, { status: 410 });
@@ -196,15 +195,15 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
 
       const isTokenValid = await deps.isValidSandboxToken(token, sandbox);
       if (!isTokenValid) {
-        deps.getLog().warn("Sandbox token verification failed: token mismatch");
+        log.warn("Sandbox token verification failed: token mismatch");
         return Response.json({ valid: false, error: "Invalid token" }, { status: 401 });
       }
 
-      deps.getLog().info("Sandbox token verified successfully");
+      log.info("Sandbox token verified successfully");
       return Response.json({ valid: true }, { status: 200 });
     },
 
-    async openaiTokenRefresh(): Promise<Response> {
+    async openaiTokenRefresh(log: Logger): Promise<Response> {
       const session = deps.getSession();
       if (!session) {
         return Response.json({ error: "No session" }, { status: 404 });
@@ -214,7 +213,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "Secrets not configured" }, { status: 500 });
       }
 
-      const result = await deps.refreshOpenAIToken(session);
+      const result = await deps.refreshOpenAIToken(session, log);
       if (!result.ok) {
         return Response.json({ error: result.error }, { status: result.status });
       }
@@ -249,7 +248,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
      *   client must tolerate an empty result and retry until ports appear.
      * - `200` with `{ tunnelUrls }` otherwise (empty map when none are stored).
      */
-    async tunnelUrls(): Promise<Response> {
+    async tunnelUrls(log: Logger): Promise<Response> {
       const sandbox = deps.getSandbox();
       if (!sandbox) {
         return Response.json({ error: "No sandbox" }, { status: 404 });
@@ -259,7 +258,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       if (sandbox.tunnel_urls) {
         const parsed = parseTunnelUrls(sandbox.tunnel_urls);
         if (!parsed) {
-          deps.getLog().warn("Invalid stored tunnel_urls");
+          log.warn("Invalid stored tunnel_urls");
           return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
         }
         urls = parsed;
@@ -271,7 +270,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       );
     },
 
-    async scmCredentials(): Promise<Response> {
+    async scmCredentials(log: Logger): Promise<Response> {
       const session = deps.getSession();
       if (!session) {
         return Response.json({ error: "No session" }, { status: 404 });
@@ -283,7 +282,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         );
       }
 
-      const result = await deps.getScmCredentials();
+      const result = await deps.getScmCredentials(log);
       if (!result.ok) {
         return Response.json({ error: result.error }, { status: result.status });
       }

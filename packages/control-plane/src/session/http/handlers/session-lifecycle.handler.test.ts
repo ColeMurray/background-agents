@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
 import { getValidModelOrDefault } from "@open-inspect/shared";
@@ -96,7 +97,7 @@ function createHandler() {
     warn: vi.fn(),
     error: vi.fn(),
     child: vi.fn(),
-  };
+  } as unknown as Logger;
   const getSession = vi.fn<() => SessionRow | null>();
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
@@ -108,7 +109,7 @@ function createHandler() {
   const sendToSandbox = vi.fn();
   const updateSandboxStatus = vi.fn();
 
-  const handler = createSessionLifecycleHandler({
+  const lifecycleHandler = createSessionLifecycleHandler({
     repository,
     getDurableObjectId,
     tokenEncryptionKey: "encryption-key",
@@ -117,7 +118,6 @@ function createHandler() {
     generateId,
     now,
     scheduleWarmSandbox,
-    getLog: () => log,
     getSession,
     getSandbox,
     getPublicSessionId,
@@ -129,6 +129,13 @@ function createHandler() {
     sendToSandbox,
     updateSandboxStatus,
   });
+
+  // Bind the request-scoped log so call sites exercise the threading without
+  // repeating it at every invocation.
+  const handler = {
+    ...lifecycleHandler,
+    init: (request: Request) => lifecycleHandler.init(request, log),
+  };
 
   return {
     handler,

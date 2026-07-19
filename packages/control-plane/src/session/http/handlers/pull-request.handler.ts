@@ -1,4 +1,5 @@
 import type { SessionArtifact } from "@open-inspect/shared";
+import type { Logger } from "../../../logger";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
 import {
@@ -39,7 +40,10 @@ export interface PullRequestHandlerDeps {
   getPromptingParticipantForPR: () => Promise<PromptingParticipantResult>;
   resolveAuthForPR: (participant: ParticipantRow) => Promise<ResolveAuthForPrResult>;
   getSessionUrl: (session: SessionRow) => string;
-  createPullRequest: (input: CreatePullRequestInput) => Promise<CreatePullRequestResult>;
+  createPullRequest: (
+    input: CreatePullRequestInput,
+    log: Logger
+  ) => Promise<CreatePullRequestResult>;
   getArtifactById: (artifactId: string) => ArtifactRow | null;
   updateArtifact: (artifactId: string, data: UpdateArtifactData) => void;
   broadcastArtifactUpdated: (artifact: SessionArtifact) => void;
@@ -49,14 +53,14 @@ export interface PullRequestHandlerDeps {
 }
 
 export interface PullRequestHandler {
-  createPr: (request: Request) => Promise<Response>;
+  createPr: (request: Request, log: Logger) => Promise<Response>;
   pullRequestArtifactSnapshot: (request: Request, url: URL) => Promise<Response>;
   refreshPullRequests: () => Response;
 }
 
 export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequestHandler {
   return {
-    async createPr(request: Request): Promise<Response> {
+    async createPr(request: Request, log: Logger): Promise<Response> {
       let raw: unknown;
       try {
         raw = await request.json();
@@ -113,17 +117,20 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       // Base-branch defaulting happens in the service (requested > target
       // repo's base branch > repo default), so the raw request value passes
       // through untouched.
-      const result = await deps.createPullRequest({
-        title: body.title,
-        body: body.body,
-        baseBranch: body.baseBranch,
-        headBranch: body.headBranch,
-        repoOwner: target.repoOwner,
-        repoName: target.repoName,
-        promptingUserId: promptingParticipant.user_id,
-        promptingAuth: authResolution.auth,
-        sessionUrl: deps.getSessionUrl(session),
-      });
+      const result = await deps.createPullRequest(
+        {
+          title: body.title,
+          body: body.body,
+          baseBranch: body.baseBranch,
+          headBranch: body.headBranch,
+          repoOwner: target.repoOwner,
+          repoName: target.repoName,
+          promptingUserId: promptingParticipant.user_id,
+          promptingAuth: authResolution.auth,
+          sessionUrl: deps.getSessionUrl(session),
+        },
+        log
+      );
 
       if (result.kind === "error") {
         return Response.json({ error: result.error }, { status: result.status });

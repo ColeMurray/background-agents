@@ -25,7 +25,7 @@ import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
-import { createForwardingLogger, createLogger, parseLogLevel } from "../logger";
+import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
   SandboxLifecycleManager,
@@ -152,13 +152,10 @@ export class SessionDO extends DurableObject<Env> {
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private initialized = false;
+  // Session-scoped logger. Assigned during initialization only — never
+  // per-request. Request-serving code receives a request-scoped child
+  // (with trace_id / request_id) threaded explicitly from fetch().
   private log: Logger;
-  // Live view of `log` for lazily-constructed singleton services. fetch()
-  // swaps `log` to a request-scoped child and restores it afterwards, so a
-  // service constructed mid-request must not capture the logger by value —
-  // it would carry that first request's trace_id forever. Forwarding resolves
-  // `this.log` at call time instead.
-  private readonly liveLog: Logger = createForwardingLogger(() => this.log);
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
   // Session messenger (constructed in ensureInitialized once the session logger exists)
@@ -206,9 +203,9 @@ export class SessionDO extends DurableObject<Env> {
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
-    init: (request) => this.sessionLifecycleHandler.init(request),
+    init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
-    prompt: (request) => this.messagesHandler.enqueuePrompt(request),
+    prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
@@ -224,18 +221,19 @@ export class SessionDO extends DurableObject<Env> {
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => this.messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
-    createPr: (request) => this.pullRequestHandler.createPr(request),
+    createPr: (request, _url, log) => this.pullRequestHandler.createPr(request, log),
     pullRequestArtifactSnapshot: (request, url) =>
       this.pullRequestHandler.pullRequestArtifactSnapshot(request, url),
     pullRequestsRefresh: () => this.pullRequestHandler.refreshPullRequests(),
-    wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
+    wsToken: (request, _url, log) => this.wsTokenHandler.generateWsToken(request, log),
     updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
     archive: (request) => this.sessionLifecycleHandler.archive(request),
     unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
-    verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
-    openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
-    scmCredentials: () => this.sandboxHandler.scmCredentials(),
-    tunnelUrls: () => this.sandboxHandler.tunnelUrls(),
+    verifySandboxToken: (request, _url, log) =>
+      this.sandboxHandler.verifySandboxToken(request, log),
+    openaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.openaiTokenRefresh(log),
+    scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
+    tunnelUrls: (_request, _url, log) => this.sandboxHandler.tunnelUrls(log),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     cancel: () => this.sessionLifecycleHandler.cancel(),
@@ -293,7 +291,7 @@ export class SessionDO extends DurableObject<Env> {
       this._participantService = new ParticipantService({
         repository: this.repository,
         env: this.env,
-        log: this.liveLog,
+        log: this.log,
         generateId: () => generateId(),
         userScmTokenStore,
       });
@@ -317,7 +315,7 @@ export class SessionDO extends DurableObject<Env> {
           ...this.env,
           SCHEDULER_CALLBACK: schedulerCallback,
         },
-        log: this.liveLog,
+        log: this.log,
         getSessionId: () => {
           const session = this.getSession();
           return session?.session_name || session?.id || this.ctx.id.toString();
@@ -340,7 +338,7 @@ export class SessionDO extends DurableObject<Env> {
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         isSpawning: () => this.lifecycleManager.isSpawning(),
         spawnSandbox: () => this.spawnSandbox(),
-        log: this.liveLog,
+        log: this.log,
       });
     }
     return this._presenceService;
@@ -369,7 +367,7 @@ export class SessionDO extends DurableObject<Env> {
       this._messageQueue = new SessionMessageQueue({
         env: this.env,
         ctx: this.ctx,
-        log: this.liveLog,
+        log: this.log,
         repository: this.repository,
         attachmentRepository: this.attachmentRepository,
         wsManager: this.wsManager,
@@ -426,7 +424,6 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._messagesHandler) {
       this._messagesHandler = createMessagesHandler({
         messageService: this.messageService,
-        getLog: () => this.log,
       });
     }
 
@@ -456,23 +453,22 @@ export class SessionDO extends DurableObject<Env> {
         getSandbox: () => this.getSandbox(),
         isValidSandboxToken: (token, sandbox) => this.isValidSandboxToken(token, sandbox),
         getSession: () => this.getSession(),
-        refreshOpenAIToken: async (session) => {
+        refreshOpenAIToken: async (session, log) => {
           const service = new OpenAITokenRefreshService(
             this.env.DB!,
             this.env.REPO_SECRETS_ENCRYPTION_KEY!,
             (sessionRow) => this.ensureRepoId(sessionRow),
-            this.log
+            log
           );
           return service.refresh(session);
         },
         isOpenAISecretsConfigured: () =>
           Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
-        getScmCredentials: () =>
-          new ScmCredentialsService(this.sourceControlProvider, this.log).getCredentials(),
+        getScmCredentials: (log) =>
+          new ScmCredentialsService(this.sourceControlProvider, log).getCredentials(),
         broadcast: (message) => this.broadcast(message),
         generateId: () => generateId(),
         now: () => Date.now(),
-        getLog: () => this.log,
       });
     }
 
@@ -481,7 +477,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get attachmentsHandler(): AttachmentsHandler {
     if (!this._attachmentsHandler) {
-      this._attachmentsHandler = new AttachmentsHandler(this.attachmentRepository, this.liveLog);
+      this._attachmentsHandler = new AttachmentsHandler(this.attachmentRepository, this.log);
     }
 
     return this._attachmentsHandler;
@@ -495,7 +491,6 @@ export class SessionDO extends DurableObject<Env> {
         generateId: (bytes) => generateId(bytes),
         hashToken: (token) => hashToken(token),
         now: () => Date.now(),
-        getLog: () => this.log,
       });
     }
 
@@ -516,7 +511,6 @@ export class SessionDO extends DurableObject<Env> {
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
         scheduleWarmSandbox: () => this.ctx.waitUntil(this.warmSandbox()),
-        getLog: () => this.log,
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
@@ -545,12 +539,12 @@ export class SessionDO extends DurableObject<Env> {
           const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
           return webAppUrl + "/session/" + sessionId;
         },
-        createPullRequest: async (input) => {
+        createPullRequest: async (input, log) => {
           const pullRequestService = new SessionPullRequestService({
             repository: this.repository,
             claims: this.prCreationClaims,
             sourceControlProvider: this.sourceControlProvider,
-            log: this.log,
+            log,
             generateId: () => generateId(),
             pushBranchToRemote: (pushSpec) => this.pushBranchToRemote(pushSpec),
             broadcastSessionBranch: (branchName, repo) => {
@@ -640,7 +634,7 @@ export class SessionDO extends DurableObject<Env> {
         lifecycleManager: this.lifecycleManager,
         executionTimeoutMs: this.executionTimeoutMs,
         now: () => Date.now(),
-        getLog: () => this.log,
+        log: this.log,
       });
     }
 
@@ -891,70 +885,68 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     const initMs = performance.now() - fetchStart;
 
-    const originalLogger = this.log;
-
-    // Extract correlation headers and create a request-scoped logger
+    // Derive a request-scoped logger from correlation headers and thread it
+    // explicitly to request-serving code. `this.log` stays session-scoped —
+    // it is never reassigned per request, so nothing that captures it can
+    // pin another request's correlation ids.
     const traceId = request.headers.get("x-trace-id");
     const requestId = request.headers.get("x-request-id");
+    let requestLog = this.log;
     if (traceId || requestId) {
       const correlationCtx: Record<string, unknown> = {};
       if (traceId) correlationCtx.trace_id = traceId;
       if (requestId) correlationCtx.request_id = requestId;
-      this.log = originalLogger.child(correlationCtx);
+      requestLog = this.log.child(correlationCtx);
     }
 
-    try {
-      const url = new URL(request.url);
-      const path = url.pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
 
-      // WebSocket upgrade (special case - header-based, not path-based)
-      if (request.headers.get("Upgrade") === "websocket") {
-        return this.handleWebSocketUpgrade(request, url);
-      }
-
-      // Match route from table
-      const route = this.routes.find((r) => r.path === path && r.method === request.method);
-
-      if (route) {
-        const handlerStart = performance.now();
-        let status = 500;
-        let outcome: "success" | "error" = "error";
-        try {
-          const response = await route.handler(request, url);
-          status = response.status;
-          outcome = status >= 500 ? "error" : "success";
-          return response;
-        } catch (e) {
-          status = 500;
-          outcome = "error";
-          throw e;
-        } finally {
-          const handlerMs = performance.now() - handlerStart;
-          const totalMs = performance.now() - fetchStart;
-          this.log.info("do.request", {
-            event: "do.request",
-            http_method: request.method,
-            http_path: path,
-            http_status: status,
-            duration_ms: Math.round(totalMs * 100) / 100,
-            init_ms: Math.round(initMs * 100) / 100,
-            handler_ms: Math.round(handlerMs * 100) / 100,
-            outcome,
-          });
-        }
-      }
-
-      return new Response("Not Found", { status: 404 });
-    } finally {
-      this.log = originalLogger;
+    // WebSocket upgrade (special case - header-based, not path-based)
+    if (request.headers.get("Upgrade") === "websocket") {
+      return this.handleWebSocketUpgrade(request, url, requestLog);
     }
+
+    // Match route from table
+    const route = this.routes.find((r) => r.path === path && r.method === request.method);
+
+    if (route) {
+      const handlerStart = performance.now();
+      let status = 500;
+      let outcome: "success" | "error" = "error";
+      try {
+        const response = await route.handler(request, url, requestLog);
+        status = response.status;
+        outcome = status >= 500 ? "error" : "success";
+        return response;
+      } catch (e) {
+        status = 500;
+        outcome = "error";
+        throw e;
+      } finally {
+        const handlerMs = performance.now() - handlerStart;
+        const totalMs = performance.now() - fetchStart;
+        requestLog.info("do.request", {
+          event: "do.request",
+          http_method: request.method,
+          http_path: path,
+          http_status: status,
+          duration_ms: Math.round(totalMs * 100) / 100,
+          init_ms: Math.round(initMs * 100) / 100,
+          handler_ms: Math.round(handlerMs * 100) / 100,
+          outcome,
+        });
+      }
+    }
+
+    return new Response("Not Found", { status: 404 });
   }
 
   /**
-   * Handle WebSocket upgrade request.
+   * Handle WebSocket upgrade request. `log` is the request-scoped logger.
    */
-  private async handleWebSocketUpgrade(request: Request, url: URL): Promise<Response> {
-    this.log.debug("WebSocket upgrade requested");
+  private async handleWebSocketUpgrade(request: Request, url: URL, log: Logger): Promise<Response> {
+    log.debug("WebSocket upgrade requested");
     const isSandbox = url.searchParams.get("type") === "sandbox";
 
     // Validate sandbox authentication
@@ -975,7 +967,7 @@ export class SessionDO extends DurableObject<Env> {
       // still connect — a slow boot that outlived the connecting watchdog
       // self-heals here by flipping the status back to ready.
       if (sandbox?.status === "stopped" || sandbox?.status === "stale") {
-        this.log.warn("ws.connect", {
+        log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "rejected",
@@ -988,7 +980,7 @@ export class SessionDO extends DurableObject<Env> {
 
       // Validate sandbox ID first (catches stale sandboxes reconnecting after restore)
       if (expectedSandboxId && sandboxId !== expectedSandboxId) {
-        this.log.warn("ws.connect", {
+        log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "auth_failed",
@@ -1003,7 +995,7 @@ export class SessionDO extends DurableObject<Env> {
       // Validate auth token
       const tokenMatches = await this.isValidSandboxToken(providedToken, sandbox);
       if (!tokenMatches) {
-        this.log.warn("ws.connect", {
+        log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "auth_failed",
@@ -1040,7 +1032,7 @@ export class SessionDO extends DurableObject<Env> {
         this.updateLastActivity(now);
         await this.scheduleInactivityCheck();
 
-        this.log.info("ws.connect", {
+        log.info("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "success",
@@ -1059,7 +1051,7 @@ export class SessionDO extends DurableObject<Env> {
 
       return new Response(null, { status: 101, webSocket: client });
     } catch (error) {
-      this.log.error("WebSocket upgrade failed", {
+      log.error("WebSocket upgrade failed", {
         error: error instanceof Error ? error : String(error),
       });
       return new Response("WebSocket upgrade failed", { status: 500 });

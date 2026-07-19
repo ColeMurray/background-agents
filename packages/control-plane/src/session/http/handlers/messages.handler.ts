@@ -31,11 +31,10 @@ const VALID_MESSAGE_STATUSES = ["pending", "processing", "completed", "failed"] 
 
 export interface MessagesHandlerDeps {
   messageService: MessageService;
-  getLog: () => Logger;
 }
 
 export interface MessagesHandler {
-  enqueuePrompt: (request: Request) => Promise<Response>;
+  enqueuePrompt: (request: Request, log: Logger) => Promise<Response>;
   stop: () => Promise<Response>;
   listEvents: (url: URL) => Response;
   listArtifacts: (url: URL) => Response;
@@ -44,7 +43,7 @@ export interface MessagesHandler {
 
 export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandler {
   return {
-    async enqueuePrompt(request: Request): Promise<Response> {
+    async enqueuePrompt(request: Request, log: Logger): Promise<Response> {
       try {
         const body = (await request.json()) as EnqueuePromptRequest;
         return Response.json(await deps.messageService.enqueuePrompt(body));
@@ -52,7 +51,7 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
         if (error instanceof SessionAttachmentError) {
           return Response.json({ error: error.message }, { status: 400 });
         }
-        deps.getLog().error("handleEnqueuePrompt error", {
+        log.error("handleEnqueuePrompt error", {
           error: error instanceof Error ? error : String(error),
         });
         throw error;

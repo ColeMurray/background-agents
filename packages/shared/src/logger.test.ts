@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createForwardingLogger, createLogger } from "./logger";
-import type { Logger } from "./logger";
+import { createLogger } from "./logger";
 
 describe("createLogger", () => {
   afterEach(() => {
@@ -79,96 +78,6 @@ describe("createLogger", () => {
       event: "prompt.started",
       requestId: "child-request",
       sessionId: "session-123",
-    });
-  });
-});
-
-describe("createForwardingLogger", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("forwards every level to whatever the source returns at call time", () => {
-    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    let current: Logger = createLogger("session-do", { source: "first" }, "debug");
-    const forwarding = createForwardingLogger(() => current);
-
-    forwarding.debug("debug line");
-    forwarding.info("info line");
-    forwarding.warn("warn line");
-    forwarding.error("error line");
-    current = createLogger("session-do", { source: "second" }, "debug");
-    forwarding.info("after swap");
-
-    expect(JSON.parse(consoleLogSpy.mock.calls[0][0] as string)).toMatchObject({
-      level: "debug",
-      source: "first",
-    });
-    expect(JSON.parse(consoleWarnSpy.mock.calls[0][0] as string)).toMatchObject({
-      level: "warn",
-      source: "first",
-    });
-    expect(JSON.parse(consoleErrorSpy.mock.calls[0][0] as string)).toMatchObject({
-      level: "error",
-      source: "first",
-    });
-    expect(JSON.parse(consoleLogSpy.mock.calls[2][0] as string)).toMatchObject({
-      msg: "after swap",
-      source: "second",
-    });
-  });
-
-  it("does not pin a request-scoped child captured at construction time", () => {
-    // Regression scenario: a Durable Object swaps its logger to a
-    // request-scoped child during fetch() and restores it afterwards. A
-    // lazily-constructed service that received the logger while the child
-    // was installed must log with the restored logger, not the first
-    // request's child.
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const sessionLogger = createLogger("session-do", { session_id: "session-123" });
-    let log = sessionLogger;
-    const service = { log: createForwardingLogger(() => log) };
-
-    log = sessionLogger.child({ trace_id: "trace-first-request" });
-    service.log.info("constructed during first request");
-    log = sessionLogger;
-    service.log.info("logged after request completed");
-
-    expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toMatchObject({
-      trace_id: "trace-first-request",
-    });
-    const restored = JSON.parse(consoleSpy.mock.calls[1][0] as string);
-    expect(restored).toMatchObject({ session_id: "session-123" });
-    expect(restored).not.toHaveProperty("trace_id");
-  });
-
-  it("derives child loggers from the current source", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    let current = createLogger("session-do", { source: "first" });
-    const forwarding = createForwardingLogger(() => current);
-    current = createLogger("session-do", { source: "second" });
-
-    forwarding.child({ child_ctx: "yes" }).info("from child");
-
-    expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toMatchObject({
-      source: "second",
-      child_ctx: "yes",
-    });
-  });
-
-  it("keeps derived children live across later source swaps", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    let current = createLogger("session-do", { source: "first" });
-    const child = createForwardingLogger(() => current).child({ child_ctx: "yes" });
-    current = createLogger("session-do", { source: "second" });
-
-    child.info("after swap");
-
-    expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toMatchObject({
-      source: "second",
-      child_ctx: "yes",
     });
   });
 });

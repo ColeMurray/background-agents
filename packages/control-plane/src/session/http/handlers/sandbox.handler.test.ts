@@ -29,7 +29,7 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const handler = createSandboxHandler({
+  const sandboxHandler = createSandboxHandler({
     repository,
     processSandboxEvent,
     getSandbox,
@@ -41,8 +41,17 @@ function createHandler() {
     broadcast,
     generateId,
     now,
-    getLog: () => log,
   });
+
+  // Bind the request-scoped log so call sites exercise the threading without
+  // repeating it at every invocation.
+  const handler = {
+    ...sandboxHandler,
+    verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
+    openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
+    scmCredentials: () => sandboxHandler.scmCredentials(log),
+    tunnelUrls: () => sandboxHandler.tunnelUrls(log),
+  };
 
   return {
     handler,
@@ -443,7 +452,8 @@ describe("createSandboxHandler", () => {
   });
 
   it("returns openai access token payload on success", async () => {
-    const { handler, getSession, isOpenAISecretsConfigured, refreshOpenAIToken } = createHandler();
+    const { handler, getSession, isOpenAISecretsConfigured, refreshOpenAIToken, log } =
+      createHandler();
     const session = { id: "session-1" } as SessionRow;
     getSession.mockReturnValue(session);
     isOpenAISecretsConfigured.mockReturnValue(true);
@@ -462,7 +472,7 @@ describe("createSandboxHandler", () => {
       expires_in: 3600,
       account_id: "acct_123",
     });
-    expect(refreshOpenAIToken).toHaveBeenCalledWith(session);
+    expect(refreshOpenAIToken).toHaveBeenCalledWith(session, log);
   });
 
   it("returns 404 when scm credentials have no session", async () => {
