@@ -12,8 +12,11 @@
 
 import type { SandboxSettings } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
-import { deriveCodeServerPassword } from "./e2b-helpers";
-import { buildSandboxEnvVars, legacyScmCloneIdentity } from "../sandbox-env";
+import {
+  buildSandboxEnvVars,
+  deriveCodeServerPassword,
+  legacyScmCloneIdentity,
+} from "../sandbox-env";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxDetail } from "../e2b-rest-client";

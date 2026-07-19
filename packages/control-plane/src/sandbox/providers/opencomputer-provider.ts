@@ -6,11 +6,7 @@
  * to OpenComputer rather than being driven by OpenInspect's lifecycle manager.
  */
 
-import {
-  computeHmacHex,
-  DEFAULT_BUILD_TIMEOUT_SECONDS,
-  type SandboxSettings,
-} from "@open-inspect/shared";
+import { DEFAULT_BUILD_TIMEOUT_SECONDS, type SandboxSettings } from "@open-inspect/shared";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
@@ -27,6 +23,7 @@ import {
 import {
   applyScmCloneEnv,
   buildSandboxEnvVars,
+  deriveCodeServerPassword,
   IMAGE_BUILD_MODE_ENV_VAR,
   legacyScmCloneIdentity,
   SESSION_CONFIG_ENV_VAR,
@@ -473,7 +470,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       baseEnvVars,
       scmIdentity: legacyScmCloneIdentity(this.providerConfig.scmProvider),
       codeServerPassword: config.codeServerEnabled
-        ? await this.deriveCodeServerPassword(config.sandboxId)
+        ? await deriveCodeServerPassword(
+            config.sandboxId,
+            this.providerConfig.codeServerPasswordSecret
+          )
         : undefined,
     });
 
@@ -677,7 +677,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       codeServerUrl =
         routeUrls[String(codeServerPort)] ??
         (await this.client.getTunnelUrl(providerObjectId, codeServerPort)).url;
-      codeServerPassword = await this.deriveCodeServerPassword(logicalSandboxId);
+      codeServerPassword = await deriveCodeServerPassword(
+        logicalSandboxId,
+        this.providerConfig.codeServerPasswordSecret
+      );
       tunnelPorts = tunnelPorts.filter((port) => port !== codeServerPort);
     }
 
@@ -714,14 +717,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
     if (!sandbox.routes) return {};
     return Object.fromEntries(sandbox.routes.map((route) => [String(route.port), route.url]));
-  }
-
-  private async deriveCodeServerPassword(sandboxId: string): Promise<string> {
-    const digest = await computeHmacHex(
-      `code-server:${sandboxId}`,
-      this.providerConfig.codeServerPasswordSecret
-    );
-    return digest.slice(0, 32);
   }
 
   private classifyError(message: string, error: unknown): SandboxProviderError {

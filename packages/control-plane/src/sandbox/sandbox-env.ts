@@ -1,4 +1,4 @@
-import type { McpServerConfig } from "@open-inspect/shared";
+import { computeHmacHex, type McpServerConfig } from "@open-inspect/shared";
 import type { SourceControlProviderName } from "../source-control";
 import type { CreateSandboxConfig, RestoreConfig, SessionRepositoryInfo } from "./provider";
 import { resolveServicePorts } from "./providers/port-resolution";
@@ -101,9 +101,9 @@ export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 /** Host/username pair git pairs with the brokered clone token in the sandbox. */
 export interface ScmCloneIdentity {
   /** `VCS_HOST` — hostname the credential helper and clone URLs target. */
-  host: string;
+  readonly host: string;
   /** `VCS_CLONE_USERNAME` — username git sends alongside the brokered token. */
-  cloneUsername: string;
+  readonly cloneUsername: string;
 }
 
 const SCM_CLONE_IDENTITIES: Record<SourceControlProviderName, ScmCloneIdentity> = {
@@ -140,6 +140,16 @@ export function applyScmCloneEnv(
   if (cloneToken) {
     envVars[VCS_CLONE_TOKEN_ENV_VAR] = cloneToken;
   }
+}
+
+/**
+ * Derive the code-server password for a sandbox (ported from auth.py
+ * derive_code_server_password). Must match what code-server inside the
+ * sandbox checks — change here and in the runtime in lockstep.
+ */
+export async function deriveCodeServerPassword(sandboxId: string, secret: string): Promise<string> {
+  const digest = await computeHmacHex(`code-server:${sandboxId}`, secret);
+  return digest.slice(0, 32);
 }
 
 /** Provider-specific inputs to {@link buildSandboxEnvVars}. */
@@ -204,12 +214,16 @@ export function buildSandboxEnvVars(
 
   applyScmCloneEnv(envVars, options.scmIdentity);
 
-  // Note: no VCS_CLONE_TOKEN / GITHUB_TOKEN / GITHUB_APP_TOKEN. Git operations
-  // in the sandbox authenticate per-request via the system git credential
-  // helper, which hits /sessions/:id/scm-credentials. Embedding a token in env
-  // would silently fail once the token expires (immediately so, for GitHub App
+  // Note: this builder never sets VCS_CLONE_TOKEN / GITHUB_TOKEN /
+  // GITHUB_APP_TOKEN as system vars. Git operations in the sandbox
+  // authenticate per-request via the system git credential helper, which hits
+  // /sessions/:id/scm-credentials. Embedding a system token in env would
+  // silently fail once the token expires (immediately so, for GitHub App
   // installation tokens) — exactly the failure that broke long-running and
-  // resumed sessions before brokered credentials landed.
+  // resumed sessions before brokered credentials landed. User-defined secrets
+  // are passed through verbatim, though, so a user-supplied VCS_CLONE_TOKEN
+  // survives — OpenComputer deliberately preserves one on prebuilt-image
+  // boots (see its provider tests).
 
   return envVars;
 }

@@ -2,11 +2,7 @@
  * Vercel Sandbox provider implementation.
  */
 
-import {
-  computeHmacHex,
-  DEFAULT_BUILD_TIMEOUT_SECONDS,
-  type SandboxSettings,
-} from "@open-inspect/shared";
+import { DEFAULT_BUILD_TIMEOUT_SECONDS, type SandboxSettings } from "@open-inspect/shared";
 import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
@@ -14,6 +10,7 @@ import type { SourceControlProviderName } from "../../../source-control";
 import {
   applyScmCloneEnv,
   buildSandboxEnvVars,
+  deriveCodeServerPassword,
   IMAGE_BUILD_MODE_ENV_VAR,
   scmCloneIdentity,
   SESSION_CONFIG_ENV_VAR,
@@ -365,7 +362,10 @@ export class VercelSandboxProvider implements SandboxProvider {
     const envVars = buildSandboxEnvVars(config, {
       scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
       codeServerPassword: config.codeServerEnabled
-        ? await this.deriveCodeServerPassword(config.sandboxId)
+        ? await deriveCodeServerPassword(
+            config.sandboxId,
+            this.providerConfig.codeServerPasswordSecret
+          )
         : undefined,
     });
     Object.assign(envVars, this.buildPlatformEnvVars());
@@ -477,7 +477,10 @@ export class VercelSandboxProvider implements SandboxProvider {
     return {
       codeServerUrl,
       codeServerPassword: codeServerEnabled
-        ? await this.deriveCodeServerPassword(logicalSandboxId)
+        ? await deriveCodeServerPassword(
+            logicalSandboxId,
+            this.providerConfig.codeServerPasswordSecret
+          )
         : undefined,
       ttydUrl,
       tunnelUrls: Object.keys(tunnelUrls).length > 0 ? tunnelUrls : undefined,
@@ -596,14 +599,6 @@ export class VercelSandboxProvider implements SandboxProvider {
       [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
     };
-  }
-
-  private async deriveCodeServerPassword(sandboxId: string): Promise<string> {
-    const digest = await computeHmacHex(
-      `code-server:${sandboxId}`,
-      this.providerConfig.codeServerPasswordSecret
-    );
-    return digest.slice(0, 32);
   }
 
   private classifyError(message: string, error: unknown): SandboxProviderError {

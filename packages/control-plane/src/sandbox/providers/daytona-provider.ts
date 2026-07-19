@@ -5,13 +5,17 @@
  * code-server password derivation that previously lived in the Python shim.
  */
 
-import { computeHmacHex, type SandboxSettings } from "@open-inspect/shared";
+import type { SandboxSettings } from "@open-inspect/shared";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
-import { buildSandboxEnvVars, legacyScmCloneIdentity } from "../sandbox-env";
+import {
+  buildSandboxEnvVars,
+  deriveCodeServerPassword,
+  legacyScmCloneIdentity,
+} from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -194,7 +198,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     return buildSandboxEnvVars(config, {
       scmIdentity: legacyScmCloneIdentity(this.providerConfig.scmProvider),
       codeServerPassword: config.codeServerEnabled
-        ? await this.deriveCodeServerPassword(config.sandboxId)
+        ? await deriveCodeServerPassword(
+            config.sandboxId,
+            this.providerConfig.codeServerPasswordSecret
+          )
         : undefined,
     });
   }
@@ -242,7 +249,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         expirySeconds
       );
       codeServerUrl = preview.url;
-      codeServerPassword = await this.deriveCodeServerPassword(logicalSandboxId);
+      codeServerPassword = await deriveCodeServerPassword(
+        logicalSandboxId,
+        this.providerConfig.codeServerPasswordSecret
+      );
       tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
     }
 
@@ -262,18 +272,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     }
 
     return { codeServerUrl, codeServerPassword, tunnelUrls };
-  }
-
-  // -----------------------------------------------------------------------
-  // Code-server password (ported from auth.py derive_code_server_password)
-  // -----------------------------------------------------------------------
-
-  private async deriveCodeServerPassword(sandboxId: string): Promise<string> {
-    const digest = await computeHmacHex(
-      `code-server:${sandboxId}`,
-      this.providerConfig.codeServerPasswordSecret
-    );
-    return digest.slice(0, 32);
   }
 
   // -----------------------------------------------------------------------
