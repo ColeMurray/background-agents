@@ -359,6 +359,19 @@ export async function handleRequest(
   const method = request.method;
   const startTime = Date.now();
 
+  // The DB binding is required (types.ts) and the control plane cannot serve
+  // requests without it. Reject a missing binding once here — the single
+  // honest boundary — so ctx.db is genuinely always present in handlers and
+  // no per-route degraded-mode guards are needed.
+  // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
+  if (!env.DB) {
+    logger.error("DB binding is not configured; refusing request", { http_path: path });
+    return new Response(JSON.stringify({ error: "Database not configured" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   // Build correlation context with per-request metrics and the instrumented
   // database handle. Handlers use ctx.db (never env.DB) so all queries are
   // automatically timed.
@@ -367,10 +380,8 @@ export async function handleRequest(
     trace_id: request.headers.get("x-trace-id") || crypto.randomUUID(),
     request_id: crypto.randomUUID().slice(0, 8),
     metrics,
-    // env.DB is typed required but some handlers guard its runtime absence
-    // (deployment misconfiguration) with degraded responses. The && preserves
-    // that observable truthiness: ctx.db is undefined exactly when env.DB is.
-    db: env.DB && instrumentD1(env.DB, metrics),
+    // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
+    db: instrumentD1(env.DB, metrics),
     executionCtx,
   };
 

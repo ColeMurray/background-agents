@@ -73,10 +73,6 @@ function requireImageBuilds(env: Env): Response | null {
   return message ? error(message, 501) : null;
 }
 
-function requireDb(db: SqlDatabase): Response | null {
-  return db ? null : error("Database not configured", 503);
-}
-
 function workflowContext(ctx: RequestContext): ImageBuildWorkflowContext {
   return {
     request_id: ctx.request_id,
@@ -276,9 +272,6 @@ async function handleBuildComplete(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
-
   const body = await parseCallbackBody<ImageBuildCompleteBody>(request);
   if (body instanceof Response) return body;
 
@@ -308,9 +301,6 @@ async function handleBuildFailed(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
-
   const body = await parseCallbackBody<ImageBuildFailedBody>(request);
   if (body instanceof Response) return body;
 
@@ -369,9 +359,6 @@ async function handleTriggerEnvironmentBuild(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
-
   const environmentId = match.groups?.id;
   if (!environmentId) return error("Environment ID required", 400);
 
@@ -390,9 +377,6 @@ async function handleTriggerRepoBuild(
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
-
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
 
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
@@ -415,9 +399,6 @@ async function handleToggleRepoImageBuilds(
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
-
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
 
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
@@ -513,9 +494,6 @@ async function handleGetStatus(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
-
   const scope = parseScopeParams(request);
   if (scope instanceof Response) return scope;
 
@@ -545,9 +523,6 @@ async function handleGetEnabledUnits(
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
-
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
 
   try {
     const units = await listEnabledScopeUnits(env, ctx.db);
@@ -585,9 +560,6 @@ async function handleGetEnabledRepos(
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
-
   try {
     return json({ repos: await new RepoMetadataStore(ctx.db).getImageBuildEnabledRepos() });
   } catch (e) {
@@ -612,9 +584,6 @@ async function handleMarkStale(
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
-
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
 
   const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_STALE_BUILD_MAX_AGE_MS);
   if (maxAgeMs instanceof Response) return maxAgeMs;
@@ -655,9 +624,6 @@ async function handleCleanup(
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
-
-  const dbError = requireDb(ctx.db);
-  if (dbError) return dbError;
 
   const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS);
   if (maxAgeMs instanceof Response) return maxAgeMs;

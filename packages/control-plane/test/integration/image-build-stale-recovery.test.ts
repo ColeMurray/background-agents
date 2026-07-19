@@ -51,13 +51,12 @@ function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
       },
       callbackAuth: { type: "none" },
     }),
-  } as unknown as ConstructorParameters<typeof ImageBuildWorkflow>[4];
+  } as unknown as NonNullable<ConstructorParameters<typeof ImageBuildWorkflow>[3]>["planner"];
   return new ImageBuildWorkflow(
     { ...env, WORKER_URL: "https://worker.test" } as Env,
     new ImageBuildStore(env.DB),
     factory,
-    "modal",
-    planner
+    { provider: "modal", planner }
   );
 }
 

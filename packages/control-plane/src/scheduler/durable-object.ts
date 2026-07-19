@@ -166,6 +166,7 @@ export class SchedulerDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.log = createLogger("scheduler-do", {}, parseLogLevel(env.LOG_LEVEL));
+    // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
     this.db = env.DB;
   }
 

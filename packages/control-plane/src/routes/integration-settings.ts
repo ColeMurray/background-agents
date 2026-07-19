@@ -67,10 +67,6 @@ async function extractEnvironmentSettingsParams(
   const environmentId = match.groups?.environmentId;
   if (!environmentId) return error("Environment ID required", 400);
 
-  if (!db) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
   const environmentStore = new EnvironmentStore(db);
   if (!(await environmentStore.getById(environmentId))) {
     return error("Environment not found", 404);
@@ -88,10 +84,6 @@ async function handleGetIntegrationSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  if (!ctx.db) {
-    return json({ integrationId: id, settings: null });
-  }
-
   const store = new IntegrationSettingsStore(ctx.db);
   const settings = await store.getGlobal(id);
   return json({ integrationId: id, settings });
@@ -105,10 +97,6 @@ async function handleSetIntegrationSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  if (!ctx.db) {
-    return error("Integration settings storage is not configured", 503);
-  }
 
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
@@ -152,10 +140,6 @@ async function handleDeleteIntegrationSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  if (!ctx.db) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
   const store = new IntegrationSettingsStore(ctx.db);
 
   try {
@@ -188,10 +172,6 @@ async function handleListRepoSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  if (!ctx.db) {
-    return json({ integrationId: id, repos: [] });
-  }
-
   const store = new IntegrationSettingsStore(ctx.db);
   const repos = await store.listRepoSettings(id);
   return json({ integrationId: id, repos });
@@ -212,10 +192,6 @@ async function handleGetRepoSettings(
 
   const repo = `${owner}/${name}`;
 
-  if (!ctx.db) {
-    return json({ integrationId: id, repo, settings: null });
-  }
-
   const store = new IntegrationSettingsStore(ctx.db);
   const settings = await store.getRepoSettings(id, repo);
   return json({ integrationId: id, repo, settings });
@@ -233,10 +209,6 @@ async function handleSetRepoSettings(
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
   const { owner, name } = params;
-
-  if (!ctx.db) {
-    return error("Integration settings storage is not configured", 503);
-  }
 
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
@@ -285,10 +257,6 @@ async function handleDeleteRepoSettings(
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
   const { owner, name } = params;
-
-  if (!ctx.db) {
-    return error("Integration settings storage is not configured", 503);
-  }
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
@@ -415,10 +383,6 @@ async function handleGetResolvedConfig(
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
   const { owner, name } = params;
-
-  if (!ctx.db) {
-    return json({ integrationId: id, repo: `${owner}/${name}`, config: null });
-  }
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;

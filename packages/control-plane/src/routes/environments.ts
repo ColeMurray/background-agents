@@ -27,14 +27,8 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("router:environments");
-
-function requireDb(db: SqlDatabase): Response | null {
-  if (!db) return error("Environment storage is not configured", 503);
-  return null;
-}
 
 /** Turn a zod validation failure into a 400 naming the first offending field. */
 function validationError(err: {
@@ -98,9 +92,6 @@ async function handleListEnvironments(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(ctx.db);
-  if (guard) return guard;
-
   const store = new EnvironmentStore(ctx.db);
   const { environments, total } = await store.list();
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
@@ -119,9 +110,6 @@ async function handleCreateEnvironment(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(ctx.db);
-  if (guard) return guard;
-
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
 
@@ -175,9 +163,6 @@ async function handleGetEnvironment(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(ctx.db);
-  if (guard) return guard;
-
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
@@ -194,9 +179,6 @@ async function handleUpdateEnvironment(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(ctx.db);
-  if (guard) return guard;
-
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
@@ -258,9 +240,6 @@ async function handleDeleteEnvironment(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(ctx.db);
-  if (guard) return guard;
-
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 

@@ -252,6 +252,7 @@ export class SessionDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
     this.db = env.DB ?? null;
     this.sql = ctx.storage.sql;
     this.attachmentRepository = new SessionAttachmentRepository(this.sql);

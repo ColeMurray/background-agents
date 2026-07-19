@@ -47,7 +47,7 @@ async function trackPullRequestLifecycle(
     parseLogLevel(env.LOG_LEVEL)
   );
   try {
-    if (!ctx.db || !env.SESSION) return;
+    if (!env.SESSION) return;
 
     const parsed = automationEventSchema.safeParse(rawEvent);
     if (!parsed.success) {

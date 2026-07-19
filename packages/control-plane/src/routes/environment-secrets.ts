@@ -23,7 +23,6 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("router:environment-secrets");
 
@@ -61,11 +60,10 @@ async function invalidateImagesAfterSecretsChange(
 }
 
 /**
- * Require both D1 and the secrets encryption key, returning the resolved key so
- * handlers use `config.key` instead of a non-null assertion on the optional env.
+ * Require the secrets encryption key, returning the resolved key so handlers
+ * use `config.key` instead of a non-null assertion on the optional env.
  */
-function requireSecretsConfig(env: Env, db: SqlDatabase): { key: string } | Response {
-  if (!db) return error("Secrets storage is not configured", 503);
+function requireSecretsConfig(env: Env): { key: string } | Response {
   if (!env.REPO_SECRETS_ENCRYPTION_KEY)
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   return { key: env.REPO_SECRETS_ENCRYPTION_KEY };
@@ -77,7 +75,7 @@ async function handleListEnvironmentSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env, ctx.db);
+  const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
@@ -117,7 +115,7 @@ async function handleSetEnvironmentSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env, ctx.db);
+  const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
@@ -172,7 +170,7 @@ async function handleDeleteEnvironmentSecret(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env, ctx.db);
+  const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
@@ -223,7 +221,7 @@ async function handleImportEnvironmentSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const config = requireSecretsConfig(env, ctx.db);
+  const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
   const id = match.groups?.id;
