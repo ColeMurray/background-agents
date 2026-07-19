@@ -18,6 +18,7 @@ function createHandler() {
   const isOpenAISecretsConfigured = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
+  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
 
@@ -38,7 +39,7 @@ function createHandler() {
     refreshOpenAIToken,
     isOpenAISecretsConfigured,
     getScmCredentials,
-    broadcast,
+    messenger,
     generateId,
     now,
     getLog: () => log,
