@@ -9,7 +9,7 @@ import { createLogger as _createLogger, type LogLevel } from "@open-inspect/shar
 import type { Logger } from "@open-inspect/shared";
 export type { Logger } from "@open-inspect/shared";
 export type { LogLevel } from "@open-inspect/shared";
-export { parseLogLevel } from "@open-inspect/shared";
+export { createForwardingLogger, parseLogLevel } from "@open-inspect/shared";
 
 const SERVICE_NAME = "control-plane";
 

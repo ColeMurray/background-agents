@@ -134,6 +134,31 @@ export function createLogger(
 }
 
 /**
+ * Create a logger that resolves `source()` on every call and forwards to the
+ * result (cf. Guava's Forwarding* pattern).
+ *
+ * Use this when a long-lived component needs a plain `Logger` but the owner
+ * swaps its logger over time — e.g. a Durable Object that installs a
+ * request-scoped child logger for the duration of each request. Handing the
+ * component the logger by value would pin whichever logger happened to be
+ * installed at construction time; handing it a forwarding logger makes every
+ * log line reflect the owner's current logger.
+ *
+ * `child(context)` derives a child from the current source at call time and
+ * returns it as-is: the child is a snapshot bound to that logger, not a
+ * forwarding logger itself.
+ */
+export function createForwardingLogger(source: () => Logger): Logger {
+  return {
+    debug: (msg, data) => source().debug(msg, data),
+    info: (msg, data) => source().info(msg, data),
+    warn: (msg, data) => source().warn(msg, data),
+    error: (msg, data) => source().error(msg, data),
+    child: (context) => source().child(context),
+  };
+}
+
+/**
  * Parse a LOG_LEVEL env var string into a valid LogLevel, defaulting to "info".
  * Uses an explicit allowlist to avoid matching Object prototype keys.
  */

@@ -25,7 +25,7 @@ import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
-import { createLogger, parseLogLevel } from "../logger";
+import { createForwardingLogger, createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
   SandboxLifecycleManager,
@@ -153,6 +153,12 @@ export class SessionDO extends DurableObject<Env> {
   private attachmentRepository: SessionAttachmentRepository;
   private initialized = false;
   private log: Logger;
+  // Live view of `log` for lazily-constructed singleton services. fetch()
+  // swaps `log` to a request-scoped child and restores it afterwards, so a
+  // service constructed mid-request must not capture the logger by value —
+  // it would carry that first request's trace_id forever. Forwarding resolves
+  // `this.log` at call time instead.
+  private readonly liveLog: Logger = createForwardingLogger(() => this.log);
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
   // Session messenger (constructed in ensureInitialized once the session logger exists)
@@ -287,7 +293,7 @@ export class SessionDO extends DurableObject<Env> {
       this._participantService = new ParticipantService({
         repository: this.repository,
         env: this.env,
-        log: this.log,
+        log: this.liveLog,
         generateId: () => generateId(),
         userScmTokenStore,
       });
@@ -311,7 +317,7 @@ export class SessionDO extends DurableObject<Env> {
           ...this.env,
           SCHEDULER_CALLBACK: schedulerCallback,
         },
-        log: this.log,
+        log: this.liveLog,
         getSessionId: () => {
           const session = this.getSession();
           return session?.session_name || session?.id || this.ctx.id.toString();
@@ -334,7 +340,7 @@ export class SessionDO extends DurableObject<Env> {
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         isSpawning: () => this.lifecycleManager.isSpawning(),
         spawnSandbox: () => this.spawnSandbox(),
-        log: this.log,
+        log: this.liveLog,
       });
     }
     return this._presenceService;
@@ -363,7 +369,7 @@ export class SessionDO extends DurableObject<Env> {
       this._messageQueue = new SessionMessageQueue({
         env: this.env,
         ctx: this.ctx,
-        log: this.log,
+        log: this.liveLog,
         repository: this.repository,
         attachmentRepository: this.attachmentRepository,
         wsManager: this.wsManager,
@@ -475,7 +481,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get attachmentsHandler(): AttachmentsHandler {
     if (!this._attachmentsHandler) {
-      this._attachmentsHandler = new AttachmentsHandler(this.attachmentRepository, this.log);
+      this._attachmentsHandler = new AttachmentsHandler(this.attachmentRepository, this.liveLog);
     }
 
     return this._attachmentsHandler;
