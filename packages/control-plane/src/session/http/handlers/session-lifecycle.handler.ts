@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
+import type { SessionStatusService } from "../../session-status-service";
 import {
   normalizeSessionTitle,
   type SessionTitleUpdateOptions,
@@ -71,7 +72,7 @@ export interface SessionLifecycleHandlerDeps {
   getSandbox: () => SandboxRow | null;
   getPublicSessionId: (session: SessionRow) => string;
   getParticipantByUserId: (userId: string) => ParticipantRow | null;
-  transitionSessionStatus: (status: SessionStatus) => Promise<boolean>;
+  statusService: SessionStatusService;
   applySessionTitleUpdate: (
     title: string,
     options?: SessionTitleUpdateOptions
@@ -343,7 +344,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
       }
 
-      await deps.transitionSessionStatus("archived");
+      await deps.statusService.transition("archived");
 
       return Response.json({ status: "archived" });
     },
@@ -373,7 +374,7 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      await deps.transitionSessionStatus("active");
+      await deps.statusService.transition("active");
 
       return Response.json({ status: "active" });
     },
@@ -389,7 +390,7 @@ export function createSessionLifecycleHandler(
       }
 
       await deps.stopExecution({ suppressStatusReconcile: true });
-      await deps.transitionSessionStatus("cancelled");
+      await deps.statusService.transition("cancelled");
 
       const sandbox = deps.getSandbox();
       if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {

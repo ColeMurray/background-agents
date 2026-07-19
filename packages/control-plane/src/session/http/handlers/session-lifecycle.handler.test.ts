@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
+import type { SessionStatusService } from "../../session-status-service";
 import { getValidModelOrDefault } from "@open-inspect/shared";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -102,7 +103,8 @@ function createHandler() {
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
   const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
-  const transitionSessionStatus = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const statusService = { transition } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const stopExecution = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
@@ -122,7 +124,7 @@ function createHandler() {
     getSandbox,
     getPublicSessionId,
     getParticipantByUserId,
-    transitionSessionStatus,
+    statusService,
     applySessionTitleUpdate,
     stopExecution,
     getSandboxSocket,
@@ -151,7 +153,7 @@ function createHandler() {
     getSandbox,
     getPublicSessionId,
     getParticipantByUserId,
-    transitionSessionStatus,
+    transition,
     applySessionTitleUpdate,
     stopExecution,
     getSandboxSocket,
@@ -661,11 +663,10 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("archives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transitionSessionStatus } =
-      createHandler();
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
     getSession.mockReturnValue(createSession());
     getParticipantByUserId.mockReturnValue(createParticipant());
-    transitionSessionStatus.mockResolvedValue(true);
+    transition.mockResolvedValue(true);
 
     const response = await handler.archive(
       new Request("http://internal/internal/archive", {
@@ -677,15 +678,14 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "archived" });
-    expect(transitionSessionStatus).toHaveBeenCalledWith("archived");
+    expect(transition).toHaveBeenCalledWith("archived");
   });
 
   it("unarchives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transitionSessionStatus } =
-      createHandler();
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
     getParticipantByUserId.mockReturnValue(createParticipant());
-    transitionSessionStatus.mockResolvedValue(true);
+    transition.mockResolvedValue(true);
 
     const response = await handler.unarchive(
       new Request("http://internal/internal/unarchive", {
@@ -697,7 +697,7 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "active" });
-    expect(transitionSessionStatus).toHaveBeenCalledWith("active");
+    expect(transition).toHaveBeenCalledWith("active");
   });
 
   it("returns 409 when cancelling terminal session", async () => {
@@ -716,7 +716,7 @@ describe("createSessionLifecycleHandler", () => {
       getSession,
       getSandbox,
       stopExecution,
-      transitionSessionStatus,
+      transition,
       getSandboxSocket,
       sendToSandbox,
       updateSandboxStatus,
@@ -725,7 +725,7 @@ describe("createSessionLifecycleHandler", () => {
     getSession.mockReturnValue(createSession({ status: "active" }));
     getSandbox.mockReturnValue(createSandbox({ status: "running" }));
     stopExecution.mockResolvedValue(undefined);
-    transitionSessionStatus.mockResolvedValue(true);
+    transition.mockResolvedValue(true);
     getSandboxSocket.mockReturnValue(ws);
 
     const response = await handler.cancel();
@@ -733,7 +733,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
     expect(stopExecution).toHaveBeenCalledWith({ suppressStatusReconcile: true });
-    expect(transitionSessionStatus).toHaveBeenCalledWith("cancelled");
+    expect(transition).toHaveBeenCalledWith("cancelled");
     expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
   });

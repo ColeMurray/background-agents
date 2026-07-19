@@ -5,6 +5,7 @@ import type { SandboxEvent, ServerMessage } from "../types";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionRepository } from "./repository";
+import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
@@ -55,7 +56,7 @@ function createProcessor() {
   const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
-  const reconcileSessionStatusAfterExecution = vi.fn(async (_success: boolean) => {});
+  const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const updateLastActivity = vi.fn();
@@ -79,7 +80,7 @@ function createProcessor() {
     diffService as unknown as SessionDiffService,
     applySessionTitleUpdate,
     triggerSnapshot,
-    reconcileSessionStatusAfterExecution,
+    statusService as unknown as SessionStatusService,
     updateLastActivity,
     scheduleInactivityCheck,
     processMessageQueue
@@ -93,7 +94,7 @@ function createProcessor() {
     broadcast,
     diffService,
     triggerSnapshot,
-    reconcileSessionStatusAfterExecution,
+    statusService,
     scheduleInactivityCheck,
     processMessageQueue,
     updateLastActivity,
@@ -117,7 +118,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
 
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
-    expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(true);
+    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
   });
 
   it("updates heartbeat without broadcasting", async () => {
@@ -340,7 +341,7 @@ describe("SessionSandboxEventProcessor", () => {
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
-    expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(true);
+    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
     expect(h.processMessageQueue).toHaveBeenCalledTimes(1);
