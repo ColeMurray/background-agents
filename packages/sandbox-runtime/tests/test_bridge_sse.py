@@ -18,7 +18,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from sandbox_runtime.bridge import AgentBridge, OpenCodeIdentifier, SSEConnectionError
+from sandbox_runtime.bridge import AgentBridge
+from sandbox_runtime.prompt_stream import (
+    OpenCodeIdentifier,
+    OpenCodePromptStream,
+    SSEConnectionError,
+)
 from tests.conftest import MockResponse
 
 
@@ -119,7 +124,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._parse_sse_stream(response):
+        async for event in bridge._ensure_prompt_stream()._parse_sse_stream(response):
             events.append(event)
 
         assert len(events) == 1
@@ -147,7 +152,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._parse_sse_stream(response):
+        async for event in bridge._ensure_prompt_stream()._parse_sse_stream(response):
             events.append(event)
 
         assert len(events) == 3
@@ -165,7 +170,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._parse_sse_stream(response):
+        async for event in bridge._ensure_prompt_stream()._parse_sse_stream(response):
             events.append(event)
 
         assert len(events) == 2
@@ -907,8 +912,8 @@ class TestFetchFinalMessageState:
 
         events = []
         # Pass both control plane ID and OpenCode ID
-        async for event in bridge._fetch_final_message_state(
-            "cp-msg-2", "msg_0002bbbbbb", cumulative_text
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(
+            "oc-session-123", "cp-msg-2", "msg_0002bbbbbb", cumulative_text
         ):
             events.append(event)
 
@@ -936,8 +941,8 @@ class TestFetchFinalMessageState:
 
         events = []
         # Pass both control plane ID and OpenCode ID (new ID doesn't match old parentID)
-        async for event in bridge._fetch_final_message_state(
-            "cp-msg-new", "msg_0002newnew", cumulative_text
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(
+            "oc-session-123", "cp-msg-new", "msg_0002newnew", cumulative_text
         ):
             events.append(event)
 
@@ -962,8 +967,8 @@ class TestFetchFinalMessageState:
         cumulative_text = {"part-1": "Same length"}
 
         events = []
-        async for event in bridge._fetch_final_message_state(
-            "cp-msg-1", "msg_0001aaaaaa", cumulative_text
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(
+            "oc-session-123", "cp-msg-1", "msg_0001aaaaaa", cumulative_text
         ):
             events.append(event)
 
@@ -988,8 +993,8 @@ class TestFetchFinalMessageState:
         cumulative_text = {"part-1": "Hello"}
 
         events = []
-        async for event in bridge._fetch_final_message_state(
-            "cp-msg-1", "msg_0001aaaaaa", cumulative_text
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(
+            "oc-session-123", "cp-msg-1", "msg_0001aaaaaa", cumulative_text
         ):
             events.append(event)
 
@@ -1022,8 +1027,8 @@ class TestFetchFinalMessageState:
         cumulative_text: dict[str, str] = {}
 
         events = []
-        async for event in bridge._fetch_final_message_state(
-            "cp-msg-1", "msg_0001aaaaaa", cumulative_text
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(
+            "oc-session-123", "cp-msg-1", "msg_0001aaaaaa", cumulative_text
         ):
             events.append(event)
 
@@ -1038,29 +1043,29 @@ class TestExtractErrorMessage:
     def test_named_error_with_data_message(self):
         """Should extract message from NamedError data.message."""
         error = {"name": "SomeError", "data": {"message": "Something broke"}}
-        assert AgentBridge._extract_error_message(error) == "Something broke"
+        assert OpenCodePromptStream._extract_error_message(error) == "Something broke"
 
     def test_dict_with_message_key(self):
         """Should fall back to error.message when no data.message."""
         error = {"message": "Direct message"}
-        assert AgentBridge._extract_error_message(error) == "Direct message"
+        assert OpenCodePromptStream._extract_error_message(error) == "Direct message"
 
     def test_dict_with_name_key_only(self):
         """Should fall back to error.name when no message key."""
         error = {"name": "TimeoutError"}
-        assert AgentBridge._extract_error_message(error) == "TimeoutError"
+        assert OpenCodePromptStream._extract_error_message(error) == "TimeoutError"
 
     def test_non_dict_error(self):
         """Should stringify non-dict errors."""
-        assert AgentBridge._extract_error_message("raw error string") == "raw error string"
+        assert OpenCodePromptStream._extract_error_message("raw error string") == "raw error string"
 
     def test_none_error(self):
         """Should return None for falsy error."""
-        assert AgentBridge._extract_error_message(None) is None
+        assert OpenCodePromptStream._extract_error_message(None) is None
 
     def test_empty_dict(self):
         """Should return None for empty dict (no message or name)."""
-        assert AgentBridge._extract_error_message({}) is None
+        assert OpenCodePromptStream._extract_error_message({}) is None
 
 
 class TestSSEFollowUpMessageBug:
@@ -2485,7 +2490,8 @@ class TestCompactionHandling:
         bridge.http_client.get = AsyncMock(return_value=MockResponse(200, messages))
 
         events = []
-        async for event in bridge._fetch_final_message_state(
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(
+            "oc-session-123",
             "cp-msg-1",
             "msg_original_id",
             {},
@@ -2527,7 +2533,8 @@ class TestCompactionHandling:
         bridge.http_client.get = AsyncMock(return_value=MockResponse(200, messages))
 
         events = []
-        async for event in bridge._fetch_final_message_state(
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(
+            "oc-session-123",
             "cp-msg-1",
             "msg_original_id",
             {},

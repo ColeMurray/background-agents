@@ -10,9 +10,12 @@ which tests the parentID-based correlation mechanism used for attributing
 events to the correct prompt.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from sandbox_runtime.bridge import AgentBridge, OpenCodeIdentifier
+from sandbox_runtime.bridge import AgentBridge
+from sandbox_runtime.prompt_stream import OpenCodeIdentifier
 
 
 def create_text_part(part_id: str, text: str) -> dict:
@@ -55,6 +58,7 @@ def bridge() -> AgentBridge:
         auth_token="test-token",
     )
     bridge.opencode_session_id = "oc-session-123"
+    bridge.http_client = MagicMock()
     return bridge
 
 
@@ -65,7 +69,7 @@ class TestTransformPartToEvent:
         """Text parts should use the provided message_id, not any internal ID."""
         part = create_text_part("part-1", "Hello, world!")
 
-        event = bridge._transform_part_to_event(part, "cp-message-123")
+        event = bridge._ensure_prompt_stream()._transform_part_to_event(part, "cp-message-123")
 
         assert event is not None
         assert event["type"] == "token"
@@ -81,7 +85,7 @@ class TestTransformPartToEvent:
             input_data={"command": "ls -la"},
         )
 
-        event = bridge._transform_part_to_event(part, "cp-message-456")
+        event = bridge._ensure_prompt_stream()._transform_part_to_event(part, "cp-message-456")
 
         assert event is not None
         assert event["type"] == "tool_call"
@@ -92,7 +96,7 @@ class TestTransformPartToEvent:
         """Empty text parts should return None."""
         part = create_text_part("part-1", "")
 
-        event = bridge._transform_part_to_event(part, "cp-message-123")
+        event = bridge._ensure_prompt_stream()._transform_part_to_event(part, "cp-message-123")
 
         assert event is None
 
@@ -105,7 +109,7 @@ class TestTransformPartToEvent:
             input_data={},
         )
 
-        event = bridge._transform_part_to_event(part, "cp-message-123")
+        event = bridge._ensure_prompt_stream()._transform_part_to_event(part, "cp-message-123")
 
         assert event is None
 
@@ -119,7 +123,7 @@ class TestTransformPartToEvent:
             output="file1.txt\nfile2.txt",
         )
 
-        event = bridge._transform_part_to_event(part, "cp-message-123")
+        event = bridge._ensure_prompt_stream()._transform_part_to_event(part, "cp-message-123")
 
         assert event is not None
         assert event["type"] == "tool_call"
@@ -130,7 +134,7 @@ class TestTransformPartToEvent:
         """Step-start parts should be transformed correctly."""
         part = {"type": "step-start", "id": "step-1"}
 
-        event = bridge._transform_part_to_event(part, "cp-message-123")
+        event = bridge._ensure_prompt_stream()._transform_part_to_event(part, "cp-message-123")
 
         assert event is not None
         assert event["type"] == "step_start"
@@ -146,7 +150,7 @@ class TestTransformPartToEvent:
             "reason": "end_turn",
         }
 
-        event = bridge._transform_part_to_event(part, "cp-message-123")
+        event = bridge._ensure_prompt_stream()._transform_part_to_event(part, "cp-message-123")
 
         assert event is not None
         assert event["type"] == "step_finish"
@@ -161,7 +165,7 @@ class TestBuildPromptRequestBody:
 
     def test_basic_prompt(self, bridge: AgentBridge):
         """Should build request with text content."""
-        body = bridge._build_prompt_request_body("Hello", None)
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body("Hello", None)
 
         assert body["parts"] == [{"type": "text", "text": "Hello"}]
         assert "model" not in body
@@ -171,13 +175,15 @@ class TestBuildPromptRequestBody:
         """Should include messageID when provided (expects OpenCode format)."""
         # The function now expects an already-formatted OpenCode ID
         opencode_id = "msg_0123456789abcdefABCDEF"
-        body = bridge._build_prompt_request_body("Hello", None, opencode_id)
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body("Hello", None, opencode_id)
 
         assert body["messageID"] == opencode_id
 
     def test_with_model_short_form(self, bridge: AgentBridge):
         """Should expand short model name to provider/model."""
-        body = bridge._build_prompt_request_body("Hello", "claude-haiku-4-5")
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello", "claude-haiku-4-5"
+        )
 
         assert body["model"] == {
             "providerID": "anthropic",
@@ -186,7 +192,7 @@ class TestBuildPromptRequestBody:
 
     def test_with_model_full_form(self, bridge: AgentBridge):
         """Should parse provider/model format."""
-        body = bridge._build_prompt_request_body("Hello", "openai/gpt-4")
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body("Hello", "openai/gpt-4")
 
         assert body["model"] == {
             "providerID": "openai",
@@ -196,7 +202,9 @@ class TestBuildPromptRequestBody:
     def test_with_all_options(self, bridge: AgentBridge):
         """Should include all options when provided."""
         opencode_id = "msg_0123456789abcdefABCDEF"
-        body = bridge._build_prompt_request_body("Hello", "anthropic/claude-3-opus", opencode_id)
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello", "anthropic/claude-3-opus", opencode_id
+        )
 
         assert body["parts"] == [{"type": "text", "text": "Hello"}]
         assert body["messageID"] == opencode_id
@@ -207,7 +215,7 @@ class TestBuildPromptRequestBody:
 
     def test_with_anthropic_manual_thinking(self, bridge: AgentBridge):
         """Non-Opus-4.6 Claude models should use manual thinking budgets."""
-        body = bridge._build_prompt_request_body(
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",
             "anthropic/claude-sonnet-4-5",
             reasoning_effort="max",
@@ -217,7 +225,7 @@ class TestBuildPromptRequestBody:
 
     def test_with_opus_4_6_adaptive_thinking(self, bridge: AgentBridge):
         """Opus 4.6 should use adaptive thinking instead of manual budgets."""
-        body = bridge._build_prompt_request_body(
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",
             "anthropic/claude-opus-4-6",
             reasoning_effort="medium",
@@ -230,7 +238,7 @@ class TestBuildPromptRequestBody:
 
     def test_with_sonnet_4_6_adaptive_thinking(self, bridge: AgentBridge):
         """Sonnet 4.6 should use adaptive thinking instead of manual budgets."""
-        body = bridge._build_prompt_request_body(
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",
             "anthropic/claude-sonnet-4-6",
             reasoning_effort="high",
