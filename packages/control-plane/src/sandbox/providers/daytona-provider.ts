@@ -11,7 +11,7 @@ import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
-import { buildSessionConfig } from "../sandbox-env";
+import { buildSandboxEnvVars, legacyScmCloneIdentity } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -191,45 +191,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   // -----------------------------------------------------------------------
 
   private async buildEnvVars(config: CreateSandboxConfig): Promise<Record<string, string>> {
-    // Start with user env vars (repo secrets), then overlay system vars
-    const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
-
-    const sessionConfig = buildSessionConfig(config);
-
-    Object.assign(envVars, {
-      PYTHONUNBUFFERED: "1",
-      SANDBOX_ID: config.sandboxId,
-      CONTROL_PLANE_URL: config.controlPlaneUrl,
-      SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-      REPO_OWNER: config.repoOwner ?? "",
-      REPO_NAME: config.repoName ?? "",
-      SESSION_CONFIG: JSON.stringify(sessionConfig),
+    return buildSandboxEnvVars(config, {
+      scmIdentity: legacyScmCloneIdentity(this.providerConfig.scmProvider),
+      codeServerPassword: config.codeServerEnabled
+        ? await this.deriveCodeServerPassword(config.sandboxId)
+        : undefined,
     });
-
-    if (config.codeServerEnabled) {
-      envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
-      envVars.CODE_SERVER_PORT = String(resolveServicePorts(config.sandboxSettings).codeServerPort);
-    }
-
-    if (config.agentSlackNotifyEnabled) {
-      envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
-    }
-
-    if (this.providerConfig.scmProvider === "gitlab") {
-      envVars.VCS_HOST = "gitlab.com";
-      envVars.VCS_CLONE_USERNAME = "oauth2";
-    } else {
-      envVars.VCS_HOST = "github.com";
-      envVars.VCS_CLONE_USERNAME = "x-access-token";
-    }
-
-    // Note: no VCS_CLONE_TOKEN / GITHUB_TOKEN / GITHUB_APP_TOKEN. Git
-    // operations in the sandbox authenticate per-request via the system git
-    // credential helper, which hits /sessions/:id/scm-credentials. Embedding
-    // a token in env would silently fail once the token expires (or
-    // immediately, for providers like GitHub Apps with short-lived tokens).
-
-    return envVars;
   }
 
   // -----------------------------------------------------------------------

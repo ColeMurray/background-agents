@@ -188,6 +188,23 @@ describe("DaytonaSandboxProvider", () => {
       expect(envVars.VCS_CLONE_TOKEN).toBeUndefined();
     });
 
+    it("collapses bitbucket to the GitHub clone identity (historical behavior)", async () => {
+      // Daytona predates Bitbucket support: only GitLab is mapped, everything
+      // else — including bitbucket — resolves to the GitHub identity. Locked
+      // in so the shared env assembly can't silently change it.
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, {
+        scmProvider: "bitbucket",
+        codeServerPasswordSecret: "secret",
+      });
+
+      await provider.createSandbox(baseCreateConfig);
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      expect(envVars.VCS_HOST).toBe("github.com");
+      expect(envVars.VCS_CLONE_USERNAME).toBe("x-access-token");
+    });
+
     it("includes branch in SESSION_CONFIG when provided", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);

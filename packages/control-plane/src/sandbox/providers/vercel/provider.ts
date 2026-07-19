@@ -11,7 +11,14 @@ import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
-import { buildSessionConfig, toRepositoryConfigPayload } from "../../sandbox-env";
+import {
+  applyScmCloneEnv,
+  buildSandboxEnvVars,
+  IMAGE_BUILD_MODE_ENV_VAR,
+  scmCloneIdentity,
+  SESSION_CONFIG_ENV_VAR,
+  toRepositoryConfigPayload,
+} from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -355,42 +362,22 @@ export class VercelSandboxProvider implements SandboxProvider {
       prebuiltImageSha?: string;
     }
   ): Promise<Record<string, string>> {
-    const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
-    const sessionConfig = buildSessionConfig(config);
-
-    Object.assign(envVars, {
-      HOME: "/root",
-      NODE_ENV: "development",
-      PATH: buildVercelRuntimePath(this.providerConfig.runtime),
-      PYTHONPATH: "/app",
-      PYTHONUNBUFFERED: "1",
-      NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
-      SANDBOX_ID: config.sandboxId,
-      CONTROL_PLANE_URL: config.controlPlaneUrl,
-      SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-      REPO_OWNER: config.repoOwner ?? "",
-      REPO_NAME: config.repoName ?? "",
-      SESSION_CONFIG: JSON.stringify(sessionConfig),
+    const envVars = buildSandboxEnvVars(config, {
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+      codeServerPassword: config.codeServerEnabled
+        ? await this.deriveCodeServerPassword(config.sandboxId)
+        : undefined,
     });
-
-    this.injectScmEnvVars(envVars);
+    Object.assign(envVars, this.buildPlatformEnvVars());
 
     if (mode.restoredFromSnapshot) envVars.RESTORED_FROM_SNAPSHOT = "true";
     if (mode.fromPrebuiltImage) {
       envVars.FROM_REPO_IMAGE = "true";
       envVars.REPO_IMAGE_SHA = mode.prebuiltImageSha ?? "";
     }
-    const { codeServerPort, terminalPort } = resolveServicePorts(config.sandboxSettings);
-    if (config.codeServerEnabled) {
-      envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
-      envVars.CODE_SERVER_PORT = String(codeServerPort);
-    }
     if (config.sandboxSettings?.terminalEnabled) {
       envVars.TERMINAL_ENABLED = "true";
-      envVars.TTYD_PROXY_PORT = String(terminalPort);
-    }
-    if (config.agentSlackNotifyEnabled) {
-      envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
+      envVars.TTYD_PROXY_PORT = String(resolveServicePorts(config.sandboxSettings).terminalPort);
     }
 
     const tunnelPorts = collectExposedPorts(
@@ -418,40 +405,29 @@ export class VercelSandboxProvider implements SandboxProvider {
       delete envVars[key];
     }
 
-    Object.assign(envVars, {
+    Object.assign(envVars, this.buildPlatformEnvVars(), {
+      SANDBOX_ID: config.sandboxId,
+      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
+      REPO_OWNER: config.repoOwner,
+      REPO_NAME: config.repoName,
+      [IMAGE_BUILD_MODE_ENV_VAR]: "true",
+      [SESSION_CONFIG_ENV_VAR]: JSON.stringify(config.sessionConfig),
+    });
+
+    applyScmCloneEnv(envVars, scmCloneIdentity(this.providerConfig.scmProvider), config.cloneToken);
+    return envVars;
+  }
+
+  /** Vercel base-image paths layered on top of the canonical sandbox env. */
+  private buildPlatformEnvVars(): Record<string, string> {
+    return {
       HOME: "/root",
       NODE_ENV: "development",
       PATH: buildVercelRuntimePath(this.providerConfig.runtime),
       PYTHONPATH: "/app",
       PYTHONUNBUFFERED: "1",
       NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
-      SANDBOX_ID: config.sandboxId,
-      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
-      REPO_OWNER: config.repoOwner,
-      REPO_NAME: config.repoName,
-      IMAGE_BUILD_MODE: "true",
-      SESSION_CONFIG: JSON.stringify(config.sessionConfig),
-    });
-
-    this.injectScmEnvVars(envVars, config.cloneToken);
-    return envVars;
-  }
-
-  private injectScmEnvVars(envVars: Record<string, string>, cloneToken?: string): void {
-    if (this.providerConfig.scmProvider === "gitlab") {
-      envVars.VCS_HOST = "gitlab.com";
-      envVars.VCS_CLONE_USERNAME = "oauth2";
-    } else if (this.providerConfig.scmProvider === "bitbucket") {
-      envVars.VCS_HOST = "bitbucket.org";
-      envVars.VCS_CLONE_USERNAME = "x-token-auth";
-    } else {
-      envVars.VCS_HOST = "github.com";
-      envVars.VCS_CLONE_USERNAME = "x-access-token";
-    }
-
-    if (cloneToken) {
-      envVars.VCS_CLONE_TOKEN = cloneToken;
-    }
+    };
   }
 
   private buildTags(config: CreateSandboxConfig | RestoreConfig): Record<string, string> {
