@@ -253,7 +253,7 @@ class OpenCodePromptStream:
                             yield event
 
                         if step.disposition is _Disposition.FINISHED_IDLE:
-                            async for final_event in self._final_state_events(state):
+                            async for final_event in self._fetch_final_message_state(state):
                                 yield final_event
                             return
                         if step.disposition is _Disposition.FAILED:
@@ -270,7 +270,7 @@ class OpenCodePromptStream:
                             await self.request_stop(
                                 opencode_session_id, reason="prompt_max_duration_timeout"
                             )
-                            async for final_event in self._final_state_events(state):
+                            async for final_event in self._fetch_final_message_state(state):
                                 yield final_event
                             raise RuntimeError(
                                 f"Prompt exceeded max duration of "
@@ -288,7 +288,7 @@ class OpenCodePromptStream:
                 message_id=message_id,
             )
             await self.request_stop(opencode_session_id, reason="inactivity_timeout")
-            async for final_event in self._final_state_events(state):
+            async for final_event in self._fetch_final_message_state(state):
                 yield final_event
             raise RuntimeError(
                 f"SSE stream inactive for {self._sse_inactivity_timeout_seconds:.0f}s "
@@ -297,7 +297,7 @@ class OpenCodePromptStream:
 
         except httpx.TransportError as e:
             self._log.error("bridge.sse_transport_error", exc=e)
-            async for final_event in self._final_state_events(state):
+            async for final_event in self._fetch_final_message_state(state):
                 yield final_event
             raise SSEConnectionError(
                 "OpenCode event stream disconnected before completion; "
@@ -359,7 +359,9 @@ class OpenCodePromptStream:
                     asyncio.get_running_loop().time() + self._sse_inactivity_timeout_seconds
                 )
 
-            # Process complete events (separated by double newlines)
+            # Frames split on LF-LF only: the peer is the bundled localhost
+            # OpenCode server (Bun/Hono), which emits LF-framed SSE. CRLF
+            # framing is deliberately not handled.
             while "\n\n" in buffer:
                 event_str, buffer = buffer.split("\n\n", 1)
 
@@ -606,7 +608,7 @@ class OpenCodePromptStream:
                 )
 
         elif part_type == "tool":
-            tool_event = self._transform_part_to_event(part, state.message_id)
+            tool_event = self._tool_call_event(part, state.message_id)
             if tool_event:
                 tool_state = part.get("state", {})
                 status = tool_state.get("status", "")
@@ -676,60 +678,38 @@ class OpenCodePromptStream:
             tracked_msgs=len(state.allowed_assistant_msg_ids),
         )
 
-    def _transform_part_to_event(
+    def _tool_call_event(
         self,
         part: dict[str, Any],
         message_id: str,
     ) -> dict[str, Any] | None:
-        """Transform a single OpenCode part to a bridge event."""
-        part_type = part.get("type")
+        """Build a tool_call event from a tool part.
 
-        if part_type == "text":
-            text = part.get("text", "")
-            if text:
-                return {
-                    "type": "token",
-                    "content": text,
-                    "messageId": message_id,
-                }
-        elif part_type == "tool":
-            state = part.get("state", {})
-            status = state.get("status", "")
-            tool_input = state.get("input", {})
+        Returns None for a pending invocation with no input yet — there is
+        nothing to show until arguments start streaming.
+        """
+        tool_state = part.get("state", {})
+        status = tool_state.get("status", "")
+        tool_input = tool_state.get("input", {})
 
-            self._log.debug(
-                "bridge.tool_part",
-                tool=part.get("tool"),
-                status=status,
-            )
+        self._log.debug(
+            "bridge.tool_part",
+            tool=part.get("tool"),
+            status=status,
+        )
 
-            if status in ("pending", "") and not tool_input:
-                return None
+        if status in ("pending", "") and not tool_input:
+            return None
 
-            return {
-                "type": "tool_call",
-                "tool": part.get("tool", ""),
-                "args": tool_input,
-                "callId": part.get("callID", ""),
-                "status": status,
-                "output": state.get("output", ""),
-                "messageId": message_id,
-            }
-        elif part_type == "step-finish":
-            return {
-                "type": "step_finish",
-                "cost": part.get("cost"),
-                "tokens": part.get("tokens"),
-                "reason": part.get("reason"),
-                "messageId": message_id,
-            }
-        elif part_type == "step-start":
-            return {
-                "type": "step_start",
-                "messageId": message_id,
-            }
-
-        return None
+        return {
+            "type": "tool_call",
+            "tool": part.get("tool", ""),
+            "args": tool_input,
+            "callId": part.get("callID", ""),
+            "status": status,
+            "output": tool_state.get("output", ""),
+            "messageId": message_id,
+        }
 
     def _build_prompt_request_body(
         self,
@@ -842,51 +822,26 @@ class OpenCodePromptStream:
             return str(message) if message else None
         return str(error) if error else None
 
-    async def _final_state_events(self, state: _PromptState) -> AsyncIterator[dict[str, Any]]:
-        async for event in self._fetch_final_message_state(
-            state.opencode_session_id,
-            state.message_id,
-            state.opencode_message_id,
-            state.cumulative_text,
-            state.allowed_assistant_msg_ids,
-            user_message_ids=state.user_message_ids,
-            compaction_occurred=state.compaction_occurred,
-        ):
-            yield event
-
     async def _fetch_final_message_state(
-        self,
-        opencode_session_id: str,
-        message_id: str,
-        opencode_message_id: str,
-        cumulative_text: dict[str, str],
-        tracked_msg_ids: set[str] | None = None,
-        user_message_ids: set[str] | None = None,
-        compaction_occurred: bool = False,
+        self, state: _PromptState
     ) -> AsyncIterator[dict[str, Any]]:
         """Fetch final message state from API to ensure complete text.
 
-        This is called after session.idle to capture any text that may have
-        been missed due to SSE event ordering. It fetches the latest message
-        state and emits any text that's longer than what we've already sent.
+        This is called after session.idle (and on the timeout/disconnect
+        paths) to capture any text that may have been missed due to SSE event
+        ordering. It fetches the latest message state and emits any text
+        that's longer than what ``state.cumulative_text`` says we already
+        sent.
 
-        Args:
-            opencode_session_id: OpenCode session to fetch messages from
-            message_id: Control plane message ID (used in events sent back)
-            opencode_message_id: OpenCode ascending ID (used for parentID correlation)
-            cumulative_text: Text already sent, keyed by part ID
-            tracked_msg_ids: Assistant message IDs tracked during SSE streaming
-            compaction_occurred: Whether session compaction happened during this prompt.
-                When True, accepts non-summary assistant messages even if parentID
-                doesn't match, since compaction changes the message chain.
-
-        Uses parentID-based correlation if available, falling back to
-        tracked_msg_ids from SSE streaming if parentID doesn't match.
+        Accepts an assistant message when its parentID matches one of the
+        prompt's user message IDs, when it was already authorized during SSE
+        streaming, or — after compaction, which rewrites the message chain —
+        when it is not the compaction summary itself.
         """
-        if not opencode_session_id:
+        if not state.opencode_session_id:
             return
 
-        messages_url = f"{self._opencode_base_url}/session/{opencode_session_id}/message"
+        messages_url = f"{self._opencode_base_url}/session/{state.opencode_session_id}/message"
 
         try:
             response = await self._http_client.get(
@@ -911,9 +866,8 @@ class OpenCodePromptStream:
                 if role != "assistant":
                     continue
 
-                valid_parent_ids = user_message_ids or {opencode_message_id}
-                parent_matches = parent_id in valid_parent_ids
-                in_tracked_set = tracked_msg_ids and msg_id in tracked_msg_ids
+                parent_matches = parent_id in state.user_message_ids
+                in_tracked_set = msg_id in state.allowed_assistant_msg_ids
                 is_compaction_summary = info.get("summary") is True
 
                 # Accept if: parentID matches, was tracked during SSE, or
@@ -921,7 +875,7 @@ class OpenCodePromptStream:
                 should_accept = (
                     parent_matches
                     or in_tracked_set
-                    or (compaction_occurred and not is_compaction_summary)
+                    or (state.compaction_occurred and not is_compaction_summary)
                 )
                 if not should_accept:
                     continue
@@ -933,18 +887,18 @@ class OpenCodePromptStream:
 
                     if part_type == "text":
                         text = part.get("text", "")
-                        previously_sent = cumulative_text.get(part_id, "")
+                        previously_sent = state.cumulative_text.get(part_id, "")
                         if len(text) > len(previously_sent):
                             self._log.debug(
                                 "bridge.final_text_update",
                                 prev_len=len(previously_sent),
                                 new_len=len(text),
                             )
-                            cumulative_text[part_id] = text
+                            state.cumulative_text[part_id] = text
                             yield {
                                 "type": "token",
                                 "content": text,
-                                "messageId": message_id,
+                                "messageId": state.message_id,
                             }
 
         except Exception as e:
