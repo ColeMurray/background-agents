@@ -6,11 +6,7 @@
  * to OpenComputer rather than being driven by OpenInspect's lifecycle manager.
  */
 
-import {
-  computeHmacHex,
-  DEFAULT_BUILD_TIMEOUT_SECONDS,
-  type SandboxSettings,
-} from "@open-inspect/shared";
+import { DEFAULT_BUILD_TIMEOUT_SECONDS, type SandboxSettings } from "@open-inspect/shared";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
@@ -24,7 +20,16 @@ import {
   type OpenComputerSandboxResponse,
   type OpenComputerSecretStoreResponse,
 } from "../opencomputer-rest-client";
-import { buildSessionConfig, toRepositoryConfigPayload } from "../sandbox-env";
+import {
+  applyScmCloneEnv,
+  buildSandboxEnvVars,
+  deriveCodeServerPassword,
+  IMAGE_BUILD_MODE_ENV_VAR,
+  scmCloneIdentity,
+  SESSION_CONFIG_ENV_VAR,
+  toRepositoryConfigPayload,
+  VCS_CLONE_TOKEN_ENV_VAR,
+} from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -460,34 +465,24 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       prebuiltImageSha?: string;
     } = {}
   ): Promise<PreparedOpenComputerEnvironment> {
-    const environment = this.prepareEnvironment(config.userEnvVars);
-    const { envVars } = environment;
-    const sessionConfig = buildSessionConfig(config);
-
-    Object.assign(envVars, {
-      PYTHONUNBUFFERED: "1",
-      SANDBOX_ID: config.sandboxId,
-      CONTROL_PLANE_URL: config.controlPlaneUrl,
-      SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-      REPO_OWNER: config.repoOwner ?? "",
-      REPO_NAME: config.repoName ?? "",
-      SESSION_CONFIG: JSON.stringify(sessionConfig),
+    const { envVars: baseEnvVars, secretEnvVars } = this.prepareEnvironment(config.userEnvVars);
+    const envVars = buildSandboxEnvVars(config, {
+      baseEnvVars,
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+      codeServerPassword: config.codeServerEnabled
+        ? await deriveCodeServerPassword(
+            config.sandboxId,
+            this.providerConfig.codeServerPasswordSecret
+          )
+        : undefined,
     });
 
-    if (config.codeServerEnabled) {
-      envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
-      envVars.CODE_SERVER_PORT = String(resolveServicePorts(config.sandboxSettings).codeServerPort);
-    }
-
-    if (config.agentSlackNotifyEnabled) {
-      envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
-    }
     if (mode.restoredFromSnapshot) envVars.RESTORED_FROM_SNAPSHOT = "true";
     if (mode.fromPrebuiltImage) {
       envVars.FROM_REPO_IMAGE = "true";
       envVars.REPO_IMAGE_SHA = mode.prebuiltImageSha ?? "";
-      if (!envVars.VCS_CLONE_TOKEN) {
-        envVars.VCS_CLONE_TOKEN = "";
+      if (!envVars[VCS_CLONE_TOKEN_ENV_VAR]) {
+        envVars[VCS_CLONE_TOKEN_ENV_VAR] = "";
       }
     }
 
@@ -500,18 +495,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     // failing the already-completed build-complete callback). A runtime session
     // is never an image build, so force the markers off. IMAGE_BUILD_MODE is
     // checked as === "true" in entrypoint.py, so "false" disables it.
-    envVars.IMAGE_BUILD_MODE = "false";
+    envVars[IMAGE_BUILD_MODE_ENV_VAR] = "false";
     for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
 
-    if (this.providerConfig.scmProvider === "gitlab") {
-      envVars.VCS_HOST = "gitlab.com";
-      envVars.VCS_CLONE_USERNAME = "oauth2";
-    } else {
-      envVars.VCS_HOST = "github.com";
-      envVars.VCS_CLONE_USERNAME = "x-access-token";
-    }
-
-    return environment;
+    return { envVars, secretEnvVars };
   }
 
   /** Build-sandbox env for both repo- and environment-image builds; the caller owns identity + SESSION_CONFIG shape. */
@@ -537,24 +524,15 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       SANDBOX_ID: config.sandboxId,
       REPO_OWNER: config.repoOwner,
       REPO_NAME: config.repoName,
-      IMAGE_BUILD_MODE: "true",
-      SESSION_CONFIG: JSON.stringify(config.sessionConfig),
+      [IMAGE_BUILD_MODE_ENV_VAR]: "true",
+      [SESSION_CONFIG_ENV_VAR]: JSON.stringify(config.sessionConfig),
       [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
     });
 
-    if (this.providerConfig.scmProvider === "gitlab") {
-      envVars.VCS_HOST = "gitlab.com";
-      envVars.VCS_CLONE_USERNAME = "oauth2";
-    } else {
-      envVars.VCS_HOST = "github.com";
-      envVars.VCS_CLONE_USERNAME = "x-access-token";
-    }
-    if (config.cloneToken) {
-      envVars.VCS_CLONE_TOKEN = config.cloneToken;
-    }
+    applyScmCloneEnv(envVars, scmCloneIdentity(this.providerConfig.scmProvider), config.cloneToken);
 
     return environment;
   }
@@ -639,10 +617,14 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     const normalized = name.toUpperCase();
     if (normalized.includes("ANTHROPIC")) return ["api.anthropic.com"];
     if (normalized.includes("OPENAI")) return ["api.openai.com"];
-    if (normalized.includes("GITHUB") || normalized.includes("VCS_CLONE")) {
-      return this.providerConfig.scmProvider === "gitlab"
-        ? ["gitlab.com", "api.gitlab.com"]
-        : ["github.com", "api.github.com"];
+    // VCS_CLONE_* is the provider-generic clone credential, so it follows the
+    // configured SCM provider; GITHUB-named secrets are GitHub credentials no
+    // matter which provider the deployment clones from.
+    if (normalized.includes("VCS_CLONE")) {
+      return [...scmCloneIdentity(this.providerConfig.scmProvider).secretHosts];
+    }
+    if (normalized.includes("GITHUB")) {
+      return [...scmCloneIdentity("github").secretHosts];
     }
     return undefined;
   }
@@ -695,7 +677,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       codeServerUrl =
         routeUrls[String(codeServerPort)] ??
         (await this.client.getTunnelUrl(providerObjectId, codeServerPort)).url;
-      codeServerPassword = await this.deriveCodeServerPassword(logicalSandboxId);
+      codeServerPassword = await deriveCodeServerPassword(
+        logicalSandboxId,
+        this.providerConfig.codeServerPasswordSecret
+      );
       tunnelPorts = tunnelPorts.filter((port) => port !== codeServerPort);
     }
 
@@ -732,14 +717,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
     if (!sandbox.routes) return {};
     return Object.fromEntries(sandbox.routes.map((route) => [String(route.port), route.url]));
-  }
-
-  private async deriveCodeServerPassword(sandboxId: string): Promise<string> {
-    const digest = await computeHmacHex(
-      `code-server:${sandboxId}`,
-      this.providerConfig.codeServerPasswordSecret
-    );
-    return digest.slice(0, 32);
   }
 
   private classifyError(message: string, error: unknown): SandboxProviderError {

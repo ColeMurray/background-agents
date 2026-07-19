@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
+import type { SessionStatusService } from "../../session-status-service";
 import {
   normalizeSessionTitle,
   type SessionTitleUpdateOptions,
@@ -67,12 +68,11 @@ export interface SessionLifecycleHandlerDeps {
   generateId: (bytes?: number) => string;
   now: () => number;
   scheduleWarmSandbox: () => void;
-  getLog: () => Logger;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
   getPublicSessionId: (session: SessionRow) => string;
   getParticipantByUserId: (userId: string) => ParticipantRow | null;
-  transitionSessionStatus: (status: SessionStatus) => Promise<boolean>;
+  statusService: SessionStatusService;
   applySessionTitleUpdate: (
     title: string,
     options?: SessionTitleUpdateOptions
@@ -97,7 +97,7 @@ function sessionTitleUpdateStatus(
 }
 
 export interface SessionLifecycleHandler {
-  init: (request: Request) => Promise<Response>;
+  init: (request: Request, log: Logger) => Promise<Response>;
   getState: () => Response;
   updateTitle: (request: Request) => Promise<Response>;
   archive: (request: Request) => Promise<Response>;
@@ -113,7 +113,7 @@ export function createSessionLifecycleHandler(
   deps: SessionLifecycleHandlerDeps
 ): SessionLifecycleHandler {
   return {
-    async init(request: Request): Promise<Response> {
+    async init(request: Request, log: Logger): Promise<Response> {
       const body = (await request.json()) as InitRequest;
 
       const sessionId = deps.getDurableObjectId();
@@ -139,9 +139,9 @@ export function createSessionLifecycleHandler(
       if (body.scmToken && deps.tokenEncryptionKey) {
         try {
           encryptedToken = await deps.encryptToken(body.scmToken, deps.tokenEncryptionKey);
-          deps.getLog().debug("Encrypted SCM token for storage");
+          log.debug("Encrypted SCM token for storage");
         } catch (error) {
-          deps.getLog().error("Failed to encrypt SCM token", {
+          log.error("Failed to encrypt SCM token", {
             error: error instanceof Error ? error : String(error),
           });
         }
@@ -149,7 +149,7 @@ export function createSessionLifecycleHandler(
 
       const model = getValidModelOrDefault(body.model);
       if (body.model && !isValidModel(body.model)) {
-        deps.getLog().warn("Invalid model name, using default", {
+        log.warn("Invalid model name, using default", {
           requested_model: body.model,
           default_model: model,
         });
@@ -220,7 +220,6 @@ export function createSessionLifecycleHandler(
           baseBranch: repo.baseBranch,
         }))
       );
-
       const sandboxId = deps.generateId();
       deps.repository.createSandbox({
         id: sandboxId,
@@ -244,7 +243,7 @@ export function createSessionLifecycleHandler(
         joinedAt: now,
       });
 
-      deps.getLog().info("Triggering sandbox spawn for new session");
+      log.info("Triggering sandbox spawn for new session");
       deps.scheduleWarmSandbox();
 
       return Response.json({ sessionId, status: "created" });
@@ -345,7 +344,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
       }
 
-      await deps.transitionSessionStatus("archived");
+      await deps.statusService.transition("archived");
 
       return Response.json({ status: "archived" });
     },
@@ -375,7 +374,7 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      await deps.transitionSessionStatus("active");
+      await deps.statusService.transition("active");
 
       return Response.json({ status: "active" });
     },
@@ -391,7 +390,7 @@ export function createSessionLifecycleHandler(
       }
 
       await deps.stopExecution({ suppressStatusReconcile: true });
-      await deps.transitionSessionStatus("cancelled");
+      await deps.statusService.transition("cancelled");
 
       const sandbox = deps.getSandbox();
       if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {

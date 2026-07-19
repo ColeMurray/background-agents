@@ -227,7 +227,9 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
 function multiRepoSpawnFields(
   repositories: SessionRepositoryInfo[]
 ): Pick<CreateSandboxConfig, "repositories"> {
-  return repositories.length > 1 ? { repositories } : {};
+  return repositories.length > 1 || repositories.some((repository) => repository.baseSha)
+    ? { repositories }
+    : {};
 }
 
 // ==================== MCP Server Lookup ====================

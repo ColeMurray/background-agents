@@ -92,6 +92,23 @@ describe("E2BSandboxProvider", () => {
     expect(env).not.toHaveProperty("GITHUB_APP_TOKEN");
   });
 
+  it("maps bitbucket to the Bitbucket clone identity", async () => {
+    // E2B historically collapsed bitbucket to the GitHub identity (a
+    // pre-Bitbucket-support drift that made bitbucket clones impossible);
+    // it now resolves the real Bitbucket identity like every provider.
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, {
+      ...providerConfig,
+      scmProvider: "bitbucket",
+    });
+
+    await provider.createSandbox(baseCreateConfig);
+
+    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    expect(env.VCS_HOST).toBe("bitbucket.org");
+    expect(env.VCS_CLONE_USERNAME).toBe("x-token-auth");
+  });
+
   it("resumeSandbox paused uses connectSandbox", async () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);

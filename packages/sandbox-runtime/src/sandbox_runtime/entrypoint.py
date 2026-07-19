@@ -12,6 +12,7 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 """
 
 import asyncio
+import filecmp
 import json
 import os
 import re
@@ -35,6 +36,8 @@ from .constants import (
     TUNNEL_ENV_FILE_PATH,
     TUNNEL_ENV_SANDBOX_ID_KEY,
 )
+from .diff_baseline import resolve_session_diff_baselines
+from .git_excludes import install_runtime_git_excludes
 from .log_config import configure_logging, get_logger
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
@@ -438,10 +441,12 @@ class SandboxSupervisor:
     # ------------------------------------------------------------------
 
     async def _update_existing_repo(self, repo: RepoEntry) -> bool:
-        """Fetch the target branch and check it out in an existing repo.
+        """Refresh an existing checkout without corrupting restored session state.
 
-        Used by both snapshot-restore and repo-image boot paths where the
-        repository already exists on disk.
+        A snapshot contains the session's HEAD, index, and worktree. Fetching
+        remote refs is safe there, but checkout/reset is not. Fresh clones and
+        explicitly initialized repository images still align to their requested
+        branch.
         """
         if not repo.path.exists():
             self.log.info(
@@ -453,12 +458,25 @@ class SandboxSupervisor:
             return False
 
         try:
+            preserve_checkout = self.boot_mode == "snapshot_restore"
+            if preserve_checkout:
+                if not await self._ensure_plain_origin(repo):
+                    return False
+                return await self._fetch_branch(repo, repo.branch)
             if not await self._ensure_plain_origin(repo):
                 return False
             if not await self._fetch_branch(repo, repo.branch):
                 return False
             return await self._checkout_branch(repo, repo.branch)
         except Exception as e:
+            if preserve_checkout:
+                self.log.warn(
+                    "git.restore_refresh_error",
+                    exc=e,
+                    repo_owner=repo.owner,
+                    repo_name=repo.name,
+                )
+                return False
             self.log.error("git.update_error", exc=e, repo_owner=repo.owner, repo_name=repo.name)
             return False
 
@@ -485,10 +503,8 @@ class SandboxSupervisor:
     async def _sync_repo(self, repo: RepoEntry) -> bool:
         """Sync one repository: update in place when present, clone when missing.
 
-        The same rule serves every boot mode — a fresh boot clones, an
-        image/snapshot boot finds the path and fetches — so member count and
-        boot mode never multiply into special cases here. Failure policy is
-        the caller's (run()) job.
+        A fresh boot clones and aligns the requested branch. Snapshot restore
+        refreshes refs without switching or resetting the restored checkout.
         """
         self.log.debug(
             "git.sync_start",
@@ -682,8 +698,9 @@ class SandboxSupervisor:
         except Exception as e:
             self.log.warn("workspace.manifest_write_failed", exc=e)
 
-    def _install_tools(self, workdir: Path) -> None:
+    def _install_tools(self, workdir: Path) -> set[str]:
         """Copy custom tools into the .opencode/tool directory for OpenCode to discover."""
+        installed: set[str] = set()
         opencode_dir = workdir / ".opencode"
         tool_dest = opencode_dir / "tool"
 
@@ -694,12 +711,13 @@ class SandboxSupervisor:
 
         has_tools = legacy_tool.exists() or tools_dir.exists()
         if not has_tools:
-            return
+            return installed
 
         tool_dest.mkdir(parents=True, exist_ok=True)
 
         if legacy_tool.exists() and self.has_repository:
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
+            installed.add(".opencode/tool/create-pull-request.js")
 
         # Copy all .js files from tools/ — these must export tool() for OpenCode.
         # Tools listed in AGENT_TOOLS_GATED_ON_ENV are skipped unless their gate
@@ -714,20 +732,25 @@ class SandboxSupervisor:
                 if tool_file.name in AGENT_TOOLS_REQUIRING_REPOSITORY and not self.has_repository:
                     continue
                 shutil.copy(tool_file, tool_dest / tool_file.name)
+                installed.add(f".opencode/tool/{tool_file.name}")
 
         # Copy pre-built deps (package.json, package-lock.json, node_modules) from the image
         # staging directory so OpenCode's Npm.install() finds the tree in sync and skips the
         # arborist reify() that would otherwise block the first request.
         staged_at = time.monotonic()
-        self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
+        installed.update(
+            f".opencode/{path}"
+            for path in self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
+        )
         self.log.info(
             "opencode.repo_deps_staged",
             dir=str(opencode_dir),
             duration_ms=round((time.monotonic() - staged_at) * 1000),
         )
+        return installed
 
     @staticmethod
-    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> None:
+    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> set[str]:
         """Copy the pre-staged OpenCode plugin deps into dest_dir.
 
         Copies package.json, package-lock.json and node_modules from the image staging
@@ -736,15 +759,24 @@ class SandboxSupervisor:
         Npm.install() finds @opencode-ai/plugin in sync and skips the arborist reify() that
         would otherwise block the first request.
         """
+        installed: set[str] = set()
         for name in ("package.json", "package-lock.json"):
             src = deps_cache / name
             dest = dest_dir / name
             if src.exists() and not dest.exists():
                 shutil.copy2(src, dest)
+                installed.add(name)
+            elif src.is_file() and dest.is_file() and filecmp.cmp(src, dest, shallow=False):
+                installed.add(name)
         cached_modules = deps_cache / "node_modules"
         local_modules = dest_dir / "node_modules"
+        copied_modules = False
         if cached_modules.is_dir() and not local_modules.exists():
             shutil.copytree(cached_modules, local_modules, symlinks=True)
+            copied_modules = True
+        if copied_modules:
+            installed.add("node_modules/")
+        return installed
 
     @staticmethod
     def _resolve_opencode_global_config_dir() -> Path:
@@ -795,19 +827,21 @@ class SandboxSupervisor:
             duration_ms=round((time.monotonic() - seeded_at) * 1000),
         )
 
-    def _prepare_opencode_filesystem(self, workdir: Path) -> None:
+    def _prepare_opencode_filesystem(self, workdir: Path) -> set[str]:
         """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.
 
         The global seed is best-effort (degrades to a slower reify); the rest fail fast.
         """
+        installed: set[str] = set()
         self._assemble_workspace_opencode()
-        self._install_tools(workdir)
+        installed.update(self._install_tools(workdir))
         try:
             self._seed_global_opencode_deps()
         except Exception as e:
             self.log.warn("opencode.global_deps_seed_failed", exc=e)
-        self._install_skills(workdir)
+        installed.update(self._install_skills(workdir))
         self._install_bin_scripts()
+        return installed
 
     def _install_bin_scripts(self) -> None:
         """Install standalone CLI scripts into the sandbox bin directory.
@@ -829,11 +863,12 @@ class SandboxSupervisor:
                 dest.chmod(0o755)
                 self.log.info("bin.installed", script=script.stem)
 
-    def _install_skills(self, workdir: Path) -> None:
+    def _install_skills(self, workdir: Path) -> set[str]:
         """Copy bundled Skills into the .opencode/skills directory."""
+        installed: set[str] = set()
         skills_dir = Path("/app/sandbox_runtime/skills")
         if not skills_dir.is_dir():
-            return
+            return installed
 
         skills_dest = workdir / ".opencode" / "skills"
         installed_any = False
@@ -852,10 +887,19 @@ class SandboxSupervisor:
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
                 symlinks=True,
             )
+            for source in skill_dir.rglob("*"):
+                relative = source.relative_to(skill_dir)
+                if any(part == "__pycache__" for part in relative.parts):
+                    continue
+                if source.name == ".DS_Store" or source.suffix == ".pyc":
+                    continue
+                if source.is_file() or source.is_symlink():
+                    installed.add((Path(".opencode/skills") / skill_dir.name / relative).as_posix())
             installed_any = True
 
         if installed_any:
             self.log.info("opencode.skills_installed", skills_path=str(skills_dest))
+        return installed
 
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
@@ -1184,7 +1228,7 @@ class SandboxSupervisor:
         # for multi-repo (every member visible) and repo-less sessions.
         workdir = self._opencode_workdir()
 
-        self._prepare_opencode_filesystem(workdir)
+        installed_runtime_paths = self._prepare_opencode_filesystem(workdir)
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"
@@ -1193,7 +1237,14 @@ class SandboxSupervisor:
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.js")
+            installed_runtime_paths.add(".opencode/plugins/codex-auth-plugin.js")
             self.log.info("openai_oauth.plugin_deployed")
+
+        if installed_runtime_paths and (workdir / ".git").exists():
+            try:
+                install_runtime_git_excludes(workdir, installed_runtime_paths)
+            except Exception as error:
+                self.log.warn("opencode.git_excludes_failed", exc=error)
 
         env = {
             **os.environ,
@@ -1839,6 +1890,12 @@ class SandboxSupervisor:
                             "the checkout may be stale."
                         ),
                     )
+            self.repositories = await resolve_session_diff_baselines(
+                self.repositories,
+                discover_missing=self.boot_mode != "snapshot_restore",
+                get_head_sha=self._get_head_sha,
+            )
+            self._write_repo_manifest()
             if image_build_mode and git_sync_success and self.repositories:
                 # repository_shas is the cross-language provenance document
                 # ([{repoOwner, repoName, baseSha}]): parsed from this event by
@@ -1850,7 +1907,7 @@ class SandboxSupervisor:
                     {
                         "repoOwner": repo.owner,
                         "repoName": repo.name,
-                        "baseSha": await self._get_head_sha(repo),
+                        "baseSha": repo.base_sha or "",
                     }
                     for repo in self.repositories
                 ]

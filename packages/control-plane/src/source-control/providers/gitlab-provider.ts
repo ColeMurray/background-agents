@@ -113,6 +113,34 @@ const gitlabProjectLocationSchema = z.object({
   namespace: z.object({ full_path: z.string() }),
 });
 
+/** Wire shape of a GitLab project response, limited to fields used for repo metadata. */
+const gitlabRepositoryInfoSchema = z.object({
+  id: z.number().int(),
+  path: z.string(),
+  path_with_namespace: z.string(),
+  namespace: z.object({ full_path: z.string() }),
+  default_branch: z.string().optional(),
+  visibility: z.enum(["private", "internal", "public"]),
+});
+
+/** Wire shape used when validating PAT access to a GitLab project. */
+const gitlabRepositoryAccessSchema = z.object({
+  id: z.number().int(),
+  namespace: z.object({ full_path: z.string() }),
+  path: z.string(),
+  default_branch: z.string().optional(),
+  archived: z.boolean(),
+});
+
+/** Wire shape of list-projects results, limited to fields displayed downstream. */
+const gitlabRepositoryListSchema = z.array(
+  gitlabRepositoryAccessSchema.extend({
+    path_with_namespace: z.string(),
+    description: z.string().nullable(),
+    visibility: z.enum(["private", "internal", "public"]),
+  })
+);
+
 /** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -172,15 +200,18 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as {
-      id: number;
-      name: string;
-      path: string;
-      path_with_namespace: string;
-      namespace: { full_path: string };
-      default_branch: string;
-      visibility: string;
-    };
+    const data = await parseProviderResponse(
+      response,
+      gitlabRepositoryInfoSchema,
+      "Failed to get repository"
+    );
+
+    if (data.default_branch === undefined) {
+      throw new SourceControlProviderError(
+        "Failed to get repository: token cannot read repository code",
+        "permanent"
+      );
+    }
 
     // full_path, not path: nested groups ("group/subgroup") need the
     // entire namespace so owner/name lookups reconstruct the project path.
@@ -376,15 +407,13 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         );
       }
 
-      const data = (await response.json()) as {
-        id: number;
-        namespace: { full_path: string };
-        path: string;
-        default_branch: string;
-        archived: boolean;
-      };
+      const data = await parseProviderResponse(
+        response,
+        gitlabRepositoryAccessSchema,
+        "Failed to check repository access"
+      );
 
-      if (data.archived) {
+      if (data.archived || data.default_branch === undefined) {
         return null;
       }
 
@@ -430,20 +459,17 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         );
       }
 
-      const data = (await response.json()) as Array<{
-        id: number;
-        name: string;
-        path: string;
-        path_with_namespace: string;
-        namespace: { full_path: string };
-        description: string | null;
-        visibility: string;
-        default_branch: string;
-        archived: boolean;
-      }>;
+      const data = await parseProviderResponse(
+        response,
+        gitlabRepositoryListSchema,
+        "Failed to list repositories"
+      );
 
       return data
-        .filter((project) => !project.archived)
+        .filter(
+          (project): project is typeof project & { default_branch: string } =>
+            !project.archived && project.default_branch !== undefined
+        )
         .map((project) => ({
           id: project.id,
           owner: project.namespace.full_path,

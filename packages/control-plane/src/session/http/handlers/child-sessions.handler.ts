@@ -1,5 +1,6 @@
 import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionStatus } from "../../../types";
+import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
@@ -26,12 +27,7 @@ export interface ChildSessionsHandlerDeps {
   parseArtifactMetadata: (
     artifact: Pick<ArtifactRow, "id" | "metadata">
   ) => Record<string, unknown> | null;
-  broadcast: (message: {
-    type: "child_session_update";
-    childSessionId: string;
-    status: SessionStatus;
-    title: string | null;
-  }) => void;
+  messenger: SessionMessenger;
 }
 
 export interface ChildSessionsHandler {
@@ -141,7 +137,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
       }
 
-      deps.broadcast({
+      deps.messenger.broadcast({
         type: "child_session_update",
         childSessionId: body.childSessionId,
         status: body.status,

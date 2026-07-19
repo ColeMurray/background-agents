@@ -29,6 +29,17 @@ const ATTACHMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS attachments (
   created_at INTEGER NOT NULL
 )`;
 
+const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  revision_id TEXT,
+  trigger_message_id TEXT,
+  bundle_json TEXT,
+  captured_at INTEGER,
+  last_error TEXT,
+  error_at INTEGER,
+  updated_at INTEGER NOT NULL
+);`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -158,6 +169,9 @@ CREATE TABLE IF NOT EXISTS sandbox (
 -- by push handling from PR-5 onward; until then the position-0 row is
 -- overlaid with the session scalar branch/sha columns at read time.
 ${SESSION_REPOSITORIES_TABLE_SQL};
+
+-- Latest durable checkout diff bundle. Source patches live only in this bounded row.
+${SESSION_DIFF_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -460,6 +474,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 35,
     description: "Create attachments table",
     run: ATTACHMENTS_TABLE_SQL,
+  },
+  {
+    id: 36,
+    description: "Add durable latest session diff bundle",
+    run: SESSION_DIFF_TABLE_SQL,
   },
 ];
 
