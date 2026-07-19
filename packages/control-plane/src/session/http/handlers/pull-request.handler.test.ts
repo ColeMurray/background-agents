@@ -90,7 +90,8 @@ function createHandler() {
   const createPullRequest = vi.fn();
   const getArtifactById = vi.fn<(artifactId: string) => ArtifactRow | null>(() => null);
   const updateArtifact = vi.fn();
-  const broadcastArtifactUpdated = vi.fn();
+  const broadcast = vi.fn();
+  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const now = vi.fn(() => 5000);
   const triggerPullRequestRefresh = vi.fn();
   const log = {
@@ -110,7 +111,7 @@ function createHandler() {
     createPullRequest,
     getArtifactById,
     updateArtifact,
-    broadcastArtifactUpdated,
+    messenger,
     now,
     triggerPullRequestRefresh,
   });
@@ -136,7 +137,7 @@ function createHandler() {
     createPullRequest,
     getArtifactById,
     updateArtifact,
-    broadcastArtifactUpdated,
+    broadcast,
     now,
     triggerPullRequestRefresh,
   };
@@ -601,7 +602,7 @@ describe("pullRequestArtifactSnapshot", () => {
   });
 
   it("applies a changed snapshot, advances updatedAt, and broadcasts artifact_updated", async () => {
-    const { handler, getArtifactById, updateArtifact, broadcastArtifactUpdated } = createHandler();
+    const { handler, getArtifactById, updateArtifact, broadcast } = createHandler();
     getArtifactById.mockReturnValue(createPrArtifact());
 
     const response = await postSnapshot(
@@ -633,13 +634,16 @@ describe("pullRequestArtifactSnapshot", () => {
       metadata: JSON.stringify(expectedMetadata),
       updatedAt: 5000,
     });
-    expect(broadcastArtifactUpdated).toHaveBeenCalledWith({
-      id: "artifact-1",
-      type: "pr",
-      url: "https://github.com/acme/repo/pull/7",
-      metadata: expectedMetadata,
-      createdAt: 1000,
-      updatedAt: 5000,
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "artifact_updated",
+      artifact: {
+        id: "artifact-1",
+        type: "pr",
+        url: "https://github.com/acme/repo/pull/7",
+        metadata: expectedMetadata,
+        createdAt: 1000,
+        updatedAt: 5000,
+      },
     });
   });
 
@@ -666,7 +670,7 @@ describe("pullRequestArtifactSnapshot", () => {
   });
 
   it("no-ops when the snapshot is materially identical", async () => {
-    const { handler, getArtifactById, updateArtifact, broadcastArtifactUpdated } = createHandler();
+    const { handler, getArtifactById, updateArtifact, broadcast } = createHandler();
     getArtifactById.mockReturnValue(createPrArtifact());
 
     const response = await postSnapshot(handler, createSnapshotPayload());
@@ -674,11 +678,11 @@ describe("pullRequestArtifactSnapshot", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ applied: false });
     expect(updateArtifact).not.toHaveBeenCalled();
-    expect(broadcastArtifactUpdated).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("rejects a snapshot older than the stored provider timestamp", async () => {
-    const { handler, getArtifactById, updateArtifact, broadcastArtifactUpdated } = createHandler();
+    const { handler, getArtifactById, updateArtifact, broadcast } = createHandler();
     getArtifactById.mockReturnValue(
       createPrArtifact({
         metadata: JSON.stringify({
@@ -698,7 +702,7 @@ describe("pullRequestArtifactSnapshot", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ applied: false });
     expect(updateArtifact).not.toHaveBeenCalled();
-    expect(broadcastArtifactUpdated).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("applies when either side lacks a provider timestamp", async () => {

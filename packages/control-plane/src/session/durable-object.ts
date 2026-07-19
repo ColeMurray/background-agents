@@ -333,7 +333,7 @@ export class SessionDO extends DurableObject<Env> {
       this._presenceService = new PresenceService({
         getAuthenticatedClients: () => this.wsManager.getAuthenticatedClients(),
         getClientInfo: (ws) => this.getClientInfo(ws),
-        broadcast: (msg) => this.broadcast(msg),
+        messenger: this.messenger,
         send: (ws, msg) => this.safeSend(ws, msg),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         isSpawning: () => this.lifecycleManager.isSpawning(),
@@ -379,7 +379,7 @@ export class SessionDO extends DurableObject<Env> {
         getSession: () => this.getSession(),
         updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
         spawnSandbox: () => this.spawnSandbox(),
-        broadcast: (message) => this.broadcast(message),
+        messenger: this.messenger,
         setSessionStatus: async (status) => {
           await this.transitionSessionStatus(status);
         },
@@ -438,7 +438,7 @@ export class SessionDO extends DurableObject<Env> {
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
-        broadcast: (message) => this.broadcast(message),
+        messenger: this.messenger,
       });
     }
 
@@ -466,7 +466,7 @@ export class SessionDO extends DurableObject<Env> {
           Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
         getScmCredentials: (log) =>
           new ScmCredentialsService(this.sourceControlProvider, log).getCredentials(),
-        broadcast: (message) => this.broadcast(message),
+        messenger: this.messenger,
         generateId: () => generateId(),
         now: () => Date.now(),
       });
@@ -547,20 +547,7 @@ export class SessionDO extends DurableObject<Env> {
             log,
             generateId: () => generateId(),
             pushBranchToRemote: (pushSpec) => this.pushBranchToRemote(pushSpec),
-            broadcastSessionBranch: (branchName, repo) => {
-              this.broadcast({
-                type: "session_branch",
-                branchName,
-                repoOwner: repo.repoOwner,
-                repoName: repo.repoName,
-              });
-            },
-            broadcastArtifactCreated: (artifact) => {
-              this.broadcast({
-                type: "artifact_created",
-                artifact,
-              });
-            },
+            messenger: this.messenger,
             appName: resolveAppName(this.env),
             sessionPullRequests: this.env.DB ? new SessionPullRequestStore(this.env.DB) : undefined,
           });
@@ -569,12 +556,7 @@ export class SessionDO extends DurableObject<Env> {
         },
         getArtifactById: (artifactId) => this.repository.getArtifactById(artifactId),
         updateArtifact: (artifactId, data) => this.repository.updateArtifact(artifactId, data),
-        broadcastArtifactUpdated: (artifact) => {
-          this.broadcast({
-            type: "artifact_updated",
-            artifact,
-          });
-        },
+        messenger: this.messenger,
         now: () => Date.now(),
         triggerPullRequestRefresh: () => this.schedulePullRequestRefresh("manual"),
       });
@@ -643,24 +625,23 @@ export class SessionDO extends DurableObject<Env> {
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
     if (!this._sandboxEventProcessor) {
-      this._sandboxEventProcessor = new SessionSandboxEventProcessor({
-        ctx: this.ctx,
-        log: this.log,
-        repository: this.repository,
-        callbackService: this.callbackService,
-        wsManager: this.wsManager,
-        broadcast: (message) => this.broadcast(message),
-        applySessionTitleUpdate: (title, options) => this.applySessionTitleUpdate(title, options),
-        getIsProcessing: () => this.getIsProcessing(),
-        triggerSnapshot: (reason) => this.triggerSnapshot(reason),
-        reconcileSessionStatusAfterExecution: async (success) => {
+      this._sandboxEventProcessor = new SessionSandboxEventProcessor(
+        this.ctx,
+        () => this.log,
+        this.repository,
+        this.callbackService,
+        this.wsManager,
+        this.messenger,
+        this.diffService,
+        (title, options) => this.applySessionTitleUpdate(title, options),
+        (reason) => this.triggerSnapshot(reason),
+        async (success) => {
           await this.reconcileSessionStatusAfterExecution(success);
         },
-        updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
-        scheduleInactivityCheck: () => this.scheduleInactivityCheck(),
-        processMessageQueue: () => this.messageQueue.processMessageQueue(),
-        handleReady: async (event) => this.diffService.pinBaselines(event),
-      });
+        (timestamp) => this.updateLastActivity(timestamp),
+        () => this.scheduleInactivityCheck(),
+        () => this.messageQueue.processMessageQueue()
+      );
     }
 
     return this._sandboxEventProcessor;

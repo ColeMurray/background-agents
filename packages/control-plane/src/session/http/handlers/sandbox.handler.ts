@@ -5,10 +5,11 @@ import {
   type CreateMediaArtifactRequest,
   type SessionArtifact,
 } from "@open-inspect/shared";
-import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
+import type { ParticipantRole, SandboxEvent } from "../../../types";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
+import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
@@ -34,7 +35,7 @@ export interface SandboxHandlerDeps {
   refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAITokenRefreshResult>;
   isOpenAISecretsConfigured: () => boolean;
   getScmCredentials: (log: Logger) => Promise<ScmCredentialsResult>;
-  broadcast: (message: ServerMessage) => void;
+  messenger: SessionMessenger;
   generateId: () => string;
   now: () => number;
 }
@@ -137,8 +138,8 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         createdAt: now,
       });
 
-      deps.broadcast({ type: "artifact_created", artifact });
-      deps.broadcast({ type: "sandbox_event", event });
+      deps.messenger.broadcast({ type: "artifact_created", artifact });
+      deps.messenger.broadcast({ type: "sandbox_event", event });
 
       return Response.json({ status: "ok", artifactId: artifact.id });
     },

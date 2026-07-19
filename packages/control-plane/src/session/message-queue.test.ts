@@ -119,6 +119,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
+  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const spawnSandbox = vi.fn(async () => {});
   const setSessionStatus = vi.fn(async (_status: string) => {});
   const reconcileSessionStatusAfterExecution = vi.fn(async (_success: boolean) => {});
@@ -146,7 +147,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     getSession: vi.fn(() => createSession()),
     updateLastActivity,
     spawnSandbox,
-    broadcast,
+    messenger,
     setSessionStatus,
     reconcileSessionStatusAfterExecution,
   });

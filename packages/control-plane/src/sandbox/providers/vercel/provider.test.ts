@@ -225,6 +225,25 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("maps bitbucket to its own clone identity (unlike the other providers)", async () => {
+    // Vercel is the only provider with real Bitbucket support; the others
+    // collapse bitbucket to the GitHub identity. Locked in so the shared env
+    // assembly can't silently change either side.
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, {
+      ...providerConfig,
+      scmProvider: "bitbucket",
+    });
+
+    await provider.createSandbox(baseCreateConfig);
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      VCS_HOST: "bitbucket.org",
+      VCS_CLONE_USERNAME: "x-token-auth",
+    });
+  });
+
   it("omits repo tag for no-repository sandboxes", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
