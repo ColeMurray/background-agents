@@ -19,10 +19,10 @@ import httpx
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge
+from sandbox_runtime.opencode_client import SSEConnectionError
+from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from sandbox_runtime.prompt_stream import (
-    OpenCodeIdentifier,
     OpenCodePromptStream,
-    SSEConnectionError,
     _PromptState,
 )
 from tests.conftest import MockResponse
@@ -138,7 +138,7 @@ def opencode_message_id(monkeypatch) -> str:
 
 
 class TestSSEParser:
-    """Tests for _parse_sse_stream method."""
+    """Tests for OpenCodeClient.parse_sse_stream."""
 
     @pytest.mark.asyncio
     async def test_parse_single_event(self, bridge: AgentBridge):
@@ -147,7 +147,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_prompt_stream()._parse_sse_stream(response):
+        async for event in bridge._ensure_opencode_client().parse_sse_stream(response):
             events.append(event)
 
         assert len(events) == 1
@@ -175,7 +175,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_prompt_stream()._parse_sse_stream(response):
+        async for event in bridge._ensure_opencode_client().parse_sse_stream(response):
             events.append(event)
 
         assert len(events) == 3
@@ -193,7 +193,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_prompt_stream()._parse_sse_stream(response):
+        async for event in bridge._ensure_opencode_client().parse_sse_stream(response):
             events.append(event)
 
         assert len(events) == 2

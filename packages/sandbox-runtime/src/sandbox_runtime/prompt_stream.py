@@ -3,24 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
-import secrets
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+
+from .opencode_client import SSEConnectionError
+from .opencode_identifier import OpenCodeIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from .attachment_processor import AttachmentProcessor, HydratedSessionAttachment
     from .log_config import StructuredLogger
-
-HTTP_CONNECT_TIMEOUT_SECONDS: Final = 30.0
-OPENCODE_REQUEST_TIMEOUT_SECONDS: Final = 30.0
+    from .opencode_client import OpenCodeClient
 
 # Cap on parts buffered for assistant messages that have not been authorized
 # yet (their message.updated may arrive after their first parts).
@@ -50,69 +49,6 @@ OPENCODE_DEFAULT_TITLE_RE: Final = re.compile(
     r"^(new session|child session) - " r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
     re.IGNORECASE,
 )
-
-
-class SSEConnectionError(Exception):
-    """Raised when SSE connection fails."""
-
-
-class OpenCodeIdentifier:
-    """
-    Generate OpenCode-compatible ascending IDs.
-
-    Port of OpenCode's TypeScript implementation:
-    https://github.com/anomalyco/opencode/blob/8f0d08fae07c97a090fcd31d0d4c4a6fa7eeaa1d/packages/opencode/src/id/id.ts
-
-    Format: {prefix}_{timestamp_hex}{random_base62}
-    - prefix: type identifier (e.g., "msg" for messages)
-    - timestamp_hex: 12 hex chars encoding (timestamp_ms * 0x1000 + counter)
-    - random_base62: 14 random base62 characters
-
-    IDs are monotonically increasing, ensuring new user messages always have
-    IDs greater than previous assistant messages (required for OpenCode's
-    prompt loop).
-
-    Note: Uses class-level state for monotonic generation. Safe for async code
-    but NOT thread-safe.
-    """
-
-    PREFIXES: ClassVar[dict[str, str]] = {
-        "session": "ses",
-        "message": "msg",
-        "part": "prt",
-    }
-    BASE62_CHARS: ClassVar[str] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    RANDOM_LENGTH: ClassVar[int] = 14
-
-    _last_timestamp: ClassVar[int] = 0
-    _counter: ClassVar[int] = 0
-
-    @classmethod
-    def ascending(cls, prefix: str) -> str:
-        """Generate an ascending ID with the given prefix."""
-        if prefix not in cls.PREFIXES:
-            raise ValueError(f"Unknown prefix: {prefix}")
-
-        prefix_str = cls.PREFIXES[prefix]
-        current_timestamp = int(time.time() * 1000)
-
-        if current_timestamp != cls._last_timestamp:
-            cls._last_timestamp = current_timestamp
-            cls._counter = 0
-        cls._counter += 1
-
-        encoded = current_timestamp * 0x1000 + cls._counter
-        encoded_48bit = encoded & 0xFFFFFFFFFFFF
-        timestamp_bytes = encoded_48bit.to_bytes(6, byteorder="big")
-        timestamp_hex = timestamp_bytes.hex()
-        random_suffix = cls._random_base62(cls.RANDOM_LENGTH)
-
-        return f"{prefix_str}_{timestamp_hex}{random_suffix}"
-
-    @classmethod
-    def _random_base62(cls, length: int) -> str:
-        """Generate random base62 string."""
-        return "".join(cls.BASE62_CHARS[secrets.randbelow(62)] for _ in range(length))
 
 
 @dataclass(frozen=True)
@@ -181,15 +117,13 @@ class OpenCodePromptStream:
     def __init__(
         self,
         *,
-        http_client: httpx.AsyncClient,
-        opencode_base_url: str,
+        client: OpenCodeClient,
         attachment_processor: AttachmentProcessor,
         log: StructuredLogger,
         sse_inactivity_timeout_seconds: float,
         prompt_max_duration_seconds: float,
     ) -> None:
-        self._http_client = http_client
-        self._opencode_base_url = opencode_base_url
+        self._client = client
         self._attachment_processor = attachment_processor
         self._log = log
         self._sse_inactivity_timeout_seconds = sse_inactivity_timeout_seconds
@@ -219,9 +153,6 @@ class OpenCodePromptStream:
             content, model, opencode_message_id, reasoning_effort, attachments
         )
 
-        sse_url = f"{self._opencode_base_url}/event"
-        async_url = f"{self._opencode_base_url}/session/{opencode_session_id}/prompt_async"
-
         state = _PromptState(
             opencode_session_id=opencode_session_id,
             message_id=message_id,
@@ -234,20 +165,15 @@ class OpenCodePromptStream:
         try:
             deadline = loop.time() + self._sse_inactivity_timeout_seconds
             async with asyncio.timeout_at(deadline) as timeout_ctx:
-                async with self._http_client.stream(
-                    "GET",
-                    sse_url,
-                    timeout=httpx.Timeout(None, connect=HTTP_CONNECT_TIMEOUT_SECONDS, read=None),
-                ) as sse_response:
-                    if sse_response.status_code != 200:
-                        raise SSEConnectionError(
-                            f"SSE connection failed: {sse_response.status_code}"
-                        )
-
+                async with self._client.open_event_stream() as sse_response:
                     prompt_start = loop.time()
-                    await self._post_prompt(async_url, request_body)
+                    await self._client.post_prompt(opencode_session_id, request_body)
 
-                    async for sse_event in self._parse_sse_stream(sse_response, timeout_ctx):
+                    async for sse_event in self._client.parse_sse_stream(
+                        sse_response,
+                        timeout_ctx,
+                        inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds,
+                    ):
                         step = self._apply_sse_event(state, sse_event)
                         for event in step.events:
                             yield event
@@ -267,7 +193,7 @@ class OpenCodePromptStream:
                                 elapsed_ms=int(elapsed * 1000),
                                 message_id=message_id,
                             )
-                            await self.request_stop(
+                            await self._client.request_stop(
                                 opencode_session_id, reason="prompt_max_duration_timeout"
                             )
                             async for final_event in self._fetch_final_message_state(state):
@@ -287,7 +213,7 @@ class OpenCodePromptStream:
                 operation="bridge.sse",
                 message_id=message_id,
             )
-            await self.request_stop(opencode_session_id, reason="inactivity_timeout")
+            await self._client.request_stop(opencode_session_id, reason="inactivity_timeout")
             async for final_event in self._fetch_final_message_state(state):
                 yield final_event
             raise RuntimeError(
@@ -303,85 +229,6 @@ class OpenCodePromptStream:
                 "OpenCode event stream disconnected before completion; "
                 "partial output was preserved when available."
             ) from e
-
-    async def request_stop(self, opencode_session_id: str | None, *, reason: str) -> bool:
-        """Best-effort abort of the active OpenCode prompt (saves LLM compute)."""
-        if not opencode_session_id:
-            return False
-
-        try:
-            await self._http_client.post(
-                f"{self._opencode_base_url}/session/{opencode_session_id}/abort",
-                timeout=OPENCODE_REQUEST_TIMEOUT_SECONDS,
-            )
-            self._log.info("bridge.stop_requested", reason=reason)
-            return True
-        except Exception as e:
-            self._log.warn("bridge.stop_request_error", exc=e, reason=reason)
-            return False
-
-    async def _post_prompt(self, async_url: str, request_body: dict[str, Any]) -> None:
-        """Kick off the async prompt; the response arrives on the SSE stream."""
-        prompt_response = await self._http_client.post(
-            async_url,
-            json=request_body,
-            timeout=OPENCODE_REQUEST_TIMEOUT_SECONDS,
-        )
-        if prompt_response.status_code not in [200, 204]:
-            error_body = prompt_response.text
-            self._log.error(
-                "bridge.prompt_request_error",
-                status_code=prompt_response.status_code,
-                error_body=error_body,
-            )
-            raise RuntimeError(f"Async prompt failed: {prompt_response.status_code} - {error_body}")
-
-    async def _parse_sse_stream(
-        self,
-        response: httpx.Response,
-        timeout_ctx: asyncio.Timeout | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
-        """Parse Server-Sent Events stream from OpenCode.
-
-        SSE format:
-            data: {"type": "...", "properties": {...}}
-
-            data: {"type": "...", "properties": {...}}
-
-        Events are separated by double newlines.
-        If timeout_ctx is provided, the deadline is reset on every chunk received.
-        """
-        buffer = ""
-        async for chunk in response.aiter_text():
-            buffer += chunk
-            if timeout_ctx is not None:
-                timeout_ctx.reschedule(
-                    asyncio.get_running_loop().time() + self._sse_inactivity_timeout_seconds
-                )
-
-            # Frames split on LF-LF only: the peer is the bundled localhost
-            # OpenCode server (Bun/Hono), which emits LF-framed SSE. CRLF
-            # framing is deliberately not handled.
-            while "\n\n" in buffer:
-                event_str, buffer = buffer.split("\n\n", 1)
-
-                # Parse the event lines
-                data_lines: list[str] = []
-                for line in event_str.split("\n"):
-                    if line.startswith("data:"):
-                        # Handle both "data: {...}" and "data:{...}" formats
-                        data_content = line[5:].lstrip()
-                        if data_content:
-                            data_lines.append(data_content)
-
-                # Join multi-line data and parse JSON
-                if data_lines:
-                    try:
-                        raw_data = "\n".join(data_lines)
-                        event = json.loads(raw_data)
-                        yield event
-                    except json.JSONDecodeError as e:
-                        self._log.debug("bridge.sse_parse_error", exc=e)
 
     def _apply_sse_event(self, state: _PromptState, sse_event: dict[str, Any]) -> _StreamStep:
         """Translate one OpenCode SSE event into bridge events, mutating state."""
@@ -841,21 +688,10 @@ class OpenCodePromptStream:
         if not state.opencode_session_id:
             return
 
-        messages_url = f"{self._opencode_base_url}/session/{state.opencode_session_id}/message"
-
         try:
-            response = await self._http_client.get(
-                messages_url,
-                timeout=OPENCODE_REQUEST_TIMEOUT_SECONDS,
-            )
-            if response.status_code != 200:
-                self._log.warn(
-                    "bridge.final_state_fetch_error",
-                    status_code=response.status_code,
-                )
+            messages = await self._client.get_messages(state.opencode_session_id)
+            if messages is None:
                 return
-
-            messages = response.json()
 
             for msg in messages:
                 info = msg.get("info", {})

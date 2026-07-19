@@ -23,8 +23,7 @@ CHILD_SESSION_ID = "oc-child-456"
 
 def make_stream() -> OpenCodePromptStream:
     return OpenCodePromptStream(
-        http_client=MagicMock(),
-        opencode_base_url="http://localhost:4096",
+        client=MagicMock(),
         attachment_processor=MagicMock(),
         log=MagicMock(),
         sse_inactivity_timeout_seconds=120.0,

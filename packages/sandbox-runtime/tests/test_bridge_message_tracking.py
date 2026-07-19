@@ -15,7 +15,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge
-from sandbox_runtime.prompt_stream import OpenCodeIdentifier, _PromptState
+from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
+from sandbox_runtime.prompt_stream import _PromptState
 
 
 def create_text_part(part_id: str, text: str) -> dict:

@@ -37,11 +37,12 @@ from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
 from .log_config import configure_logging, get_logger
-from .prompt_stream import (
+from .opencode_client import (
     HTTP_CONNECT_TIMEOUT_SECONDS,
     OPENCODE_REQUEST_TIMEOUT_SECONDS,
-    OpenCodePromptStream,
+    OpenCodeClient,
 )
+from .prompt_stream import OpenCodePromptStream
 from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
 
@@ -208,8 +209,10 @@ class AgentBridge:
         # HTTP client for OpenCode API
         self.http_client: httpx.AsyncClient | None = None
 
-        # Prompt SSE translator; created on first use because it shares the
-        # HTTP client that only exists once run() has started.
+        # OpenCode transport client and prompt SSE translator; created on
+        # first use because they share the HTTP client that only exists once
+        # run() has started.
+        self._opencode_client: OpenCodeClient | None = None
         self._prompt_stream: OpenCodePromptStream | None = None
 
         # Track the current prompt task so _handle_stop can cancel it
@@ -747,18 +750,27 @@ class AgentBridge:
 
         await self._save_session_id()
 
-    def _ensure_prompt_stream(self) -> OpenCodePromptStream:
-        """The long-lived prompt SSE translator, created on first use.
+    def _ensure_opencode_client(self) -> OpenCodeClient:
+        """The long-lived OpenCode transport client, created on first use.
 
         Lazy because it shares the bridge's HTTP client, which only exists
         once run() has started.
         """
-        if self._prompt_stream is None:
+        if self._opencode_client is None:
             if not self.http_client:
                 raise RuntimeError("HTTP client not initialized")
-            self._prompt_stream = OpenCodePromptStream(
+            self._opencode_client = OpenCodeClient(
                 http_client=self.http_client,
-                opencode_base_url=self.opencode_base_url,
+                base_url=self.opencode_base_url,
+                log=self.log,
+            )
+        return self._opencode_client
+
+    def _ensure_prompt_stream(self) -> OpenCodePromptStream:
+        """The long-lived prompt SSE translator, created on first use."""
+        if self._prompt_stream is None:
+            self._prompt_stream = OpenCodePromptStream(
+                client=self._ensure_opencode_client(),
                 attachment_processor=self.attachment_processor,
                 log=self.log,
                 sse_inactivity_timeout_seconds=self.sse_inactivity_timeout,
@@ -1113,7 +1125,7 @@ class AgentBridge:
     async def _request_opencode_stop(self, reason: str) -> bool:
         if not self.http_client or not self.opencode_session_id:
             return False
-        return await self._ensure_prompt_stream().request_stop(
+        return await self._ensure_opencode_client().request_stop(
             self.opencode_session_id, reason=reason
         )
 
