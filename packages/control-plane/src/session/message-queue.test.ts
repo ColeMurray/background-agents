@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionMessageQueue } from "./message-queue";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
+import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { ClientInfo, ServerMessage } from "../types";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
+import type { SessionRepository } from "./repository";
+import type { SessionWebSocketManager } from "./websocket-manager";
+import type { ParticipantService } from "./participant-service";
+import type { CallbackNotificationService } from "./callback-notification-service";
+import type { SessionStatusService } from "./session-status-service";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -144,13 +150,13 @@ function buildQueue() {
       error: vi.fn(),
       child: vi.fn(),
     },
-    repository as never,
-    attachmentRepository as never,
-    wsManager as never,
+    repository as unknown as SessionRepository,
+    attachmentRepository as unknown as SessionAttachmentRepository,
+    wsManager as unknown as SessionWebSocketManager,
     messenger,
-    participantService as never,
-    callbackService as never,
-    sessionStatus as never,
+    participantService as unknown as ParticipantService,
+    callbackService as unknown as CallbackNotificationService,
+    sessionStatus as unknown as SessionStatusService,
     sandboxLifecycle,
     null,
     "github",
