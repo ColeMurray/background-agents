@@ -25,7 +25,7 @@ from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _PromptState,
 )
-from tests.conftest import MockResponse
+from tests.conftest import MockResponse, wire_opencode_transport
 
 
 class MockSSEResponse:
@@ -122,7 +122,7 @@ def bridge() -> AgentBridge:
         auth_token="test-token",
     )
     bridge.opencode_session_id = "oc-session-123"
-    bridge.http_client = MockHttpClient()
+    wire_opencode_transport(bridge, MockHttpClient())
     return bridge
 
 
@@ -147,7 +147,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_opencode_client()._decoded_events(response):
+        async for event in bridge.opencode_client._decoded_events(response):
             events.append(event)
 
         assert len(events) == 1
@@ -175,7 +175,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_opencode_client()._decoded_events(response):
+        async for event in bridge.opencode_client._decoded_events(response):
             events.append(event)
 
         assert len(events) == 3
@@ -193,7 +193,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge._ensure_opencode_client()._decoded_events(response):
+        async for event in bridge.opencode_client._decoded_events(response):
             events.append(event)
 
         assert len(events) == 2
@@ -908,7 +908,7 @@ class TestFetchFinalMessageState:
             auth_token="test-token",
         )
         bridge.opencode_session_id = "oc-session-123"
-        bridge.http_client = AsyncMock()
+        wire_opencode_transport(bridge, AsyncMock())
         return bridge
 
     @pytest.mark.asyncio
@@ -1349,7 +1349,7 @@ class TestInactivityTimeout:
         sse_response = HangingMockSSEResponse(
             initial_events=[create_sse_event("server.connected", {})]
         )
-        bridge.http_client = DelayedMockHttpClient(sse_response)
+        wire_opencode_transport(bridge, DelayedMockHttpClient(sse_response))
 
         with pytest.raises(RuntimeError, match="SSE stream inactive"):
             async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
@@ -1419,7 +1419,7 @@ class TestInactivityTimeout:
                 (create_sse_event("session.idle", {"sessionID": "oc-session-123"}), 0.1),
             ]
         )
-        bridge.http_client = DelayedMockHttpClient(sse_response)
+        wire_opencode_transport(bridge, DelayedMockHttpClient(sse_response))
 
         events = []
         async for event in bridge._stream_opencode_response_sse("msg-1", "test"):
@@ -1481,7 +1481,7 @@ class TestInactivityTimeout:
                 (create_sse_event("session.idle", {"sessionID": "oc-session-123"}), 0),
             ]
         )
-        bridge.http_client = DelayedMockHttpClient(sse_response)
+        wire_opencode_transport(bridge, DelayedMockHttpClient(sse_response))
 
         events = []
         async for event in bridge._stream_opencode_response_sse("msg-1", "test"):
@@ -1517,7 +1517,7 @@ class TestPromptMaxDuration:
         )
         http_client = DelayedMockHttpClient(sse_response)
         http_client.get_responses = [MockResponse(200, [])]
-        bridge.http_client = http_client
+        wire_opencode_transport(bridge, http_client)
 
         with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
             async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
@@ -2478,7 +2478,7 @@ class TestCompactionHandling:
             auth_token="test-token",
         )
         bridge.opencode_session_id = "oc-session-123"
-        bridge.http_client = AsyncMock()
+        wire_opencode_transport(bridge, AsyncMock())
 
         # API returns: compaction summary + post-compaction response
         messages = [
@@ -2527,7 +2527,7 @@ class TestCompactionHandling:
             auth_token="test-token",
         )
         bridge.opencode_session_id = "oc-session-123"
-        bridge.http_client = AsyncMock()
+        wire_opencode_transport(bridge, AsyncMock())
 
         messages = [
             {

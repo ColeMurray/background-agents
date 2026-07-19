@@ -38,26 +38,45 @@ class OpenCodeClient:
     off async prompts, aborting sessions, and fetching message state.
     Prompt-lifecycle policy (inactivity/max-duration values, request-body
     construction, event translation) stays in ``OpenCodePromptStream``.
+
+    Owns its connection pool unless one is injected.
     """
 
     def __init__(
         self,
         *,
-        http_client: httpx.AsyncClient,
         base_url: str,
         log: StructuredLogger,
+        http_client: httpx.AsyncClient | None = None,
         connect_timeout_seconds: float = HTTP_CONNECT_TIMEOUT_SECONDS,
         request_timeout_seconds: float = OPENCODE_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
-        self._http_client = http_client
         self._base_url = base_url
         self._log = log
+        self._http_client = http_client
+        self._owns_http_client = http_client is None
         self._connect_timeout_seconds = connect_timeout_seconds
         self._request_timeout_seconds = request_timeout_seconds
 
+    async def aclose(self) -> None:
+        if self._owns_http_client and self._http_client is not None:
+            await self._http_client.aclose()
+
+    def _client(self) -> httpx.AsyncClient:
+        # Created on first request so constructing a bridge that never runs
+        # (common in tests) does not leak an unclosed connection pool.
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    self._request_timeout_seconds,
+                    connect=self._connect_timeout_seconds,
+                )
+            )
+        return self._http_client
+
     async def create_session(self) -> str | None:
         """Create a new OpenCode session, returning its id."""
-        response = await self._http_client.post(
+        response = await self._client().post(
             f"{self._base_url}/session",
             json={},
             timeout=self._request_timeout_seconds,
@@ -69,7 +88,7 @@ class OpenCodeClient:
 
     async def session_exists(self, opencode_session_id: str) -> bool:
         """Whether OpenCode still knows the session (a 200 from its lookup)."""
-        response = await self._http_client.get(
+        response = await self._client().get(
             f"{self._base_url}/session/{opencode_session_id}",
             timeout=self._request_timeout_seconds,
         )
@@ -90,7 +109,7 @@ class OpenCodeClient:
         """
         try:
             async with asyncio.timeout(inactivity_timeout_seconds) as timeout_ctx:
-                async with self._http_client.stream(
+                async with self._client().stream(
                     "GET",
                     f"{self._base_url}/event",
                     timeout=httpx.Timeout(None, connect=self._connect_timeout_seconds, read=None),
@@ -108,7 +127,7 @@ class OpenCodeClient:
 
     async def post_prompt(self, opencode_session_id: str, request_body: dict[str, Any]) -> None:
         """Kick off the async prompt; the response arrives on the SSE stream."""
-        prompt_response = await self._http_client.post(
+        prompt_response = await self._client().post(
             f"{self._base_url}/session/{opencode_session_id}/prompt_async",
             json=request_body,
             timeout=self._request_timeout_seconds,
@@ -128,7 +147,7 @@ class OpenCodeClient:
             return False
 
         try:
-            await self._http_client.post(
+            await self._client().post(
                 f"{self._base_url}/session/{opencode_session_id}/abort",
                 timeout=self._request_timeout_seconds,
             )
@@ -140,7 +159,7 @@ class OpenCodeClient:
 
     async def get_messages(self, opencode_session_id: str) -> list[Any] | None:
         """Fetch the session's message list; ``None`` when OpenCode rejects the fetch."""
-        response = await self._http_client.get(
+        response = await self._client().get(
             f"{self._base_url}/session/{opencode_session_id}/message",
             timeout=self._request_timeout_seconds,
         )

@@ -103,6 +103,27 @@ class TestGetMessages:
         assert await make_client(http_client).get_messages(SESSION_ID) is None
 
 
+class TestPoolOwnership:
+    async def test_aclose_leaves_injected_pool_open(self):
+        pool = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+        client = OpenCodeClient(base_url=BASE_URL, log=MagicMock(), http_client=pool)
+
+        assert await client.session_exists(SESSION_ID) is True
+        await client.aclose()
+
+        assert pool.is_closed is False
+        await pool.aclose()
+
+    async def test_owned_pool_created_lazily_and_closed_by_aclose(self):
+        client = OpenCodeClient(base_url=BASE_URL, log=MagicMock())
+
+        pool = client._client()
+
+        assert client._client() is pool
+        await client.aclose()
+        assert pool.is_closed
+
+
 class TestCreateSession:
     async def test_returns_created_session_id(self):
         http_client = AsyncMock()

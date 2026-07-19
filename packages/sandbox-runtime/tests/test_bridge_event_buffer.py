@@ -17,7 +17,7 @@ import pytest
 from websockets import State
 
 from sandbox_runtime.bridge import AgentBridge
-from tests.conftest import MockResponse
+from tests.conftest import MockResponse, wire_opencode_transport
 
 
 class MockHttpClient:
@@ -84,7 +84,7 @@ def bridge() -> AgentBridge:
         auth_token="test-token",
     )
     bridge.opencode_session_id = "oc-session-123"
-    bridge.http_client = MockHttpClient()
+    wire_opencode_transport(bridge, MockHttpClient())
     return bridge
 
 

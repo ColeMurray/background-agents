@@ -17,6 +17,7 @@ import pytest
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from sandbox_runtime.prompt_stream import _PromptState
+from tests.conftest import wire_opencode_transport
 
 
 def create_text_part(part_id: str, text: str) -> dict:
@@ -59,7 +60,7 @@ def bridge() -> AgentBridge:
         auth_token="test-token",
     )
     bridge.opencode_session_id = "oc-session-123"
-    bridge.http_client = MagicMock()
+    wire_opencode_transport(bridge, MagicMock())
     return bridge
 
 

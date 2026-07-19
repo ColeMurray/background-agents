@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge
+from tests.conftest import wire_opencode_transport
 
 
 @pytest.fixture
@@ -15,7 +16,7 @@ def bridge() -> AgentBridge:
         control_plane_url="http://localhost:8787",
         auth_token="test-token",
     )
-    bridge.http_client = MagicMock()
+    wire_opencode_transport(bridge, MagicMock())
     return bridge
 
 

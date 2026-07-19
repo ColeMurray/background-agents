@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-import httpx
 import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
@@ -37,7 +36,7 @@ from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
 from .log_config import configure_logging, get_logger
-from .opencode_client import HTTP_CONNECT_TIMEOUT_SECONDS, OpenCodeClient
+from .opencode_client import OpenCodeClient
 from .prompt_stream import OpenCodePromptStream
 from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
@@ -143,8 +142,6 @@ class AgentBridge:
     SSE_INACTIVITY_TIMEOUT = 120.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
-    HTTP_CONNECT_TIMEOUT = HTTP_CONNECT_TIMEOUT_SECONDS
-    HTTP_DEFAULT_TIMEOUT = 30.0
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
@@ -158,6 +155,7 @@ class AgentBridge:
         control_plane_url: str,
         auth_token: str,
         opencode_port: int = 4096,
+        opencode_client: OpenCodeClient | None = None,
     ):
         self.sandbox_id = sandbox_id
         self.session_id = session_id
@@ -201,13 +199,15 @@ class AgentBridge:
         # names into the filesystem.
         self.repo_manifest_path = Path(REPO_MANIFEST_FILE_PATH)
 
-        # HTTP client for OpenCode API
-        self.http_client: httpx.AsyncClient | None = None
+        # OpenCode transport client; owns its connection pool unless one was
+        # injected (mirrors ControlPlaneDiffClient).
+        self.opencode_client = opencode_client or OpenCodeClient(
+            base_url=self.opencode_base_url,
+            log=self.log,
+        )
 
-        # OpenCode transport client and prompt SSE translator; created on
-        # first use because they share the HTTP client that only exists once
-        # run() has started.
-        self._opencode_client: OpenCodeClient | None = None
+        # Prompt SSE translator; created on first prompt so that
+        # sse_inactivity_timeout stays overridable until streaming starts.
         self._prompt_stream: OpenCodePromptStream | None = None
 
         # Track the current prompt task so _handle_stop can cancel it
@@ -272,12 +272,6 @@ class AgentBridge:
         """
         self.log.info("bridge.run_start")
 
-        self.http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                self.HTTP_DEFAULT_TIMEOUT,
-                connect=self.HTTP_CONNECT_TIMEOUT,
-            )
-        )
         await self._load_session_id()
 
         reconnect_attempts = 0
@@ -336,8 +330,7 @@ class AgentBridge:
             await self.diff_refresh.close(
                 timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
             )
-            if self.http_client:
-                await self.http_client.aclose()
+            await self.opencode_client.aclose()
             self.log.info(
                 "bridge.run_complete",
                 outcome=run_outcome,
@@ -725,7 +718,7 @@ class AgentBridge:
 
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""
-        self.opencode_session_id = await self._ensure_opencode_client().create_session()
+        self.opencode_session_id = await self.opencode_client.create_session()
         self.log.info(
             "opencode.session.ensure",
             opencode_session_id=self.opencode_session_id,
@@ -734,27 +727,11 @@ class AgentBridge:
 
         await self._save_session_id()
 
-    def _ensure_opencode_client(self) -> OpenCodeClient:
-        """The long-lived OpenCode transport client, created on first use.
-
-        Lazy because it shares the bridge's HTTP client, which only exists
-        once run() has started.
-        """
-        if self._opencode_client is None:
-            if not self.http_client:
-                raise RuntimeError("HTTP client not initialized")
-            self._opencode_client = OpenCodeClient(
-                http_client=self.http_client,
-                base_url=self.opencode_base_url,
-                log=self.log,
-            )
-        return self._opencode_client
-
     def _ensure_prompt_stream(self) -> OpenCodePromptStream:
         """The long-lived prompt SSE translator, created on first use."""
         if self._prompt_stream is None:
             self._prompt_stream = OpenCodePromptStream(
-                client=self._ensure_opencode_client(),
+                client=self.opencode_client,
                 attachment_processor=self.attachment_processor,
                 log=self.log,
                 sse_inactivity_timeout_seconds=self.sse_inactivity_timeout,
@@ -771,7 +748,7 @@ class AgentBridge:
         attachments: list[HydratedSessionAttachment] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream one prompt's response events (see prompt_stream.py)."""
-        if not self.http_client or not self.opencode_session_id:
+        if not self.opencode_session_id:
             raise RuntimeError("OpenCode session not initialized")
 
         stream = self._ensure_prompt_stream()
@@ -1080,17 +1057,15 @@ class AgentBridge:
                     action="loaded",
                 )
 
-                if self.http_client:
-                    try:
-                        client = self._ensure_opencode_client()
-                        if not await client.session_exists(self.opencode_session_id):
-                            self.log.info(
-                                "opencode.session.invalid",
-                                opencode_session_id=self.opencode_session_id,
-                            )
-                            self.opencode_session_id = None
-                    except Exception:
+                try:
+                    if not await self.opencode_client.session_exists(self.opencode_session_id):
+                        self.log.info(
+                            "opencode.session.invalid",
+                            opencode_session_id=self.opencode_session_id,
+                        )
                         self.opencode_session_id = None
+                except Exception:
+                    self.opencode_session_id = None
 
             except Exception as e:
                 self.log.error("opencode.session.load_error", exc=e)
@@ -1104,11 +1079,9 @@ class AgentBridge:
                 self.log.error("opencode.session.save_error", exc=e)
 
     async def _request_opencode_stop(self, reason: str) -> bool:
-        if not self.http_client or not self.opencode_session_id:
+        if not self.opencode_session_id:
             return False
-        return await self._ensure_opencode_client().request_stop(
-            self.opencode_session_id, reason=reason
-        )
+        return await self.opencode_client.request_stop(self.opencode_session_id, reason=reason)
 
     def _resolve_timeout_seconds(
         self,

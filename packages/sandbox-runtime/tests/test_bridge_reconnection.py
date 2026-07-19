@@ -115,10 +115,6 @@ class TestIsFatalConnectionError:
 
     @pytest.mark.asyncio
     async def test_run_complete_does_not_retain_transient_outcome(self, bridge, monkeypatch):
-        class HttpClient:
-            async def aclose(self):
-                return None
-
         attempts = 0
 
         async def connect_and_run():
@@ -131,9 +127,6 @@ class TestIsFatalConnectionError:
         bridge.log = MagicMock()
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = connect_and_run
-        monkeypatch.setattr(
-            "sandbox_runtime.bridge.httpx.AsyncClient", lambda **_kwargs: HttpClient()
-        )
         monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", AsyncMock())
 
         await bridge.run()
