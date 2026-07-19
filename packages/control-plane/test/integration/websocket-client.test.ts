@@ -20,6 +20,29 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
+  it("rejects a prompt sent before subscribing without enqueuing it", async () => {
+    const name = `ws-client-nosub-prompt-${Date.now()}`;
+    await initNamedSession(name);
+
+    const { ws } = await openClientWs(name);
+
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (evt) => resolve({ code: evt.code }));
+    });
+
+    ws.send(JSON.stringify({ type: "prompt", content: "hello" }));
+
+    // Unsubscribed sockets have no client mapping — the DO closes them
+    // with 4002 and never enqueues the prompt.
+    const { code } = await closed;
+    expect(code).toBe(4002);
+
+    const id = env.SESSION.idFromName(name);
+    const stub = env.SESSION.get(id);
+    const rows = await queryDO<{ count: number }>(stub, "SELECT COUNT(*) AS count FROM messages");
+    expect(rows[0].count).toBe(0);
+  });
+
   it("subscribe with valid token sends subscribed + state", async () => {
     const name = `ws-client-sub-${Date.now()}`;
     await initNamedSession(name, { repoOwner: "acme", repoName: "web-app" });
