@@ -144,9 +144,10 @@ export function createLogger(
  * installed at construction time; handing it a forwarding logger makes every
  * log line reflect the owner's current logger.
  *
- * `child(context)` derives a child from the current source at call time and
- * returns it as-is: the child is a snapshot bound to that logger, not a
- * forwarding logger itself.
+ * `child(context)` is forwarding too: the returned logger derives its child
+ * from the current source on every call, so derived loggers keep following
+ * the owner's swaps instead of snapshotting whichever logger was installed
+ * when the child was created.
  */
 export function createForwardingLogger(source: () => Logger): Logger {
   return {
@@ -154,7 +155,7 @@ export function createForwardingLogger(source: () => Logger): Logger {
     info: (msg, data) => source().info(msg, data),
     warn: (msg, data) => source().warn(msg, data),
     error: (msg, data) => source().error(msg, data),
-    child: (context) => source().child(context),
+    child: (context) => createForwardingLogger(() => source().child(context)),
   };
 }
 

@@ -157,4 +157,18 @@ describe("createForwardingLogger", () => {
       child_ctx: "yes",
     });
   });
+
+  it("keeps derived children live across later source swaps", () => {
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let current = createLogger("session-do", { source: "first" });
+    const child = createForwardingLogger(() => current).child({ child_ctx: "yes" });
+    current = createLogger("session-do", { source: "second" });
+
+    child.info("after swap");
+
+    expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toMatchObject({
+      source: "second",
+      child_ctx: "yes",
+    });
+  });
 });
