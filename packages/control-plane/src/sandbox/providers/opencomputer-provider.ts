@@ -117,7 +117,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       });
       secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
-      const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
+      const timeoutSeconds = config.timeoutSeconds;
       const sandbox = config.prebuiltImageId
         ? await this.client.forkFromCheckpoint({
             checkpointId: config.prebuiltImageId,
@@ -184,7 +184,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         restoredFromSnapshot: true,
       });
       secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
-      const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
+      const timeoutSeconds = config.timeoutSeconds;
       const sandbox = await this.client.forkFromCheckpoint({
         checkpointId: config.snapshotImageId,
         name: config.sandboxId,
@@ -286,7 +286,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       }
 
       if (wokeSandbox) {
-        const timeoutSeconds = resolveOpenComputerTimeoutSeconds(config.timeoutSeconds);
+        const timeoutSeconds = config.timeoutSeconds;
         if (timeoutSeconds !== undefined) {
           await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
         }
@@ -729,10 +729,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
     return SandboxProviderError.fromFetchError(message, error);
   }
-}
-
-function resolveOpenComputerTimeoutSeconds(timeoutSeconds: number | undefined): number | undefined {
-  return timeoutSeconds;
 }
 
 function copyDefinedEnvVars(
