@@ -95,11 +95,7 @@ export {
   type OpenComputerCreateSandboxParams,
   type OpenComputerDeleteSandboxOptions,
 } from "./opencomputer-rest-client";
-export {
-  resolveSandboxBackendName,
-  isModalSandboxBackend,
-  type SandboxBackendName,
-} from "./provider-name";
+export { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
 
 // Lifecycle decisions
 export {

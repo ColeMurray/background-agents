@@ -34,7 +34,3 @@ export function resolveSandboxBackendName(value: string | undefined): SandboxBac
 
   throw new Error(`Unsupported SANDBOX_PROVIDER: ${value}`);
 }
-
-export function isModalSandboxBackend(value: string | undefined): boolean {
-  return resolveSandboxBackendName(value) === "modal";
-}
