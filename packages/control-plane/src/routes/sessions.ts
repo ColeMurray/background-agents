@@ -9,6 +9,7 @@ import { sessionPullRequestRoutes } from "./session-pull-requests";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import { sessionAttachmentRoutes } from "./session-attachments";
 import { sessionWsTokenRoutes } from "./session-ws-token";
+import { sessionDiffRoutes } from "./session-diffs";
 
 export const sessionRoutes: Route[] = [
   ...sessionCreateRoutes,
@@ -19,6 +20,7 @@ export const sessionRoutes: Route[] = [
   ...sessionPullRequestRoutes,
   ...sessionMediaRoutes,
   ...sessionAttachmentRoutes,
+  ...sessionDiffRoutes,
   ...sessionChildSpawnRoutes,
   ...sessionChildRoutes,
 ];

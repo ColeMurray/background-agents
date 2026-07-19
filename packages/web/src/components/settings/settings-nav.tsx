@@ -92,6 +92,7 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
             return (
               <li key={item.id}>
                 <button
+                  type="button"
                   onClick={() => {
                     onSelect(item.id);
                     onNavigate?.();
@@ -120,6 +121,7 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
           return (
             <li key={item.id}>
               <button
+                type="button"
                 onClick={() => onSelect(item.id)}
                 aria-current={isActive ? "page" : undefined}
                 className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition ${

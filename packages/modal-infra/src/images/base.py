@@ -216,15 +216,3 @@ base_image = (
         remote_path="/app/sandbox_runtime",
     )
 )
-
-# Image variant optimized for Node.js/TypeScript projects
-node_image = base_image.run_commands(
-    # Pre-cache common Node.js development dependencies
-    "npm cache clean --force",
-)
-
-# Image variant optimized for Python projects
-python_image = base_image.run_commands(
-    # Pre-create virtual environment
-    "uv venv /workspace/.venv",
-)

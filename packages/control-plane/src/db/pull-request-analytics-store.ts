@@ -11,6 +11,7 @@
  */
 
 import type { AnalyticsPullRequestsResponse, SpawnSource } from "@open-inspect/shared";
+import type { SqlDatabase, SqlResult } from "./sql-database";
 
 /** `now` anchors the open-inventory age computation. */
 export interface PullRequestAnalyticsFilters {
@@ -71,16 +72,16 @@ function prCreatedAtExpr(alias = ""): string {
   return `COALESCE(${prefix}provider_created_at, ${prefix}created_at)`;
 }
 
-function rows<T>(result: D1Result): T[] {
+function rows<T>(result: SqlResult): T[] {
   return (result.results ?? []) as T[];
 }
 
-function firstRow<T>(result: D1Result): T | undefined {
+function firstRow<T>(result: SqlResult): T | undefined {
   return rows<T>(result)[0];
 }
 
 export class PullRequestAnalyticsStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Two windows with different populations: the funnel/repos/sources cohort is

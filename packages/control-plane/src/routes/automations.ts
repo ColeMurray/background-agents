@@ -47,6 +47,7 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
+import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 
 const logger = createLogger("router:automations");
 
@@ -174,9 +175,12 @@ function parseEnvironmentSelection(body: {
  *
  * @throws TargetSelectionError naming every missing environment.
  */
-async function resolveEnvironmentSelection(env: Env, environmentIds: string[]): Promise<void> {
+async function resolveEnvironmentSelection(
+  db: SqlDatabase,
+  environmentIds: string[]
+): Promise<void> {
   if (environmentIds.length === 0) return;
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(db);
   const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
   const missing = environmentIds.filter((_, index) => !found[index]);
   if (missing.length > 0) {
@@ -265,13 +269,13 @@ async function handleListAutomations(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
   const repoOwner = url.searchParams.get("repoOwner") ?? undefined;
   const repoName = url.searchParams.get("repoName") ?? undefined;
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const result = await store.list({ repoOwner, repoName });
   const automationIds = result.automations.map((row) => row.id);
   const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
@@ -346,7 +350,7 @@ async function handleCreateAutomation(
     requestedEnvironmentIds =
       environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
     validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
-    await resolveEnvironmentSelection(env, requestedEnvironmentIds);
+    await resolveEnvironmentSelection(ctx.db, requestedEnvironmentIds);
   } catch (e) {
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
@@ -446,7 +450,7 @@ async function handleCreateAutomation(
   const providerIdentity = resolveProviderIdentity("user", body);
   if (providerIdentity) {
     try {
-      const userStore = new UserStore(env.DB);
+      const userStore = new UserStore(ctx.db);
       const resolvedUser = await userStore.resolveOrCreateUser(providerIdentity);
       resolvedUserId = resolvedUser.id;
     } catch (e) {
@@ -458,7 +462,8 @@ async function handleCreateAutomation(
     }
   }
 
-  const store = new AutomationStore(env.DB);
+  const db: SqlDatabase = ctx.db;
+  const store = new AutomationStore(db);
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
@@ -491,12 +496,12 @@ async function handleCreateAutomation(
     ...store.bindEnvironmentInserts(id, requestedEnvironmentIds, now),
   ];
   if (triggerType === "slack_event") {
-    const slackStore = new SlackChannelStore(env.DB);
+    const slackStore = new SlackChannelStore(db);
     createStatements.push(
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
     );
   }
-  await env.DB.batch(createStatements);
+  await db.batch(createStatements);
 
   const automation = toAutomation(
     (await store.getById(id))!,
@@ -543,12 +548,12 @@ async function handleGetAutomation(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const row = await store.getById(id);
   if (!row) return error("Automation not found", 404);
 
@@ -570,7 +575,8 @@ async function handleUpdateAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const db: SqlDatabase = ctx.db;
+  const store = new AutomationStore(db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
@@ -686,7 +692,7 @@ async function handleUpdateAutomation(
         finalEnvironmentCount
       );
       if (replacementEnvironmentIds !== null) {
-        await resolveEnvironmentSelection(env, replacementEnvironmentIds);
+        await resolveEnvironmentSelection(ctx.db, replacementEnvironmentIds);
       }
     } catch (e) {
       if (e instanceof TargetSelectionError) return error(e.message, 400);
@@ -775,7 +781,7 @@ async function handleUpdateAutomation(
   // repositories-only edit).
   const resyncSlackChannels =
     existing.trigger_type === "slack_event" && body.triggerConfig !== undefined;
-  const statements: D1PreparedStatement[] = [];
+  const statements: SqlStatement[] = [];
   const updateStatement = store.bindAutomationUpdate(id, updateFields);
   if (updateStatement) statements.push(updateStatement);
   if (replacementRepositories !== null) {
@@ -785,13 +791,13 @@ async function handleUpdateAutomation(
     statements.push(...store.bindReplaceEnvironments(id, replacementEnvironmentIds, Date.now()));
   }
   if (resyncSlackChannels) {
-    const slackStore = new SlackChannelStore(env.DB);
+    const slackStore = new SlackChannelStore(db);
     statements.push(
       ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
     );
   }
   if (statements.length > 0) {
-    await env.DB.batch(statements);
+    await db.batch(statements);
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);
@@ -821,7 +827,7 @@ async function handleDeleteAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const deleted = await store.softDelete(id);
   if (!deleted) return error("Automation not found", 404);
 
@@ -844,7 +850,7 @@ async function handlePauseAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const paused = await store.pause(id);
   if (!paused) return error("Automation not found", 404);
 
@@ -876,7 +882,7 @@ async function handleResumeAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
@@ -924,7 +930,7 @@ async function handleTriggerAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
 
@@ -983,12 +989,12 @@ async function handleListInvocations(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const automationId = match.groups?.id;
   if (!automationId) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const automation = await store.getById(automationId);
   if (!automation) return error("Automation not found", 404);
 
@@ -1005,13 +1011,13 @@ async function handleGetRun(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const automationId = match.groups?.id;
   const runId = match.groups?.runId;
   if (!automationId || !runId) return error("Automation ID and Run ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const run = await store.getRunById(automationId, runId);
   if (!run) return error("Run not found", 404);
 
@@ -1027,7 +1033,7 @@ async function handleRegenerateKey(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
 
@@ -1100,9 +1106,9 @@ async function handleGetWatchedSlackChannels(
   _request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
-  const channels = await new SlackChannelStore(env.DB).getWatchedSlackChannels();
+  const channels = await new SlackChannelStore(ctx.db).getWatchedSlackChannels();
   return json({ channels });
 }
 

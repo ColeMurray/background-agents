@@ -448,6 +448,44 @@ export class SessionRepository {
     );
   }
 
+  setSessionDiffBaselines(
+    repositories: Array<{
+      position: number;
+      repoOwner: string;
+      repoName: string;
+      baseSha: string;
+      isPrimary: boolean;
+    }>
+  ): void {
+    this.transactionSync(() => {
+      for (const repository of repositories) {
+        this.sql.exec(
+          `UPDATE session_repositories
+           SET base_sha = ?
+           WHERE position = ?
+             AND repo_owner = ? COLLATE NOCASE
+             AND repo_name = ? COLLATE NOCASE
+             AND base_sha IS NULL`,
+          repository.baseSha,
+          repository.position,
+          repository.repoOwner,
+          repository.repoName
+        );
+        if (repository.isPrimary) {
+          this.sql.exec(
+            `UPDATE session SET base_sha = ?
+             WHERE repo_owner = ? COLLATE NOCASE
+               AND repo_name = ? COLLATE NOCASE
+               AND base_sha IS NULL`,
+            repository.baseSha,
+            repository.repoOwner,
+            repository.repoName
+          );
+        }
+      }
+    });
+  }
+
   // === SANDBOX ===
   // Note: Each session DO has exactly one sandbox row, so update methods use
   // a subquery `WHERE id = (SELECT id FROM sandbox LIMIT 1)` to find it.

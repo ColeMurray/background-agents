@@ -47,7 +47,7 @@ async function trackPullRequestLifecycle(
     parseLogLevel(env.LOG_LEVEL)
   );
   try {
-    if (!env.DB || !env.SESSION) return;
+    if (!env.SESSION) return;
 
     const parsed = automationEventSchema.safeParse(rawEvent);
     if (!parsed.success) {
@@ -67,8 +67,8 @@ async function trackPullRequestLifecycle(
 
     const sessionRuntime = createSessionRuntimeClient(env, ctx);
     const deps: PullRequestLifecycleDeps = {
-      store: new SessionPullRequestStore(env.DB),
-      sessions: new SessionIndexStore(env.DB),
+      store: new SessionPullRequestStore(ctx.db),
+      sessions: new SessionIndexStore(ctx.db),
       listSessionArtifacts: async (sessionId): Promise<SessionArtifactSummary[]> => {
         const response = await sessionRuntime.fetch(sessionId, SessionInternalPaths.artifacts, {
           method: "GET",

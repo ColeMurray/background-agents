@@ -11,6 +11,7 @@ import {
   ImageBuildTriggerFailedError,
   ImageBuildWorkflowUnavailableError,
 } from "./errors";
+import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { PlannedImageBuild } from "./types";
@@ -33,11 +34,13 @@ function createStore() {
   return {
     registerBuild: vi.fn().mockResolvedValue(true),
     getActiveBuild: vi.fn().mockResolvedValue(null),
+    markScopeStaleBuildFailed: vi.fn().mockResolvedValue(0),
     hasReadyImageForFingerprint: vi.fn().mockResolvedValue(false),
     getCallbackBuild: vi.fn().mockResolvedValue(null),
     getBuildRow: vi.fn().mockResolvedValue(null),
     recordArtifactOnSupersededBuild: vi.fn().mockResolvedValue(true),
     bindProviderSession: vi.fn().mockResolvedValue(true),
+    verifyCallbackToken: vi.fn().mockResolvedValue(false),
     consumeCallbackToken: vi.fn().mockResolvedValue(null),
     markBuildFailedWithCallbackToken: vi.fn().mockResolvedValue(false),
     tryMarkImageBuildReady: vi.fn(),
@@ -129,14 +132,15 @@ function createWorkflow(options: {
     });
   const createCallbackAuth =
     options.createCallbackAuth ?? vi.fn().mockResolvedValue({ kind: "none" });
+  const provider = options.provider === undefined ? "modal" : options.provider;
+  const planner = { planBuild, resolveTarget, createCallbackAuth } as unknown as NonNullable<
+    ConstructorParameters<typeof ImageBuildWorkflow>[3]
+  >["planner"];
   const workflow = new ImageBuildWorkflow(
     options.env ?? createEnv(),
     store as unknown as ImageBuildStore,
     factory,
-    options.provider === undefined ? "modal" : options.provider,
-    { planBuild, resolveTarget, createCallbackAuth } as unknown as ConstructorParameters<
-      typeof ImageBuildWorkflow
-    >[4]
+    provider ? { provider, planner } : null
   );
   return { workflow, store, adapter, factory, planBuild, resolveTarget, createCallbackAuth };
 }
@@ -193,6 +197,60 @@ describe("ImageBuildWorkflow", () => {
       expect(store.registerBuild).not.toHaveBeenCalled();
     });
 
+    it("lazily fails a timed-out build before the in-flight check", async () => {
+      const store = createStore();
+      store.markScopeStaleBuildFailed.mockResolvedValue(1);
+      const { workflow } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result.type).toBe("triggered");
+      expect(store.markScopeStaleBuildFailed).toHaveBeenCalledWith(
+        ENV_SCOPE,
+        "modal",
+        DEFAULT_STALE_BUILD_MAX_AGE_MS
+      );
+      // The wedged row must be failed before the in-flight read, or the read
+      // still sees it and re-wedges the scope.
+      expect(store.markScopeStaleBuildFailed.mock.invocationCallOrder[0]).toBeLessThan(
+        store.getActiveBuild.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("still reports a fresh in-flight build after the lazy stale check", async () => {
+      const store = createStore();
+      store.getActiveBuild.mockResolvedValue({ id: "imgb-fresh" });
+      const { workflow, planBuild } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result).toEqual({ type: "already_building", buildId: "imgb-fresh" });
+      expect(store.markScopeStaleBuildFailed).toHaveBeenCalled();
+      expect(planBuild).not.toHaveBeenCalled();
+    });
+
+    it("a lazy stale-mark failure never blocks the in-flight report", async () => {
+      const store = createStore();
+      store.markScopeStaleBuildFailed.mockRejectedValue(new Error("D1 unavailable"));
+      store.getActiveBuild.mockResolvedValue({ id: "imgb-existing" });
+      const { workflow } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result).toEqual({ type: "already_building", buildId: "imgb-existing" });
+    });
+
+    it("a lazy stale-mark failure never blocks a fresh trigger", async () => {
+      const store = createStore();
+      store.markScopeStaleBuildFailed.mockRejectedValue(new Error("D1 unavailable"));
+      const { workflow } = createWorkflow({ store });
+
+      const result = await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+      expect(result.type).toBe("triggered");
+      expect(store.registerBuild).toHaveBeenCalled();
+    });
+
     it("yields to a concurrent trigger that wins the registerBuild guard", async () => {
       // The getActiveBuild read races: both triggers can pass it, but the
       // registerBuild NOT EXISTS guard admits exactly one. The loser must
@@ -247,15 +305,19 @@ describe("ImageBuildWorkflow", () => {
         createEnv(),
         store as unknown as ImageBuildStore,
         { create: factoryError },
-        "modal",
         {
-          planBuild: vi.fn(),
-          resolveTarget: vi.fn().mockResolvedValue({
-            repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-            repositoriesFingerprint: "fp-1",
-          }),
-          createCallbackAuth: vi.fn().mockResolvedValue({ kind: "none" }),
-        } as unknown as ConstructorParameters<typeof ImageBuildWorkflow>[4]
+          provider: "modal",
+          planner: {
+            planBuild: vi.fn(),
+            resolveTarget: vi.fn().mockResolvedValue({
+              repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+              repositoriesFingerprint: "fp-1",
+            }),
+            createCallbackAuth: vi.fn().mockResolvedValue({ kind: "none" }),
+          } as unknown as NonNullable<
+            ConstructorParameters<typeof ImageBuildWorkflow>[3]
+          >["planner"],
+        }
       );
 
       await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toMatchObject({
@@ -625,6 +687,7 @@ describe("ImageBuildWorkflow", () => {
         providerSessionId: "vercel-session-1",
         status: "building",
       });
+      store.verifyCallbackToken.mockResolvedValue(true);
       return store;
     }
 
@@ -721,6 +784,13 @@ describe("ImageBuildWorkflow", () => {
           providerSessionId: "vercel-session-1",
         })
       );
+      expect(store.verifyCallbackToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buildId: "imgb-env_1-1-abcd",
+          provider: "vercel",
+          providerSessionId: "vercel-session-1",
+        })
+      );
       expect(adapter.finalizeSuccessfulBuild).toHaveBeenCalledWith(
         expect.objectContaining({ providerSessionId: "vercel-session-1" })
       );
@@ -753,6 +823,26 @@ describe("ImageBuildWorkflow", () => {
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
     });
 
+    it("does not consume the token for an authenticated malformed completion", async () => {
+      const store = sessionBuildStore();
+      const { workflow } = createWorkflow({ store });
+
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion({
+            providerImageId: undefined,
+            providerSessionId: "vercel-session-1",
+            runtimeVersion: undefined,
+          }),
+          callbackToken: "callback-token",
+          context: ctx,
+        })
+      ).rejects.toBeInstanceOf(ImageBuildInvalidCallbackError);
+
+      expect(store.verifyCallbackToken).toHaveBeenCalled();
+      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
+    });
+
     it("requires provider_session_id on provider-session completions", async () => {
       const { workflow } = createWorkflow({ store: sessionBuildStore() });
 
@@ -767,7 +857,7 @@ describe("ImageBuildWorkflow", () => {
 
     it("authenticates the token before validating the completion payload", async () => {
       const store = sessionBuildStore();
-      store.consumeCallbackToken.mockResolvedValue(null);
+      store.verifyCallbackToken.mockResolvedValue(false);
       const { workflow } = createWorkflow({ store });
 
       // Malformed payload (no session id, no runtime version) + bad token:
@@ -782,6 +872,7 @@ describe("ImageBuildWorkflow", () => {
           context: ctx,
         })
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
+      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
     });
 
     it("marks the build failed when deferred finalization fails", async () => {

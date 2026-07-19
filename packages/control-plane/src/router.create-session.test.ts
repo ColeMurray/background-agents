@@ -349,6 +349,8 @@ describe("handleCreateSession D1 ordering", () => {
       });
       return Response.json({ status: "created" });
     });
+    const testEnv: Record<string, unknown> = createEnv(initFetch);
+    testEnv.SCM_PROVIDER = "gitlab";
 
     const response = await sessionCreateRoutes[0].handler(
       new Request("https://test.local/sessions", {
@@ -366,11 +368,12 @@ describe("handleCreateSession D1 ordering", () => {
           scmEmail: "ada@gitlab.example.com",
         }),
       }),
-      { ...createEnv(initFetch), SCM_PROVIDER: "gitlab" } as never,
+      testEnv as never,
       [] as unknown as RegExpMatchArray,
       {
         request_id: "test-request",
         trace_id: "test-trace",
+        db: testEnv["DB"] as never,
         metrics: {
           d1Queries: [],
           spans: {},

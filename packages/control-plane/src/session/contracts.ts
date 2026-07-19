@@ -32,6 +32,11 @@ export const SessionInternalPaths = {
   updateTitle: "/internal/update-title",
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",
+  diffState: "/internal/diff-state",
+  diffStore: "/internal/diff-store",
+  diffFailure: "/internal/diff-failure",
+  diffResolveFile: "/internal/diff-resolve-file",
+  diffRetry: "/internal/diff-retry",
 } as const;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];

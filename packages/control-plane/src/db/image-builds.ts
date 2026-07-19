@@ -12,6 +12,7 @@ import type {
   MarkImageBuildReadyResult,
   SupersededImageBuild,
 } from "../image-builds/model";
+import type { SqlDatabase } from "./sql-database";
 
 const MS_PER_SECOND = 1000;
 
@@ -50,6 +51,10 @@ const _statusViewComplete: MissingStatusViewKey extends never ? true : MissingSt
 void _statusViewComplete;
 
 const STATUS_VIEW_COLUMNS = STATUS_VIEW_KEYS.join(", ");
+
+// One message for both sweeps (global cron + lazy trigger-time) so a stale
+// mark is attributable regardless of which path performed it.
+const STALE_BUILD_TIMEOUT_MESSAGE = "build timed out (no callback received)";
 
 /** Row slice read by the callback-token auth checks. */
 interface CallbackTokenRow {
@@ -115,7 +120,7 @@ export interface ReapableImageBuildRow {
  * question belong to image-builds/scope.ts.
  */
 export class ImageBuildStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Registers a build unless one is already in flight for the same
@@ -217,6 +222,17 @@ export class ImageBuildStore {
       providerSessionId: build.provider_session_id,
       status: build.status,
     };
+  }
+
+  async verifyCallbackToken(params: {
+    buildId: string;
+    provider: ImageBuildProvider;
+    tokenHash: string;
+    providerSessionId: string;
+    now: number;
+  }): Promise<boolean> {
+    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
+    return this.callbackTokenRowIsUsable(build, params);
   }
 
   async markBuildFailedWithCallbackToken(params: {
@@ -767,7 +783,30 @@ export class ImageBuildStore {
       .prepare(
         "UPDATE image_builds SET status = 'failed', error_message = ? WHERE status = 'building' AND created_at < ?"
       )
-      .bind("build timed out (no callback received)", cutoff)
+      .bind(STALE_BUILD_TIMEOUT_MESSAGE, cutoff)
+      .run();
+
+    return result.meta?.changes ?? 0;
+  }
+
+  /**
+   * Scoped twin of markStaleBuildsAsFailed for lazy trigger-time recovery: a
+   * dead `building` row otherwise wedges its scope forever on deployments
+   * with no sweep (the concurrency-1 guard has no age cutoff).
+   */
+  async markScopeStaleBuildFailed(
+    scope: ImageBuildScope,
+    provider: ImageBuildProvider,
+    maxAgeMs: number
+  ): Promise<number> {
+    const cutoff = Date.now() - maxAgeMs;
+    const result = await this.db
+      .prepare(
+        `UPDATE image_builds SET status = 'failed', error_message = ?
+         WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
+           AND created_at < ?`
+      )
+      .bind(STALE_BUILD_TIMEOUT_MESSAGE, scope.kind, scope.id, provider, cutoff)
       .run();
 
     return result.meta?.changes ?? 0;

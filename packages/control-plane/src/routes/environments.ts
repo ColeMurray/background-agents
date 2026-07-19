@@ -30,11 +30,6 @@ import type { Env } from "../types";
 
 const logger = createLogger("router:environments");
 
-function requireDb(env: Env): Response | null {
-  if (!env.DB) return error("Environment storage is not configured", 503);
-  return null;
-}
-
 /** Turn a zod validation failure into a 400 naming the first offending field. */
 function validationError(err: {
   issues: { path: (string | number | symbol)[]; message: string }[];
@@ -95,12 +90,9 @@ async function handleListEnvironments(
   _request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(env);
-  if (guard) return guard;
-
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   const { environments, total } = await store.list();
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
     environments.map((e) => e.id)
@@ -118,9 +110,6 @@ async function handleCreateEnvironment(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(env);
-  if (guard) return guard;
-
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
 
@@ -128,7 +117,7 @@ async function handleCreateEnvironment(
   if (!parsed.success) return validationError(parsed.error);
   const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed.data;
 
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   if (await store.getByName(name)) {
     return error(`An environment named "${name}" already exists`, 409);
   }
@@ -172,15 +161,12 @@ async function handleGetEnvironment(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(env);
-  if (guard) return guard;
-
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   const row = await store.getById(id);
   if (!row) return error("Environment not found", 404);
 
@@ -193,13 +179,10 @@ async function handleUpdateEnvironment(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(env);
-  if (guard) return guard;
-
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   const existing = await store.getById(id);
   if (!existing) return error("Environment not found", 404);
 
@@ -257,13 +240,10 @@ async function handleDeleteEnvironment(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const guard = requireDb(env);
-  if (guard) return guard;
-
   const id = match.groups?.id;
   if (!id) return error("Environment ID required", 400);
 
-  const store = new EnvironmentStore(env.DB);
+  const store = new EnvironmentStore(ctx.db);
   const deleted = await store.delete(id);
   if (!deleted) return error("Environment not found", 404);
 

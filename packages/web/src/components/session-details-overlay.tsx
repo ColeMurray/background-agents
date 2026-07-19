@@ -43,6 +43,10 @@ export function SessionDetailsOverlay({
   terminalOpen,
   onToggleTerminal,
   onOpenMedia,
+  diffState,
+  diffLoading,
+  selectedDiff,
+  onOpenDiff,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
@@ -166,6 +170,10 @@ export function SessionDetailsOverlay({
       terminalOpen={terminalOpen}
       onToggleTerminal={onToggleTerminal}
       onOpenMedia={onOpenMedia}
+      diffState={diffState}
+      diffLoading={diffLoading}
+      selectedDiff={selectedDiff}
+      onOpenDiff={onOpenDiff}
     />
   );
 

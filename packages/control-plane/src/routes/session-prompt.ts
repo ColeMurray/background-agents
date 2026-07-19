@@ -67,7 +67,7 @@ async function handleSessionPrompt(
   const parsed = parseAuthorId(authorId);
   if (authorId !== "anonymous") {
     try {
-      const userStore = new UserStore(env.DB);
+      const userStore = new UserStore(ctx.db);
       let userId: string | undefined;
       if (parsed) {
         const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
@@ -76,7 +76,7 @@ async function handleSessionPrompt(
         userId = (await userStore.getUserById(authorId))?.id;
       }
       if (userId) {
-        const enrichment = await resolveGitHubEnrichment(env, userStore, userId);
+        const enrichment = await resolveGitHubEnrichment(env, ctx.db, userStore, userId);
         enrichmentResult = enrichment ? { status: "resolved", enrichment } : { status: "absent" };
       }
     } catch (e) {
@@ -116,7 +116,7 @@ async function handleSessionPrompt(
     }),
   });
 
-  const store = new SessionIndexStore(env.DB);
+  const store = new SessionIndexStore(ctx.db);
   ctx.executionCtx?.waitUntil(
     store.touchUpdatedAt(sessionId).catch((error) => {
       logger.error("session_index.touch_updated_at.background_error", {

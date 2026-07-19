@@ -35,6 +35,9 @@ export function swrKeysToRevalidate(
       // Child session spawned or changed status — revalidate child list and sidebar.
       return [`/api/sessions/${sessionId}/children`, isUnarchivedSessionListKey];
 
+    case "diff_state_changed":
+      return [`/api/sessions/${sessionId}/diff`];
+
     default:
       return [];
   }

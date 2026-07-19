@@ -13,9 +13,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
 import { ImageBuildStore } from "../../src/db/image-builds";
-import { EnvironmentStore } from "../../src/db/environments";
 import { RepoMetadataStore } from "../../src/db/repo-metadata";
 import { computeRepositoriesFingerprint } from "../../src/image-builds/fingerprint";
+import { hashImageBuildCallbackToken } from "../../src/image-builds/callback-auth";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   repoImageBuildScope,
@@ -27,11 +27,19 @@ import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import type { AnyImageBuildAdapter, DeleteImageInput } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
+import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
+import {
+  RUNTIME_VERSION,
+  REPOSITORY_SHAS,
+  environmentScope,
+  getRow,
+  seedEnvironment,
+  seedImageRow,
+  seedImageRowForScope,
+} from "./image-build-helpers";
 
 const BASE = "https://test.local";
-const RUNTIME_VERSION = "v53-list-native-runtime";
-const REPOSITORY_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
 
 /**
  * The exact key set of the `ImageBuildRecordView` wire contract. The status
@@ -52,89 +60,9 @@ const WIRE_KEYS = [
   "created_at",
 ].sort();
 
-function environmentScope(id: string): ImageBuildScope {
-  return { kind: "environment", id };
-}
-
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
-
-async function seedEnvironment(opts?: {
-  id?: string;
-  name?: string;
-  prebuildEnabled?: boolean;
-  repositories?: [string, string, number, string][];
-}): Promise<string> {
-  const store = new EnvironmentStore(env.DB);
-  const id = opts?.id ?? `env_${Math.random().toString(36).slice(2, 10)}`;
-  const now = Date.now();
-  await store.create(
-    {
-      id,
-      name: opts?.name ?? `Seeded ${id}`,
-      description: null,
-      prebuild_enabled: opts?.prebuildEnabled ? 1 : 0,
-      channel_associations: null,
-      created_at: now,
-      updated_at: now,
-    },
-    (opts?.repositories ?? [["acme", "web", 1, "main"]]).map(([o, n, rid, b], position) => ({
-      position,
-      repo_owner: o,
-      repo_name: n,
-      repo_id: rid,
-      base_branch: b,
-    }))
-  );
-  return id;
-}
-
-/** Raw insert when a test needs to control created_at/status/artifact. */
-async function seedImageRowForScope(
-  scope: ImageBuildScope,
-  row: {
-    id: string;
-    status: string;
-    provider?: string;
-    providerImageId?: string | null;
-    repositoriesFingerprint?: string;
-    runtimeVersion?: string;
-    createdAt?: number;
-  }
-): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO image_builds
-       (id, scope_kind, scope_id, provider, provider_image_id, repositories_fingerprint,
-        repository_shas, runtime_version, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      row.id,
-      scope.kind,
-      scope.id,
-      row.provider ?? "modal",
-      row.providerImageId ?? null,
-      row.repositoriesFingerprint ?? "fp-seeded",
-      JSON.stringify(REPOSITORY_SHAS),
-      row.runtimeVersion ?? RUNTIME_VERSION,
-      row.status,
-      row.createdAt ?? Date.now()
-    )
-    .run();
-}
-
-async function seedImageRow(row: {
-  id: string;
-  environmentId: string;
-  status: string;
-  provider?: string;
-  providerImageId?: string | null;
-  repositoriesFingerprint?: string;
-  createdAt?: number;
-}): Promise<void> {
-  await seedImageRowForScope(environmentScope(row.environmentId), row);
 }
 
 /**
@@ -170,12 +98,6 @@ async function seedRowWithInternalColumns(scope: ImageBuildScope, id: string): P
       Date.now()
     )
     .run();
-}
-
-async function getRow(id: string) {
-  return env.DB.prepare("SELECT * FROM image_builds WHERE id = ?")
-    .bind(id)
-    .first<Record<string, unknown>>();
 }
 
 /**
@@ -1045,6 +967,64 @@ describe("Image builds", () => {
       expect(consumed).toMatchObject({ id: "tok-once", scope: TOKEN_SCOPE, provider: "vercel" });
 
       expect(await store.consumeCallbackToken(params)).toBeNull();
+    });
+
+    it("verifies a callback token without consuming it", async () => {
+      const store = await seedTokenBuild("tok-verify");
+
+      expect(
+        await store.verifyCallbackToken({
+          buildId: "tok-verify",
+          provider: "vercel",
+          tokenHash: "hash-1",
+          providerSessionId: "vercel-session-1",
+          now: Date.now(),
+        })
+      ).toBe(true);
+      expect((await getRow("tok-verify"))?.callback_token_used_at).toBeNull();
+    });
+
+    it("allows failure reporting after an authenticated malformed completion", async () => {
+      const token = "a".repeat(64);
+      const store = new ImageBuildStore(env.DB);
+      await store.registerBuild({
+        id: "tok-malformed",
+        scope: TOKEN_SCOPE,
+        provider: "vercel",
+        repositoriesFingerprint: "fp-token",
+        callbackTokenHash: await hashImageBuildCallbackToken(token, env as Env),
+        callbackTokenExpiresAt: Date.now() + 60_000,
+      });
+      await store.bindProviderSession("tok-malformed", "vercel", "vercel-session-1");
+
+      const completion = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          build_id: "tok-malformed",
+          provider_session_id: "vercel-session-1",
+          repository_shas: REPOSITORY_SHAS,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(completion.status).toBe(400);
+      expect((await getRow("tok-malformed"))?.callback_token_used_at).toBeNull();
+
+      const failure = await SELF.fetch(`${BASE}/image-builds/build-failed`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          build_id: "tok-malformed",
+          provider_session_id: "vercel-session-1",
+          error: "repo image build-complete callback failed",
+        }),
+      });
+
+      expect(failure.status).toBe(200);
+      const row = await getRow("tok-malformed");
+      expect(row?.status).toBe("failed");
+      expect(row?.callback_token_used_at).not.toBeNull();
     });
 
     it("rejects a mismatched provider session without consuming the token", async () => {

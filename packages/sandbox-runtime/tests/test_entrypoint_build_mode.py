@@ -91,6 +91,27 @@ class TestImageBuildMode:
         supervisor.monitor_processes.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor._get_head_sha = AsyncMock(return_value="a" * 40)
+        observed_baselines = []
+
+        async def assert_baseline_is_ready(_repo):
+            observed_baselines.append(supervisor.repositories[0].base_sha)
+            return True
+
+        supervisor.run_setup_script = AsyncMock(side_effect=assert_baseline_is_ready)
+        supervisor.shutdown = AsyncMock()
+        supervisor.shutdown_event.set()
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run()
+
+        supervisor.run_setup_script.assert_awaited_once()
+        assert observed_baselines == ["a" * 40]
+
+    @pytest.mark.asyncio
     async def test_clone_depth_100(self, build_env, tmp_path):
         """Build mode should clone with --depth 100, not --depth 1."""
         supervisor = _make_supervisor(build_env)
@@ -802,6 +823,43 @@ class TestUpdateExistingRepo:
             result = await supervisor._update_existing_repo(supervisor.repositories[0])
 
         assert result is False
+
+    @pytest.mark.parametrize(
+        ("ensure_origin_result", "fetch_result"),
+        [(False, True), (True, False)],
+    )
+    @pytest.mark.asyncio
+    async def test_snapshot_restore_reports_ref_refresh_failures(
+        self, base_env, tmp_path, ensure_origin_result, fetch_result
+    ):
+        supervisor = _make_supervisor(base_env)
+        supervisor.boot_mode = "snapshot_restore"
+        supervisor.repo_path = tmp_path
+        _repoint_primary(supervisor)
+        supervisor._ensure_plain_origin = AsyncMock(return_value=ensure_origin_result)
+        supervisor._fetch_branch = AsyncMock(return_value=fetch_result)
+
+        result = await supervisor._update_existing_repo(supervisor.repositories[0])
+
+        assert result is False
+        if ensure_origin_result:
+            supervisor._fetch_branch.assert_awaited_once()
+        else:
+            supervisor._fetch_branch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_restore_reports_unexpected_refresh_errors(self, base_env, tmp_path):
+        supervisor = _make_supervisor(base_env)
+        supervisor.boot_mode = "snapshot_restore"
+        supervisor.repo_path = tmp_path
+        _repoint_primary(supervisor)
+        supervisor._ensure_plain_origin = AsyncMock(side_effect=RuntimeError("refresh failed"))
+        supervisor.log.warn = MagicMock()
+
+        result = await supervisor._update_existing_repo(supervisor.repositories[0])
+
+        assert result is False
+        supervisor.log.warn.assert_called_once()
 
 
 class TestPerformGitSync:

@@ -48,7 +48,7 @@ export async function handleUpsertProviderIdentity(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const body = await parseJsonBody<UpsertProviderIdentityRequest>(request);
   if (body instanceof Response) return body;
@@ -75,7 +75,7 @@ export async function handleUpsertProviderIdentity(
     avatarUrl: optionalString(body.avatarUrl),
   };
 
-  const resolvedUser = await new UserStore(env.DB).resolveOrCreateUser(identity);
+  const resolvedUser = await new UserStore(ctx.db).resolveOrCreateUser(identity);
   if (!isCanonicalUserId(resolvedUser.id)) {
     return error("Resolved user ID is invalid", 500);
   }

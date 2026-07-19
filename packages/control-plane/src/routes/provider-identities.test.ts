@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { providerIdentityRoutes } from "./provider-identities";
 import type { RequestContext } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 
 const mockUserStore = {
@@ -23,6 +24,7 @@ function createCtx(): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
+    db: {} as SqlDatabase,
     metrics: {
       d1Queries: [],
       spans: {},

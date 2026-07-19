@@ -7,6 +7,7 @@ import { UserScmTokenStore } from "../db/user-scm-tokens";
 import type { ProviderIdentity, UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 
 const FALLBACK_GIT_AUTHOR = {
   name: "OpenInspect",
@@ -206,6 +207,7 @@ export function deriveParticipantUserId(body: SessionIdentityFields): string {
  */
 export async function resolveGitHubEnrichment(
   env: Env,
+  db: SqlDatabase,
   userStore: UserStore,
   userId: string
 ): Promise<GitHubEnrichment | null> {
@@ -216,7 +218,7 @@ export async function resolveGitHubEnrichment(
   const [user, tokens] = await Promise.all([
     userStore.getUserById(userId),
     env.TOKEN_ENCRYPTION_KEY
-      ? new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY).getEncryptedTokens(
+      ? new UserScmTokenStore(db, env.TOKEN_ENCRYPTION_KEY).getEncryptedTokens(
           githubIdentity.providerUserId
         )
       : null,

@@ -299,6 +299,70 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("setSessionDiffBaselines", () => {
+    it("writes each baseline once using position and repository identity", () => {
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(mock.calls[0].query).toContain("WHERE position = ?");
+      expect(mock.calls[0].query).toContain("repo_owner = ?");
+      expect(mock.calls[0].query).toContain("repo_name = ?");
+      expect(mock.calls[0].query).toContain("base_sha IS NULL");
+      expect(mock.calls[0].params).toEqual(["a".repeat(40), 0, "acme", "web"]);
+      expect(mock.calls[1].query).toContain("UPDATE session SET base_sha");
+      expect(mock.calls[1].query).toContain("base_sha IS NULL");
+      expect(mock.calls[1].params).toEqual(["a".repeat(40), "acme", "web"]);
+      expect(mock.calls[2].query).toContain("WHERE position = ?");
+      expect(mock.calls[2].params).toEqual(["b".repeat(40), 1, "acme", "web"]);
+    });
+
+    it("applies all baseline updates in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
+
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "api",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(transactions).toBe(1);
+      expect(mock.calls).toHaveLength(3);
+    });
+  });
+
   // === SANDBOX ===
 
   describe("getSandbox", () => {

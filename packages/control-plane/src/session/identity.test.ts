@@ -422,7 +422,7 @@ describe("resolveGitHubEnrichment", () => {
       { provider: "google", providerUserId: "google-sub-1", providerEmail: "pm@gmail.com" },
     ]);
 
-    await expect(resolveGitHubEnrichment(env, store, "user-1")).resolves.toBeNull();
+    await expect(resolveGitHubEnrichment(env, env.DB, store, "user-1")).resolves.toBeNull();
   });
 
   it("enriches from the linked GitHub identity, never the Google one", async () => {
@@ -439,7 +439,7 @@ describe("resolveGitHubEnrichment", () => {
       { id: "user-1", displayName: "PM Person", email: "pm@gmail.com" }
     );
 
-    const enrichment = await resolveGitHubEnrichment(env, store, "user-1");
+    const enrichment = await resolveGitHubEnrichment(env, env.DB, store, "user-1");
 
     expect(enrichment).not.toBeNull();
     // The SCM identifier is the GitHub provider id — never the Google sub.
@@ -462,7 +462,7 @@ describe("resolveGitHubEnrichment", () => {
       { id: "user-1", displayName: "PM Person" }
     );
 
-    const enrichment = await resolveGitHubEnrichment(env, store, "user-1");
+    const enrichment = await resolveGitHubEnrichment(env, env.DB, store, "user-1");
 
     expect(enrichment?.email).toBe("42+pm-dev@users.noreply.github.com");
   });

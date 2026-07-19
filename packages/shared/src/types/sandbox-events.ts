@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { recordSchema } from "./artifacts";
+import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { gitSyncStatusSchema, type EventType } from "./statuses";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 
@@ -60,6 +61,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // Present in essentially every session's replay history.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
+    repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("token"),

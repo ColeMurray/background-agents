@@ -8,12 +8,12 @@ async function handleListChildren(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const parentId = match.groups?.id;
   if (!parentId) return error("Parent session ID required");
 
-  const sessionStore = new SessionIndexStore(env.DB);
+  const sessionStore = new SessionIndexStore(ctx.db);
   const children = await sessionStore.listByParent(parentId);
 
   return json({ children });
@@ -29,7 +29,7 @@ async function handleGetChild(
   const childId = match.groups?.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
-  const sessionStore = new SessionIndexStore(env.DB);
+  const sessionStore = new SessionIndexStore(ctx.db);
   const isChild = await sessionStore.isChildOf(childId, parentId);
   if (!isChild) {
     return error("Child session not found", 404);
@@ -54,7 +54,7 @@ async function handleCancelChild(
   const childId = match.groups?.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
-  const sessionStore = new SessionIndexStore(env.DB);
+  const sessionStore = new SessionIndexStore(ctx.db);
   const isChild = await sessionStore.isChildOf(childId, parentId);
   if (!isChild) {
     return error("Child session not found", 404);

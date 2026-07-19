@@ -28,16 +28,15 @@ export interface WsTokenHandlerDeps {
   generateId: (bytes?: number) => string;
   hashToken: (token: string) => Promise<string>;
   now: () => number;
-  getLog: () => Logger;
 }
 
 export interface WsTokenHandler {
-  generateWsToken: (request: Request) => Promise<Response>;
+  generateWsToken: (request: Request, log: Logger) => Promise<Response>;
 }
 
 export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
   return {
-    async generateWsToken(request: Request): Promise<Response> {
+    async generateWsToken(request: Request, log: Logger): Promise<Response> {
       let raw: unknown;
       try {
         raw = await request.json();
@@ -113,9 +112,7 @@ export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
       const tokenHash = await deps.hashToken(plainToken);
 
       deps.repository.updateParticipantWsToken(participant.id, tokenHash, now);
-      deps
-        .getLog()
-        .info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
+      log.info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
 
       return Response.json({
         token: plainToken,

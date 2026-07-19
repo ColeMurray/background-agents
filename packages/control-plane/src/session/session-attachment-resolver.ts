@@ -22,7 +22,7 @@ export function parseStoredSessionAttachments(
   if (!value) return undefined;
   try {
     const parsed = resolvedSessionAttachmentsSchema.safeParse(JSON.parse(value));
-    if (parsed.success) return parsed.data;
+    if (parsed.success) return parsed.data.length > 0 ? parsed.data : undefined;
   } catch {
     // Report malformed JSON through the same callback as invalid attachment metadata.
   }

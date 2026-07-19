@@ -1,8 +1,16 @@
+import type { Logger } from "../../logger";
 import { SessionInternalPaths, type SessionInternalPath } from "../contracts";
 
+/**
+ * Route handler invoked by SessionDO.fetch dispatch. `log` is the
+ * request-scoped logger (the session logger enriched with trace_id /
+ * request_id correlation from the router); handlers thread it into any
+ * request-serving code that logs.
+ */
 export type SessionInternalRouteHandler = (
   request: Request,
-  url: URL
+  url: URL,
+  log: Logger
 ) => Promise<Response> | Response;
 
 export interface SessionInternalRoute {
@@ -39,6 +47,11 @@ export interface SessionInternalRouteHandlers {
   childSummary: SessionInternalRouteHandler;
   cancel: SessionInternalRouteHandler;
   childSessionUpdate: SessionInternalRouteHandler;
+  diffState: SessionInternalRouteHandler;
+  diffStore: SessionInternalRouteHandler;
+  diffFailure: SessionInternalRouteHandler;
+  diffResolveFile: SessionInternalRouteHandler;
+  diffRetry: SessionInternalRouteHandler;
 }
 
 /**
@@ -112,5 +125,14 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.childSessionUpdate,
       handler: handlers.childSessionUpdate,
     },
+    { method: "GET", path: SessionInternalPaths.diffState, handler: handlers.diffState },
+    { method: "POST", path: SessionInternalPaths.diffStore, handler: handlers.diffStore },
+    { method: "POST", path: SessionInternalPaths.diffFailure, handler: handlers.diffFailure },
+    {
+      method: "GET",
+      path: SessionInternalPaths.diffResolveFile,
+      handler: handlers.diffResolveFile,
+    },
+    { method: "POST", path: SessionInternalPaths.diffRetry, handler: handlers.diffRetry },
   ];
 }

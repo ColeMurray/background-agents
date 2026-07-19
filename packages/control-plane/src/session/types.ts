@@ -182,13 +182,18 @@ export interface PushCommand {
   pushSpec: GitPushSpec;
 }
 
+export interface RefreshDiffCommand {
+  type: "refresh_diff";
+}
+
 export type SandboxCommand =
   | PromptCommand
   | StopCommand
   | SnapshotCommand
   | ShutdownCommand
   | AckCommand
-  | PushCommand;
+  | PushCommand
+  | RefreshDiffCommand;
 
 // Internal session update types
 

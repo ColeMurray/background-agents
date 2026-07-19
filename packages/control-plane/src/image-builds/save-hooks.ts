@@ -32,7 +32,7 @@ export function scheduleImageBuildOnSave(
 ): void {
   if (!resolveImageBuildProvider(env.SANDBOX_PROVIDER)) return;
 
-  const task = createImageBuildWorkflowFromEnv(env)
+  const task = createImageBuildWorkflowFromEnv(env, ctx.db)
     .triggerBuildIfStale(scope, { request_id: ctx.request_id, trace_id: ctx.trace_id })
     .then((result) => {
       logger.info("image_build.save_hook_trigger", {
@@ -67,11 +67,10 @@ export function scheduleImageBuildOnSave(
  * blocked, never stale.
  */
 export async function supersedeImageBuildsForSecretsChange(
-  env: Env,
   scope: ImageBuildScope,
   ctx: RequestContext
 ): Promise<void> {
-  const superseded = await new ImageBuildStore(env.DB).supersedeActiveImages(scope);
+  const superseded = await new ImageBuildStore(ctx.db).supersedeActiveImages(scope);
   if (superseded > 0) {
     logger.info("image_build.secrets_change_superseded", {
       scope_kind: scope.kind,

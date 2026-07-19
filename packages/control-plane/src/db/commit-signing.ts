@@ -1,6 +1,7 @@
 import type { CommitSigningMetadata } from "@open-inspect/shared";
 
 import { decryptToken, encryptToken } from "../auth/crypto";
+import type { SqlDatabase } from "./sql-database";
 
 export interface CommitSigningConfigurationInput {
   privateKey: string;
@@ -62,7 +63,7 @@ interface DeletedConfigurationRow {
 
 export class CommitSigningStore {
   constructor(
-    private readonly db: D1Database,
+    private readonly db: SqlDatabase,
     private readonly encryptionKey: string
   ) {}
 

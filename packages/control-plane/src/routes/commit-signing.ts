@@ -6,6 +6,7 @@ import {
   validateOpenSshEd25519PrivateKey,
 } from "../auth/openssh-ed25519";
 import { CommitSigningStore } from "../db/commit-signing";
+import type { SqlDatabase } from "../db/sql-database";
 import { createLogger } from "../logger";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
@@ -31,12 +32,11 @@ function noStore(response: Response): Response {
   });
 }
 
-function createStore(env: Env): CommitSigningStore | Response {
-  if (!env.DB) return noStore(error("Commit signing storage is not configured", 503));
+function createStore(env: Env, db: SqlDatabase): CommitSigningStore | Response {
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
     return noStore(error("Commit signing encryption is not configured", 503));
   }
-  return new CommitSigningStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  return new CommitSigningStore(db, env.REPO_SECRETS_ENCRYPTION_KEY);
 }
 
 function declaredSigningPayloadExceedsLimit(request: Request): boolean {
@@ -71,8 +71,13 @@ async function readSigningPayload(request: Request): Promise<Uint8Array | null> 
   return payload;
 }
 
-async function handleGetCommitSigning(_request: Request, env: Env): Promise<Response> {
-  const store = createStore(env);
+async function handleGetCommitSigning(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const store = createStore(env, ctx.db);
   if (store instanceof Response) return store;
 
   try {
@@ -88,7 +93,7 @@ async function handlePutCommitSigning(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const store = createStore(env);
+  const store = createStore(env, ctx.db);
   if (store instanceof Response) return store;
 
   let action: "configure" | "replace" = "configure";
@@ -157,7 +162,7 @@ async function handleDeleteCommitSigning(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const store = createStore(env);
+  const store = createStore(env, ctx.db);
   if (store instanceof Response) return store;
 
   try {
@@ -202,7 +207,7 @@ async function handleGetSandboxCommitSigning(
     return noStore(json({ enabled: false }));
   }
 
-  const store = createStore(env);
+  const store = createStore(env, ctx.db);
   if (store instanceof Response) return store;
 
   try {
@@ -255,7 +260,7 @@ async function handlePostSandboxCommitSigning(
   if (!payload) return noStore(error("Commit signing payload is too large", 413));
   if (payload.length === 0) return noStore(error("Commit signing payload required", 400));
 
-  const store = createStore(env);
+  const store = createStore(env, ctx.db);
   if (store instanceof Response) return store;
 
   try {

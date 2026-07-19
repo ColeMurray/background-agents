@@ -165,8 +165,9 @@ statuses are `building | ready | failed | superseded`.
 
 Build callbacks authenticate in one of two modes, decided per provider: Modal builders call back
 with the deployment-wide internal HMAC token, while Vercel/OpenComputer build sandboxes use a
-single-use bearer token minted at trigger time — only its HMAC hash is stored on the build row,
-bound to the provider session, and consumed on the first success or failure callback.
+single-use bearer token minted at trigger time — only its HMAC hash is stored on the build row and
+bound to the provider session. Success callbacks verify it before payload validation and consume it
+atomically when accepted; failure callbacks consume it while marking the build failed.
 
 ### Automations
 

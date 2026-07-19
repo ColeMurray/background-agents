@@ -100,6 +100,21 @@ opencomputer_api_url = "https://app.opencomputer.dev/api"
 opencomputer_api_key = ""
 opencomputer_template = ""
 
+# E2B
+# Only required when sandbox_provider = "e2b"
+# - e2b_api_key: runtime key (control-plane → E2B API) AND template-build auth
+#                (the e2b-infra module builds via the Template SDK). Dashboard → API Keys.
+# The e2b-infra Terraform module builds the template automatically; e2b_template_id
+# is the name it creates/rebuilds (also used at runtime for fresh sandboxes).
+e2b_api_key = ""               # sensitive — runtime REST API key (also auths the build)
+e2b_template_id = ""           # e.g., "open-inspect-sandbox"
+# e2b_api_url = "https://api.e2b.app"
+# Sandbox TTL. Default 7200 (paid plans); on a plan with a ~1h cap, set 3300.
+# e2b_sandbox_timeout_seconds = 3300
+# Auto-pause makes a lapsed TTL recoverable (pause, not kill) and auto-resumes the
+# sandbox on inbound activity. Default true; set false to kill on timeout.
+# e2b_auto_pause = true
+
 # =============================================================================
 # GitHub App Credentials
 # =============================================================================
@@ -235,6 +250,7 @@ nextauth_secret = ""
 # - "daytona": direct Daytona REST API integration with stop/start resume
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
 # - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
+# - "e2b": direct E2B REST API integration with pause/resume
 sandbox_provider = "modal"
 
 # Platform for the web app deployment
