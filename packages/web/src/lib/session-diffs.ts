@@ -1,6 +1,5 @@
 import {
-  SESSION_DIFF_FILE_NOT_FOUND_CODE,
-  SESSION_DIFF_REVISION_STALE_CODE,
+  isSessionDiffErrorCode,
   type SessionDiffErrorCode,
   type SessionDiffFile,
   type SessionDiffManifest,
@@ -93,15 +92,6 @@ export function resolveDiffSelection(
 export interface DiffErrorBody {
   code?: SessionDiffErrorCode;
   error?: string;
-}
-
-const SESSION_DIFF_ERROR_CODES: readonly SessionDiffErrorCode[] = [
-  SESSION_DIFF_REVISION_STALE_CODE,
-  SESSION_DIFF_FILE_NOT_FOUND_CODE,
-];
-
-function isSessionDiffErrorCode(value: unknown): value is SessionDiffErrorCode {
-  return (SESSION_DIFF_ERROR_CODES as readonly unknown[]).includes(value);
 }
 
 /** Narrows an untrusted diff error-response body to the fields the UI reads. */

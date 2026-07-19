@@ -117,6 +117,8 @@ export {
   SESSION_DIFF_ID_PATTERN,
   SESSION_DIFF_REVISION_STALE_CODE,
   SESSION_DIFF_FILE_NOT_FOUND_CODE,
+  SESSION_DIFF_ERROR_CODES,
+  isSessionDiffErrorCode,
   diffRenderStateSchema,
   diffFileStatusSchema,
   sessionDiffBaselineRepositorySchema,

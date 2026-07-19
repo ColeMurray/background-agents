@@ -16,9 +16,17 @@ export const SESSION_DIFF_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 export const SESSION_DIFF_REVISION_STALE_CODE = "diff_revision_stale" as const;
 export const SESSION_DIFF_FILE_NOT_FOUND_CODE = "diff_file_not_found" as const;
 
-export type SessionDiffErrorCode =
-  | typeof SESSION_DIFF_REVISION_STALE_CODE
-  | typeof SESSION_DIFF_FILE_NOT_FOUND_CODE;
+/** Every wire error code the session diff endpoints produce. */
+export const SESSION_DIFF_ERROR_CODES = [
+  SESSION_DIFF_REVISION_STALE_CODE,
+  SESSION_DIFF_FILE_NOT_FOUND_CODE,
+] as const;
+
+export type SessionDiffErrorCode = (typeof SESSION_DIFF_ERROR_CODES)[number];
+
+export function isSessionDiffErrorCode(value: unknown): value is SessionDiffErrorCode {
+  return (SESSION_DIFF_ERROR_CODES as readonly unknown[]).includes(value);
+}
 
 export const diffRenderStateSchema = z.enum(["renderable", "binary", "too_large", "metadata_only"]);
 export const diffFileStatusSchema = z.enum([
