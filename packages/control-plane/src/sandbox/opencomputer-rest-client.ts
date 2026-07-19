@@ -461,15 +461,7 @@ export class OpenComputerRestClient {
       };
       if (body !== undefined) init.body = JSON.stringify(body);
 
-      let response: Response;
-      try {
-        response = await fetch(url, init);
-      } catch (error) {
-        if (controller.signal.aborted) {
-          throw new Error(`OpenComputer request timed out after ${timeoutMs}ms`);
-        }
-        throw error;
-      }
+      const response = await fetch(url, init);
 
       if (response.status === 404) {
         const text = await response.text();
@@ -486,6 +478,18 @@ export class OpenComputerRestClient {
         return (await response.json()) as T;
       }
       return undefined as T;
+    } catch (error) {
+      // The per-call timeout fires controller.abort(); the resulting AbortError
+      // — from fetch OR a body read — must surface as an attributed timeout so
+      // it is actionable in logs and build error_messages. The message must
+      // contain "timeout" so SandboxProviderError classifies it transient
+      // (isTransientNetworkError), not permanent — otherwise it trips the
+      // circuit breaker. Our typed API errors (OpenComputer*Error) have
+      // distinct names and rethrow unchanged.
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`OpenComputer request timeout after ${timeoutMs}ms (${method} ${path})`);
+      }
+      throw error;
     } finally {
       clearTimeout(timeoutId);
     }
