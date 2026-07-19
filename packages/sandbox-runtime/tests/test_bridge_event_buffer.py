@@ -95,24 +95,24 @@ class TestEventBuffering:
 
         await bridge._send_event({"type": "token", "content": "hello"})
 
-        assert len(bridge._event_buffer) == 1
-        assert bridge._event_buffer[0]["type"] == "token"
-        assert bridge._event_buffer[0]["content"] == "hello"
+        assert len(bridge.event_forwarder._event_buffer) == 1
+        assert bridge.event_forwarder._event_buffer[0]["type"] == "token"
+        assert bridge.event_forwarder._event_buffer[0]["content"] == "hello"
         # sandboxId and timestamp should be stamped
-        assert bridge._event_buffer[0]["sandboxId"] == "test-sandbox"
-        assert "timestamp" in bridge._event_buffer[0]
+        assert bridge.event_forwarder._event_buffer[0]["sandboxId"] == "test-sandbox"
+        assert "timestamp" in bridge.event_forwarder._event_buffer[0]
 
     @pytest.mark.asyncio
     async def test_send_event_buffers_when_ws_not_open(self, bridge: AgentBridge):
         """Events should be buffered when WS exists but is not OPEN."""
         mock_ws = MagicMock()
         mock_ws.state = State.CLOSED
-        bridge.ws = mock_ws
+        bridge.event_forwarder.bind(mock_ws)
 
         await bridge._send_event({"type": "execution_complete", "messageId": "msg-1"})
 
-        assert len(bridge._event_buffer) == 1
-        assert bridge._event_buffer[0]["type"] == "execution_complete"
+        assert len(bridge.event_forwarder._event_buffer) == 1
+        assert bridge.event_forwarder._event_buffer[0]["type"] == "execution_complete"
 
     @pytest.mark.asyncio
     async def test_send_event_buffers_on_send_exception(self, bridge: AgentBridge):
@@ -120,29 +120,29 @@ class TestEventBuffering:
         mock_ws = MagicMock()
         mock_ws.state = State.OPEN
         mock_ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
-        bridge.ws = mock_ws
+        bridge.event_forwarder.bind(mock_ws)
 
         await bridge._send_event({"type": "token", "content": "data"})
 
-        assert len(bridge._event_buffer) == 1
-        assert bridge._event_buffer[0]["type"] == "token"
+        assert len(bridge.event_forwarder._event_buffer) == 1
+        assert bridge.event_forwarder._event_buffer[0]["type"] == "token"
 
     def test_buffer_overflow_evicts_non_critical_first(self, bridge: AgentBridge):
         """When buffer is full, non-critical events should be evicted before critical ones."""
         # Fill buffer with a mix of critical and non-critical events
-        bridge._event_buffer = [
+        bridge.event_forwarder._event_buffer = [
             {"type": "execution_complete", "messageId": "msg-1"},  # critical
             {"type": "token", "content": "a"},  # non-critical
             {"type": "error", "messageId": "msg-2"},  # critical
         ]
-        bridge.MAX_EVENT_BUFFER_SIZE = 3
+        bridge.event_forwarder._max_buffer_size = 3
 
-        bridge._buffer_event({"type": "snapshot_ready"})
+        bridge.event_forwarder._buffer_event({"type": "snapshot_ready"})
 
         # Buffer should still be size 3 (one evicted, one added)
-        assert len(bridge._event_buffer) == 3
+        assert len(bridge.event_forwarder._event_buffer) == 3
         # The non-critical "token" event should have been evicted
-        types = [e["type"] for e in bridge._event_buffer]
+        types = [e["type"] for e in bridge.event_forwarder._event_buffer]
         assert "token" not in types
         assert "execution_complete" in types
         assert "error" in types
@@ -150,17 +150,17 @@ class TestEventBuffering:
 
     def test_buffer_overflow_evicts_oldest_critical_if_all_critical(self, bridge: AgentBridge):
         """When all events are critical, oldest gets evicted."""
-        bridge._event_buffer = [
+        bridge.event_forwarder._event_buffer = [
             {"type": "execution_complete", "messageId": "msg-1"},
             {"type": "error", "messageId": "msg-2"},
         ]
-        bridge.MAX_EVENT_BUFFER_SIZE = 2
+        bridge.event_forwarder._max_buffer_size = 2
 
-        bridge._buffer_event({"type": "push_complete"})
+        bridge.event_forwarder._buffer_event({"type": "push_complete"})
 
-        assert len(bridge._event_buffer) == 2
+        assert len(bridge.event_forwarder._event_buffer) == 2
         # Oldest critical (execution_complete) should be evicted
-        types = [e["type"] for e in bridge._event_buffer]
+        types = [e["type"] for e in bridge.event_forwarder._event_buffer]
         assert "execution_complete" not in types
         assert "error" in types
         assert "push_complete" in types
@@ -176,16 +176,16 @@ class TestEventFlush:
         mock_ws.state = State.OPEN
         sent_data: list[str] = []
         mock_ws.send = AsyncMock(side_effect=lambda data: sent_data.append(data))
-        bridge.ws = mock_ws
+        bridge.event_forwarder.bind(mock_ws)
 
-        bridge._event_buffer = [
+        bridge.event_forwarder._event_buffer = [
             {"type": "token", "content": "a"},
             {"type": "execution_complete", "messageId": "msg-1"},
         ]
 
-        await bridge._flush_event_buffer()
+        await bridge.event_forwarder.flush_event_buffer()
 
-        assert len(bridge._event_buffer) == 0
+        assert len(bridge.event_forwarder._event_buffer) == 0
         assert len(sent_data) == 2
         assert json.loads(sent_data[0])["type"] == "token"
         assert json.loads(sent_data[1])["type"] == "execution_complete"
@@ -204,27 +204,27 @@ class TestEventFlush:
                 raise ConnectionError("broken")
 
         mock_ws.send = flaky_send
-        bridge.ws = mock_ws
+        bridge.event_forwarder.bind(mock_ws)
 
-        bridge._event_buffer = [
+        bridge.event_forwarder._event_buffer = [
             {"type": "token", "content": "a"},
             {"type": "token", "content": "b"},
             {"type": "execution_complete", "messageId": "msg-1"},
         ]
 
-        await bridge._flush_event_buffer()
+        await bridge.event_forwarder.flush_event_buffer()
 
         # First event sent successfully, second failed
-        assert len(bridge._event_buffer) == 2
-        assert bridge._event_buffer[0]["content"] == "b"
-        assert bridge._event_buffer[1]["type"] == "execution_complete"
+        assert len(bridge.event_forwarder._event_buffer) == 2
+        assert bridge.event_forwarder._event_buffer[0]["content"] == "b"
+        assert bridge.event_forwarder._event_buffer[1]["type"] == "execution_complete"
 
     @pytest.mark.asyncio
     async def test_flush_noop_when_buffer_empty(self, bridge: AgentBridge):
         """Flushing an empty buffer should be a no-op."""
-        assert len(bridge._event_buffer) == 0
-        await bridge._flush_event_buffer()
-        assert len(bridge._event_buffer) == 0
+        assert len(bridge.event_forwarder._event_buffer) == 0
+        await bridge.event_forwarder.flush_event_buffer()
+        assert len(bridge.event_forwarder._event_buffer) == 0
 
 
 class TestPromptTaskDecoupling:
@@ -301,19 +301,19 @@ class TestPromptTaskDecoupling:
             }
         )
 
-        assert len(bridge._event_buffer) == 1
-        assert bridge._event_buffer[0]["type"] == "execution_complete"
+        assert len(bridge.event_forwarder._event_buffer) == 1
+        assert bridge.event_forwarder._event_buffer[0]["type"] == "execution_complete"
 
         # Simulate reconnect
         mock_ws = MagicMock()
         mock_ws.state = State.OPEN
         sent_data: list[str] = []
         mock_ws.send = AsyncMock(side_effect=lambda data: sent_data.append(data))
-        bridge.ws = mock_ws
+        bridge.event_forwarder.bind(mock_ws)
 
-        await bridge._flush_event_buffer()
+        await bridge.event_forwarder.flush_event_buffer()
 
-        assert len(bridge._event_buffer) == 0
+        assert len(bridge.event_forwarder._event_buffer) == 0
         assert len(sent_data) == 1
         parsed = json.loads(sent_data[0])
         assert parsed["type"] == "execution_complete"
