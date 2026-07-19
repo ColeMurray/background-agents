@@ -14,6 +14,13 @@ import {
   type PushBranchResult,
 } from "./pull-request-service";
 
+function artifactCreatedBroadcasts(deps: PullRequestServiceDeps) {
+  return vi
+    .mocked(deps.messenger.broadcast)
+    .mock.calls.map(([message]) => message)
+    .filter((message) => message.type === "artifact_created");
+}
+
 function createMockLogger(): Logger {
   return {
     debug: vi.fn(),
@@ -172,8 +179,7 @@ function createTestHarness() {
     log,
     generateId: () => `id-${++idCounter}`,
     pushBranchToRemote: vi.fn(async () => ({ success: true as const })),
-    broadcastSessionBranch: vi.fn(),
-    broadcastArtifactCreated: vi.fn(),
+    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
     appName: "Open-Inspect",
     sessionPullRequests,
   };
@@ -251,7 +257,7 @@ describe("SessionPullRequestService", () => {
       status: 500,
       error: "Failed to push branch: timeout",
     });
-    expect(harness.deps.broadcastSessionBranch).not.toHaveBeenCalled();
+    expect(harness.deps.messenger.broadcast).not.toHaveBeenCalled();
   });
 
   it("creates PR with app auth when prompting auth is unavailable", async () => {
@@ -266,15 +272,17 @@ describe("SessionPullRequestService", () => {
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
       .calls[0];
     expect(createPrCall[0]).toEqual({ authType: "app", token: "app-token" });
-    expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledTimes(1);
+    expect(artifactCreatedBroadcasts(harness.deps)).toHaveLength(1);
     expect(harness.deps.repository.updateSessionBranch).toHaveBeenCalledWith(
       "session-1",
       "open-inspect/session-name-1"
     );
-    expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith(
-      "open-inspect/session-name-1",
-      { repoOwner: "acme", repoName: "web" }
-    );
+    expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith({
+      type: "session_branch",
+      branchName: "open-inspect/session-name-1",
+      repoOwner: "acme",
+      repoName: "web",
+    });
   });
 
   it("uses the sanitized branch for push, PR creation, and branch sync", async () => {
@@ -309,7 +317,9 @@ describe("SessionPullRequestService", () => {
       "session-1",
       "feature/test"
     );
-    expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("feature/test", {
+    expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith({
+      type: "session_branch",
+      branchName: "feature/test",
       repoOwner: "acme",
       repoName: "web",
     });
@@ -333,22 +343,25 @@ describe("SessionPullRequestService", () => {
     expect(createPrCall[1].body).toContain(
       "*Created with [Open-Inspect](https://app.example.com/session/session-name-1)*"
     );
-    expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith({
-      id: "id-1",
-      type: "pr",
-      url: "https://github.com/acme/web/pull/42",
-      metadata: {
-        number: 42,
-        state: "open",
-        lifecycleState: "open",
-        isDraft: false,
-        head: "open-inspect/session-name-1",
-        base: "main",
-        repoOwner: "acme",
-        repoName: "web",
+    expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith({
+      type: "artifact_created",
+      artifact: {
+        id: "id-1",
+        type: "pr",
+        url: "https://github.com/acme/web/pull/42",
+        metadata: {
+          number: 42,
+          state: "open",
+          lifecycleState: "open",
+          isDraft: false,
+          head: "open-inspect/session-name-1",
+          base: "main",
+          repoOwner: "acme",
+          repoName: "web",
+        },
+        createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
       },
-      createdAt: expect.any(Number),
-      updatedAt: expect.any(Number),
     });
   });
 
@@ -371,8 +384,9 @@ describe("SessionPullRequestService", () => {
   it("syncs the branch after push and before PR creation", async () => {
     await harness.service.createPullRequest(createInput());
 
+    // The session_branch broadcast is the first messenger fan-out in the flow.
     const pushOrder = vi.mocked(harness.deps.pushBranchToRemote).mock.invocationCallOrder[0];
-    const syncOrder = vi.mocked(harness.deps.broadcastSessionBranch).mock.invocationCallOrder[0];
+    const syncOrder = vi.mocked(harness.deps.messenger.broadcast).mock.invocationCallOrder[0];
     const createPrOrder = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0];
 
@@ -398,7 +412,7 @@ describe("SessionPullRequestService", () => {
     expect(harness.provider.buildGitPushSpec).not.toHaveBeenCalled();
     expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
     expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
-    expect(harness.deps.broadcastSessionBranch).not.toHaveBeenCalled();
+    expect(harness.deps.messenger.broadcast).not.toHaveBeenCalled();
   });
 
   it("skips branch writes when the sanitized branch is unchanged but still broadcasts", async () => {
@@ -426,7 +440,9 @@ describe("SessionPullRequestService", () => {
         refspec: "HEAD:refs/heads/feature/test",
       })
     );
-    expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("feature/test", {
+    expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith({
+      type: "session_branch",
+      branchName: "feature/test",
       repoOwner: "acme",
       repoName: "web",
     });
@@ -559,10 +575,12 @@ describe("SessionPullRequestService", () => {
         "open-inspect/session-name-1"
       );
       expect(harness.deps.repository.updateSessionBranch).not.toHaveBeenCalled();
-      expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith(
-        "open-inspect/session-name-1",
-        { repoOwner: "acme", repoName: "backend" }
-      );
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith({
+        type: "session_branch",
+        branchName: "open-inspect/session-name-1",
+        repoOwner: "acme",
+        repoName: "backend",
+      });
     });
 
     it("writes both the member row and the scalar mirror for the primary", async () => {
@@ -585,9 +603,12 @@ describe("SessionPullRequestService", () => {
         createInput({ repoOwner: "acme", repoName: "backend" })
       );
 
-      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith(
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith(
         expect.objectContaining({
-          metadata: expect.objectContaining({ repoOwner: "acme", repoName: "backend" }),
+          type: "artifact_created",
+          artifact: expect.objectContaining({
+            metadata: expect.objectContaining({ repoOwner: "acme", repoName: "backend" }),
+          }),
         })
       );
     });
@@ -736,8 +757,11 @@ describe("SessionPullRequestService", () => {
       });
 
       const upsertOrder = harness.sessionPullRequests.upsert.mock.invocationCallOrder[0];
-      const broadcastOrder = vi.mocked(harness.deps.broadcastArtifactCreated).mock
-        .invocationCallOrder[0];
+      const broadcastMock = vi.mocked(harness.deps.messenger.broadcast).mock;
+      const artifactCreatedIndex = broadcastMock.calls.findIndex(
+        ([message]) => message.type === "artifact_created"
+      );
+      const broadcastOrder = broadcastMock.invocationCallOrder[artifactCreatedIndex];
       expect(upsertOrder).toBeLessThan(broadcastOrder);
     });
 
@@ -762,11 +786,14 @@ describe("SessionPullRequestService", () => {
           repositoryExternalId: "999",
         })
       );
-      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith(
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith(
         expect.objectContaining({
-          metadata: expect.objectContaining({
-            headSha: "abc123",
-            repositoryExternalId: "999",
+          type: "artifact_created",
+          artifact: expect.objectContaining({
+            metadata: expect.objectContaining({
+              headSha: "abc123",
+              repositoryExternalId: "999",
+            }),
           }),
         })
       );
@@ -791,9 +818,12 @@ describe("SessionPullRequestService", () => {
       expect(harness.sessionPullRequests.upsert).toHaveBeenCalledWith(
         expect.objectContaining({ providerUpdatedAt: 1_720_000_000_000 })
       );
-      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith(
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith(
         expect.objectContaining({
-          metadata: expect.objectContaining({ providerUpdatedAt: 1_720_000_000_000 }),
+          type: "artifact_created",
+          artifact: expect.objectContaining({
+            metadata: expect.objectContaining({ providerUpdatedAt: 1_720_000_000_000 }),
+          }),
         })
       );
     });
@@ -814,12 +844,15 @@ describe("SessionPullRequestService", () => {
       expect(harness.sessionPullRequests.upsert).toHaveBeenCalledWith(
         expect.objectContaining({ lifecycleState: "open", isDraft: true })
       );
-      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledWith(
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith(
         expect.objectContaining({
-          metadata: expect.objectContaining({
-            lifecycleState: "open",
-            isDraft: true,
-            state: "draft",
+          type: "artifact_created",
+          artifact: expect.objectContaining({
+            metadata: expect.objectContaining({
+              lifecycleState: "open",
+              isDraft: true,
+              state: "draft",
+            }),
           }),
         })
       );
@@ -836,7 +869,7 @@ describe("SessionPullRequestService", () => {
         prUrl: "https://github.com/acme/web/pull/42",
         state: "open",
       });
-      expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledTimes(1);
+      expect(artifactCreatedBroadcasts(harness.deps)).toHaveLength(1);
       expect(harness.log.error).toHaveBeenCalledWith(
         "Failed to write session pull request record",
         expect.objectContaining({ artifact_id: "id-1", pr_number: 42 })

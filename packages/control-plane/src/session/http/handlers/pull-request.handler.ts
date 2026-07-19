@@ -1,5 +1,5 @@
-import type { SessionArtifact } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
+import type { SessionMessenger } from "../../messenger";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
 import {
   preparePullRequestArtifactUpdate,
@@ -42,7 +42,7 @@ export interface PullRequestHandlerDeps {
   createPullRequest: (input: CreatePullRequestInput) => Promise<CreatePullRequestResult>;
   getArtifactById: (artifactId: string) => ArtifactRow | null;
   updateArtifact: (artifactId: string, data: UpdateArtifactData) => void;
-  broadcastArtifactUpdated: (artifact: SessionArtifact) => void;
+  messenger: SessionMessenger;
   now: () => number;
   /** Kicks off a background read-through refresh. */
   triggerPullRequestRefresh: () => void;
@@ -172,7 +172,7 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       }
 
       deps.updateArtifact(artifact.id, artifactUpdate.update);
-      deps.broadcastArtifactUpdated(artifactUpdate.artifact);
+      deps.messenger.broadcast({ type: "artifact_updated", artifact: artifactUpdate.artifact });
       return Response.json({ applied: true });
     },
 
