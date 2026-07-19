@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent, ServerMessage } from "../types";
+import type { CallbackNotificationService } from "./callback-notification-service";
+import type { SessionDiffService } from "./diffs/service";
+import type { SessionRepository } from "./repository";
+import type { SessionWebSocketManager } from "./websocket-manager";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -68,11 +72,11 @@ function createProcessor() {
   const processor = new SessionSandboxEventProcessor(
     { waitUntil } as unknown as DurableObjectState,
     () => log,
-    repository as never,
-    callbackService as never,
-    wsManager as never,
-    messenger as never,
-    diffService as never,
+    repository as unknown as SessionRepository,
+    callbackService as unknown as CallbackNotificationService,
+    wsManager as unknown as SessionWebSocketManager,
+    messenger,
+    diffService as unknown as SessionDiffService,
     applySessionTitleUpdate,
     triggerSnapshot,
     reconcileSessionStatusAfterExecution,
