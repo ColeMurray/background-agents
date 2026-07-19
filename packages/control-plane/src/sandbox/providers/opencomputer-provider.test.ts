@@ -295,6 +295,26 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
+  it("keeps GITHUB-named secrets scoped to GitHub hosts on non-GitHub providers", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "bitbucket",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      userEnvVars: { GITHUB_TOKEN: "gh-token" },
+    });
+
+    expect(client.setSecret).toHaveBeenCalledWith({
+      storeId: "secret-store-1",
+      name: "GITHUB_TOKEN",
+      value: "gh-token",
+      allowedHosts: ["github.com", "api.github.com"],
+    });
+  });
+
   it("uses the Bitbucket clone identity for image builds", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {

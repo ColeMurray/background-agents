@@ -617,8 +617,14 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     const normalized = name.toUpperCase();
     if (normalized.includes("ANTHROPIC")) return ["api.anthropic.com"];
     if (normalized.includes("OPENAI")) return ["api.openai.com"];
-    if (normalized.includes("GITHUB") || normalized.includes("VCS_CLONE")) {
+    // VCS_CLONE_* is the provider-generic clone credential, so it follows the
+    // configured SCM provider; GITHUB-named secrets are GitHub credentials no
+    // matter which provider the deployment clones from.
+    if (normalized.includes("VCS_CLONE")) {
       return [...scmCloneIdentity(this.providerConfig.scmProvider).secretHosts];
+    }
+    if (normalized.includes("GITHUB")) {
+      return [...scmCloneIdentity("github").secretHosts];
     }
     return undefined;
   }
