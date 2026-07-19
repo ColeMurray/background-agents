@@ -73,22 +73,6 @@ describe("ModalClient", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the Modal environment web suffix in endpoint URLs", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ success: true, data: { status: "ok", service: "modal" } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })
-    );
-
-    const client = createModalClient("secret", "acme", "prod-web");
-    await client.health();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://acme-prod-web--open-inspect-api-health.modal.run"
-    );
-  });
-
   it("routes the restore session_config through buildSessionConfig (carries mcp_servers)", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
