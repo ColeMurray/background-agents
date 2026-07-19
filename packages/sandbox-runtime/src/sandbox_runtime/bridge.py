@@ -15,14 +15,13 @@ import contextlib
 import json
 import os
 import re
-import secrets
 import subprocess
 import tempfile
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, NoReturn
+from typing import Any, NoReturn
 
 import httpx
 import websockets
@@ -36,6 +35,7 @@ from .attachment_processor import (
 )
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
+from .event_forwarder import BufferedEventForwarder
 from .log_config import configure_logging, get_logger
 from .prompt_stream import (
     HTTP_CONNECT_TIMEOUT_SECONDS,
@@ -154,14 +154,6 @@ class AgentBridge:
     PROMPT_MAX_DURATION = 5400.0
     GIT_CONFIG_TIMEOUT_SECONDS = 10.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
-    MAX_EVENT_BUFFER_SIZE = 1000
-    CRITICAL_EVENT_TYPES: ClassVar[set[str]] = {
-        "execution_complete",
-        "error",
-        "snapshot_ready",
-        "push_complete",
-        "push_error",
-    }
 
     def __init__(
         self,
@@ -232,12 +224,9 @@ class AgentBridge:
             log=self.log,
         )
 
-        # Event buffer: survives WS reconnection, flushed on reconnect
-        self._event_buffer: list[dict[str, Any]] = []
-
-        # Pending ACKs: events sent but not yet acknowledged by the control plane.
-        # Keyed by ackId, re-sent on reconnect until the DO confirms receipt.
-        self._pending_acks: dict[str, dict[str, Any]] = {}
+        # Reconnect-safe event delivery: buffers while the WS is down and
+        # re-sends unacknowledged critical events (see event_forwarder.py).
+        self.event_forwarder = BufferedEventForwarder(sandbox_id=sandbox_id, log=self.log)
 
         self._connected_at_monotonic: float | None = None
         self._connection_count = 0
@@ -449,10 +438,9 @@ class AgentBridge:
                         reconnect_count=max(0, self._connection_count - 1),
                         reconnect_attempt_count=self._reconnect_attempt_count,
                     )
+                    await self.event_forwarder.bind(ws)
                     await self._send_event(self._build_ready_event())
                     await self._drain_boot_warnings()
-                    just_flushed = await self._flush_event_buffer()
-                    await self._flush_pending_acks(skip_ack_ids=just_flushed)
 
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                     async for message in ws:
@@ -484,6 +472,7 @@ class AgentBridge:
                     for task in background_tasks:
                         task.cancel()
                     self.ws = None
+                    self.event_forwarder.unbind()
                     if self._connected_at_monotonic is not None:
                         close_code = getattr(ws, "close_code", None)
                         reason = (
@@ -555,127 +544,7 @@ class AgentBridge:
 
     async def _send_event(self, event: dict[str, Any]) -> None:
         """Send event to control plane, buffering if WS is unavailable."""
-        event_type = event.get("type", "unknown")
-        event["sandboxId"] = self.sandbox_id
-        event["timestamp"] = event.get("timestamp", time.time())
-
-        is_critical = event_type in self.CRITICAL_EVENT_TYPES
-        if is_critical and "ackId" not in event:
-            event["ackId"] = self._make_ack_id(event)
-
-        if not self.ws or self.ws.state != State.OPEN:
-            self._buffer_event(event)
-            return
-
-        try:
-            await self.ws.send(json.dumps(event))
-            if is_critical:
-                self._pending_acks[event["ackId"]] = event
-        except Exception as e:
-            self.log.warn("bridge.send_error", event_type=event_type, exc=e)
-            self._buffer_event(event)
-
-    async def _flush_event_buffer(self) -> set[str]:
-        """Flush buffered events to the control plane after reconnect.
-
-        Returns the set of ackIds that were added to _pending_acks during this
-        flush, so the caller can skip them in _flush_pending_acks (avoiding
-        double-send on the same reconnect).
-        """
-        if not self._event_buffer:
-            return set()
-
-        self.log.info("bridge.flush_buffer_start", buffer_size=len(self._event_buffer))
-        flushed = 0
-        just_added: set[str] = set()
-        while self._event_buffer:
-            event = self._event_buffer[0]
-            if not self.ws or self.ws.state != State.OPEN:
-                break
-            try:
-                await self.ws.send(json.dumps(event))
-                self._event_buffer.pop(0)
-                flushed += 1
-                # Track critical events sent from buffer as pending ACKs
-                if event.get("type") in self.CRITICAL_EVENT_TYPES and "ackId" in event:
-                    self._pending_acks[event["ackId"]] = event
-                    just_added.add(event["ackId"])
-            except Exception as e:
-                self.log.warn("bridge.flush_send_error", exc=e)
-                break
-
-        self.log.info(
-            "bridge.flush_buffer_complete",
-            flushed=flushed,
-            remaining=len(self._event_buffer),
-        )
-        return just_added
-
-    def _buffer_event(self, event: dict[str, Any]) -> None:
-        """Buffer an event for later delivery after WS reconnect."""
-        if len(self._event_buffer) >= self.MAX_EVENT_BUFFER_SIZE:
-            # Evict oldest non-critical event; fall back to oldest if all critical
-            evicted = False
-            for i, buffered in enumerate(self._event_buffer):
-                if buffered.get("type") not in self.CRITICAL_EVENT_TYPES:
-                    self._event_buffer.pop(i)
-                    evicted = True
-                    break
-            if not evicted:
-                self._event_buffer.pop(0)
-
-        self._event_buffer.append(event)
-        self.log.debug(
-            "bridge.event_buffered",
-            event_type=event.get("type", "unknown"),
-            buffer_size=len(self._event_buffer),
-        )
-
-    @staticmethod
-    def _make_ack_id(event: dict[str, Any]) -> str:
-        """Generate a deterministic ack ID for a critical event.
-
-        Format: "{type}:{messageId}" for events with messageId,
-        "{type}:{random_hex}" for events without (e.g., snapshot_ready).
-        Deterministic IDs give natural deduplication on the DO side.
-        """
-        event_type = event.get("type", "unknown")
-        message_id = event.get("messageId")
-        if message_id:
-            return f"{event_type}:{message_id}"
-        return f"{event_type}:{secrets.token_hex(8)}"
-
-    async def _flush_pending_acks(self, skip_ack_ids: set[str] | None = None) -> None:
-        """Re-send unacknowledged critical events on a new WS connection.
-
-        Events stay in _pending_acks until the DO sends an ACK command.
-
-        Args:
-            skip_ack_ids: ackIds to skip (already sent during _flush_event_buffer
-                          on this same reconnect).
-        """
-        if not self._pending_acks:
-            return
-
-        self.log.info("bridge.flush_pending_acks_start", count=len(self._pending_acks))
-        resent = 0
-        for ack_id, event in list(self._pending_acks.items()):
-            if skip_ack_ids and ack_id in skip_ack_ids:
-                continue
-            if not self.ws or self.ws.state != State.OPEN:
-                break
-            try:
-                await self.ws.send(json.dumps(event))
-                resent += 1
-            except Exception as e:
-                self.log.warn("bridge.flush_pending_ack_error", ack_id=ack_id, exc=e)
-                break
-
-        self.log.info(
-            "bridge.flush_pending_acks_complete",
-            resent=resent,
-            total=len(self._pending_acks),
-        )
+        await self.event_forwarder.send(event)
 
     async def _handle_command(self, cmd: dict[str, Any]) -> asyncio.Task[None] | None:
         """Handle command from control plane.
@@ -744,8 +613,7 @@ class AgentBridge:
             self.diff_refresh.request(None)
         elif cmd_type == "ack":
             ack_id = cmd.get("ackId")
-            if ack_id and ack_id in self._pending_acks:
-                del self._pending_acks[ack_id]
+            if ack_id and self.event_forwarder.acknowledge(ack_id):
                 self.log.debug("bridge.ack_received", ack_id=ack_id)
         else:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)

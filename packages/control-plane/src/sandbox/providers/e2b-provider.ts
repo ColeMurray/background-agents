@@ -12,7 +12,11 @@
 
 import type { SandboxSettings } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
-import { buildSandboxEnvVars, deriveCodeServerPassword } from "./e2b-helpers";
+import {
+  buildSandboxEnvVars,
+  deriveCodeServerPassword,
+  legacyScmCloneIdentity,
+} from "../sandbox-env";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxDetail } from "../e2b-rest-client";
@@ -79,9 +83,13 @@ export class E2BSandboxProvider implements SandboxProvider {
           )
         : undefined;
       const envVars = buildSandboxEnvVars(config, {
-        scmProvider: this.providerConfig.scmProvider,
+        scmIdentity: legacyScmCloneIdentity(this.providerConfig.scmProvider),
         codeServerPassword,
       });
+      // E2B sandboxes run as a non-root user and /run is a root-owned tmpfs, so
+      // the git credential helper can't create its default cache dir (/run/oi)
+      // and fails before brokering a token. Point it at a user-writable path.
+      envVars.OI_SCM_CRED_CACHE_DIR = "/tmp/oi";
       const metadata = this.buildMetadata(config);
       const sandbox = await this.client.createSandbox({
         templateID: this.client.config.templateId,

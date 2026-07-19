@@ -24,7 +24,6 @@ function createHandler() {
   return {
     handler: createMessagesHandler({
       messageService,
-      getLog: () => log,
     }),
     messageService,
     log,
@@ -33,7 +32,7 @@ function createHandler() {
 
 describe("createMessagesHandler", () => {
   it("enqueues prompt and returns queued response", async () => {
-    const { handler, messageService } = createHandler();
+    const { handler, messageService, log } = createHandler();
     vi.mocked(messageService.enqueuePrompt).mockResolvedValue({
       messageId: "msg-1",
       status: "queued",
@@ -48,7 +47,8 @@ describe("createMessagesHandler", () => {
           authorId: "user-1",
           source: "web",
         }),
-      })
+      }),
+      log
     );
 
     expect(response.status).toBe(200);
@@ -69,7 +69,8 @@ describe("createMessagesHandler", () => {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: "{invalid",
-        })
+        }),
+        log
       )
     ).rejects.toBeTruthy();
 

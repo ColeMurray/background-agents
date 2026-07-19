@@ -1,8 +1,16 @@
+import type { Logger } from "../../logger";
 import { SessionInternalPaths, type SessionInternalPath } from "../contracts";
 
+/**
+ * Route handler invoked by SessionDO.fetch dispatch. `log` is the
+ * request-scoped logger (the session logger enriched with trace_id /
+ * request_id correlation from the router); handlers thread it into any
+ * request-serving code that logs.
+ */
 export type SessionInternalRouteHandler = (
   request: Request,
-  url: URL
+  url: URL,
+  log: Logger
 ) => Promise<Response> | Response;
 
 export interface SessionInternalRoute {
