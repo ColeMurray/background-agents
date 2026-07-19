@@ -55,6 +55,7 @@ const QUERY_PATTERNS = {
   SELECT_BY_PARENT:
     /^SELECT \* FROM sessions WHERE parent_session_id = \? ORDER BY created_at DESC$/,
   SELECT_1_CHILD: /^SELECT 1 FROM sessions WHERE id = \? AND parent_session_id = \?$/,
+  SELECT_1_ASSOCIATED_REPO: /^SELECT 1 AS ok FROM sessions WHERE id = \?1 AND /,
   SELECT_SPAWN_DEPTH: /^SELECT spawn_depth FROM sessions WHERE id = \?$/,
 } as const;
 
@@ -100,6 +101,25 @@ class FakeD1Database {
         return { "1": 1 };
       }
       return null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_1_ASSOCIATED_REPO.test(normalized)) {
+      const [sessionId, repoOwner, repoName] = args as [string, string, string];
+      const row = this.rows.get(sessionId);
+      if (!row) return null;
+
+      const owner = repoOwner.toLowerCase();
+      const name = repoName.toLowerCase();
+      const scalarMatch =
+        row.repo_owner?.toLowerCase() === owner && row.repo_name?.toLowerCase() === name;
+      const memberMatch = this.repositoryRows.some(
+        (repo) =>
+          repo.session_id === sessionId &&
+          repo.repo_owner.toLowerCase() === owner &&
+          repo.repo_name.toLowerCase() === name
+      );
+
+      return scalarMatch || memberMatch ? { ok: 1 } : null;
     }
 
     if (QUERY_PATTERNS.SELECT_SPAWN_DEPTH.test(normalized)) {
@@ -549,6 +569,46 @@ describe("SessionIndexStore", () => {
     it("returns null when not found", async () => {
       const result = await store.get("nonexistent");
       expect(result).toBeNull();
+    });
+  });
+
+  describe("isRepositoryAssociated", () => {
+    it("matches a legacy scalar repository case-insensitively", async () => {
+      await store.create(makeSession({ id: "legacy", repoOwner: "Acme", repoName: "Web" }));
+
+      await expect(store.isRepositoryAssociated("legacy", "ACME", "web")).resolves.toBe(true);
+    });
+
+    it("matches secondary repository members, including nested owners", async () => {
+      await store.create(
+        makeSession({
+          id: "multi",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repositories: [
+            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+            {
+              repoOwner: "group/subgroup",
+              repoName: "backend",
+              repoId: 2,
+              baseBranch: "main",
+            },
+          ],
+        })
+      );
+
+      await expect(
+        store.isRepositoryAssociated("multi", "GROUP/SUBGROUP", "BACKEND")
+      ).resolves.toBe(true);
+    });
+
+    it("rejects missing sessions and repos outside the session repository set", async () => {
+      await store.create(makeSession({ id: "known", repoOwner: "acme", repoName: "frontend" }));
+
+      await expect(store.isRepositoryAssociated("missing", "acme", "frontend")).resolves.toBe(
+        false
+      );
+      await expect(store.isRepositoryAssociated("known", "acme", "backend")).resolves.toBe(false);
     });
   });
 
