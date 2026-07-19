@@ -40,3 +40,13 @@ BOOT_WARNINGS_FILE_PATH = "/tmp/oi-boot-warnings.jsonl"
 # layout has a single authority. JSON: {"repositories": [{owner, name, branch,
 # path}]}. Mirrored as a string literal in plugins/inspect-plugin.js.
 REPO_MANIFEST_FILE_PATH = "/tmp/oi-repo-manifest.json"
+
+# Advisory flock guaranteeing one live supervisor per sandbox. Providers can
+# re-exec the entrypoint into a sandbox whose original supervisor is still
+# alive (e.g. an OpenComputer wake after pause/resume, where processes survive
+# the suspension); the duplicate must detect the survivor and bow out. The
+# lock is a held flock, not a pidfile existence check: the kernel releases it
+# when the holder dies (SIGKILL included), so a stale file restored from a
+# snapshot or left on a persistent disk never blocks a fresh boot. The PID
+# written inside is diagnostic only.
+SUPERVISOR_LOCK_FILE_PATH = "/tmp/oi-supervisor.lock"
