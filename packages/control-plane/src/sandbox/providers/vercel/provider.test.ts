@@ -225,10 +225,8 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
-  it("maps bitbucket to its own clone identity (unlike the other providers)", async () => {
-    // Vercel is the only provider with real Bitbucket support; the others
-    // collapse bitbucket to the GitHub identity. Locked in so the shared env
-    // assembly can't silently change either side.
+  it("maps bitbucket to its own clone identity", async () => {
+    // Locked in so the shared env assembly can't silently change it.
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, {
       ...providerConfig,

@@ -11,11 +11,7 @@ import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
-import {
-  buildSandboxEnvVars,
-  deriveCodeServerPassword,
-  legacyScmCloneIdentity,
-} from "../sandbox-env";
+import { buildSandboxEnvVars, deriveCodeServerPassword, scmCloneIdentity } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -196,7 +192,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   private async buildEnvVars(config: CreateSandboxConfig): Promise<Record<string, string>> {
     return buildSandboxEnvVars(config, {
-      scmIdentity: legacyScmCloneIdentity(this.providerConfig.scmProvider),
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
       codeServerPassword: config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,

@@ -12,11 +12,7 @@
 
 import type { SandboxSettings } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
-import {
-  buildSandboxEnvVars,
-  deriveCodeServerPassword,
-  legacyScmCloneIdentity,
-} from "../sandbox-env";
+import { buildSandboxEnvVars, deriveCodeServerPassword, scmCloneIdentity } from "../sandbox-env";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxDetail } from "../e2b-rest-client";
@@ -83,7 +79,7 @@ export class E2BSandboxProvider implements SandboxProvider {
           )
         : undefined;
       const envVars = buildSandboxEnvVars(config, {
-        scmIdentity: legacyScmCloneIdentity(this.providerConfig.scmProvider),
+        scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
         codeServerPassword,
       });
       // E2B sandboxes run as a non-root user and /run is a root-owned tmpfs, so

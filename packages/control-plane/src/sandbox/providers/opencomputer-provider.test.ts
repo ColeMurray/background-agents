@@ -267,6 +267,25 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
+  it("maps bitbucket to the Bitbucket clone identity", async () => {
+    // OpenComputer historically collapsed bitbucket to the GitHub identity (a
+    // pre-Bitbucket-support drift that made bitbucket clones impossible); it
+    // now resolves the real Bitbucket identity like every provider.
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "bitbucket",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox(baseConfig);
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      VCS_HOST: "bitbucket.org",
+      VCS_CLONE_USERNAME: "x-token-auth",
+    });
+  });
+
   it("cleans up a created sandbox when runtime startup fails", async () => {
     const client = createMockClient({
       startRuntime: vi.fn(async () => {

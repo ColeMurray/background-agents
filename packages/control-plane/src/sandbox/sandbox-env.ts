@@ -117,18 +117,6 @@ export function scmCloneIdentity(scmProvider: SourceControlProviderName): ScmClo
   return SCM_CLONE_IDENTITIES[scmProvider];
 }
 
-/**
- * Clone identity for providers that predate Bitbucket support (Daytona, E2B,
- * OpenComputer): GitLab resolves normally, every other value — including
- * "bitbucket" — collapses to the GitHub identity. This preserves each
- * provider's historical behavior verbatim; only the Vercel provider maps
- * Bitbucket today. Moving a provider to {@link scmCloneIdentity} is a
- * deliberate behavior change, not a refactor.
- */
-export function legacyScmCloneIdentity(scmProvider: SourceControlProviderName): ScmCloneIdentity {
-  return scmCloneIdentity(scmProvider === "gitlab" ? "gitlab" : "github");
-}
-
 /** Set `VCS_HOST`/`VCS_CLONE_USERNAME` (and the clone token, when given) on an env map. */
 export function applyScmCloneEnv(
   envVars: Record<string, string>,
@@ -154,10 +142,7 @@ export async function deriveCodeServerPassword(sandboxId: string, secret: string
 
 /** Provider-specific inputs to {@link buildSandboxEnvVars}. */
 export interface SandboxEnvVarsOptions {
-  /**
-   * Resolved clone identity — {@link scmCloneIdentity} for providers with full
-   * SCM support, {@link legacyScmCloneIdentity} for the historical mapping.
-   */
+  /** Resolved clone identity — {@link scmCloneIdentity} of the configured SCM provider. */
   scmIdentity: ScmCloneIdentity;
   /**
    * Precomputed code-server password (derivation is provider-specific and

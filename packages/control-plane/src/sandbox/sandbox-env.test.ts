@@ -3,7 +3,6 @@ import {
   applyScmCloneEnv,
   buildSandboxEnvVars,
   buildSessionConfig,
-  legacyScmCloneIdentity,
   scmCloneIdentity,
 } from "./sandbox-env";
 import type { CreateSandboxConfig } from "./provider";
@@ -115,17 +114,6 @@ describe("scmCloneIdentity", () => {
       host: "bitbucket.org",
       cloneUsername: "x-token-auth",
     });
-  });
-});
-
-describe("legacyScmCloneIdentity", () => {
-  it("resolves gitlab normally", () => {
-    expect(legacyScmCloneIdentity("gitlab")).toEqual(scmCloneIdentity("gitlab"));
-  });
-
-  it("collapses bitbucket to the GitHub identity (historical pre-Bitbucket behavior)", () => {
-    expect(legacyScmCloneIdentity("bitbucket")).toEqual(scmCloneIdentity("github"));
-    expect(legacyScmCloneIdentity("github")).toEqual(scmCloneIdentity("github"));
   });
 });
 
