@@ -12,9 +12,6 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 """
 
 import asyncio
-import contextlib
-import errno
-import fcntl
 import filecmp
 import json
 import os
@@ -33,7 +30,6 @@ from .constants import (
     CODE_SERVER_PORT_ENV_VAR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     REPO_MANIFEST_FILE_PATH,
-    SUPERVISOR_LOCK_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
@@ -45,6 +41,7 @@ from .git_excludes import install_runtime_git_excludes
 from .log_config import configure_logging, get_logger
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
+from .supervisor_guard import SupervisorGuard, SupervisorLockOutcome
 
 configure_logging()
 
@@ -72,22 +69,6 @@ def _port_from_env(env_var: str, default: int) -> int:
     except ValueError:
         return default
     return port if 1 <= port <= 65535 else default
-
-
-def _cmdline_is_orphan_runtime(argv: list[str]) -> bool:
-    """Whether ``argv`` is a runtime child a dead supervisor could have left behind.
-
-    Matches only the two processes whose duplication breaks correctness: the
-    OpenCode server (one SQLite store, one owner of its port) and the bridge
-    (one WebSocket identity per sandbox at the control plane). Sidecars
-    (code-server, ttyd) are deliberately not matched — a duplicate there only
-    burns its own restart budget.
-    """
-    if not argv:
-        return False
-    if Path(argv[0]).name == "opencode" and argv[1:2] == ["serve"]:
-        return True
-    return "sandbox_runtime.bridge" in argv[1:] and Path(argv[0]).name.startswith("python")
 
 
 AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
@@ -143,7 +124,6 @@ class SandboxSupervisor:
     CLONE_DEPTH_COMMITS = 100
     SIDECAR_TIMEOUT_SECONDS = 5
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
-    ORPHAN_TERM_TIMEOUT_SECONDS = 5.0
 
     def __init__(self):
         self.opencode_process: asyncio.subprocess.Process | None = None
@@ -155,9 +135,6 @@ class SandboxSupervisor:
         self.git_sync_complete = asyncio.Event()
         self.opencode_ready = asyncio.Event()
         self.boot_mode = "unknown"
-        # Held (never closed) for the supervisor's lifetime; the kernel
-        # releases the flock on it when this process dies.
-        self.supervisor_lock_fd: int | None = None
 
         # Configuration from environment (set by Modal/SandboxManager)
         self.sandbox_id = os.environ.get("SANDBOX_ID", "unknown")
@@ -1816,115 +1793,9 @@ class SandboxSupervisor:
         )
         return False
 
-    def acquire_supervisor_lock(self) -> bool:
-        """Take the sandbox-wide single-supervisor lock, or report who holds it.
-
-        Providers can exec a duplicate entrypoint into a sandbox whose
-        original supervisor is still alive (OpenComputer wake after
-        pause/resume re-runs the start command, but the paused supervisor
-        survives the suspension). Two supervisors mean two OpenCode processes
-        fighting over one SQLite store ("database is locked" crash loops) and
-        two bridges claiming one sandbox identity at the control plane.
-
-        The guard is an advisory flock held for this process's lifetime — see
-        SUPERVISOR_LOCK_FILE_PATH for why flock rather than a pidfile check.
-        Unexpected lock-file errors fail open (boot proceeds unguarded):
-        refusing to boot would brick every sandbox on a filesystem quirk,
-        while a missed duplicate only recreates today's behavior.
-        """
-        try:
-            fd = os.open(SUPERVISOR_LOCK_FILE_PATH, os.O_RDWR | os.O_CREAT, 0o644)
-        except OSError as e:
-            self.log.warn("supervisor.lock_error", exc=e)
-            return True
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as e:
-            if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
-                os.close(fd)
-                self.log.warn("supervisor.lock_error", exc=e)
-                return True
-            holder_pid = ""
-            with contextlib.suppress(OSError):
-                holder_pid = os.read(fd, 64).decode(errors="replace").strip()
-            os.close(fd)
-            self.log.info("supervisor.already_running", holder_pid=holder_pid)
-            return False
-        os.ftruncate(fd, 0)
-        os.write(fd, str(os.getpid()).encode())
-        self.supervisor_lock_fd = fd
-        return True
-
-    def release_supervisor_lock(self) -> None:
-        """Drop the single-supervisor lock during teardown (idempotent).
-
-        The kernel would release it at process death anyway; releasing at the
-        end of shutdown just makes the handoff explicit for a replacement
-        exec'd while this process is still unwinding.
-        """
-        if self.supervisor_lock_fd is None:
-            return
-        with contextlib.suppress(OSError):
-            os.close(self.supervisor_lock_fd)
-        self.supervisor_lock_fd = None
-
-    def _find_orphan_runtime_pids(self) -> list[int]:
-        """PIDs of runtime children left behind by a dead supervisor.
-
-        Scans /proc (absent outside Linux → empty result). Any process
-        matching the runtime signatures cannot belong to a live supervisor:
-        a live one holds the lock and this supervisor would not be running.
-        """
-        pids: list[int] = []
-        for entry in Path("/proc").glob("[0-9]*"):
-            pid = int(entry.name)
-            if pid == os.getpid():
-                continue
-            try:
-                argv = (entry / "cmdline").read_bytes().decode(errors="replace").split("\x00")
-            except OSError:
-                continue
-            if _cmdline_is_orphan_runtime([arg for arg in argv if arg]):
-                pids.append(pid)
-        return pids
-
-    async def reap_orphan_runtime_processes(self) -> None:
-        """Terminate OpenCode/bridge processes orphaned by a dead supervisor.
-
-        Without this, a supervisor that died leaving children (possible where
-        the entrypoint is not PID 1, e.g. OpenComputer's nohup'd exec) forces
-        the replacement's OpenCode into a port-bind crash loop against the
-        orphan until MAX_RESTARTS gives up.
-        """
-        signalled: list[int] = []
-        for pid in self._find_orphan_runtime_pids():
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                continue
-            self.log.info("supervisor.orphan_terminated", pid=pid)
-            signalled.append(pid)
-        pids = signalled
-        deadline = time.monotonic() + self.ORPHAN_TERM_TIMEOUT_SECONDS
-        while pids and time.monotonic() < deadline:
-            await asyncio.sleep(0.2)
-            pids = [pid for pid in pids if Path(f"/proc/{pid}").exists()]
-        for pid in pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-                self.log.warn("supervisor.orphan_killed", pid=pid)
-            except OSError:
-                pass
-
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
-
-        # Before any side effect: a duplicate supervisor must not touch the
-        # manifest, the checkout, or the child processes of the live one.
-        if not self.acquire_supervisor_lock():
-            return
-        await self.reap_orphan_runtime_processes()
 
         self.log.info(
             "supervisor.start",
@@ -2238,14 +2109,30 @@ class SandboxSupervisor:
             except TimeoutError:
                 self.opencode_process.kill()
 
-        self.release_supervisor_lock()
         self.log.info("supervisor.shutdown_complete")
 
 
 async def main():
-    """Entry point for the sandbox supervisor."""
-    supervisor = SandboxSupervisor()
-    await supervisor.run()
+    """Entry point for the sandbox supervisor.
+
+    The single-instance guard brackets the whole supervisor lifecycle: a
+    duplicate exec must not touch the manifest, the checkout, or the child
+    processes of the live supervisor. An UNAVAILABLE lock proceeds unguarded
+    — refusing to boot would brick every sandbox on a filesystem quirk,
+    while a missed duplicate only recreates the pre-guard behavior — but
+    skips the orphan sweep, which is only sound while holding the lock.
+    """
+    guard = SupervisorGuard(log=get_logger("supervisor"))
+    outcome = guard.acquire()
+    if outcome is SupervisorLockOutcome.ALREADY_RUNNING:
+        return
+    try:
+        if outcome is SupervisorLockOutcome.ACQUIRED:
+            await guard.reap_orphan_runtime_processes()
+        supervisor = SandboxSupervisor()
+        await supervisor.run()
+    finally:
+        guard.release()
 
 
 if __name__ == "__main__":

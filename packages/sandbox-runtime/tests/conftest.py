@@ -3,26 +3,11 @@
 from typing import TYPE_CHECKING, Any
 
 import httpx
-import pytest
 
 from sandbox_runtime.opencode_client import OpenCodeClient
 
 if TYPE_CHECKING:
     from sandbox_runtime.bridge import AgentBridge
-
-
-@pytest.fixture(autouse=True)
-def _isolated_supervisor_lock(tmp_path, monkeypatch):
-    """Point the single-supervisor lock at a per-test file.
-
-    Without this, every test that drives SandboxSupervisor.run() contends for
-    the real SUPERVISOR_LOCK_FILE_PATH within one pytest process, and the
-    duplicate-supervisor guard makes later tests exit early.
-    """
-    monkeypatch.setattr(
-        "sandbox_runtime.entrypoint.SUPERVISOR_LOCK_FILE_PATH",
-        str(tmp_path / "oi-supervisor.lock"),
-    )
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:

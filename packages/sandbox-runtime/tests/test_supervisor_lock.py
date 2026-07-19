@@ -1,99 +1,130 @@
-"""Tests for the single-supervisor lock and orphan runtime reaping."""
+"""Tests for the single-supervisor guard: lock, matcher, and orphan reaping."""
 
 import os
+import signal
 import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sandbox_runtime.entrypoint import SandboxSupervisor, _cmdline_is_orphan_runtime
+from sandbox_runtime.supervisor_guard import (
+    SupervisorGuard,
+    SupervisorLockOutcome,
+    _cmdline_is_orphan_runtime,
+    _parse_stat_start_time,
+)
 
 
-def _make_supervisor() -> SandboxSupervisor:
-    """Create a SandboxSupervisor with env vars stubbed out."""
-    with patch.dict(
-        "os.environ",
-        {
-            "SANDBOX_ID": "test-sandbox",
-            "CONTROL_PLANE_URL": "https://cp.example.com",
-            "SANDBOX_AUTH_TOKEN": "tok",
-            "REPO_OWNER": "acme",
-            "REPO_NAME": "app",
-        },
-    ):
-        return SandboxSupervisor()
+def _make_guard(tmp_path, term_timeout_seconds: float = 0.5) -> SupervisorGuard:
+    return SupervisorGuard(
+        log=MagicMock(),
+        lock_path=str(tmp_path / "supervisor.lock"),
+        term_timeout_seconds=term_timeout_seconds,
+    )
 
 
-class TestAcquireSupervisorLock:
-    def test_first_acquire_succeeds_and_records_pid(self, tmp_path, monkeypatch):
-        lock_path = tmp_path / "supervisor.lock"
-        monkeypatch.setattr("sandbox_runtime.entrypoint.SUPERVISOR_LOCK_FILE_PATH", str(lock_path))
-        sup = _make_supervisor()
+class TestAcquire:
+    def test_first_acquire_succeeds_and_records_pid(self, tmp_path):
+        guard = _make_guard(tmp_path)
 
-        assert sup.acquire_supervisor_lock() is True
-        assert sup.supervisor_lock_fd is not None
-        assert lock_path.read_text() == str(os.getpid())
+        assert guard.acquire() is SupervisorLockOutcome.ACQUIRED
+        assert (tmp_path / "supervisor.lock").read_text() == str(os.getpid())
 
-    def test_second_acquire_fails_while_first_holds(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            "sandbox_runtime.entrypoint.SUPERVISOR_LOCK_FILE_PATH",
-            str(tmp_path / "supervisor.lock"),
-        )
-        first = _make_supervisor()
-        second = _make_supervisor()
+    def test_second_acquire_reports_already_running(self, tmp_path):
+        first = _make_guard(tmp_path)
+        second = _make_guard(tmp_path)
 
-        assert first.acquire_supervisor_lock() is True
-        assert second.acquire_supervisor_lock() is False
-        assert second.supervisor_lock_fd is None
+        assert first.acquire() is SupervisorLockOutcome.ACQUIRED
+        assert second.acquire() is SupervisorLockOutcome.ALREADY_RUNNING
 
-    def test_lock_released_on_holder_death_allows_new_acquire(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            "sandbox_runtime.entrypoint.SUPERVISOR_LOCK_FILE_PATH",
-            str(tmp_path / "supervisor.lock"),
-        )
-        first = _make_supervisor()
-        second = _make_supervisor()
+    def test_lock_released_on_holder_death_allows_new_acquire(self, tmp_path):
+        first = _make_guard(tmp_path)
+        second = _make_guard(tmp_path)
 
-        assert first.acquire_supervisor_lock() is True
+        assert first.acquire() is SupervisorLockOutcome.ACQUIRED
         # Closing the fd is what the kernel does implicitly when the holding
         # process dies (SIGKILL included).
-        os.close(first.supervisor_lock_fd)
+        os.close(first._lock_fd)
+        first._lock_fd = None
 
-        assert second.acquire_supervisor_lock() is True
+        assert second.acquire() is SupervisorLockOutcome.ACQUIRED
 
-    def test_stale_lock_file_does_not_block_boot(self, tmp_path, monkeypatch):
+    def test_explicit_release_allows_new_acquire(self, tmp_path):
+        first = _make_guard(tmp_path)
+        second = _make_guard(tmp_path)
+
+        assert first.acquire() is SupervisorLockOutcome.ACQUIRED
+        first.release()
+
+        assert second.acquire() is SupervisorLockOutcome.ACQUIRED
+
+    def test_stale_lock_file_does_not_block_boot(self, tmp_path):
         """A lock FILE restored from a snapshot has no live holder — must not block."""
         lock_path = tmp_path / "supervisor.lock"
         lock_path.write_text("424242")
-        monkeypatch.setattr("sandbox_runtime.entrypoint.SUPERVISOR_LOCK_FILE_PATH", str(lock_path))
-        sup = _make_supervisor()
+        guard = _make_guard(tmp_path)
 
-        assert sup.acquire_supervisor_lock() is True
+        assert guard.acquire() is SupervisorLockOutcome.ACQUIRED
         assert lock_path.read_text() == str(os.getpid())
 
-    def test_unexpected_open_error_fails_open(self, tmp_path, monkeypatch):
-        """A filesystem quirk must not brick the boot — proceed unguarded."""
-        monkeypatch.setattr(
-            "sandbox_runtime.entrypoint.SUPERVISOR_LOCK_FILE_PATH",
-            str(tmp_path / "missing-dir" / "supervisor.lock"),
+    def test_unusable_lock_path_reports_unavailable(self, tmp_path):
+        guard = SupervisorGuard(
+            log=MagicMock(),
+            lock_path=str(tmp_path / "missing-dir" / "supervisor.lock"),
         )
-        sup = _make_supervisor()
 
-        assert sup.acquire_supervisor_lock() is True
-        assert sup.supervisor_lock_fd is None
+        assert guard.acquire() is SupervisorLockOutcome.UNAVAILABLE
 
 
-class TestRunGuard:
-    async def test_run_exits_before_side_effects_when_duplicate(self):
-        sup = _make_supervisor()
-        sup.acquire_supervisor_lock = MagicMock(return_value=False)
-        sup.reap_orphan_runtime_processes = AsyncMock()
-        sup._write_repo_manifest = MagicMock()
-        sup.sync_repositories = AsyncMock()
+class TestMainLifecycle:
+    async def test_duplicate_exec_never_constructs_a_supervisor(self, tmp_path, monkeypatch):
+        from sandbox_runtime import entrypoint
 
-        await sup.run()
+        holder = _make_guard(tmp_path)
+        assert holder.acquire() is SupervisorLockOutcome.ACQUIRED
+        monkeypatch.setattr(
+            entrypoint,
+            "SupervisorGuard",
+            lambda log: SupervisorGuard(log=log, lock_path=holder.lock_path),
+        )
+        supervisor_cls = MagicMock()
+        monkeypatch.setattr(entrypoint, "SandboxSupervisor", supervisor_cls)
 
-        sup.reap_orphan_runtime_processes.assert_not_called()
-        sup._write_repo_manifest.assert_not_called()
-        sup.sync_repositories.assert_not_called()
+        await entrypoint.main()
+
+        supervisor_cls.assert_not_called()
+
+    async def test_unguarded_boot_runs_but_skips_orphan_sweep(self, tmp_path, monkeypatch):
+        from sandbox_runtime import entrypoint
+
+        guard = SupervisorGuard(
+            log=MagicMock(),
+            lock_path=str(tmp_path / "missing-dir" / "supervisor.lock"),
+        )
+        guard.reap_orphan_runtime_processes = AsyncMock()
+        monkeypatch.setattr(entrypoint, "SupervisorGuard", lambda log: guard)
+        supervisor = MagicMock()
+        supervisor.run = AsyncMock()
+        monkeypatch.setattr(entrypoint, "SandboxSupervisor", lambda: supervisor)
+
+        await entrypoint.main()
+
+        guard.reap_orphan_runtime_processes.assert_not_called()
+        supervisor.run.assert_awaited_once()
+
+    async def test_guarded_boot_reaps_then_runs_then_releases(self, tmp_path, monkeypatch):
+        from sandbox_runtime import entrypoint
+
+        guard = _make_guard(tmp_path)
+        guard.reap_orphan_runtime_processes = AsyncMock()
+        monkeypatch.setattr(entrypoint, "SupervisorGuard", lambda log: guard)
+        supervisor = MagicMock()
+        supervisor.run = AsyncMock()
+        monkeypatch.setattr(entrypoint, "SandboxSupervisor", lambda: supervisor)
+
+        await entrypoint.main()
+
+        guard.reap_orphan_runtime_processes.assert_awaited_once()
+        supervisor.run.assert_awaited_once()
+        assert guard._lock_fd is None
 
 
 class TestOrphanCmdlineMatcher:
@@ -115,15 +146,28 @@ class TestOrphanCmdlineMatcher:
         assert not _cmdline_is_orphan_runtime(["sleep", "30"])
 
 
+class TestStatStartTime:
+    def test_parses_start_time_after_comm(self):
+        # Fields 3..22 after the parenthesized comm; start time is field 22.
+        tail = b"S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654"
+        assert _parse_stat_start_time(b"1234 (opencode) " + tail) == "987654"
+
+    def test_comm_with_spaces_and_parens(self):
+        tail = b"R 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 424242"
+        assert _parse_stat_start_time(b"42 (weird) proc (name)) " + tail) == "424242"
+
+    def test_truncated_stat_returns_none(self):
+        assert _parse_stat_start_time(b"42 (short) S 1 2") is None
+
+
 class TestReapOrphans:
-    async def test_reap_terminates_found_pids(self):
-        sup = _make_supervisor()
-        sup.ORPHAN_TERM_TIMEOUT_SECONDS = 0.5
+    async def test_reap_terminates_found_processes(self, tmp_path):
+        guard = _make_guard(tmp_path)
         proc = subprocess.Popen(["sleep", "30"])
         try:
-            sup._find_orphan_runtime_pids = MagicMock(return_value=[proc.pid])
+            guard._find_orphan_runtime_processes = MagicMock(return_value=[(proc.pid, "111")])
 
-            await sup.reap_orphan_runtime_processes()
+            await guard.reap_orphan_runtime_processes()
 
             assert proc.wait(timeout=5) != 0
         finally:
@@ -131,17 +175,50 @@ class TestReapOrphans:
                 proc.kill()
                 proc.wait()
 
-    async def test_reap_with_no_orphans_is_a_noop(self):
-        sup = _make_supervisor()
-        sup._find_orphan_runtime_pids = MagicMock(return_value=[])
+    async def test_reap_with_no_orphans_is_a_noop(self, tmp_path):
+        guard = _make_guard(tmp_path)
+        guard._find_orphan_runtime_processes = MagicMock(return_value=[])
 
-        await sup.reap_orphan_runtime_processes()
+        await guard.reap_orphan_runtime_processes()
 
-    async def test_reap_survives_already_dead_pid(self):
-        sup = _make_supervisor()
+    async def test_reap_survives_already_dead_pid(self, tmp_path):
+        guard = _make_guard(tmp_path)
         proc = subprocess.Popen(["sleep", "30"])
         proc.kill()
         proc.wait()
-        sup._find_orphan_runtime_pids = MagicMock(return_value=[proc.pid])
+        guard._find_orphan_runtime_processes = MagicMock(return_value=[(proc.pid, "111")])
 
-        await sup.reap_orphan_runtime_processes()
+        await guard.reap_orphan_runtime_processes()
+
+    async def test_escalates_to_sigkill_when_term_is_ignored(self, tmp_path):
+        guard = _make_guard(tmp_path, term_timeout_seconds=0.3)
+        guard._find_orphan_runtime_processes = MagicMock(return_value=[(4242, "111")])
+        kills: list[tuple[int, int]] = []
+        with (
+            patch(
+                "sandbox_runtime.supervisor_guard.os.kill",
+                side_effect=lambda pid, sig: kills.append((pid, sig)),
+            ),
+            patch("sandbox_runtime.supervisor_guard._proc_start_time", return_value="111"),
+        ):
+            await guard.reap_orphan_runtime_processes()
+
+        assert kills == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+
+    async def test_recycled_pid_is_never_sigkilled(self, tmp_path):
+        """The orphan exits during the grace period and Linux reuses its PID:
+        the replacement process has a different start time and must not be
+        signalled."""
+        guard = _make_guard(tmp_path, term_timeout_seconds=0.3)
+        guard._find_orphan_runtime_processes = MagicMock(return_value=[(4242, "111")])
+        kills: list[tuple[int, int]] = []
+        with (
+            patch(
+                "sandbox_runtime.supervisor_guard.os.kill",
+                side_effect=lambda pid, sig: kills.append((pid, sig)),
+            ),
+            patch("sandbox_runtime.supervisor_guard._proc_start_time", return_value="999"),
+        ):
+            await guard.reap_orphan_runtime_processes()
+
+        assert kills == [(4242, signal.SIGTERM)]
