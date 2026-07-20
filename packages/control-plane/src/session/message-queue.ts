@@ -81,25 +81,6 @@ function resolveParticipantGitIdentity(
     : { mode: "agent-only" };
 }
 
-function parseGitIdentitySnapshot(value: string): PromptGitIdentity | null {
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    if (parsed.mode === "agent-only") return { mode: "agent-only" };
-    if (
-      parsed.mode === "attributed-user" &&
-      typeof parsed.name === "string" &&
-      parsed.name.length > 0 &&
-      typeof parsed.email === "string" &&
-      parsed.email.length > 0
-    ) {
-      return { mode: "attributed-user", name: parsed.name, email: parsed.email };
-    }
-  } catch {
-    // Invalid snapshots fail closed to agent-only at dispatch.
-  }
-  return null;
-}
-
 export class SessionMessageQueue {
   constructor(
     private readonly ctx: DurableObjectState,
@@ -210,9 +191,7 @@ export class SessionMessageQueue {
     }
 
     const author = this.repository.getParticipantById(message.author_id);
-    const gitIdentity = message.git_identity
-      ? (parseGitIdentitySnapshot(message.git_identity) ?? { mode: "agent-only" as const })
-      : resolveParticipantGitIdentity(author, this.scmProvider);
+    const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     const resolvedEffort =
@@ -441,8 +420,6 @@ export class SessionMessageQueue {
       data.reasoningEffort,
       this.log
     );
-    const gitIdentity = resolveParticipantGitIdentity(data.participant, this.scmProvider);
-
     try {
       this.repository.createMessageWithAttachments(
         {
@@ -454,7 +431,6 @@ export class SessionMessageQueue {
           reasoningEffort: messageReasoningEffort,
           attachments: attachments ? JSON.stringify(attachments) : null,
           callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
-          gitIdentity: JSON.stringify(gitIdentity),
           status: "pending",
           createdAt: now,
         },

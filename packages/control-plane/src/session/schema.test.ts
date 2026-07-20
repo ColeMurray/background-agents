@@ -250,16 +250,6 @@ describe("applyMigrations", () => {
     expect(migration?.run).not.toContain("kind TEXT");
   });
 
-  it("stores queued Git identity snapshots for fresh and existing session databases", () => {
-    const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
-      ");"
-    )[0];
-    expect(messagesTable).toContain("git_identity TEXT");
-
-    const migration = MIGRATIONS.find((entry) => entry.id === 37);
-    expect(migration?.run).toContain("ALTER TABLE messages ADD COLUMN git_identity TEXT");
-  });
-
   it("creates one latest-only session diff row for fresh and migrated sessions", () => {
     expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_diff");
     expect(SCHEMA_SQL).toContain("singleton INTEGER PRIMARY KEY CHECK (singleton = 1)");

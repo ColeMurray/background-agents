@@ -87,7 +87,6 @@ export interface MessageRow {
   reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
-  git_identity: string | null; // JSON PromptGitIdentity snapshot; null only for pre-migration messages
   status: MessageStatus;
   error_message: string | null;
   created_at: number;

@@ -121,7 +121,6 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
-    git_identity: null,
     status: "completed",
     error_message: null,
     created_at: 1,
