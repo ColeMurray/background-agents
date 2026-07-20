@@ -1,7 +1,13 @@
-import type { CommitSigningMetadata } from "@open-inspect/shared";
-
 import { decryptToken, encryptToken } from "../auth/crypto";
 import type { SqlDatabase } from "./sql-database";
+
+interface CommitSigningConfigurationMetadata {
+  committerName: string;
+  committerEmail: string;
+  publicKey: string;
+  fingerprint: string;
+  updatedAt: string;
+}
 
 export interface CommitSigningConfigurationInput {
   privateKey: string;
@@ -11,23 +17,17 @@ export interface CommitSigningConfigurationInput {
   fingerprint: string;
 }
 
-export type SandboxCommitSigningConfiguration =
-  | { enabled: false }
-  | {
-      enabled: true;
-      committerName: string;
-      committerEmail: string;
-      publicKey: string;
-    };
+export interface SandboxCommitSigningConfiguration {
+  committerName: string;
+  committerEmail: string;
+  publicKey: string;
+}
 
-export type DecryptedCommitSigningConfiguration =
-  | { enabled: false }
-  | {
-      enabled: true;
-      publicKey: string;
-      fingerprint: string;
-      privateKey: string;
-    };
+export interface DecryptedCommitSigningConfiguration {
+  publicKey: string;
+  fingerprint: string;
+  privateKey: string;
+}
 
 interface MetadataRow {
   committer_name: string;
@@ -55,7 +55,7 @@ export class CommitSigningStore {
     private readonly encryptionKey: string
   ) {}
 
-  async save(input: CommitSigningConfigurationInput): Promise<CommitSigningMetadata> {
+  async save(input: CommitSigningConfigurationInput): Promise<CommitSigningConfigurationMetadata> {
     const encryptedPrivateKey = await encryptToken(input.privateKey, this.encryptionKey);
     const now = Date.now();
 
@@ -92,7 +92,7 @@ export class CommitSigningStore {
     });
   }
 
-  async getMetadata(): Promise<CommitSigningMetadata> {
+  async getMetadata(): Promise<CommitSigningConfigurationMetadata | null> {
     const row = await this.db
       .prepare(
         `SELECT committer_name, committer_email, public_key, fingerprint, updated_at
@@ -100,10 +100,10 @@ export class CommitSigningStore {
       )
       .first<MetadataRow>();
 
-    return row ? this.toMetadata(row) : { enabled: false };
+    return row ? this.toMetadata(row) : null;
   }
 
-  async getRuntimeConfiguration(): Promise<SandboxCommitSigningConfiguration> {
+  async getRuntimeConfiguration(): Promise<SandboxCommitSigningConfiguration | null> {
     const row = await this.db
       .prepare(
         `SELECT committer_name, committer_email, public_key
@@ -111,16 +111,15 @@ export class CommitSigningStore {
       )
       .first<RuntimeConfigurationRow>();
 
-    if (!row) return { enabled: false };
+    if (!row) return null;
     return {
-      enabled: true,
       committerName: row.committer_name,
       committerEmail: row.committer_email,
       publicKey: row.public_key,
     };
   }
 
-  async getDecryptedSigningConfiguration(): Promise<DecryptedCommitSigningConfiguration> {
+  async getDecryptedSigningConfiguration(): Promise<DecryptedCommitSigningConfiguration | null> {
     const row = await this.db
       .prepare(
         `SELECT encrypted_private_key, public_key, fingerprint
@@ -128,11 +127,10 @@ export class CommitSigningStore {
       )
       .first<ConfigurationRow>();
 
-    if (!row) return { enabled: false };
+    if (!row) return null;
 
     const privateKey = await decryptToken(row.encrypted_private_key, this.encryptionKey);
     return {
-      enabled: true,
       publicKey: row.public_key,
       fingerprint: row.fingerprint,
       privateKey,
@@ -143,9 +141,8 @@ export class CommitSigningStore {
     await this.db.prepare("DELETE FROM commit_signing_configuration WHERE singleton_id = 1").run();
   }
 
-  private toMetadata(row: MetadataRow): CommitSigningMetadata {
+  private toMetadata(row: MetadataRow): CommitSigningConfigurationMetadata {
     return {
-      enabled: true,
       committerName: row.committer_name,
       committerEmail: row.committer_email,
       publicKey: row.public_key,

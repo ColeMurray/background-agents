@@ -67,13 +67,13 @@ describe("commit signing store", () => {
     ).first<{ encrypted_private_key: string }>();
     expect(stored?.encrypted_private_key).toBeTruthy();
     expect(stored?.encrypted_private_key).not.toContain("OPENSSH PRIVATE KEY");
-    expect(await store.getMetadata()).toEqual(
-      expect.objectContaining({
-        enabled: true,
-        committerName: "Open Inspect",
-        fingerprint: "SHA256:test",
-      })
-    );
+    expect(await store.getMetadata()).toEqual({
+      committerName: "Open Inspect",
+      committerEmail: "open-inspect@example.com",
+      publicKey: "ssh-ed25519 AAAA test",
+      fingerprint: "SHA256:test",
+      updatedAt: expect.any(String),
+    });
   });
 
   it("returns public-only runtime configuration to the sandbox boundary", async () => {
@@ -82,13 +82,20 @@ describe("commit signing store", () => {
     const configuration = await store.getRuntimeConfiguration();
 
     expect(configuration).toEqual({
-      enabled: true,
       committerName: "Open Inspect",
       committerEmail: "open-inspect@example.com",
       publicKey: "ssh-ed25519 AAAA test",
     });
     expect(JSON.stringify(configuration)).not.toContain("privateKey");
     expect(JSON.stringify(configuration)).not.toContain("OPENSSH PRIVATE KEY");
+  });
+
+  it("returns null runtime configuration when signing is not configured", async () => {
+    expect(await createStore().getRuntimeConfiguration()).toBeNull();
+  });
+
+  it("returns null decrypted configuration when signing is not configured", async () => {
+    expect(await createStore().getDecryptedSigningConfiguration()).toBeNull();
   });
 
   it("leaves an active row unchanged when encryption fails", async () => {
@@ -116,7 +123,7 @@ describe("commit signing store", () => {
 
     await expect(store.delete()).resolves.toBeUndefined();
     await expect(store.delete()).resolves.toBeUndefined();
-    expect(await store.getMetadata()).toEqual({ enabled: false });
+    expect(await store.getMetadata()).toBeNull();
   });
 });
 

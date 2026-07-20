@@ -73,7 +73,8 @@ async function handleGetCommitSigning(
   if (store instanceof Response) return store;
 
   try {
-    return noStore(json(await store.getMetadata()));
+    const metadata = await store.getMetadata();
+    return noStore(json(metadata ? { enabled: true, ...metadata } : { enabled: false }));
   } catch {
     return noStore(error("Commit signing storage unavailable", 503));
   }
@@ -101,7 +102,7 @@ async function handlePutCommitSigning(
       ...parsedBody.data,
       ...validatedKey,
     });
-    return noStore(json(metadata));
+    return noStore(json({ enabled: true, ...metadata }));
   } catch (caught) {
     const validationFailure = caught instanceof OpenSshKeyValidationError;
     return noStore(
@@ -149,7 +150,8 @@ async function handleGetSandboxCommitSigning(
   if (store instanceof Response) return store;
 
   try {
-    return noStore(json(await store.getRuntimeConfiguration()));
+    const configuration = await store.getRuntimeConfiguration();
+    return noStore(json(configuration ? { enabled: true, ...configuration } : { enabled: false }));
   } catch {
     return noStore(error("Commit signing configuration unavailable", 503));
   }
@@ -180,7 +182,7 @@ async function handlePostSandboxCommitSigning(
 
   try {
     const configuration = await store.getDecryptedSigningConfiguration();
-    if (!configuration.enabled) return noStore(error("Commit signing is disabled", 409));
+    if (!configuration) return noStore(error("Commit signing is disabled", 409));
     if (configuration.fingerprint !== requestedFingerprint) {
       return noStore(error("Commit signing key changed", 409));
     }
