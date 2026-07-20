@@ -220,7 +220,7 @@ Important limitations:
   the sandbox trustworthy or add commit-policy enforcement.
 - Sessions already running when signing support is deployed must be recreated so they start the
   updated shared runtime. Provider images and snapshots do not need a preinstalled signer wrapper;
-  the runtime creates its provider-neutral launcher during initialization.
+  the checked-in launcher is installed with the runtime's other standalone commands during startup.
 
 ---
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import os
 import re
 from pathlib import Path
 from typing import Annotated, Literal
@@ -10,12 +11,11 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
-from .constants import REPO_MANIFEST_FILE_PATH
+from .constants import BIN_INSTALL_DIR_ENV_VAR, DEFAULT_BIN_INSTALL_DIR, REPO_MANIFEST_FILE_PATH
 from .repo_config import RepoConfigError, read_repo_manifest
 from .types import GitUser
 
-DEFAULT_GIT_SIGNER_PATH = Path("/tmp/opencode/oi-git-sign")
-GIT_SIGNER_LAUNCHER = '#!/bin/sh\nexec python3 -m sandbox_runtime.git_signer "$@"\n'
+GIT_SIGNER_COMMAND = "oi-git-sign"
 GIT_CONFIG_TIMEOUT_SECONDS = 10.0
 SIGNING_CONFIG_FETCH_TIMEOUT_SECONDS = 30.0
 SIGNING_CONFIG_KEYS = (
@@ -99,29 +99,25 @@ class GitSigningRuntime:
         session_id: str,
         auth_token: str,
         repo_manifest_path: str | Path = REPO_MANIFEST_FILE_PATH,
-        signer_path: str | Path = DEFAULT_GIT_SIGNER_PATH,
+        signer_path: str | Path | None = None,
     ) -> None:
         self.control_plane_url = control_plane_url.rstrip("/")
         self.session_id = session_id
         self.auth_token = auth_token
         self.repo_manifest_path = Path(repo_manifest_path)
-        self.signer_path = Path(signer_path)
+        self.signer_path = (
+            Path(signer_path)
+            if signer_path is not None
+            else Path(os.environ.get(BIN_INSTALL_DIR_ENV_VAR, DEFAULT_BIN_INSTALL_DIR))
+            / GIT_SIGNER_COMMAND
+        )
         self._installed_signing_revision: tuple[str, ...] | None = None
         self._installed_repository_paths: tuple[Path, ...] = ()
 
     async def initialize(self, author: GitUser | None) -> None:
-        self._install_signer_launcher()
         self._installed_signing_revision = None
         self._installed_repository_paths = ()
         await self.refresh(author)
-
-    def _install_signer_launcher(self) -> None:
-        try:
-            self.signer_path.parent.mkdir(parents=True, exist_ok=True)
-            self.signer_path.write_text(GIT_SIGNER_LAUNCHER)
-            self.signer_path.chmod(0o755)
-        except OSError:
-            raise GitSigningError("Git signer launcher unavailable") from None
 
     async def refresh(self, author: GitUser | None) -> None:
         configuration = await self._fetch_configuration()

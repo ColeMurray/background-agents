@@ -333,12 +333,13 @@ class TestInstallBinScripts:
     """Cases for _install_bin_scripts() standalone CLI installation."""
 
     def test_scripts_installed_to_bin(self, tmp_path):
-        """JS scripts in bin/ should be copied to /usr/local/bin without .js extension."""
+        """Checked-in bin scripts should be installed as executable commands."""
         sup = _make_supervisor()
 
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
         (src / "upload-media.js").write_text("#!/usr/bin/env node\n// upload cli")
+        (src / "oi-git-sign").write_text("#!/bin/sh\n# signer launcher")
 
         dest = tmp_path / "usr-local-bin"
         dest.mkdir()
@@ -352,6 +353,10 @@ class TestInstallBinScripts:
         assert installed.exists()
         assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
         assert installed.stat().st_mode & 0o755
+        signer = dest / "oi-git-sign"
+        assert signer.exists()
+        assert signer.read_text() == "#!/bin/sh\n# signer launcher"
+        assert signer.stat().st_mode & 0o755
 
     def test_scripts_installed_to_configured_bin(self, tmp_path, monkeypatch):
         """OPENINSPECT_BIN_INSTALL_DIR can override the install directory."""

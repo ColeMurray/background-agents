@@ -25,9 +25,11 @@ from pathlib import Path
 import httpx
 
 from .constants import (
+    BIN_INSTALL_DIR_ENV_VAR,
     BOOT_WARNINGS_FILE_PATH,
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
+    DEFAULT_BIN_INSTALL_DIR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
@@ -43,8 +45,6 @@ from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_r
 from .repo_image_callback import RepoImageBuildCallback
 
 configure_logging()
-
-BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
 
 # asyncio.StreamReader raises (rather than returns) once a single line exceeds
 # its buffer, which defaults to 64 KiB. Child-process log lines — JSON events
@@ -854,14 +854,16 @@ class SandboxSupervisor:
         if not bin_dir.is_dir():
             return
 
+        install_dir = Path(os.environ.get(BIN_INSTALL_DIR_ENV_VAR, DEFAULT_BIN_INSTALL_DIR))
+        install_dir.mkdir(parents=True, exist_ok=True)
         for script in bin_dir.iterdir():
-            if script.is_file() and script.suffix == ".js":
-                install_dir = Path(os.environ.get(BIN_INSTALL_DIR_ENV_VAR, "/usr/local/bin"))
-                install_dir.mkdir(parents=True, exist_ok=True)
-                dest = install_dir / script.stem
-                shutil.copy(script, dest)
-                dest.chmod(0o755)
-                self.log.info("bin.installed", script=script.stem)
+            if not script.is_file() or script.suffix not in {"", ".js"}:
+                continue
+            command_name = script.stem if script.suffix == ".js" else script.name
+            dest = install_dir / command_name
+            shutil.copy(script, dest)
+            dest.chmod(0o755)
+            self.log.info("bin.installed", script=command_name)
 
     def _install_skills(self, workdir: Path) -> set[str]:
         """Copy bundled Skills into the .opencode/skills directory."""
