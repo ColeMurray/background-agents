@@ -183,18 +183,18 @@ To configure signing, open **Settings > Integrations > GitHub > Commit signing**
    repository access because the GitHub App continues to push branches.
 2. Generate an unencrypted OpenSSH Ed25519 key and add its public key to that account as a **signing
    key**.
-3. Enter the dedicated account login, fixed committer name/email, and private key in the write-only
-   form. The committer email must belong to the dedicated account.
+3. Enter the fixed committer name/email and private key in the write-only form. The committer email
+   must belong to the dedicated account.
 4. Save, then exercise a normal commit and a history rewrite in a non-critical repository before
    requiring signed commits.
 
 The private key is encrypted in the control-plane database. The settings page reads back only the
-derived public key, fingerprint, fixed identity, and validation timestamps; it never repopulates the
-private-key field. Sandboxes receive only the public key and fingerprint. For each commit, a
-stateless Git signer sends the bounded unsigned commit buffer to the authenticated control-plane
-signing endpoint, which decrypts the active key in request-local memory and returns a complete
-`git`-namespace SSH signature. The private key is never delivered to a sandbox file, environment,
-process, or provider snapshot.
+derived public key, fingerprint, fixed identity, and last update time; it never repopulates the
+private-key field. Sandboxes receive only the public key. For each commit, a stateless Git signer
+derives its fingerprint from that public key and sends the bounded unsigned commit buffer to the
+authenticated control-plane signing endpoint. The control plane decrypts the active key in
+request-local memory and returns a complete `git`-namespace SSH signature. The private key is never
+delivered to a sandbox file, environment, process, or provider snapshot.
 
 The unsigned commit buffer contains Git headers, author/committer identities, and the commit
 message. It does not contain file contents or diffs. Open-Inspect does not interpret, retain, or log
@@ -220,7 +220,6 @@ Important limitations:
   the sandbox trustworthy or add commit-policy enforcement.
 - After deploying the first signing-capable runtime, drain or recreate sessions restored from older
   runtime snapshots that do not contain the stateless signer wrapper before configuring a key.
-  Repeat the focused runtime qualification if the deployment changes sandbox provider.
 
 ---
 

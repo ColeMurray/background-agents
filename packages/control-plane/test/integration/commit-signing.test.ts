@@ -21,18 +21,14 @@ type StoredConfiguration = Parameters<CommitSigningStore["save"]>[0];
 
 const STORED_CONFIGURATION: StoredConfiguration = {
   privateKey: PRIVATE_KEY,
-  githubLogin: "open-inspect-bot",
   committerName: "Open Inspect",
   committerEmail: "open-inspect@example.com",
-  keyFormat: "ssh-ed25519",
   publicKey: "ssh-ed25519 AAAA test",
   fingerprint: "SHA256:test",
-  validatedAt: 1_721_152_000_000,
 };
 
 const WRITE_REQUEST = {
   privateKey: PRIVATE_KEY,
-  githubLogin: "open-inspect-bot",
   committerName: "Open Inspect",
   committerEmail: "open-inspect@example.com",
 };
@@ -74,7 +70,7 @@ describe("commit signing store", () => {
     expect(await store.getMetadata()).toEqual(
       expect.objectContaining({
         enabled: true,
-        githubLogin: "open-inspect-bot",
+        committerName: "Open Inspect",
         fingerprint: "SHA256:test",
       })
     );
@@ -90,7 +86,6 @@ describe("commit signing store", () => {
       committerName: "Open Inspect",
       committerEmail: "open-inspect@example.com",
       publicKey: "ssh-ed25519 AAAA test",
-      fingerprint: "SHA256:test",
     });
     expect(JSON.stringify(configuration)).not.toContain("privateKey");
     expect(JSON.stringify(configuration)).not.toContain("OPENSSH PRIVATE KEY");
@@ -105,7 +100,7 @@ describe("commit signing store", () => {
     await expect(
       new CommitSigningStore(env.DB, "not-base64").save({
         ...STORED_CONFIGURATION,
-        githubLogin: "replacement",
+        committerName: "Replacement",
       })
     ).rejects.toThrow();
 
@@ -116,11 +111,12 @@ describe("commit signing store", () => {
     ).toEqual(before);
   });
 
-  it("returns the fingerprint from the row deleted by the same mutation", async () => {
-    const store = await saveConfiguration({ fingerprint: "SHA256:deleted" });
+  it("deletes the active configuration idempotently", async () => {
+    const store = await saveConfiguration();
 
-    expect(await store.delete()).toBe("SHA256:deleted");
-    expect(await store.delete()).toBeUndefined();
+    await expect(store.delete()).resolves.toBeUndefined();
+    await expect(store.delete()).resolves.toBeUndefined();
+    expect(await store.getMetadata()).toEqual({ enabled: false });
   });
 });
 
@@ -152,22 +148,19 @@ describe("commit signing settings API", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     const body = await response.json<Record<string, unknown>>();
-    expect(body).toEqual(
-      expect.objectContaining({
-        enabled: true,
-        keyFormat: "ssh-ed25519",
-        githubLogin: "open-inspect-bot",
-        publicKey:
-          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBaM0ggz8RWOz0lq3xs+vNPvnuWs0SS30txpSJTb357p",
-        fingerprint: "SHA256:Cu64KulDfH7B8Mu37+JWepAJ1m59o159Y8RPj5Ta1XM",
-        validationStatus: "valid",
-      })
-    );
+    expect(body).toEqual({
+      enabled: true,
+      committerName: "Open Inspect",
+      committerEmail: "open-inspect@example.com",
+      publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBaM0ggz8RWOz0lq3xs+vNPvnuWs0SS30txpSJTb357p",
+      fingerprint: "SHA256:Cu64KulDfH7B8Mu37+JWepAJ1m59o159Y8RPj5Ta1XM",
+      updatedAt: expect.any(String),
+    });
     expect(JSON.stringify(body)).not.toContain("OPENSSH PRIVATE KEY");
   });
 
   it("deletes the active ciphertext when signing is disabled", async () => {
-    await saveConfiguration({ validatedAt: Date.now() });
+    await saveConfiguration();
     const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
 
     const response = await SELF.fetch("https://test.local/commit-signing", {
@@ -181,17 +174,15 @@ describe("commit signing settings API", () => {
     expect(await env.DB.prepare("SELECT 1 FROM commit_signing_configuration").first()).toBeNull();
   });
 
-  it("atomically replaces configuration while preserving created_at", async () => {
+  it("atomically replaces configuration and advances the update timestamp", async () => {
     await saveConfiguration({
-      githubLogin: "old-login",
       committerName: "Old Name",
       committerEmail: "old@example.com",
       publicKey: "ssh-ed25519 AAAA old",
       fingerprint: "SHA256:old",
-      validatedAt: 1,
     });
     await env.DB.prepare(
-      "UPDATE commit_signing_configuration SET created_at = 1, updated_at = 1 WHERE singleton_id = 1"
+      "UPDATE commit_signing_configuration SET updated_at = 1 WHERE singleton_id = 1"
     ).run();
     const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
 
@@ -203,7 +194,6 @@ describe("commit signing settings API", () => {
       },
       body: JSON.stringify({
         privateKey: PRIVATE_KEY,
-        githubLogin: "new-login",
         committerName: "New Name",
         committerEmail: "new@example.com",
       }),
@@ -211,27 +201,23 @@ describe("commit signing settings API", () => {
 
     expect(response.status).toBe(200);
     const row = await env.DB.prepare(
-      "SELECT github_login, created_at, updated_at, validated_at FROM commit_signing_configuration WHERE singleton_id = 1"
+      "SELECT committer_name, committer_email, updated_at FROM commit_signing_configuration WHERE singleton_id = 1"
     ).first<{
-      github_login: string;
-      created_at: number;
+      committer_name: string;
+      committer_email: string;
       updated_at: number;
-      validated_at: number;
     }>();
-    expect(row?.github_login).toBe("new-login");
-    expect(row?.created_at).toBe(1);
+    expect(row?.committer_name).toBe("New Name");
+    expect(row?.committer_email).toBe("new@example.com");
     expect(row?.updated_at).toBeGreaterThan(1);
-    expect(row?.validated_at).toBeGreaterThan(1);
   });
 
   it("leaves the active row unchanged after validation failure and redacts the response", async () => {
     await saveConfiguration({
-      githubLogin: "old-login",
       committerName: "Old Name",
       committerEmail: "old@example.com",
       publicKey: "ssh-ed25519 AAAA old",
       fingerprint: "SHA256:old",
-      validatedAt: 1,
     });
     const before = await env.DB.prepare(
       "SELECT * FROM commit_signing_configuration WHERE singleton_id = 1"
@@ -247,7 +233,6 @@ describe("commit signing settings API", () => {
       },
       body: JSON.stringify({
         privateKey: submittedKey,
-        githubLogin: "new-login",
         committerName: "New Name",
         committerEmail: "new@example.com",
       }),
@@ -327,7 +312,6 @@ describe("sandbox commit signing broker", () => {
     await saveConfiguration({
       publicKey: "ssh-ed25519 AAAA public",
       fingerprint: "SHA256:fingerprint",
-      validatedAt: Date.now(),
     });
 
     const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
@@ -341,7 +325,6 @@ describe("sandbox commit signing broker", () => {
       committerName: "Open Inspect",
       committerEmail: "open-inspect@example.com",
       publicKey: "ssh-ed25519 AAAA public",
-      fingerprint: "SHA256:fingerprint",
     });
   });
 
@@ -350,7 +333,6 @@ describe("sandbox commit signing broker", () => {
     await saveConfiguration({
       publicKey: "ssh-ed25519 AAAA public",
       fingerprint: "SHA256:fingerprint",
-      validatedAt: Date.now(),
     });
     await env.DB.prepare(
       "UPDATE commit_signing_configuration SET encrypted_private_key = 'corrupt' WHERE singleton_id = 1"
@@ -364,7 +346,7 @@ describe("sandbox commit signing broker", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     const body = await response.text();
     expect(JSON.parse(body)).toEqual(
-      expect.objectContaining({ enabled: true, fingerprint: "SHA256:fingerprint" })
+      expect.objectContaining({ enabled: true, publicKey: "ssh-ed25519 AAAA public" })
     );
     expect(body).not.toContain("corrupt");
     expect(body).not.toContain("OPENSSH PRIVATE KEY");
@@ -375,7 +357,6 @@ describe("sandbox commit signing broker", () => {
     await saveConfiguration({
       publicKey: PUBLIC_KEY,
       fingerprint: FINGERPRINT,
-      validatedAt: Date.now(),
     });
     const payload = new Uint8Array([0, 1, 2, 255, 10]);
 
@@ -402,7 +383,6 @@ describe("sandbox commit signing broker", () => {
     await saveConfiguration({
       publicKey: PUBLIC_KEY,
       fingerprint: FINGERPRINT,
-      validatedAt: Date.now(),
     });
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -462,14 +442,12 @@ describe("sandbox commit signing broker", () => {
     const store = await saveConfiguration({
       publicKey: PUBLIC_KEY,
       fingerprint: FINGERPRINT,
-      validatedAt: Date.now(),
     });
 
     await store.save({
       ...STORED_CONFIGURATION,
       publicKey: "ssh-ed25519 AAAA replacement",
       fingerprint: "SHA256:replacement",
-      validatedAt: Date.now(),
     });
     const afterReplacement = await SELF.fetch(
       `https://test.local/sessions/${sessionName}/commit-signing`,
@@ -506,7 +484,6 @@ describe("sandbox commit signing broker", () => {
     await saveConfiguration({
       publicKey: PUBLIC_KEY,
       fingerprint: FINGERPRINT,
-      validatedAt: Date.now(),
     });
     await env.DB.prepare(
       "UPDATE commit_signing_configuration SET encrypted_private_key = 'corrupt' WHERE singleton_id = 1"

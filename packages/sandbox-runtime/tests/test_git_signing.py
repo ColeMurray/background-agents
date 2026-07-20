@@ -1,6 +1,6 @@
 import subprocess
 import textwrap
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -22,7 +22,6 @@ ENABLED_CONFIGURATION = {
     "committerName": "Open Inspect",
     "committerEmail": "open-inspect@example.com",
     "publicKey": PUBLIC_KEY,
-    "fingerprint": "SHA256:fingerprint",
 }
 
 
@@ -96,7 +95,6 @@ def create_runtime(
     manifest,
     *,
     signer_path=None,
-    log=None,
     control_plane_url="https://control.example.com",
 ):
     return GitSigningRuntime(
@@ -105,7 +103,6 @@ def create_runtime(
         auth_token="sandbox-token",
         repo_manifest_path=manifest,
         signer_path=signer_path or tmp_path / "oi-git-sign",
-        log=log,
     )
 
 
@@ -140,10 +137,7 @@ async def test_enabled_configuration_creates_a_valid_signed_commit_with_split_id
     runtime = create_runtime(tmp_path, manifest, signer_path=signer_path)
 
     await runtime.apply_configuration(
-        {
-            **ENABLED_CONFIGURATION,
-            "fingerprint": "SHA256:Cu64KulDfH7B8Mu37+JWepAJ1m59o159Y8RPj5Ta1XM",
-        },
+        ENABLED_CONFIGURATION,
         GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com"),
     )
 
@@ -162,12 +156,10 @@ async def test_enabled_configuration_creates_a_valid_signed_commit_with_split_id
 async def test_enabled_agent_only_mode_uses_committer_as_author(tmp_path):
     repo = create_repository(tmp_path / "repo")
     manifest = create_manifest(tmp_path, [repo])
-    log = MagicMock()
     runtime = create_runtime(
         tmp_path,
         manifest,
         signer_path=create_remote_signer(tmp_path),
-        log=log,
     )
 
     await runtime.apply_configuration(ENABLED_CONFIGURATION, None)
@@ -177,12 +169,6 @@ async def test_enabled_agent_only_mode_uses_committer_as_author(tmp_path):
     git(repo, "commit", "-m", "agent-only change")
     assert git(repo, "show", "-s", "--format=%an|%ae|%cn|%ce").stdout.strip() == (
         "Open Inspect|open-inspect@example.com|Open Inspect|open-inspect@example.com"
-    )
-    log.info.assert_called_once_with(
-        "git.signing_apply",
-        enabled=True,
-        mode="agent-only",
-        fingerprint="SHA256:fingerprint",
     )
 
 
@@ -354,7 +340,6 @@ async def test_participant_change_updates_only_author_identity(tmp_path, monkeyp
                 "committerName": "Open Inspect",
                 "committerEmail": "open-inspect@example.com",
                 "publicKey": PUBLIC_KEY,
-                "fingerprint": "SHA256:fingerprint",
                 "privateKey": PRIVATE_KEY,
             },
         ),

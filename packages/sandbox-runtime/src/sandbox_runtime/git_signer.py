@@ -129,10 +129,6 @@ def _read_bounded_file(path: Path, limit: int, description: str) -> bytes:
 
 
 def _read_bounded_response(response: httpx.Response) -> bytes:
-    declared_length = response.headers.get("Content-Length", "")
-    if declared_length.isdecimal() and int(declared_length) > MAX_SIGNING_RESPONSE_BYTES:
-        raise GitSignerError("Control-plane signing response is too large")
-
     chunks: list[bytes] = []
     total_bytes = 0
     for chunk in response.iter_bytes():

@@ -104,7 +104,6 @@ function buildQueue() {
     getParticipantById: vi.fn(() => createParticipant()),
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
-    replaceParticipantScmEnrichment: vi.fn(),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
   };
@@ -630,7 +629,7 @@ describe("SessionMessageQueue", () => {
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
     });
 
-    it("replaces stored SCM identity and tokens with one trusted enrichment snapshot", async () => {
+    it("updates stored SCM identity and tokens after successful enrichment", async () => {
       const h = buildQueue();
 
       await h.queue.enqueuePromptFromApi({
@@ -648,7 +647,7 @@ describe("SessionMessageQueue", () => {
         },
       });
 
-      expect(h.repository.replaceParticipantScmEnrichment).toHaveBeenCalledWith("part-1", {
+      expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
         scmName: "Trusted Octo Cat",
         scmEmail: "1001+octocat@users.noreply.github.com",
         scmLogin: "octocat",
@@ -657,29 +656,6 @@ describe("SessionMessageQueue", () => {
         scmRefreshTokenEncrypted: "enc-refresh",
         scmTokenExpiresAt: 9999999,
       });
-      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
-    });
-
-    it("clears the complete SCM enrichment snapshot after confirmed absence", async () => {
-      const h = buildQueue();
-
-      await h.queue.enqueuePromptFromApi({
-        content: "Fix bug",
-        authorId: "github:1001",
-        source: "github-bot",
-        scmEnrichment: null,
-      });
-
-      expect(h.repository.replaceParticipantScmEnrichment).toHaveBeenCalledWith("part-1", {
-        scmName: null,
-        scmEmail: null,
-        scmLogin: null,
-        scmUserId: null,
-        scmAccessTokenEncrypted: null,
-        scmRefreshTokenEncrypted: null,
-        scmTokenExpiresAt: null,
-      });
-      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
 
     it("leaves stored enrichment unchanged when no snapshot is provided", async () => {
@@ -691,7 +667,6 @@ describe("SessionMessageQueue", () => {
         source: "github-bot",
       });
 
-      expect(h.repository.replaceParticipantScmEnrichment).not.toHaveBeenCalled();
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
   });

@@ -15,8 +15,7 @@ export interface EnqueuePromptRequest {
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
 
-  // Trusted SCM enrichment snapshot (from the router's D1 lookup at prompt time).
-  // `undefined` leaves the stored snapshot unchanged; `null` clears it atomically.
+  // Trusted SCM enrichment resolved by the router at prompt time.
   scmEnrichment?: {
     userId: string | null;
     login: string | null;
@@ -25,7 +24,7 @@ export interface EnqueuePromptRequest {
     accessTokenEncrypted: string | null;
     refreshTokenEncrypted: string | null;
     tokenExpiresAt: number | null;
-  } | null;
+  };
 }
 
 export type ListEventsRequest = SessionEventListRequest;

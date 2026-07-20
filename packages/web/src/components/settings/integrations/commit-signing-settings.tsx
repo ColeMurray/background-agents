@@ -8,16 +8,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 
 const SETTINGS_KEY = "/api/commit-signing";
 
@@ -44,16 +34,13 @@ export function CommitSigningSettings() {
   }, [error, isLoading, rawData]);
   const data = viewState.kind === "enabled" ? viewState.data : undefined;
   const configurationKnown = viewState.kind === "enabled" || viewState.kind === "disabled";
-  const [githubLogin, setGithubLogin] = useState("");
   const [committerName, setCommitterName] = useState("");
   const [committerEmail, setCommitterEmail] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [saving, setSaving] = useState(false);
-  const [showDisableDialog, setShowDisableDialog] = useState(false);
 
   useEffect(() => {
     if (!data?.enabled) return;
-    setGithubLogin(data.githubLogin);
     setCommitterName(data.committerName);
     setCommitterEmail(data.committerEmail);
   }, [data]);
@@ -64,7 +51,7 @@ export function CommitSigningSettings() {
       const saveResponse = await fetch(SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ privateKey, githubLogin, committerName, committerEmail }),
+        body: JSON.stringify({ privateKey, committerName, committerEmail }),
       });
       if (!saveResponse.ok) {
         toast.error(
@@ -106,7 +93,6 @@ export function CommitSigningSettings() {
         return;
       }
       await mutate(metadata.data, false);
-      setGithubLogin("");
       setCommitterName("");
       setCommitterEmail("");
       setPrivateKey("");
@@ -114,7 +100,6 @@ export function CommitSigningSettings() {
     } catch {
       toast.error("Commit signing service unavailable");
     } finally {
-      setShowDisableDialog(false);
       setSaving(false);
     }
   };
@@ -134,10 +119,6 @@ export function CommitSigningSettings() {
       {data?.enabled && (
         <dl className="mt-3 grid gap-2 text-sm">
           <div>
-            <dt className="inline text-muted-foreground">Signing account: </dt>
-            <dd className="inline">{data.githubLogin}</dd>
-          </div>
-          <div>
             <dt className="inline text-muted-foreground">Committer: </dt>
             <dd className="inline">
               {data.committerName} &lt;{data.committerEmail}&gt;
@@ -152,33 +133,13 @@ export function CommitSigningSettings() {
             <dd className="inline font-mono break-all">{data.publicKey}</dd>
           </div>
           <div>
-            <dt className="inline text-muted-foreground">Validation: </dt>
-            <dd className="inline">Valid · {new Date(data.validatedAt).toLocaleString()}</dd>
-          </div>
-          <div>
             <dt className="inline text-muted-foreground">Updated: </dt>
             <dd className="inline">{new Date(data.updatedAt).toLocaleString()}</dd>
           </div>
         </dl>
       )}
 
-      <ol className="mt-4 list-decimal pl-5 text-sm text-muted-foreground space-y-1">
-        <li>Create or recover the dedicated GitHub signing account.</li>
-        <li>Add the matching public key to that account as a signing key.</li>
-        <li>Save the private key here, then run the documented GitHub smoke test.</li>
-        <li>For rotation, register the new public key before replacing this configuration.</li>
-      </ol>
-
       <div className="mt-4 grid gap-4 max-w-2xl">
-        <label className="grid gap-1.5 text-sm">
-          <span>GitHub signing account</span>
-          <Input
-            value={githubLogin}
-            onChange={(event) => setGithubLogin(event.target.value)}
-            autoComplete="off"
-            disabled={!configurationKnown}
-          />
-        </label>
         <label className="grid gap-1.5 text-sm">
           <span>Committer name</span>
           <Input
@@ -213,12 +174,7 @@ export function CommitSigningSettings() {
             type="button"
             onClick={handleSave}
             disabled={
-              !configurationKnown ||
-              saving ||
-              !privateKey ||
-              !githubLogin ||
-              !committerName ||
-              !committerEmail
+              !configurationKnown || saving || !privateKey || !committerName || !committerEmail
             }
           >
             {saving ? "Saving…" : "Save signing configuration"}
@@ -228,7 +184,7 @@ export function CommitSigningSettings() {
               type="button"
               variant="outline"
               className="ml-2"
-              onClick={() => setShowDisableDialog(true)}
+              onClick={handleDisable}
               disabled={saving}
             >
               Disable commit signing
@@ -236,24 +192,6 @@ export function CommitSigningSettings() {
           )}
         </div>
       </div>
-
-      <AlertDialog open={showDisableDialog} onOpenChange={setShowDisableDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Disable commit signing?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This deletes the stored signing-key ciphertext. New prompts will return to unsigned
-              commit behavior.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDisable} disabled={!configurationKnown || saving}>
-              Disable signing
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </section>
   );
 }

@@ -5,13 +5,10 @@ import type { SqlDatabase } from "./sql-database";
 
 export interface CommitSigningConfigurationInput {
   privateKey: string;
-  keyFormat: "ssh-ed25519";
-  githubLogin: string;
   committerName: string;
   committerEmail: string;
   publicKey: string;
   fingerprint: string;
-  validatedAt: number;
 }
 
 export type SandboxCommitSigningConfiguration =
@@ -21,7 +18,6 @@ export type SandboxCommitSigningConfiguration =
       committerName: string;
       committerEmail: string;
       publicKey: string;
-      fingerprint: string;
     };
 
 export type DecryptedCommitSigningConfiguration =
@@ -34,13 +30,10 @@ export type DecryptedCommitSigningConfiguration =
     };
 
 interface MetadataRow {
-  key_format: "ssh-ed25519";
-  github_login: string;
   committer_name: string;
   committer_email: string;
   public_key: string;
   fingerprint: string;
-  validated_at: number;
   updated_at: number;
 }
 
@@ -54,11 +47,6 @@ interface RuntimeConfigurationRow {
   committer_name: string;
   committer_email: string;
   public_key: string;
-  fingerprint: string;
-}
-
-interface DeletedConfigurationRow {
-  fingerprint: string;
 }
 
 export class CommitSigningStore {
@@ -74,43 +62,32 @@ export class CommitSigningStore {
     await this.db
       .prepare(
         `INSERT INTO commit_signing_configuration (
-           singleton_id, encrypted_private_key, key_format, github_login,
-           committer_name, committer_email, public_key, fingerprint,
-           validated_at, created_at, updated_at
-         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           singleton_id, encrypted_private_key, committer_name, committer_email,
+           public_key, fingerprint, updated_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(singleton_id) DO UPDATE SET
            encrypted_private_key = excluded.encrypted_private_key,
-           key_format = excluded.key_format,
-           github_login = excluded.github_login,
            committer_name = excluded.committer_name,
            committer_email = excluded.committer_email,
            public_key = excluded.public_key,
            fingerprint = excluded.fingerprint,
-           validated_at = excluded.validated_at,
            updated_at = excluded.updated_at`
       )
       .bind(
         encryptedPrivateKey,
-        input.keyFormat,
-        input.githubLogin,
         input.committerName,
         input.committerEmail,
         input.publicKey,
         input.fingerprint,
-        input.validatedAt,
-        now,
         now
       )
       .run();
 
     return this.toMetadata({
-      key_format: input.keyFormat,
-      github_login: input.githubLogin,
       committer_name: input.committerName,
       committer_email: input.committerEmail,
       public_key: input.publicKey,
       fingerprint: input.fingerprint,
-      validated_at: input.validatedAt,
       updated_at: now,
     });
   }
@@ -118,8 +95,7 @@ export class CommitSigningStore {
   async getMetadata(): Promise<CommitSigningMetadata> {
     const row = await this.db
       .prepare(
-        `SELECT key_format, github_login, committer_name, committer_email,
-                public_key, fingerprint, validated_at, updated_at
+        `SELECT committer_name, committer_email, public_key, fingerprint, updated_at
          FROM commit_signing_configuration WHERE singleton_id = 1`
       )
       .first<MetadataRow>();
@@ -130,7 +106,7 @@ export class CommitSigningStore {
   async getRuntimeConfiguration(): Promise<SandboxCommitSigningConfiguration> {
     const row = await this.db
       .prepare(
-        `SELECT committer_name, committer_email, public_key, fingerprint
+        `SELECT committer_name, committer_email, public_key
          FROM commit_signing_configuration WHERE singleton_id = 1`
       )
       .first<RuntimeConfigurationRow>();
@@ -141,7 +117,6 @@ export class CommitSigningStore {
       committerName: row.committer_name,
       committerEmail: row.committer_email,
       publicKey: row.public_key,
-      fingerprint: row.fingerprint,
     };
   }
 
@@ -164,26 +139,17 @@ export class CommitSigningStore {
     };
   }
 
-  async delete(): Promise<string | undefined> {
-    const deleted = await this.db
-      .prepare(
-        "DELETE FROM commit_signing_configuration WHERE singleton_id = 1 RETURNING fingerprint"
-      )
-      .first<DeletedConfigurationRow>();
-    return deleted?.fingerprint;
+  async delete(): Promise<void> {
+    await this.db.prepare("DELETE FROM commit_signing_configuration WHERE singleton_id = 1").run();
   }
 
   private toMetadata(row: MetadataRow): CommitSigningMetadata {
     return {
       enabled: true,
-      keyFormat: row.key_format,
-      githubLogin: row.github_login,
       committerName: row.committer_name,
       committerEmail: row.committer_email,
       publicKey: row.public_key,
       fingerprint: row.fingerprint,
-      validationStatus: "valid",
-      validatedAt: new Date(row.validated_at).toISOString(),
       updatedAt: new Date(row.updated_at).toISOString(),
     };
   }

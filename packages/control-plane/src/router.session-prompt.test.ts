@@ -133,7 +133,7 @@ describe("session prompt identity enrichment", () => {
     expect(sessionFetch).toHaveBeenCalledOnce();
   });
 
-  it("clears attribution only after a successful lookup proves the GitHub identity is absent", async () => {
+  it("leaves stored enrichment unchanged when no linked GitHub identity exists", async () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getUserById: async () => ({ id: "user-1", displayName: "Unlinked User" }),
@@ -142,10 +142,8 @@ describe("session prompt identity enrichment", () => {
     });
     const sessionFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        authorId: "user-1",
-        scmEnrichment: null,
-      });
+      expect(body.authorId).toBe("user-1");
+      expect(body).not.toHaveProperty("scmEnrichment");
       return Response.json({ status: "queued" });
     });
     const statement = {

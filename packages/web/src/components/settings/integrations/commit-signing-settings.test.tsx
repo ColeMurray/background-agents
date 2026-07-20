@@ -30,6 +30,14 @@ vi.mock("sonner", () => ({
 }));
 
 const fetchMock = vi.fn();
+const enabledMetadata = {
+  enabled: true as const,
+  committerName: "Open Inspect",
+  committerEmail: "open-inspect@example.com",
+  publicKey: "ssh-ed25519 AAAA existing",
+  fingerprint: "SHA256:existing",
+  updatedAt: "2026-07-16T12:00:00.000Z",
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -56,7 +64,7 @@ describe("CommitSigningSettings", () => {
     render(<CommitSigningSettings />);
 
     expect(screen.getByText("Loading…")).toBeInTheDocument();
-    expect(screen.getByLabelText("GitHub signing account")).toBeDisabled();
+    expect(screen.getByLabelText("Committer name")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save signing configuration" })).toBeDisabled();
   });
 
@@ -71,28 +79,15 @@ describe("CommitSigningSettings", () => {
     render(<CommitSigningSettings />);
 
     expect(screen.getByText("Unable to load configuration")).toBeInTheDocument();
-    expect(screen.getByLabelText("GitHub signing account")).toBeDisabled();
+    expect(screen.getByLabelText("Committer name")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save signing configuration" })).toBeDisabled();
   });
 
   it("submits the transient key, clears it, and caches only returned metadata", async () => {
     const user = userEvent.setup();
-    const metadata = {
-      enabled: true as const,
-      keyFormat: "ssh-ed25519" as const,
-      githubLogin: "open-inspect-bot",
-      committerName: "Open Inspect",
-      committerEmail: "open-inspect@example.com",
-      publicKey: "ssh-ed25519 AAAA public",
-      fingerprint: "SHA256:fingerprint",
-      validationStatus: "valid" as const,
-      validatedAt: "2026-07-16T12:00:00.000Z",
-      updatedAt: "2026-07-16T12:00:00.000Z",
-    };
-    fetchMock.mockResolvedValue({ ok: true, json: async () => metadata });
+    fetchMock.mockResolvedValue({ ok: true, json: async () => enabledMetadata });
     render(<CommitSigningSettings />);
 
-    await user.type(screen.getByLabelText("GitHub signing account"), "open-inspect-bot");
     await user.type(screen.getByLabelText("Committer name"), "Open Inspect");
     await user.type(screen.getByLabelText("Committer email"), "open-inspect@example.com");
     const keyInput = screen.getByLabelText("OpenSSH Ed25519 private key");
@@ -105,31 +100,19 @@ describe("CommitSigningSettings", () => {
         method: "PUT",
         body: JSON.stringify({
           privateKey: "PRIVATE-KEY-BYTES",
-          githubLogin: "open-inspect-bot",
           committerName: "Open Inspect",
           committerEmail: "open-inspect@example.com",
         }),
       })
     );
     expect(keyInput).toHaveValue("");
-    expect(mutateMock).toHaveBeenCalledWith(metadata, false);
+    expect(mutateMock).toHaveBeenCalledWith(enabledMetadata, false);
   });
 
   it("clears a failed key submission while retaining active public metadata", async () => {
     const user = userEvent.setup();
     useSWRMock.mockReturnValue({
-      data: {
-        enabled: true,
-        keyFormat: "ssh-ed25519",
-        githubLogin: "open-inspect-bot",
-        committerName: "Open Inspect",
-        committerEmail: "open-inspect@example.com",
-        publicKey: "ssh-ed25519 AAAA existing",
-        fingerprint: "SHA256:existing",
-        validationStatus: "valid",
-        validatedAt: "2026-07-16T12:00:00.000Z",
-        updatedAt: "2026-07-16T12:00:00.000Z",
-      },
+      data: enabledMetadata,
       isLoading: false,
       mutate: mutateMock,
     });
@@ -151,21 +134,10 @@ describe("CommitSigningSettings", () => {
     expect(JSON.stringify(toastError.mock.calls)).not.toContain("PRIVATE-KEY-BYTES");
   });
 
-  it("confirms disable and removes the cached active metadata", async () => {
+  it("disables signing and removes the cached active metadata", async () => {
     const user = userEvent.setup();
     useSWRMock.mockReturnValue({
-      data: {
-        enabled: true,
-        keyFormat: "ssh-ed25519",
-        githubLogin: "open-inspect-bot",
-        committerName: "Open Inspect",
-        committerEmail: "open-inspect@example.com",
-        publicKey: "ssh-ed25519 AAAA existing",
-        fingerprint: "SHA256:existing",
-        validationStatus: "valid",
-        validatedAt: "2026-07-16T12:00:00.000Z",
-        updatedAt: "2026-07-16T12:00:00.000Z",
-      },
+      data: enabledMetadata,
       isLoading: false,
       mutate: mutateMock,
     });
@@ -173,7 +145,6 @@ describe("CommitSigningSettings", () => {
     render(<CommitSigningSettings />);
 
     await user.click(screen.getByRole("button", { name: "Disable commit signing" }));
-    await user.click(screen.getByRole("button", { name: "Disable signing" }));
 
     expect(fetchMock).toHaveBeenCalledWith("/api/commit-signing", { method: "DELETE" });
     expect(mutateMock).toHaveBeenCalledWith({ enabled: false }, false);
@@ -187,7 +158,6 @@ describe("CommitSigningSettings", () => {
     });
     render(<CommitSigningSettings />);
 
-    await user.type(screen.getByLabelText("GitHub signing account"), "open-inspect-bot");
     await user.type(screen.getByLabelText("Committer name"), "Open Inspect");
     await user.type(screen.getByLabelText("Committer email"), "open-inspect@example.com");
     await user.type(screen.getByLabelText("OpenSSH Ed25519 private key"), "PRIVATE-KEY-BYTES");
@@ -207,7 +177,7 @@ describe("CommitSigningSettings", () => {
     render(<CommitSigningSettings />);
 
     expect(screen.getByText("Invalid service response")).toBeInTheDocument();
-    expect(screen.getByLabelText("GitHub signing account")).toBeDisabled();
+    expect(screen.getByLabelText("Committer name")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save signing configuration" })).toBeDisabled();
     expect(screen.queryByText("secret")).not.toBeInTheDocument();
   });

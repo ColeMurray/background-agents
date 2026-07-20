@@ -367,14 +367,14 @@ export class SessionMessageQueue {
 
     if (data.scmEnrichment !== undefined) {
       const enrichment = data.scmEnrichment;
-      this.repository.replaceParticipantScmEnrichment(participant.id, {
-        scmName: enrichment?.name ?? null,
-        scmEmail: enrichment?.email ?? null,
-        scmLogin: enrichment?.login ?? null,
-        scmUserId: enrichment?.userId ?? null,
-        scmAccessTokenEncrypted: enrichment?.accessTokenEncrypted ?? null,
-        scmRefreshTokenEncrypted: enrichment?.refreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: enrichment?.tokenExpiresAt ?? null,
+      this.repository.updateParticipantCoalesce(participant.id, {
+        scmName: enrichment.name,
+        scmEmail: enrichment.email,
+        scmLogin: enrichment.login,
+        scmUserId: enrichment.userId,
+        scmAccessTokenEncrypted: enrichment.accessTokenEncrypted,
+        scmRefreshTokenEncrypted: enrichment.refreshTokenEncrypted,
+        scmTokenExpiresAt: enrichment.tokenExpiresAt,
       });
       participant = this.repository.getParticipantById(participant.id) ?? participant;
     }

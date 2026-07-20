@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import re
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 import httpx
@@ -47,7 +47,6 @@ class EnabledCommitSigningConfiguration(BaseModel):
     committerName: str = Field(min_length=1, max_length=256)
     committerEmail: str = Field(min_length=3, max_length=320)
     publicKey: str = Field(min_length=1)
-    fingerprint: str = Field(min_length=1)
 
     @classmethod
     def _non_blank(cls, value: str, field_name: str) -> str:
@@ -72,13 +71,6 @@ class EnabledCommitSigningConfiguration(BaseModel):
     def validate_public_key(cls, value: str) -> str:
         if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]+={0,2}", value):
             raise ValueError("invalid Ed25519 public key")
-        return value
-
-    @field_validator("fingerprint")
-    @classmethod
-    def validate_fingerprint(cls, value: str) -> str:
-        if not re.fullmatch(r"SHA256:[A-Za-z0-9+/]+", value):
-            raise ValueError("invalid SHA256 fingerprint")
         return value
 
 
@@ -107,14 +99,12 @@ class GitSigningRuntime:
         auth_token: str,
         repo_manifest_path: str | Path = REPO_MANIFEST_FILE_PATH,
         signer_path: str | Path = DEFAULT_GIT_SIGNER_PATH,
-        log: Any | None = None,
     ) -> None:
         self.control_plane_url = control_plane_url.rstrip("/")
         self.session_id = session_id
         self.auth_token = auth_token
         self.repo_manifest_path = Path(repo_manifest_path)
         self.signer_path = Path(signer_path)
-        self.log = log
         self._installed_signing_revision: tuple[str, ...] | None = None
         self._installed_repository_paths: tuple[Path, ...] = ()
 
@@ -138,23 +128,12 @@ class GitSigningRuntime:
                 response.raise_for_status()
                 payload = response.json()
         except (httpx.HTTPError, ValueError):
-            self._log_fetch(outcome="error")
             raise GitSigningError("Commit signing configuration unavailable") from None
 
-        try:
-            configuration = parse_commit_signing_configuration(payload)
-        except GitSigningError:
-            self._log_fetch(outcome="error")
-            raise
-        self._log_fetch(outcome="success")
-        return configuration
+        return parse_commit_signing_configuration(payload)
 
     async def apply_configuration(self, configuration: object, author: GitUser | None) -> None:
-        """Validate an external configuration before applying it.
-
-        Production broker responses are validated in ``_fetch_configuration``. This
-        boundary remains public for provider qualification without an HTTP broker.
-        """
+        """Validate and apply a configuration without fetching it."""
         await self._apply_configuration(parse_commit_signing_configuration(configuration), author)
 
     async def _apply_configuration(
@@ -182,7 +161,6 @@ class GitSigningRuntime:
                 await self._set_git_config(repository.path, "user.name", effective_author.name)
                 await self._set_git_config(repository.path, "user.email", effective_author.email)
             self._record_installed_state(signing_revision, repository_paths)
-            self._log_applied(enabled=False, mode="unsigned")
             return
 
         effective_author = author or GitUser(
@@ -210,11 +188,6 @@ class GitSigningRuntime:
             for key, value in author_values:
                 await self._set_git_config(repository.path, key, value)
         self._record_installed_state(signing_revision, repository_paths)
-        self._log_applied(
-            enabled=True,
-            mode="attributed-user" if author is not None else "agent-only",
-            fingerprint=configuration.fingerprint,
-        )
 
     @staticmethod
     def _signing_revision(configuration: CommitSigningConfiguration) -> tuple[str, ...]:
@@ -225,7 +198,6 @@ class GitSigningRuntime:
             configuration.committerName,
             configuration.committerEmail,
             configuration.publicKey,
-            configuration.fingerprint,
         )
 
     def _record_installed_state(
@@ -272,17 +244,3 @@ class GitSigningRuntime:
         if process.returncode == 0 or (allow_missing and process.returncode in {1, 5}):
             return
         raise GitSigningError("Git signing configuration failed")
-
-    def _log_applied(self, *, enabled: bool, mode: str, fingerprint: str | None = None) -> None:
-        if self.log is None:
-            return
-        self.log.info(
-            "git.signing_apply",
-            enabled=enabled,
-            mode=mode,
-            **({"fingerprint": fingerprint} if fingerprint else {}),
-        )
-
-    def _log_fetch(self, *, outcome: str) -> None:
-        if self.log is not None:
-            self.log.info("git.signing_fetch", outcome=outcome)

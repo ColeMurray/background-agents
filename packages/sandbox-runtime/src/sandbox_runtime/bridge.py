@@ -225,7 +225,6 @@ class AgentBridge:
             session_id=session_id,
             auth_token=auth_token,
             repo_manifest_path=self.repo_manifest_path,
-            log=self.log,
         )
 
         # OpenCode transport client; owns its connection pool unless one was

@@ -64,7 +64,6 @@ describe("commit signing BFF", () => {
     );
     const body = {
       privateKey: "PRIVATE-KEY-BYTES",
-      githubLogin: "open-inspect-bot",
       committerName: "Open Inspect",
       committerEmail: "open-inspect@example.com",
     };

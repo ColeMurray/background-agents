@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  signGitPayloadWithOpenSshEd25519PrivateKey,
-  validateOpenSshEd25519PrivateKey,
-} from "../../src/auth/openssh-ed25519";
-import { createGitSshSigSignedData } from "../../src/auth/sshsig";
+import { validateOpenSshEd25519PrivateKey } from "../../src/auth/openssh-ed25519";
 
 const VALID_ED25519_PRIVATE_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
@@ -199,86 +195,3 @@ describe("OpenSSH Ed25519 private key validation", () => {
     });
   });
 });
-
-describe("OpenSSH Ed25519 Git signing", () => {
-  it("returns a complete armored SSHSIG that verifies against the configured key", async () => {
-    const payload = new Uint8Array([0, 1, 2, 255, 10]);
-
-    const result = await signGitPayloadWithOpenSshEd25519PrivateKey(
-      VALID_ED25519_PRIVATE_KEY,
-      payload
-    );
-
-    expect(result.fingerprint).toBe("SHA256:Cu64KulDfH7B8Mu37+JWepAJ1m59o159Y8RPj5Ta1XM");
-    expect(result.armoredSignature).toMatch(
-      /^-----BEGIN SSH SIGNATURE-----\n[A-Za-z0-9+/=\n]+\n-----END SSH SIGNATURE-----\n$/
-    );
-
-    const sshsig = decodeArmor(result.armoredSignature);
-    const reader = new TestBinaryReader(sshsig);
-    expect(new TextDecoder().decode(reader.readBytes(6))).toBe("SSHSIG");
-    expect(reader.readUint32()).toBe(1);
-    const publicKeyBlob = reader.readString();
-    expect(new TextDecoder().decode(reader.readString())).toBe("git");
-    expect(reader.readString()).toHaveLength(0);
-    expect(new TextDecoder().decode(reader.readString())).toBe("sha512");
-    const signatureReader = new TestBinaryReader(reader.readString());
-    expect(new TextDecoder().decode(signatureReader.readString())).toBe("ssh-ed25519");
-    const rawSignature = signatureReader.readString();
-    expect(signatureReader.remaining).toBe(0);
-    expect(reader.remaining).toBe(0);
-
-    const publicKeyReader = new TestBinaryReader(publicKeyBlob);
-    expect(new TextDecoder().decode(publicKeyReader.readString())).toBe("ssh-ed25519");
-    const rawPublicKey = publicKeyReader.readString();
-    expect(publicKeyReader.remaining).toBe(0);
-    const publicCryptoKey = await crypto.subtle.importKey(
-      "raw",
-      rawPublicKey,
-      { name: "Ed25519" },
-      false,
-      ["verify"]
-    );
-    await expect(
-      crypto.subtle.verify(
-        "Ed25519",
-        publicCryptoKey,
-        rawSignature,
-        await createGitSshSigSignedData(payload)
-      )
-    ).resolves.toBe(true);
-  });
-});
-
-class TestBinaryReader {
-  private offset = 0;
-
-  constructor(private readonly bytes: Uint8Array) {}
-
-  readBytes(length: number): Uint8Array {
-    const value = this.bytes.slice(this.offset, this.offset + length);
-    this.offset += length;
-    return value;
-  }
-
-  readUint32(): number {
-    const bytes = this.readBytes(4);
-    return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
-  }
-
-  readString(): Uint8Array {
-    return this.readBytes(this.readUint32());
-  }
-
-  get remaining(): number {
-    return this.bytes.length - this.offset;
-  }
-}
-
-function decodeArmor(armoredSignature: string): Uint8Array {
-  const base64 = armoredSignature
-    .replace("-----BEGIN SSH SIGNATURE-----", "")
-    .replace("-----END SSH SIGNATURE-----", "")
-    .replaceAll("\n", "");
-  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
-}
