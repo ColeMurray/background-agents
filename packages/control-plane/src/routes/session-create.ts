@@ -128,13 +128,13 @@ async function handleCreateSession(
   }
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
-  let scmLogin = githubDeployment ? undefined : body.scmLogin;
-  let scmName = githubDeployment ? undefined : body.scmName;
-  let scmEmail = githubDeployment ? undefined : body.scmEmail;
+  let scmLogin = body.scmLogin;
+  let scmName = body.scmName;
+  let scmEmail = body.scmEmail;
   const scmToken = body.scmToken;
   const scmRefreshToken = body.scmRefreshToken;
   let scmTokenExpiresAt = body.scmTokenExpiresAt;
-  let scmUserId = githubDeployment ? undefined : body.scmUserId;
+  let scmUserId = body.scmUserId;
   let scmTokenEncrypted: string | null = null;
   let scmRefreshTokenEncrypted: string | null = null;
 
@@ -169,10 +169,10 @@ async function handleCreateSession(
     try {
       const enrichment = await resolveGitHubEnrichment(env, ctx.db, userStore, resolvedUserId);
       if (enrichment) {
-        scmUserId = enrichment.scmUserId;
-        scmLogin = enrichment.scmLogin;
-        scmName = enrichment.displayName;
-        scmEmail = enrichment.email;
+        scmUserId ??= enrichment.scmUserId;
+        scmLogin ??= enrichment.scmLogin;
+        scmName ??= enrichment.displayName;
+        scmEmail ??= enrichment.email;
         if (!scmTokenEncrypted) {
           scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
           scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;

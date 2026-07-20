@@ -240,7 +240,7 @@ describe("handleCreateSession D1 ordering", () => {
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(initFetch.mock.invocationCallOrder[0]);
   });
 
-  it("replaces caller author fields with the linked GitHub identity", async () => {
+  it("preserves GitHub identity supplied by the authenticated caller", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return { create } as never;
@@ -251,7 +251,7 @@ describe("handleCreateSession D1 ordering", () => {
         getIdentitiesForUser: async () => [
           {
             provider: "github",
-            providerUserId: "1001",
+            providerUserId: "2002",
             providerLogin: "ada",
             providerEmail: "private@example.com",
           },
@@ -263,9 +263,9 @@ describe("handleCreateSession D1 ordering", () => {
       const body = (await request.json()) as Record<string, unknown>;
       expect(body).toMatchObject({
         scmUserId: "1001",
-        scmLogin: "ada",
-        scmName: "Trusted Ada",
-        scmEmail: "1001+ada@users.noreply.github.com",
+        scmLogin: "caller-login",
+        scmName: "Caller Name",
+        scmEmail: "caller@example.com",
       });
       return Response.json({ status: "created" });
     });
@@ -284,7 +284,7 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).toHaveBeenCalledOnce();
   });
 
-  it("does not retain caller GitHub attribution when D1 identity resolution fails", async () => {
+  it("preserves authenticated caller identity when D1 resolution is unavailable", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return { create } as never;
@@ -298,10 +298,12 @@ describe("handleCreateSession D1 ordering", () => {
     });
     const initFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
-      expect(body.scmUserId).toBeUndefined();
-      expect(body.scmLogin).toBeUndefined();
-      expect(body.scmName).toBeUndefined();
-      expect(body.scmEmail).toBeUndefined();
+      expect(body).toMatchObject({
+        scmUserId: "1001",
+        scmLogin: "caller-login",
+        scmName: "Caller Name",
+        scmEmail: "caller@example.com",
+      });
       return Response.json({ status: "created" });
     });
 
