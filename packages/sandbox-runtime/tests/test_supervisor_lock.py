@@ -65,6 +65,17 @@ class TestAcquire:
         assert guard.acquire() is SupervisorLockOutcome.ACQUIRED
         assert lock_path.read_text() == str(os.getpid())
 
+    def test_symlinked_lock_path_reports_unavailable(self, tmp_path):
+        """A symlink planted at the lock path must not be followed or clobbered."""
+        target = tmp_path / "victim.txt"
+        target.write_text("precious")
+        lock_path = tmp_path / "supervisor.lock"
+        lock_path.symlink_to(target)
+        guard = SupervisorGuard(log=MagicMock(), lock_path=str(lock_path))
+
+        assert guard.acquire() is SupervisorLockOutcome.UNAVAILABLE
+        assert target.read_text() == "precious"
+
     def test_unusable_lock_path_reports_unavailable(self, tmp_path):
         guard = SupervisorGuard(
             log=MagicMock(),

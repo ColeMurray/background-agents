@@ -114,7 +114,9 @@ class SupervisorGuard:
         decides whether an unguarded boot is acceptable.
         """
         try:
-            fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+            # O_NOFOLLOW: a symlink planted at the shared lock path must fail
+            # the open (ELOOP → UNAVAILABLE) rather than be truncated through.
+            fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
         except OSError as e:
             self.log.warn("supervisor.lock_error", exc=e)
             return SupervisorLockOutcome.UNAVAILABLE
