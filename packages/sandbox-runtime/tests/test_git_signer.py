@@ -266,6 +266,75 @@ def test_git_2_39_literal_public_key_reference_is_signed(tmp_path: Path) -> None
     assert Path(f"{buffer_path}.sig").read_text() == armor
 
 
+@pytest.mark.parametrize(
+    "session_config",
+    [
+        "not-json",
+        json.dumps(["not", "an", "object"]),
+        json.dumps({"sessionId": ""}),
+        json.dumps({}),
+    ],
+)
+def test_signer_rejects_malformed_session_configuration_before_network_request(
+    tmp_path: Path, session_config: str
+) -> None:
+    key_path = tmp_path / "git-selected-key"
+    key_path.write_text(PUBLIC_KEY)
+    buffer_path = tmp_path / "commit-buffer"
+    buffer_path.write_bytes(b"commit payload")
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text="unreachable")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as client,
+        pytest.raises(GitSignerError, match="session configuration is unavailable"),
+    ):
+        run_signer(
+            ["-Y", "sign", "-n", "git", "-f", str(key_path), "-U", str(buffer_path)],
+            {
+                "CONTROL_PLANE_URL": "https://control.example.com",
+                "SANDBOX_AUTH_TOKEN": "sandbox-token",
+                "SESSION_CONFIG": session_config,
+            },
+            client,
+        )
+
+    assert requests == []
+    assert not Path(f"{buffer_path}.sig").exists()
+
+
+def test_signer_rejects_oversized_payload_before_network_request(tmp_path: Path) -> None:
+    key_path = tmp_path / "git-selected-key"
+    key_path.write_text(PUBLIC_KEY)
+    buffer_path = tmp_path / "commit-buffer"
+    buffer_path.write_bytes(b"x" * (1024 * 1024 + 1))
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text="unreachable")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as client,
+        pytest.raises(GitSignerError, match="Commit payload is too large"),
+    ):
+        run_signer(
+            ["-Y", "sign", "-n", "git", "-f", str(key_path), "-U", str(buffer_path)],
+            {
+                "CONTROL_PLANE_URL": "https://control.example.com",
+                "SANDBOX_AUTH_TOKEN": "sandbox-token",
+                "SESSION_CONFIG": json.dumps({"sessionId": "session-1"}),
+            },
+            client,
+        )
+
+    assert requests == []
+    assert not Path(f"{buffer_path}.sig").exists()
+
+
 def test_signer_bounds_streamed_responses_without_leaving_signature_output(
     tmp_path: Path,
 ) -> None:
