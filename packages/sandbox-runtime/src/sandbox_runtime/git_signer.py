@@ -74,7 +74,7 @@ def _parse_sign_arguments(arguments: Sequence[str]) -> tuple[Path, Path]:
         raise GitSignerError("Unsupported Git SSH signing invocation")
     if len(arguments) == 8 and arguments[6] == "-U":
         return Path(arguments[5]), Path(arguments[7])
-    # Git 2.39 materializes the literal public key but omits the newer -U flag.
+    # Older Git versions omit -U and may pass the key:: literal through unchanged.
     if len(arguments) == 7:
         return Path(arguments[5]), Path(arguments[6])
     raise GitSignerError("Unsupported Git SSH signing invocation")
@@ -94,8 +94,14 @@ def _resolve_endpoint(environment: Mapping[str, str]) -> tuple[str, str, str]:
     return control_plane_url, auth_token, session_id
 
 
-def _read_public_key_blob(path: Path) -> bytes:
-    raw_key = _read_bounded_file(path, 16 * 1024, "public key")
+def _read_public_key_blob(key_reference: Path) -> bytes:
+    reference = str(key_reference)
+    if reference.startswith("key::"):
+        raw_key = reference.removeprefix("key::").encode("ascii")
+        if len(raw_key) > 16 * 1024:
+            raise GitSignerError("Public key is too large")
+    else:
+        raw_key = _read_bounded_file(key_reference, 16 * 1024, "public key")
     try:
         key_text = raw_key.decode("ascii").strip()
     except UnicodeDecodeError:

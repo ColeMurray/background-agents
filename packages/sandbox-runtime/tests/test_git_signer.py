@@ -237,6 +237,35 @@ def test_supported_git_sign_invocations_post_exact_bytes_and_write_returned_armo
     assert Path(f"{buffer_path}.sig").read_text() == armor
 
 
+def test_git_2_39_literal_public_key_reference_is_signed(tmp_path: Path) -> None:
+    buffer_path = tmp_path / "commit-buffer"
+    buffer_path.write_bytes(b"tree abcdef\n\ncommit message\n")
+    armor = (
+        "-----BEGIN SSH SIGNATURE-----\n"
+        f"{base64.b64encode(b'SSHSIG-test').decode()}\n"
+        "-----END SSH SIGNATURE-----\n"
+    )
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text=armor)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        run_signer(
+            ["-Y", "sign", "-n", "git", "-f", f"key::{PUBLIC_KEY}", str(buffer_path)],
+            {
+                "CONTROL_PLANE_URL": "https://control.example.com",
+                "SANDBOX_AUTH_TOKEN": "sandbox-token",
+                "SESSION_CONFIG": json.dumps({"sessionId": "session-1"}),
+            },
+            client,
+        )
+
+    assert requests[0].headers["X-Open-Inspect-Signing-Fingerprint"] == FINGERPRINT
+    assert Path(f"{buffer_path}.sig").read_text() == armor
+
+
 def test_signer_bounds_streamed_responses_without_leaving_signature_output(
     tmp_path: Path,
 ) -> None:

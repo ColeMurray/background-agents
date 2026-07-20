@@ -37,8 +37,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v56: install the stateless remote commit signer wrapper
-CACHE_BUSTER = "v56-remote-commit-signing"
+# v54: upgrade OpenCode after upstream SSE fixes
+CACHE_BUSTER = "v54-opencode-1-17-18"
 
 # Base image with all development tools
 base_image = (
@@ -173,7 +173,7 @@ base_image = (
         "mkdir -p /tmp/opencode",
         "echo 'Image rebuilt at: v21-force-rebuild' > /app/image-version.txt",
     )
-    # Install the Git credential helper and stateless signing shims.
+    # Install the git credential helper shim.
     #
     # Each `git` invocation in the sandbox runs this shim, which delegates to
     # the sandbox-runtime helper module. The helper talks to the control plane
@@ -187,11 +187,6 @@ base_image = (
         " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
         " > /usr/local/bin/oi-git-credentials",
         "chmod 0755 /usr/local/bin/oi-git-credentials",
-        "printf '%s\\n'"
-        " '#!/bin/sh'"
-        " 'exec python3 -m sandbox_runtime.git_signer \"$@\"'"
-        " > /usr/local/bin/oi-git-sign",
-        "chmod 0755 /usr/local/bin/oi-git-sign",
         "git config --system credential.helper /usr/local/bin/oi-git-credentials",
         # Pass the repo path to the helper so it can scope credentials to the
         # session repo, not just the host.

@@ -1,3 +1,4 @@
+import os
 import subprocess
 import textwrap
 from unittest.mock import AsyncMock
@@ -404,3 +405,29 @@ async def test_initialize_fetches_public_configuration_without_creating_key_file
     await runtime.initialize(GitUser(name="OpenInspect", email="open-inspect@example.com"))
 
     assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.asyncio
+async def test_initialize_installs_the_configured_signer_launcher(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    repo = create_repository(tmp_path / "repo")
+    manifest = create_manifest(tmp_path, [repo])
+    signer_path = tmp_path / "runtime" / "oi-git-sign"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=ENABLED_CONFIGURATION)
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "sandbox_runtime.git_signing.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    runtime = create_runtime(tmp_path, manifest, signer_path=signer_path)
+
+    await runtime.initialize(GitUser(name="OpenInspect", email="open-inspect@example.com"))
+
+    assert signer_path.is_file()
+    assert os.access(signer_path, os.X_OK)
+    assert git(repo, "config", "gpg.ssh.program").stdout.strip() == str(signer_path)

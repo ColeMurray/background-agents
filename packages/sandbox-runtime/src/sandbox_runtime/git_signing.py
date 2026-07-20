@@ -14,7 +14,8 @@ from .constants import REPO_MANIFEST_FILE_PATH
 from .repo_config import RepoConfigError, read_repo_manifest
 from .types import GitUser
 
-DEFAULT_GIT_SIGNER_PATH = Path("/usr/local/bin/oi-git-sign")
+DEFAULT_GIT_SIGNER_PATH = Path("/tmp/opencode/oi-git-sign")
+GIT_SIGNER_LAUNCHER = '#!/bin/sh\nexec python3 -m sandbox_runtime.git_signer "$@"\n'
 GIT_CONFIG_TIMEOUT_SECONDS = 10.0
 SIGNING_CONFIG_FETCH_TIMEOUT_SECONDS = 30.0
 SIGNING_CONFIG_KEYS = (
@@ -109,9 +110,18 @@ class GitSigningRuntime:
         self._installed_repository_paths: tuple[Path, ...] = ()
 
     async def initialize(self, author: GitUser | None) -> None:
+        self._install_signer_launcher()
         self._installed_signing_revision = None
         self._installed_repository_paths = ()
         await self.refresh(author)
+
+    def _install_signer_launcher(self) -> None:
+        try:
+            self.signer_path.parent.mkdir(parents=True, exist_ok=True)
+            self.signer_path.write_text(GIT_SIGNER_LAUNCHER)
+            self.signer_path.chmod(0o755)
+        except OSError:
+            raise GitSigningError("Git signer launcher unavailable") from None
 
     async def refresh(self, author: GitUser | None) -> None:
         configuration = await self._fetch_configuration()

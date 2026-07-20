@@ -218,8 +218,9 @@ Important limitations:
 - Any process in a live sandbox that can use its session token can ask the control plane to sign an
   arbitrary bounded commit buffer. Remote signing prevents reusable-key extraction; it does not make
   the sandbox trustworthy or add commit-policy enforcement.
-- After deploying the first signing-capable runtime, drain or recreate sessions restored from older
-  runtime snapshots that do not contain the stateless signer wrapper before configuring a key.
+- Sessions already running when signing support is deployed must be recreated so they start the
+  updated shared runtime. Provider images and snapshots do not need a preinstalled signer wrapper;
+  the runtime creates its provider-neutral launcher during initialization.
 
 ---
 
