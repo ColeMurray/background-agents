@@ -97,6 +97,55 @@ class TestApplySseEventDispositions:
         assert step.disposition is _Disposition.FAILED
         assert step.events == [{"type": "error", "error": "It broke", "messageId": "cp-msg-1"}]
 
+    def test_parent_context_overflow_continues_without_error(self):
+        step = make_stream()._apply_sse_event(
+            make_state(),
+            sse(
+                "session.error",
+                {
+                    "sessionID": PARENT_SESSION_ID,
+                    "error": {
+                        "name": "ContextOverflowError",
+                        "data": {"message": "Context window exceeded"},
+                    },
+                },
+            ),
+        )
+
+        assert step.disposition is _Disposition.CONTINUE
+        assert step.events == []
+
+    def test_message_error_is_deduped_against_session_error(self):
+        stream = make_stream()
+        state = make_state()
+        error = {"name": "SomeError", "data": {"message": "It broke"}}
+
+        message_step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": "msg_test",
+                        "error": error,
+                    }
+                },
+            ),
+        )
+        session_step = stream._apply_sse_event(
+            state,
+            sse("session.error", {"sessionID": PARENT_SESSION_ID, "error": error}),
+        )
+
+        assert message_step.events == [
+            {"type": "error", "error": "It broke", "messageId": "cp-msg-1"}
+        ]
+        assert session_step.disposition is _Disposition.FAILED
+        assert session_step.events == []
+
     def test_child_session_error_emits_subtask_error_and_continues(self):
         state = make_state()
         state.tracked_child_session_ids.add(CHILD_SESSION_ID)

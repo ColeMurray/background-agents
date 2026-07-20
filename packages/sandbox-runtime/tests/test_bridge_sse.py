@@ -2301,6 +2301,178 @@ class TestCompactionHandling:
         assert token_events[1]["content"] == "Here is the answer."
 
     @pytest.mark.asyncio
+    async def test_context_overflow_compacts_and_completes_successfully(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        bridge._configure_git_identity = AsyncMock()
+        bridge._send_event = AsyncMock()
+        bridge.http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-before",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-before",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-before",
+                        "text": "Before compaction",
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.error",
+                {
+                    "sessionID": "oc-session-123",
+                    "error": {
+                        "name": "ContextOverflowError",
+                        "data": {"message": "Context window exceeded"},
+                    },
+                },
+            ),
+            create_sse_event("session.compacted", {"sessionID": "oc-session-123"}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-summary",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_compaction_user",
+                        "summary": True,
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-after",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_synthetic_continue",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-after",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-after",
+                        "text": "After compaction",
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        await bridge._handle_prompt(
+            {
+                "messageId": "cp-msg-1",
+                "content": "Test prompt",
+                "author": {"gitIdentity": {"mode": "agent-only"}},
+            }
+        )
+
+        events = [call.args[0] for call in bridge._send_event.await_args_list]
+        assert [event["content"] for event in events if event["type"] == "token"] == [
+            "Before compaction",
+            "After compaction",
+        ]
+        assert [event for event in events if event["type"] == "error"] == []
+        assert events[-1] == {
+            "type": "execution_complete",
+            "messageId": "cp-msg-1",
+            "success": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_compaction_overflow_fails_after_partial_output(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        bridge._configure_git_identity = AsyncMock()
+        bridge._send_event = AsyncMock()
+        bridge.http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-before",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-before",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-before",
+                        "text": "Partial output",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-summary",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_compaction_user",
+                        "summary": True,
+                        "error": {
+                            "name": "ContextOverflowError",
+                            "data": {"message": "Session too large to compact"},
+                        },
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        await bridge._handle_prompt(
+            {
+                "messageId": "cp-msg-1",
+                "content": "Test prompt",
+                "author": {"gitIdentity": {"mode": "agent-only"}},
+            }
+        )
+
+        events = [call.args[0] for call in bridge._send_event.await_args_list]
+        assert [event["type"] for event in events] == ["token", "error", "execution_complete"]
+        assert events[1] == {
+            "type": "error",
+            "error": "Session too large to compact",
+            "messageId": "cp-msg-1",
+        }
+        assert events[-1] == {
+            "type": "execution_complete",
+            "messageId": "cp-msg-1",
+            "success": False,
+            "error": "Session too large to compact",
+        }
+
+    @pytest.mark.asyncio
     async def test_compaction_summary_text_not_forwarded(
         self, bridge: AgentBridge, opencode_message_id: str
     ):

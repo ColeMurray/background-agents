@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 # Cap on parts buffered for assistant messages that have not been authorized
 # yet (their message.updated may arrive after their first parts).
 MAX_PENDING_PART_EVENTS: Final = 2000
+CONTEXT_OVERFLOW_ERROR_NAME: Final = "ContextOverflowError"
 
 # Anthropic extended thinking budget tokens by reasoning effort level.
 # "max" uses 31,999 — the API maximum for streaming responses.
@@ -81,6 +82,7 @@ class _PromptState:
     # Compaction tracking: after compaction, parentID changes so we must
     # accept all non-summary assistant messages from the parent session
     compaction_occurred: bool = False
+    emitted_error_messages: set[str] = field(default_factory=set)
 
 
 class _Disposition(Enum):
@@ -332,11 +334,26 @@ class OpenCodePromptStream:
 
             events: list[dict[str, Any]] = []
             if role == "assistant" and oc_msg_id:
+                belongs_to_prompt = (
+                    parent_matches
+                    or is_compaction_summary
+                    or (state.compaction_occurred and not is_compaction_summary)
+                )
+                if belongs_to_prompt and info.get("error"):
+                    error_event = self._parent_error_event_once(state, info["error"])
+                    if error_event:
+                        self._log.error(
+                            "bridge.message_error",
+                            error_msg=error_event["error"],
+                            oc_msg_id=oc_msg_id,
+                        )
+                        events.append(error_event)
+
                 # Accept if: parentID matches our message, OR compaction
                 # happened and this isn't the compaction summary itself
                 if parent_matches or (state.compaction_occurred and not is_compaction_summary):
                     state.allowed_assistant_msg_ids.add(oc_msg_id)
-                    events = self._drain_pending_parts(state, oc_msg_id, is_subtask=False)
+                    events.extend(self._drain_pending_parts(state, oc_msg_id, is_subtask=False))
 
             if finish and finish not in ("tool-calls", ""):
                 self._log.debug(
@@ -385,16 +402,20 @@ class OpenCodePromptStream:
         error_session_id = props.get("sessionID")
 
         if error_session_id == state.opencode_session_id:
-            error_msg = self._extract_error_message(props.get("error", {}))
-            self._log.error("bridge.session_error", error_msg=error_msg)
+            error = props.get("error", {})
+            if isinstance(error, dict) and error.get("name") == CONTEXT_OVERFLOW_ERROR_NAME:
+                # With OpenCode's default automatic compaction enabled, this event
+                # announces recovery; session.compacted and more work follow it.
+                self._log.info(
+                    "bridge.context_overflow_compacting",
+                    error_msg=self._extract_error_message(error),
+                )
+                return _StreamStep(events=[], disposition=_Disposition.CONTINUE)
+
+            error_event = self._parent_error_event_once(state, error)
+            self._log.error("bridge.session_error", error_msg=error_event and error_event["error"])
             return _StreamStep(
-                events=[
-                    {
-                        "type": "error",
-                        "error": error_msg or "Unknown error",
-                        "messageId": state.message_id,
-                    }
-                ],
+                events=[error_event] if error_event else [],
                 disposition=_Disposition.FAILED,
             )
 
@@ -419,6 +440,18 @@ class OpenCodePromptStream:
             )
 
         return _StreamStep(events=[], disposition=_Disposition.CONTINUE)
+
+    def _parent_error_event_once(self, state: _PromptState, error: object) -> dict[str, Any] | None:
+        """Build one parent error event across message.updated and session.error."""
+        error_msg = self._extract_error_message(error) or "Unknown error"
+        if error_msg in state.emitted_error_messages:
+            return None
+        state.emitted_error_messages.add(error_msg)
+        return {
+            "type": "error",
+            "error": error_msg,
+            "messageId": state.message_id,
+        }
 
     def _handle_part(
         self,
