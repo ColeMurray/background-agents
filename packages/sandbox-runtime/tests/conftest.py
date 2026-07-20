@@ -3,11 +3,36 @@
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import pytest
 
 from sandbox_runtime.opencode_client import OpenCodeClient
 
 if TYPE_CHECKING:
     from sandbox_runtime.bridge import AgentBridge
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_file_paths(tmp_path, monkeypatch):
+    """Redirect the runtime's fixed file paths to per-test locations.
+
+    This suite routinely runs inside a live Open-Inspect sandbox (agents
+    dogfooding on this repo), where /tmp/oi-repo-manifest.json is the running
+    session's real manifest. A test that drives a real SandboxSupervisor
+    (e.g. ``await sup.run()``) would otherwise overwrite it with fixture
+    repos, which breaks push targeting and PR creation for the live session —
+    and likewise delete the live boot-warnings file or read the live
+    tunnel-env file. Tests that care about a specific path still patch it
+    themselves; this fixture is the backstop that keeps every other test off
+    the real files.
+    """
+    manifest_path = str(tmp_path / "oi-repo-manifest.json")
+    boot_warnings_path = str(tmp_path / "oi-boot-warnings.jsonl")
+    tunnel_env_path = str(tmp_path / ".tunnels.env")
+    monkeypatch.setattr("sandbox_runtime.entrypoint.REPO_MANIFEST_FILE_PATH", manifest_path)
+    monkeypatch.setattr("sandbox_runtime.bridge.REPO_MANIFEST_FILE_PATH", manifest_path)
+    monkeypatch.setattr("sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
+    monkeypatch.setattr("sandbox_runtime.bridge.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
+    monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:
