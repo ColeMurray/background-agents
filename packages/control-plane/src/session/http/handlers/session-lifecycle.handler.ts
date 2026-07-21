@@ -109,6 +109,17 @@ function parseUserIdBody(body: unknown): { userId?: string } {
   return body as { userId?: string };
 }
 
+function parseTitleUpdateBody(body: unknown): { userId?: string; title?: string } | null {
+  if (!body || typeof body !== "object") return null;
+  const value = body as Record<string, unknown>;
+  if (value.userId !== undefined && typeof value.userId !== "string") return null;
+  if (value.title !== undefined && typeof value.title !== "string") return null;
+  return {
+    userId: value.userId,
+    title: value.title,
+  };
+}
+
 export function createSessionLifecycleHandler(
   deps: SessionLifecycleHandlerDeps
 ): SessionLifecycleHandler {
@@ -290,10 +301,14 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      let body: { userId?: string; title?: string };
+      let body: { userId?: string; title?: string } | null;
       try {
-        body = (await request.json()) as { userId?: string; title?: string };
+        body = parseTitleUpdateBody(await request.json());
       } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      if (!body) {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
 

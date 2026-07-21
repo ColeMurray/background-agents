@@ -140,6 +140,54 @@ describe("createSandboxHandler", () => {
     });
   });
 
+  it("adds participant with a parsed owner role", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.addParticipant(
+      new Request("http://internal/internal/participants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", role: "owner" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.createParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-1", role: "owner" })
+    );
+  });
+
+  it("rejects malformed participant bodies", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.addParticipant(
+      new Request("http://internal/internal/participants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid participant body" });
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid participant roles", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.addParticipant(
+      new Request("http://internal/internal/participants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", role: "admin" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+  });
+
   it("creates a media artifact row and matching timeline event", async () => {
     const { handler, getSandbox, repository, broadcast, generateId } = createHandler();
     getSandbox.mockReturnValue({

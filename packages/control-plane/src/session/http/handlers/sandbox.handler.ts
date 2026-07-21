@@ -20,7 +20,29 @@ interface AddParticipantRequest {
   scmLogin?: string;
   scmName?: string;
   scmEmail?: string;
-  role?: string;
+  role?: ParticipantRole;
+}
+
+function isParticipantRole(value: unknown): value is ParticipantRole {
+  return value === "owner" || value === "member";
+}
+
+function parseAddParticipantRequest(raw: unknown): AddParticipantRequest | null {
+  if (!raw || typeof raw !== "object") return null;
+  const body = raw as Record<string, unknown>;
+  if (typeof body.userId !== "string") return null;
+  if (body.scmLogin !== undefined && typeof body.scmLogin !== "string") return null;
+  if (body.scmName !== undefined && typeof body.scmName !== "string") return null;
+  if (body.scmEmail !== undefined && typeof body.scmEmail !== "string") return null;
+  if (body.role !== undefined && !isParticipantRole(body.role)) return null;
+
+  return {
+    userId: body.userId,
+    scmLogin: body.scmLogin,
+    scmName: body.scmName,
+    scmEmail: body.scmEmail,
+    role: body.role,
+  };
 }
 
 export interface SandboxHandlerDeps {
@@ -145,7 +167,17 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
     },
 
     async addParticipant(request: Request): Promise<Response> {
-      const body = (await request.json()) as AddParticipantRequest;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const body = parseAddParticipantRequest(raw);
+      if (!body) {
+        return Response.json({ error: "Invalid participant body" }, { status: 400 });
+      }
 
       const id = deps.generateId();
       const now = deps.now();
@@ -156,7 +188,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
-        role: (body.role ?? "member") as ParticipantRole,
+        role: body.role ?? "member",
         joinedAt: now,
       });
 

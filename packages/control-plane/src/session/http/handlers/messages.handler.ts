@@ -1,5 +1,9 @@
 import type { Logger } from "../../../logger";
-import type { EnqueuePromptRequest, MessageService } from "../../services/message.service";
+import {
+  enqueuePromptRequestSchema,
+  type EnqueuePromptRequest,
+  type MessageService,
+} from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 
@@ -45,7 +49,13 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
   return {
     async enqueuePrompt(request: Request, log: Logger): Promise<Response> {
       try {
-        const body = (await request.json()) as EnqueuePromptRequest;
+        const raw = await request.json();
+        const result = enqueuePromptRequestSchema.safeParse(raw);
+        if (!result.success) {
+          return Response.json({ error: "Invalid prompt body" }, { status: 400 });
+        }
+
+        const body: EnqueuePromptRequest = result.data;
         return Response.json(await deps.messageService.enqueuePrompt(body));
       } catch (error) {
         if (error instanceof SessionAttachmentError) {

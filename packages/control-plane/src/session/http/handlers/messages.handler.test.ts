@@ -60,6 +60,83 @@ describe("createMessagesHandler", () => {
     });
   });
 
+  it("enqueues prompt with optional parsed boundary fields", async () => {
+    const { handler, messageService, log } = createHandler();
+    vi.mocked(messageService.enqueuePrompt).mockResolvedValue({
+      messageId: "msg-1",
+      status: "queued",
+    });
+
+    const body = {
+      content: "hello",
+      authorId: "github:123",
+      source: "github",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      attachments: [{ attachmentId: "attachment-1", name: "screenshot.png" }],
+      callbackContext: { source: "automation", runId: "run-1" },
+      scmEnrichment: {
+        userId: "user-1",
+        login: "octocat",
+        name: null,
+        email: null,
+        accessTokenEncrypted: "encrypted-token",
+        refreshTokenEncrypted: null,
+        tokenExpiresAt: null,
+      },
+    };
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(200);
+    expect(messageService.enqueuePrompt).toHaveBeenCalledWith(body);
+  });
+
+  it("returns 400 for malformed prompt bodies", async () => {
+    const { handler, messageService, log } = createHandler();
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "hello", authorId: "user-1" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid prompt body" });
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for invalid prompt attachments", async () => {
+    const { handler, messageService, log } = createHandler();
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "hello",
+          authorId: "user-1",
+          source: "web",
+          attachments: [{ attachmentId: "bad id", name: "screenshot.png" }],
+        }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(400);
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
   it("logs and rethrows when enqueue prompt parsing fails", async () => {
     const { handler, log } = createHandler();
 

@@ -562,6 +562,23 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(400);
   });
 
+  it("returns 400 for malformed updateTitle fields", async () => {
+    const { handler, getSession, applySessionTitleUpdate } = createHandler();
+    getSession.mockReturnValue(createSession());
+
+    const response = await handler.updateTitle(
+      new Request("http://internal/internal/update-title", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", title: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(applySessionTitleUpdate).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for empty title", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(createSession());

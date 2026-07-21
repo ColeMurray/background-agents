@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ArtifactRow, EventRow, MessageRow } from "../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
-import { MessageService } from "./message.service";
+import { enqueuePromptRequestSchema, MessageService } from "./message.service";
 
 function createService() {
   const repository = {
@@ -34,6 +34,38 @@ function createService() {
 }
 
 describe("MessageService", () => {
+  it("parses valid enqueue prompt request bodies", () => {
+    const body = {
+      content: "hello",
+      authorId: "github:123",
+      source: "github",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      attachments: [{ attachmentId: "attachment-1", name: "screenshot.png" }],
+      callbackContext: { source: "automation", runId: "run-1" },
+      scmEnrichment: {
+        userId: "user-1",
+        login: "octocat",
+        name: null,
+        email: null,
+        accessTokenEncrypted: "encrypted-token",
+        refreshTokenEncrypted: null,
+        tokenExpiresAt: null,
+      },
+    };
+
+    expect(enqueuePromptRequestSchema.safeParse(body).success).toBe(true);
+  });
+
+  it("rejects malformed enqueue prompt request bodies", () => {
+    const result = enqueuePromptRequestSchema.safeParse({
+      content: "hello",
+      authorId: "user-1",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("delegates enqueuePrompt to SessionMessageQueue", async () => {
     const { service, messageQueue } = createService();
     vi.mocked(messageQueue.enqueuePromptFromApi).mockResolvedValue({
