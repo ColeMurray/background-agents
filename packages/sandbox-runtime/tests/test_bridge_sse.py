@@ -2341,7 +2341,16 @@ class TestCompactionHandling:
                     },
                 },
             ),
-            create_sse_event("session.compacted", {"sessionID": "oc-session-123"}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg_compaction_user",
+                        "role": "user",
+                        "sessionID": "oc-session-123",
+                    }
+                },
+            ),
             create_sse_event(
                 "message.updated",
                 {
@@ -2354,6 +2363,19 @@ class TestCompactionHandling:
                     }
                 },
             ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-summary",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-summary",
+                        "text": "## Goal\nThe user was working on...",
+                    }
+                },
+            ),
+            create_sse_event("session.compacted", {"sessionID": "oc-session-123"}),
             create_sse_event(
                 "message.updated",
                 {
@@ -2506,6 +2528,18 @@ class TestCompactionHandling:
             create_sse_event(
                 "session.compacted",
                 {"sessionID": "oc-session-123"},
+            ),
+            # Compaction user message (the summary's parent) — observing it must
+            # not authorize the summary's text via parentID matching
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg_compaction_user",
+                        "role": "user",
+                        "sessionID": "oc-session-123",
+                    }
+                },
             ),
             # Compaction summary with summary=True
             create_sse_event(

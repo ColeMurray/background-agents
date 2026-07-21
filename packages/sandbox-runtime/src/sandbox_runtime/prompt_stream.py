@@ -84,6 +84,10 @@ class _PromptState:
     compaction_occurred: bool = False
     correlated_compaction_summary_ids: set[str] = field(default_factory=set)
     emitted_error_messages: set[str] = field(default_factory=set)
+    # Set when a parent context-overflow announcement was swallowed; cleared by
+    # session.compacted. If still set at idle with no error emitted, the
+    # promised compaction never happened and the prompt must fail.
+    pending_overflow_error: str | None = None
 
 
 class _Disposition(Enum):
@@ -268,6 +272,7 @@ class OpenCodePromptStream:
             # Only parent idle terminates the stream
             if props.get("sessionID") == state.opencode_session_id:
                 self._log_parent_idle(state, "bridge.session_idle")
+                events.extend(self._unrecovered_overflow_events(state))
                 return _StreamStep(events=events, disposition=_Disposition.FINISHED_IDLE)
 
         elif event_type == "session.status":
@@ -275,6 +280,7 @@ class OpenCodePromptStream:
             # Only parent status=idle terminates the stream
             if props.get("sessionID") == state.opencode_session_id and status.get("type") == "idle":
                 self._log_parent_idle(state, "bridge.session_status_idle")
+                events.extend(self._unrecovered_overflow_events(state))
                 return _StreamStep(events=events, disposition=_Disposition.FINISHED_IDLE)
 
         elif event_type == "session.error":
@@ -283,6 +289,7 @@ class OpenCodePromptStream:
         elif event_type == "session.compacted":
             if props.get("sessionID") == state.opencode_session_id:
                 state.compaction_occurred = True
+                state.pending_overflow_error = None
                 self._log.info("bridge.session_compacted", message_id=state.message_id)
 
         return _StreamStep(events=events, disposition=_Disposition.CONTINUE)
@@ -353,8 +360,11 @@ class OpenCodePromptStream:
                         events.append(error_event)
 
                 # Accept if: parentID matches our message, OR compaction
-                # happened and this isn't the compaction summary itself
-                if parent_matches or (state.compaction_occurred and not is_compaction_summary):
+                # happened — but never the compaction summary itself, whose
+                # text is internal context, not assistant output. Its parentID
+                # is the compaction user message, so parentID alone cannot
+                # exclude it.
+                if not is_compaction_summary and (parent_matches or state.compaction_occurred):
                     state.allowed_assistant_msg_ids.add(oc_msg_id)
                     events.extend(self._drain_pending_parts(state, oc_msg_id, is_subtask=False))
 
@@ -409,21 +419,40 @@ class OpenCodePromptStream:
             if isinstance(error, dict) and error.get("name") == CONTEXT_OVERFLOW_ERROR_NAME:
                 # With OpenCode's default automatic compaction enabled, this event
                 # announces recovery; session.compacted and more work follow it.
+                # Remember the error so idle-without-compaction still fails.
+                state.pending_overflow_error = (
+                    self._extract_error_message(error) or "Context overflow"
+                )
                 self._log.info(
                     "bridge.context_overflow_compacting",
-                    error_msg=self._extract_error_message(error),
+                    error_msg=state.pending_overflow_error,
                 )
                 return _StreamStep(events=[], disposition=_Disposition.CONTINUE)
 
             error_event = self._parent_error_event_once(state, error)
-            self._log.error("bridge.session_error", error_msg=error_event and error_event["error"])
+            self._log.error(
+                "bridge.session_error",
+                error_msg=self._extract_error_message(error),
+                deduped=error_event is None,
+            )
             return _StreamStep(
                 events=[error_event] if error_event else [],
                 disposition=_Disposition.FAILED,
             )
 
         if error_session_id in state.tracked_child_session_ids:
-            error_msg = self._extract_error_message(props.get("error", {}))
+            error = props.get("error", {})
+            if isinstance(error, dict) and error.get("name") == CONTEXT_OVERFLOW_ERROR_NAME:
+                # Child sessions recover through the same automatic compaction;
+                # surfacing this would fail the whole prompt spuriously.
+                self._log.info(
+                    "bridge.child_context_overflow_compacting",
+                    error_msg=self._extract_error_message(error),
+                    child_session_id=error_session_id,
+                )
+                return _StreamStep(events=[], disposition=_Disposition.CONTINUE)
+
+            error_msg = self._extract_error_message(error)
             self._log.error(
                 "bridge.child_session_error",
                 error_msg=error_msg,
@@ -443,6 +472,29 @@ class OpenCodePromptStream:
             )
 
         return _StreamStep(events=[], disposition=_Disposition.CONTINUE)
+
+    def _unrecovered_overflow_events(self, state: _PromptState) -> list[dict[str, Any]]:
+        """Fail the prompt if a swallowed overflow's promised compaction never came.
+
+        The context-overflow announcement is only safe to swallow because
+        compaction normally follows it. If the session goes idle without
+        compacting and without any error emitted, surface the original
+        overflow error instead of reporting silent success.
+        """
+        if state.pending_overflow_error is None or state.emitted_error_messages:
+            return []
+        self._log.error(
+            "bridge.context_overflow_unrecovered",
+            error_msg=state.pending_overflow_error,
+        )
+        state.emitted_error_messages.add(state.pending_overflow_error)
+        return [
+            {
+                "type": "error",
+                "error": state.pending_overflow_error,
+                "messageId": state.message_id,
+            }
+        ]
 
     def _parent_error_event_once(self, state: _PromptState, error: object) -> dict[str, Any] | None:
         """Build one parent error event across message.updated and session.error."""
@@ -715,8 +767,9 @@ class OpenCodePromptStream:
 
         Accepts an assistant message when its parentID matches one of the
         prompt's user message IDs, when it was already authorized during SSE
-        streaming, or — after compaction, which rewrites the message chain —
-        when it is not the compaction summary itself.
+        streaming, or after compaction, which rewrites the message chain.
+        The compaction summary itself is never accepted: its text is internal
+        context, and its parentID (the compaction user message) matches.
         """
         if not state.opencode_session_id:
             return
@@ -740,11 +793,10 @@ class OpenCodePromptStream:
                 is_compaction_summary = info.get("summary") is True
 
                 # Accept if: parentID matches, was tracked during SSE, or
-                # compaction occurred and this isn't the summary message
-                should_accept = (
-                    parent_matches
-                    or in_tracked_set
-                    or (state.compaction_occurred and not is_compaction_summary)
+                # compaction occurred — but never the compaction summary
+                # itself; its parentID (the compaction user message) matches.
+                should_accept = not is_compaction_summary and (
+                    parent_matches or in_tracked_set or state.compaction_occurred
                 )
                 if not should_accept:
                     continue

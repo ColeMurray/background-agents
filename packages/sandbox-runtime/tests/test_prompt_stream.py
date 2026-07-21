@@ -225,6 +225,125 @@ class TestApplySseEventDispositions:
             {"type": "error", "error": "Compaction failed", "messageId": "cp-msg-1"}
         ]
 
+    def test_compaction_summary_parts_not_forwarded_despite_parent_match(self):
+        stream = make_stream()
+        state = make_state()
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg-compaction-user",
+                        "role": "user",
+                        "sessionID": PARENT_SESSION_ID,
+                    }
+                },
+            ),
+        )
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-summary",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": "msg-compaction-user",
+                        "summary": True,
+                    }
+                },
+            ),
+        )
+
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-summary",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "oc-summary",
+                        "text": "## Goal\nInternal summary text",
+                    }
+                },
+            ),
+        )
+
+        assert "oc-summary" not in state.allowed_assistant_msg_ids
+        assert step.events == []
+
+    def test_child_context_overflow_continues_without_error(self):
+        state = make_state()
+        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+
+        step = make_stream()._apply_sse_event(
+            state,
+            sse(
+                "session.error",
+                {
+                    "sessionID": CHILD_SESSION_ID,
+                    "error": {
+                        "name": "ContextOverflowError",
+                        "data": {"message": "Context window exceeded"},
+                    },
+                },
+            ),
+        )
+
+        assert step.disposition is _Disposition.CONTINUE
+        assert step.events == []
+
+    def test_unrecovered_overflow_fails_at_idle(self):
+        stream = make_stream()
+        state = make_state()
+        stream._apply_sse_event(
+            state,
+            sse(
+                "session.error",
+                {
+                    "sessionID": PARENT_SESSION_ID,
+                    "error": {
+                        "name": "ContextOverflowError",
+                        "data": {"message": "Context window exceeded"},
+                    },
+                },
+            ),
+        )
+
+        step = stream._apply_sse_event(state, sse("session.idle", {"sessionID": PARENT_SESSION_ID}))
+
+        assert step.disposition is _Disposition.FINISHED_IDLE
+        assert step.events == [
+            {"type": "error", "error": "Context window exceeded", "messageId": "cp-msg-1"}
+        ]
+
+    def test_recovered_overflow_stays_clean_at_idle(self):
+        stream = make_stream()
+        state = make_state()
+        stream._apply_sse_event(
+            state,
+            sse(
+                "session.error",
+                {
+                    "sessionID": PARENT_SESSION_ID,
+                    "error": {
+                        "name": "ContextOverflowError",
+                        "data": {"message": "Context window exceeded"},
+                    },
+                },
+            ),
+        )
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        step = stream._apply_sse_event(state, sse("session.idle", {"sessionID": PARENT_SESSION_ID}))
+
+        assert step.disposition is _Disposition.FINISHED_IDLE
+        assert step.events == []
+
     def test_child_session_error_emits_subtask_error_and_continues(self):
         state = make_state()
         state.tracked_child_session_ids.add(CHILD_SESSION_ID)
