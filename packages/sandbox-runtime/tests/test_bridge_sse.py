@@ -2435,6 +2435,16 @@ class TestCompactionHandling:
                 "message.updated",
                 {
                     "info": {
+                        "id": "msg_compaction_user",
+                        "role": "user",
+                        "sessionID": "oc-session-123",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
                         "id": "oc-msg-summary",
                         "role": "assistant",
                         "sessionID": "oc-session-123",

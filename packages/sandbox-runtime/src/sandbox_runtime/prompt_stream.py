@@ -82,6 +82,7 @@ class _PromptState:
     # Compaction tracking: after compaction, parentID changes so we must
     # accept all non-summary assistant messages from the parent session
     compaction_occurred: bool = False
+    correlated_compaction_summary_ids: set[str] = field(default_factory=set)
     emitted_error_messages: set[str] = field(default_factory=set)
 
 
@@ -334,9 +335,11 @@ class OpenCodePromptStream:
 
             events: list[dict[str, Any]] = []
             if role == "assistant" and oc_msg_id:
+                if is_compaction_summary and parent_matches:
+                    state.correlated_compaction_summary_ids.add(oc_msg_id)
                 belongs_to_prompt = (
                     parent_matches
-                    or is_compaction_summary
+                    or oc_msg_id in state.correlated_compaction_summary_ids
                     or (state.compaction_occurred and not is_compaction_summary)
                 )
                 if belongs_to_prompt and info.get("error"):

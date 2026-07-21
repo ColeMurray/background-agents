@@ -146,6 +146,85 @@ class TestApplySseEventDispositions:
         assert session_step.disposition is _Disposition.FAILED
         assert session_step.events == []
 
+    def test_unrelated_compaction_summary_error_is_ignored(self):
+        step = make_stream()._apply_sse_event(
+            make_state(),
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-old-summary",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": "msg-old-compaction-user",
+                        "summary": True,
+                        "error": {
+                            "name": "ContextOverflowError",
+                            "data": {"message": "Old compaction failed"},
+                        },
+                    }
+                },
+            ),
+        )
+
+        assert step.events == []
+        assert step.disposition is _Disposition.CONTINUE
+
+    def test_correlated_compaction_summary_error_is_emitted(self):
+        stream = make_stream()
+        state = make_state()
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg-compaction-user",
+                        "role": "user",
+                        "sessionID": PARENT_SESSION_ID,
+                    }
+                },
+            ),
+        )
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-summary",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": "msg-compaction-user",
+                        "summary": True,
+                    }
+                },
+            ),
+        )
+
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-summary",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "summary": True,
+                        "error": {
+                            "name": "ContextOverflowError",
+                            "data": {"message": "Compaction failed"},
+                        },
+                    }
+                },
+            ),
+        )
+
+        assert step.events == [
+            {"type": "error", "error": "Compaction failed", "messageId": "cp-msg-1"}
+        ]
+
     def test_child_session_error_emits_subtask_error_and_continues(self):
         state = make_state()
         state.tracked_child_session_ids.add(CHILD_SESSION_ID)
