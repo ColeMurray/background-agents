@@ -14,6 +14,7 @@ import {
   type SessionTitleUpdateOptions,
   type SessionTitleUpdateResult,
 } from "../../title";
+import { z } from "zod";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
@@ -109,16 +110,12 @@ function parseUserIdBody(body: unknown): { userId?: string } {
   return body as { userId?: string };
 }
 
-function parseTitleUpdateBody(body: unknown): { userId?: string; title?: string } | null {
-  if (!body || typeof body !== "object") return null;
-  const value = body as Record<string, unknown>;
-  if (value.userId !== undefined && typeof value.userId !== "string") return null;
-  if (value.title !== undefined && typeof value.title !== "string") return null;
-  return {
-    userId: value.userId,
-    title: value.title,
-  };
-}
+const titleUpdateBodySchema = z.object({
+  userId: z.string().optional(),
+  title: z.string().optional(),
+});
+
+type TitleUpdateBody = z.infer<typeof titleUpdateBodySchema>;
 
 export function createSessionLifecycleHandler(
   deps: SessionLifecycleHandlerDeps
@@ -301,16 +298,19 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      let body: { userId?: string; title?: string } | null;
+      let raw: unknown;
       try {
-        body = parseTitleUpdateBody(await request.json());
+        raw = await request.json();
       } catch {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
 
-      if (!body) {
+      const parseResult = titleUpdateBodySchema.safeParse(raw);
+      if (!parseResult.success) {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
+
+      const body: TitleUpdateBody = parseResult.data;
 
       if (!body.userId) {
         return Response.json({ error: "userId is required" }, { status: 400 });

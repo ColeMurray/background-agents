@@ -14,36 +14,17 @@ import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
+import { z } from "zod";
 
-interface AddParticipantRequest {
-  userId: string;
-  scmLogin?: string;
-  scmName?: string;
-  scmEmail?: string;
-  role?: ParticipantRole;
-}
+const addParticipantRequestSchema = z.object({
+  userId: z.string(),
+  scmLogin: z.string().optional(),
+  scmName: z.string().optional(),
+  scmEmail: z.string().optional(),
+  role: z.enum(["owner", "member"] satisfies [ParticipantRole, ParticipantRole]).optional(),
+});
 
-function isParticipantRole(value: unknown): value is ParticipantRole {
-  return value === "owner" || value === "member";
-}
-
-function parseAddParticipantRequest(raw: unknown): AddParticipantRequest | null {
-  if (!raw || typeof raw !== "object") return null;
-  const body = raw as Record<string, unknown>;
-  if (typeof body.userId !== "string") return null;
-  if (body.scmLogin !== undefined && typeof body.scmLogin !== "string") return null;
-  if (body.scmName !== undefined && typeof body.scmName !== "string") return null;
-  if (body.scmEmail !== undefined && typeof body.scmEmail !== "string") return null;
-  if (body.role !== undefined && !isParticipantRole(body.role)) return null;
-
-  return {
-    userId: body.userId,
-    scmLogin: body.scmLogin,
-    scmName: body.scmName,
-    scmEmail: body.scmEmail,
-    role: body.role,
-  };
-}
+type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
   repository: Pick<
@@ -174,10 +155,12 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
 
-      const body = parseAddParticipantRequest(raw);
-      if (!body) {
+      const result = addParticipantRequestSchema.safeParse(raw);
+      if (!result.success) {
         return Response.json({ error: "Invalid participant body" }, { status: 400 });
       }
+
+      const body: AddParticipantRequest = result.data;
 
       const id = deps.generateId();
       const now = deps.now();
