@@ -105,6 +105,11 @@ interface IncomingMessageParams {
   scheduleBackground: BackgroundTaskScheduler;
 }
 
+/**
+ * Route one user message: follow up on the thread's existing session when there
+ * is one, otherwise classify the target and launch a new session (or ask for
+ * clarification). Image files are forwarded as session attachments.
+ */
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
     text: messageText,
@@ -290,6 +295,11 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   }
 }
 
+/**
+ * Handle an `app_mention` event: strip the mention, recover the message's
+ * files (mention events never carry them), and hand off to the shared
+ * message flow.
+ */
 export async function handleAppMention(
   event: {
     type: string;
@@ -328,9 +338,11 @@ export async function handleAppMention(
           return [];
         }
       );
-  const channelInfoPromise = messageText
-    ? getChannelInfo(env.SLACK_BOT_TOKEN, event.channel).catch(() => undefined)
-    : Promise.resolve(undefined);
+  // Fetched unconditionally: image-only mentions rely on channel context as
+  // their main classifier signal, and filesPromise is awaited anyway.
+  const channelInfoPromise = getChannelInfo(env.SLACK_BOT_TOKEN, event.channel).catch(
+    () => undefined
+  );
   const [files, channelInfo] = await Promise.all([filesPromise, channelInfoPromise]);
   if (!messageText && extractImageFiles(files).length > 0) {
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
@@ -356,6 +368,7 @@ export async function handleAppMention(
   });
 }
 
+/** Handle a direct message to the bot, including image-only file_share DMs. */
 export async function handleDirectMessage(
   event: {
     type: string;

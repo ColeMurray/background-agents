@@ -51,6 +51,7 @@ export function extractImageFiles(files: SlackMessageFile[] | undefined): SlackM
   return files.filter((file) => file.mimetype && SUPPORTED_MIME_TYPES.has(file.mimetype));
 }
 
+/** Display name for the attachment, bounded to the store's length limit. */
 function attachmentName(file: SlackMessageFile): string {
   const name = file.name || file.title || `${file.id ?? "image"}.png`;
   return name.slice(0, ATTACHMENT_NAME_MAX_LENGTH);
@@ -98,6 +99,11 @@ async function readBodyCapped(res: Response, maxBytes: number): Promise<Uint8Arr
   return body;
 }
 
+/**
+ * Fetch a Slack-hosted file's bytes with the bot token, enforcing the trusted
+ * host policy and the image byte cap. Returns a drop reason instead of bytes
+ * when the file cannot be safely fetched.
+ */
 async function downloadSlackFile(
   token: string,
   file: SlackMessageFile,
@@ -158,6 +164,10 @@ async function downloadSlackFile(
   }
 }
 
+/**
+ * Store one image in the session's attachment store and return the prompt
+ * reference, or null when the control plane rejects it.
+ */
 async function uploadToSession(
   env: Env,
   sessionId: string,
