@@ -266,6 +266,82 @@ describe("Child session operations (list, get, cancel)", () => {
       expect(rows[0].status).toBe("cancelled");
     });
 
+    it("cancels nested tasks by default", async () => {
+      const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "active",
+      });
+      const grandchildName = `grandchild-ops-${Date.now()}`;
+      await initNamedSession(grandchildName, { repoOwner: "acme", repoName: "web-app" });
+      const now = Date.now();
+      await store.create({
+        id: grandchildName,
+        title: "Grandchild Session",
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        parentSessionId: childName,
+        spawnSource: "agent",
+        spawnDepth: 2,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}` },
+        }
+      );
+
+      expect(res.status).toBe(200);
+      expect((await store.get(childName))?.status).toBe("cancelled");
+      expect((await store.get(grandchildName))?.status).toBe("cancelled");
+    });
+
+    it("leaves nested tasks running when cancelNested is false", async () => {
+      const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "active",
+      });
+      const grandchildName = `grandchild-no-cascade-${Date.now()}`;
+      await initNamedSession(grandchildName, { repoOwner: "acme", repoName: "web-app" });
+      const now = Date.now();
+      await store.create({
+        id: grandchildName,
+        title: "Grandchild Session",
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        parentSessionId: childName,
+        spawnSource: "agent",
+        spawnDepth: 2,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ cancelNested: false }),
+        }
+      );
+
+      expect(res.status).toBe(200);
+      expect((await store.get(childName))?.status).toBe("cancelled");
+      expect((await store.get(grandchildName))?.status).toBe("active");
+    });
+
     it("returns 409 for completed session", async () => {
       const { pName, childName, sandboxToken } = await setupParentAndChild({
         childStatus: "completed",

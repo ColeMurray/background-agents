@@ -460,6 +460,26 @@ export class SessionIndexStore {
     return this.decorateEntries((result.results || []).map(toEntry));
   }
 
+  /** List non-terminal descendants, deepest first, so cancellation cascades bottom-up. */
+  async listActiveDescendantIds(parentSessionId: string): Promise<string[]> {
+    const result = await this.db
+      .prepare(
+        `WITH RECURSIVE descendants(id, status, depth) AS (
+           SELECT id, status, 1 FROM sessions WHERE parent_session_id = ?
+           UNION ALL
+           SELECT sessions.id, sessions.status, descendants.depth + 1
+           FROM sessions
+           JOIN descendants ON sessions.parent_session_id = descendants.id
+         )
+         SELECT id FROM descendants
+         WHERE status NOT IN ('completed', 'failed', 'archived', 'cancelled')
+         ORDER BY depth DESC`
+      )
+      .bind(parentSessionId)
+      .all<{ id: string }>();
+    return (result.results || []).map(({ id }) => id);
+  }
+
   /** Count active (non-terminal) children for concurrent cap enforcement. */
   async countActiveChildren(parentSessionId: string): Promise<number> {
     const result = await this.db

@@ -45,7 +45,7 @@ async function handleGetChild(
 }
 
 async function handleCancelChild(
-  _request: Request,
+  request: Request,
   env: Env,
   match: RegExpMatchArray,
   ctx: SessionRouteContext
@@ -60,7 +60,38 @@ async function handleCancelChild(
     return error("Child session not found", 404);
   }
 
-  return ctx.sessionRuntime.fetch(childId, SessionInternalPaths.cancel, { method: "POST" });
+  let cancelNested: unknown;
+  try {
+    const body = await request.json();
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      cancelNested = (body as { cancelNested?: unknown }).cancelNested;
+    }
+  } catch {
+    // Existing callers send an empty body; recursive cancellation is the default.
+  }
+  if (cancelNested !== undefined && typeof cancelNested !== "boolean") {
+    return error("cancelNested must be a boolean");
+  }
+
+  const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.cancel, {
+    method: "POST",
+  });
+  if (!response.ok || cancelNested === false) return response;
+
+  const descendantIds = await sessionStore.listActiveDescendantIds(childId);
+  for (const descendantId of descendantIds) {
+    const descendantResponse = await ctx.sessionRuntime.fetch(
+      descendantId,
+      SessionInternalPaths.cancel,
+      { method: "POST" }
+    );
+    // A descendant may have reached a terminal state since the D1 query.
+    if (!descendantResponse.ok && descendantResponse.status !== 409) {
+      return error(`Task cancelled, but nested task ${descendantId} could not be cancelled`, 502);
+    }
+  }
+
+  return response;
 }
 
 export const sessionChildRoutes: Route[] = [
