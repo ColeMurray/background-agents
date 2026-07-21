@@ -84,10 +84,11 @@ describe("uploadSlackImageAttachments", () => {
     expect(uploadUrl).toBe("https://internal/sessions/sess-1/attachments");
     expect(uploadInit.method).toBe("POST");
     expect(uploadInit.body).toBeInstanceOf(FormData);
-    const uploaded = (uploadInit.body as FormData).get("file");
+    // Workers-types FormData.get() is typed string | null, so narrow via unknown.
+    const uploaded = (uploadInit.body as FormData).get("file") as unknown as File;
     expect(uploaded).toBeInstanceOf(File);
-    expect((uploaded as File).name).toBe("screenshot.png");
-    expect((uploaded as File).type).toBe("image/png");
+    expect(uploaded.name).toBe("screenshot.png");
+    expect(uploaded.type).toBe("image/png");
   });
 
   it("prefers url_private_download when present", async () => {
