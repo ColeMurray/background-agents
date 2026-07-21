@@ -596,33 +596,17 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });
 
-  it("logs instead of leaking a rejection when the stop completion callback fails", async () => {
-    const h = buildQueue();
-    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-9" });
-    h.callbackService.notifyComplete.mockRejectedValue(new Error("delivery down"));
-
-    await h.queue.stopExecution();
-
-    expect(h.waitUntil).toHaveBeenCalledOnce();
-    await expect(h.waitUntil.mock.calls[0][0]).resolves.toBeUndefined();
-    expect(h.log.error).toHaveBeenCalledWith(
-      "callback.complete.background_error",
-      expect.objectContaining({ message_id: "msg-9" })
-    );
-  });
-
-  it("logs instead of leaking a rejection when the stuck-timeout callback fails", async () => {
+  it("notifies completion via waitUntil on the stuck-timeout path", async () => {
     const h = buildQueue();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
-    h.callbackService.notifyComplete.mockRejectedValue(new Error("delivery down"));
 
     await h.queue.failStuckProcessingMessage();
 
     expect(h.waitUntil).toHaveBeenCalledOnce();
-    await expect(h.waitUntil.mock.calls[0][0]).resolves.toBeUndefined();
-    expect(h.log.error).toHaveBeenCalledWith(
-      "callback.complete.background_error",
-      expect.objectContaining({ message_id: "msg-timeout" })
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-timeout",
+      false,
+      expect.any(String)
     );
   });
 

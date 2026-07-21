@@ -122,28 +122,6 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
   });
 
-  it("logs instead of leaking a rejection when the completion callback fails", async () => {
-    const h = createProcessor();
-    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
-    h.repository.getMessageTimestamps.mockReturnValue({ created_at: 1000, started_at: 1100 });
-    h.callbackService.notifyComplete.mockRejectedValue(new Error("delivery down"));
-
-    await h.processor.processSandboxEvent({
-      type: "execution_complete",
-      messageId: "msg-1",
-      success: true,
-      sandboxId: "sb-1",
-      timestamp: 2000,
-    });
-
-    const settled = await Promise.allSettled(h.waitUntil.mock.calls.map((call) => call[0]));
-    expect(settled.every((outcome) => outcome.status === "fulfilled")).toBe(true);
-    expect(h.log.error).toHaveBeenCalledWith(
-      "callback.complete.background_error",
-      expect.objectContaining({ message_id: "msg-1" })
-    );
-  });
-
   it("logs instead of leaking a rejection when the post-completion snapshot fails", async () => {
     const h = createProcessor();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });

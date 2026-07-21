@@ -275,14 +275,7 @@ export class SessionMessageQueue {
       });
 
       this.ctx.waitUntil(
-        this.callbackService
-          .notifyComplete(processingMessage.id, false, stopError)
-          .catch((error) => {
-            this.log.error("callback.complete.background_error", {
-              message_id: processingMessage.id,
-              error,
-            });
-          })
+        this.callbackService.notifyComplete(processingMessage.id, false, stopError)
       );
 
       if (!options.suppressStatusReconcile) {
@@ -325,14 +318,7 @@ export class SessionMessageQueue {
     this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.ctx.waitUntil(
-      this.callbackService
-        .notifyComplete(processingMessage.id, false, stuckError)
-        .catch((error) => {
-          this.log.error("callback.complete.background_error", {
-            message_id: processingMessage.id,
-            error,
-          });
-        })
+      this.callbackService.notifyComplete(processingMessage.id, false, stuckError)
     );
     await this.sessionStatus.reconcileAfterExecution(false);
   }
