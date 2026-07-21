@@ -7,6 +7,8 @@ import type {
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
 
+const TERMINAL_STATUS_SQL = "'completed', 'failed', 'archived', 'cancelled'";
+
 /**
  * One member of a session's repository set — the identity subset of the
  * shared SessionRepositoryState (no git state; D1 doesn't store it).
@@ -472,7 +474,7 @@ export class SessionIndexStore {
            JOIN descendants ON sessions.parent_session_id = descendants.id
          )
          SELECT id FROM descendants
-         WHERE status NOT IN ('completed', 'failed', 'archived', 'cancelled')
+         WHERE status NOT IN (${TERMINAL_STATUS_SQL})
          ORDER BY depth DESC`
       )
       .bind(parentSessionId)
@@ -485,7 +487,7 @@ export class SessionIndexStore {
     const result = await this.db
       .prepare(
         `SELECT COUNT(*) as count FROM sessions
-         WHERE parent_session_id = ? AND status NOT IN ('completed', 'failed', 'archived', 'cancelled')`
+         WHERE parent_session_id = ? AND status NOT IN (${TERMINAL_STATUS_SQL})`
       )
       .bind(parentSessionId)
       .first<{ count: number }>();

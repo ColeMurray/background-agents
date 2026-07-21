@@ -44,7 +44,7 @@ async function handleGetChild(
   );
 }
 
-async function handleCancelChild(
+export async function handleCancelChild(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
@@ -61,13 +61,14 @@ async function handleCancelChild(
   }
 
   let cancelNested: unknown;
+  const rawBody = await request.text();
   try {
-    const body = await request.json();
+    const body: unknown = rawBody.trim() ? JSON.parse(rawBody) : undefined;
     if (body && typeof body === "object" && !Array.isArray(body)) {
       cancelNested = (body as { cancelNested?: unknown }).cancelNested;
     }
   } catch {
-    // Existing callers send an empty body; recursive cancellation is the default.
+    return error("Invalid JSON body");
   }
   if (cancelNested !== undefined && typeof cancelNested !== "boolean") {
     return error("cancelNested must be a boolean");
@@ -76,9 +77,11 @@ async function handleCancelChild(
   const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.cancel, {
     method: "POST",
   });
-  if (!response.ok || cancelNested === false) return response;
+  if (!response.ok && response.status !== 409) return response;
+  if (cancelNested === false) return response;
 
   const descendantIds = await sessionStore.listActiveDescendantIds(childId);
+  const failedDescendantIds: string[] = [];
   for (const descendantId of descendantIds) {
     const descendantResponse = await ctx.sessionRuntime.fetch(
       descendantId,
@@ -87,8 +90,14 @@ async function handleCancelChild(
     );
     // A descendant may have reached a terminal state since the D1 query.
     if (!descendantResponse.ok && descendantResponse.status !== 409) {
-      return error(`Task cancelled, but nested task ${descendantId} could not be cancelled`, 502);
+      failedDescendantIds.push(descendantId);
     }
+  }
+  if (failedDescendantIds.length > 0) {
+    return error(
+      `Task cancelled, but nested tasks could not be cancelled: ${failedDescendantIds.join(", ")}`,
+      502
+    );
   }
 
   return response;

@@ -81,6 +81,33 @@ describe("Child session operations (list, get, cancel)", () => {
     return { pName, childName, parentStub, childStub, sandboxToken, store };
   }
 
+  async function setupNestedSession(
+    store: SessionIndexStore,
+    parentSessionId: string,
+    spawnDepth: number,
+    prefix: string
+  ): Promise<string> {
+    const id = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    await initNamedSession(id, { repoOwner: "acme", repoName: "web-app" });
+    const now = Date.now();
+    await store.create({
+      id,
+      title: "Nested Session",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      parentSessionId,
+      spawnSource: "agent",
+      spawnDepth,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return id;
+  }
+
   describe("GET /sessions/:parentId/children", () => {
     it("returns children from D1", async () => {
       const { pName, childName, sandboxToken } = await setupParentAndChild();
@@ -270,24 +297,13 @@ describe("Child session operations (list, get, cancel)", () => {
       const { pName, childName, sandboxToken, store } = await setupParentAndChild({
         childStatus: "active",
       });
-      const grandchildName = `grandchild-ops-${Date.now()}`;
-      await initNamedSession(grandchildName, { repoOwner: "acme", repoName: "web-app" });
-      const now = Date.now();
-      await store.create({
-        id: grandchildName,
-        title: "Grandchild Session",
-        repoOwner: "acme",
-        repoName: "web-app",
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: null,
-        baseBranch: null,
-        status: "active",
-        parentSessionId: childName,
-        spawnSource: "agent",
-        spawnDepth: 2,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-ops");
+      const greatGrandchildName = await setupNestedSession(
+        store,
+        grandchildName,
+        3,
+        "great-grandchild-ops"
+      );
 
       const res = await SELF.fetch(
         `https://test.local/sessions/${pName}/children/${childName}/cancel`,
@@ -300,30 +316,14 @@ describe("Child session operations (list, get, cancel)", () => {
       expect(res.status).toBe(200);
       expect((await store.get(childName))?.status).toBe("cancelled");
       expect((await store.get(grandchildName))?.status).toBe("cancelled");
+      expect((await store.get(greatGrandchildName))?.status).toBe("cancelled");
     });
 
     it("leaves nested tasks running when cancelNested is false", async () => {
       const { pName, childName, sandboxToken, store } = await setupParentAndChild({
         childStatus: "active",
       });
-      const grandchildName = `grandchild-no-cascade-${Date.now()}`;
-      await initNamedSession(grandchildName, { repoOwner: "acme", repoName: "web-app" });
-      const now = Date.now();
-      await store.create({
-        id: grandchildName,
-        title: "Grandchild Session",
-        repoOwner: "acme",
-        repoName: "web-app",
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: null,
-        baseBranch: null,
-        status: "active",
-        parentSessionId: childName,
-        spawnSource: "agent",
-        spawnDepth: 2,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-no-cascade");
 
       const res = await SELF.fetch(
         `https://test.local/sessions/${pName}/children/${childName}/cancel`,
@@ -340,6 +340,49 @@ describe("Child session operations (list, get, cancel)", () => {
       expect(res.status).toBe(200);
       expect((await store.get(childName))?.status).toBe("cancelled");
       expect((await store.get(grandchildName))?.status).toBe("active");
+    });
+
+    it("returns 400 for malformed non-empty JSON without cancelling tasks", async () => {
+      const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "active",
+      });
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-malformed");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: '{"cancelNested":false',
+        }
+      );
+
+      expect(res.status).toBe(400);
+      expect((await store.get(childName))?.status).toBe("active");
+      expect((await store.get(grandchildName))?.status).toBe("active");
+    });
+
+    it("continues cascading when the direct child is already terminal", async () => {
+      const { pName, childName, childStub, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "cancelled",
+      });
+      await queryDO(childStub, "UPDATE session SET status = 'cancelled'");
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-retry");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}` },
+        }
+      );
+
+      expect(res.status).toBe(409);
+      expect((await store.get(childName))?.status).toBe("cancelled");
+      expect((await store.get(grandchildName))?.status).toBe("cancelled");
     });
 
     it("returns 409 for completed session", async () => {
