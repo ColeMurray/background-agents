@@ -68,7 +68,7 @@ async function getChildDetail(taskId, options = {}) {
 export default tool({
   name: "get-task-status",
   description:
-    "Check child task status. Without a taskId, lists all child tasks with summary counts. With a taskId, returns details. Set includeResponse to retrieve the child's final assistant response when available. Set includeTrajectory for a paginated persisted event trajectory.",
+    "Check child task status only when its result is needed; do not poll repeatedly. Without a taskId, lists all child tasks with summary counts. With a taskId, returns details. Set includeResponse to retrieve the child's final assistant response when available. Set includeTrajectory for a paginated persisted event trajectory.",
   args: {
     taskId: z
       .string()
