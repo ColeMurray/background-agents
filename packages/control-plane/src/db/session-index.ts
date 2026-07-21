@@ -7,7 +7,19 @@ import type {
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
 
-const TERMINAL_STATUS_SQL = "'completed', 'failed', 'archived', 'cancelled'";
+const TERMINAL_STATUSES = [
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+] satisfies SessionStatus[];
+const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
+
+/**
+ * Insurance against a corrupt parent_session_id cycle making the recursive
+ * descendant CTE run away; spawn-time depth caps keep real trees far below it.
+ */
+const MAX_DESCENDANT_DEPTH = 10;
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -472,6 +484,7 @@ export class SessionIndexStore {
            SELECT sessions.id, sessions.status, descendants.depth + 1
            FROM sessions
            JOIN descendants ON sessions.parent_session_id = descendants.id
+           WHERE descendants.depth < ${MAX_DESCENDANT_DEPTH}
          )
          SELECT id FROM descendants
          WHERE status NOT IN (${TERMINAL_STATUS_SQL})

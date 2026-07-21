@@ -4,6 +4,7 @@ import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import { handleCancelChild } from "./session-children";
 import type { SessionRouteContext } from "./session-route";
+import { parsePattern } from "./shared";
 
 describe("handleCancelChild", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -24,7 +25,7 @@ describe("handleCancelChild", () => {
       return Response.json({ status: "cancelled" });
     });
     const match = "/sessions/parent/children/child/cancel".match(
-      /^\/sessions\/(?<id>[^/]+)\/children\/(?<childId>[^/]+)\/cancel$/
+      parsePattern("/sessions/:id/children/:childId/cancel")
     );
     if (!match) throw new Error("Expected route match");
 
@@ -49,8 +50,8 @@ describe("handleCancelChild", () => {
     ]);
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
-      error:
-        "Task cancelled, but nested tasks could not be cancelled: deep-failure, shallow-failure",
+      error: "Nested tasks could not be cancelled: deep-failure, shallow-failure",
+      cancelledDescendantIds: ["later-success"],
     });
   });
 });

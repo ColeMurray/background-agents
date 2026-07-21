@@ -159,6 +159,7 @@ export {
   createSessionResponseSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
+  cancelChildSessionRequestSchema,
   spawnContextSchema,
 } from "./session-api";
 export type {
@@ -176,6 +177,7 @@ export type {
   SendPromptResponse,
   ListSessionsResponse,
   SpawnChildSessionRequest,
+  CancelChildSessionRequest,
   SpawnContext,
   ChildSessionFinalResponse,
   ChildSessionTrajectory,

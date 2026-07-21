@@ -146,7 +146,8 @@ class FakeD1Database {
       const descendants: Array<{ row: SessionRow; depth: number }> = [];
       let parents = [args[0] as string];
       let depth = 1;
-      while (parents.length > 0) {
+      // Mirrors the CTE's MAX_DESCENDANT_DEPTH cycle guard.
+      while (parents.length > 0 && depth <= 10) {
         const children = Array.from(this.rows.values()).filter((row) =>
           parents.includes(row.parent_session_id ?? "")
         );

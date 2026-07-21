@@ -12,6 +12,7 @@ import {
   serverMessageSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
+  cancelChildSessionRequestSchema,
   spawnContextSchema,
   userPreferencesRequestSchema,
 } from ".";
@@ -464,6 +465,26 @@ describe("boundary schemas", () => {
       const result = spawnChildSessionRequestSchema.safeParse({
         title: "Missing prompt",
       });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("cancelChildSessionRequestSchema", () => {
+    it("parses an empty options object", () => {
+      const result = cancelChildSessionRequestSchema.safeParse({});
+
+      expect(result.success).toBe(true);
+    });
+
+    it("parses an explicit cancelNested flag", () => {
+      const result = cancelChildSessionRequestSchema.safeParse({ cancelNested: false });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a non-boolean cancelNested", () => {
+      const result = cancelChildSessionRequestSchema.safeParse({ cancelNested: "yes" });
 
       expect(result.success).toBe(false);
     });

@@ -314,6 +314,10 @@ describe("Child session operations (list, get, cancel)", () => {
       );
 
       expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        status: "cancelled",
+        cancelledDescendantIds: [greatGrandchildName, grandchildName],
+      });
       expect((await store.get(childName))?.status).toBe("cancelled");
       expect((await store.get(grandchildName))?.status).toBe("cancelled");
       expect((await store.get(greatGrandchildName))?.status).toBe("cancelled");
@@ -380,9 +384,31 @@ describe("Child session operations (list, get, cancel)", () => {
         }
       );
 
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        status: "cancelled",
+        cancelledDescendantIds: [grandchildName],
+      });
       expect((await store.get(childName))?.status).toBe("cancelled");
       expect((await store.get(grandchildName))?.status).toBe("cancelled");
+    });
+
+    it("returns 409 when the direct child is terminal and no descendants are active", async () => {
+      const { pName, childName, childStub, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "cancelled",
+      });
+      await queryDO(childStub, "UPDATE session SET status = 'cancelled'");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}` },
+        }
+      );
+
+      expect(res.status).toBe(409);
+      expect((await store.get(childName))?.status).toBe("cancelled");
     });
 
     it("returns 409 for completed session", async () => {

@@ -13,7 +13,6 @@ export default tool({
     taskId: z.string().describe("The task ID to cancel (from spawn-task or get-task-status)."),
     cancelNested: z
       .boolean()
-      .optional()
       .default(true)
       .describe("Whether to also cancel all nested child tasks. Defaults to true."),
   },
@@ -38,7 +37,11 @@ export default tool({
       }
 
       const result = await response.json();
-      return `Task "${args.taskId}" cancelled successfully. Status: ${(result.status || "cancelled").toUpperCase()}`;
+      const nestedCount = Array.isArray(result.cancelledDescendantIds)
+        ? result.cancelledDescendantIds.length
+        : 0;
+      const nestedNote = nestedCount > 0 ? ` Also cancelled ${nestedCount} nested task(s).` : "";
+      return `Task "${args.taskId}" cancelled successfully.${nestedNote} Status: ${(result.status || "cancelled").toUpperCase()}`;
     } catch (error) {
       return `Failed to cancel task: ${error instanceof Error ? error.message : String(error)}`;
     }
