@@ -8,6 +8,7 @@
 export {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   sessionAttachmentMimeTypeSchema,
   sessionAttachmentIdSchema,
   sessionAttachmentReferenceSchema,

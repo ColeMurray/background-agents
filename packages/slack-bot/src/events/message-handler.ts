@@ -157,13 +157,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           })
         : undefined;
       const interimContext = interimMessages ? formatInterimThreadContext(interimMessages) : "";
-      const { references, droppedCount } = await uploadSlackImageAttachments(
+      const uploadResult = await uploadSlackImageAttachments(
         env,
         existingSession.sessionId,
         imageFiles,
         traceId
       );
-      await notifyDroppedAttachments(env, channel, threadTs, droppedCount, traceId);
       const promptResult = await sendPrompt(
         env,
         existingSession.sessionId,
@@ -171,9 +170,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         `slack:${user}`,
         callbackContext,
         traceId,
-        references
+        uploadResult.references
       );
       if (promptResult.ok) {
+        // Notify about dropped images only now that the session proved live —
+        // uploads against a stale session fail spuriously and are retried
+        // against the replacement session below.
+        await notifyDroppedAttachments(env, channel, threadTs, uploadResult, traceId);
         // Only advance the checkpoint past messages we know were considered.
         // When the interim fetch failed, keeping the old watermark lets the
         // next follow-up retry the window; at worst it re-includes this
@@ -302,28 +305,41 @@ export async function handleAppMention(
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   const messageText = stripMentions(event.text);
-  // app_mention events don't carry the message's `files` array, so when the
-  // event has none we recover them from conversation history.
-  let files = event.files;
-  if (!files?.length) {
-    files = await getMessageFiles(env.SLACK_BOT_TOKEN, event.channel, event.ts, event.thread_ts);
-  }
-  const hasContent = Boolean(messageText) || extractImageFiles(files).length > 0;
   const threadKey = event.thread_ts || event.ts;
-  if (hasContent)
+  if (messageText)
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
+
+  // app_mention events don't carry the message's `files` array, so when the
+  // event has none we recover them from conversation history — overlapped with
+  // the channel-info fetch to keep the extra round trip off the critical path.
+  const filesPromise: Promise<SlackMessageFile[]> = event.files?.length
+    ? Promise.resolve(event.files)
+    : getMessageFiles(env.SLACK_BOT_TOKEN, event.channel, event.ts, event.thread_ts).then(
+        (lookup) => {
+          if (lookup.ok) return lookup.files;
+          // Failure is not "no files": any images on the message are lost
+          // here, so make the drop visible in logs.
+          log.warn("slack.attachment.file_lookup_failed", {
+            trace_id: traceId,
+            channel: event.channel,
+            message_ts: event.ts,
+            slack_error: lookup.error,
+          });
+          return [];
+        }
+      );
+  const channelInfoPromise = messageText
+    ? getChannelInfo(env.SLACK_BOT_TOKEN, event.channel).catch(() => undefined)
+    : Promise.resolve(undefined);
+  const [files, channelInfo] = await Promise.all([filesPromise, channelInfoPromise]);
+  if (!messageText && extractImageFiles(files).length > 0) {
+    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
+  }
   let channelName: string | undefined;
   let channelDescription: string | undefined;
-  if (hasContent) {
-    try {
-      const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
-      if (channelInfo.ok && channelInfo.channel) {
-        channelName = channelInfo.channel.name;
-        channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
-      }
-    } catch {
-      // Channel context is best effort.
-    }
+  if (channelInfo?.ok && channelInfo.channel) {
+    channelName = channelInfo.channel.name;
+    channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
   }
   await handleIncomingMessage({
     text: messageText,

@@ -16,7 +16,7 @@ vi.mock("@open-inspect/shared", () => ({
 }));
 
 vi.mock("../attachments", () => ({
-  uploadSlackImageAttachments: vi.fn(async () => ({ references: [], droppedCount: 0 })),
+  uploadSlackImageAttachments: vi.fn(async () => ({ references: [], dropped: [] })),
   notifyDroppedAttachments: vi.fn(async () => {}),
 }));
 
@@ -266,7 +266,7 @@ describe("startSessionAndSendPrompt", () => {
   it("uploads message images to the new session and passes references with the prompt", async () => {
     vi.mocked(uploadSlackImageAttachments).mockResolvedValue({
       references: [{ attachmentId: "att-1", name: "screenshot.png" }],
-      droppedCount: 1,
+      dropped: ["download_failed"],
     });
     const env = makeEnv();
     const files = [{ id: "F1", mimetype: "image/png", url_private: "https://files/x" }];
@@ -284,7 +284,16 @@ describe("startSessionAndSendPrompt", () => {
     ).resolves.toEqual({ sessionId: "session-1" });
 
     expect(uploadSlackImageAttachments).toHaveBeenCalledWith(env, "session-1", files, "trace-1");
-    expect(notifyDroppedAttachments).toHaveBeenCalledWith(env, "C123", "111.222", 1, "trace-1");
+    expect(notifyDroppedAttachments).toHaveBeenCalledWith(
+      env,
+      "C123",
+      "111.222",
+      {
+        references: [{ attachmentId: "att-1", name: "screenshot.png" }],
+        dropped: ["download_failed"],
+      },
+      "trace-1"
+    );
     expect(sendPrompt).toHaveBeenCalledWith(
       env,
       "session-1",

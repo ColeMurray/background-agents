@@ -734,10 +734,13 @@ describe("getMessageFiles", () => {
       })
     );
 
-    const files = await getMessageFiles("xoxb-token", "C123", "1.0");
+    const result = await getMessageFiles("xoxb-token", "C123", "1.0");
 
-    expect(files).toHaveLength(1);
-    expect(files[0]!.id).toBe("F1");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]!.id).toBe("F1");
+    }
     const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toBe(
       "https://slack.com/api/conversations.history?channel=C123&latest=1.0&inclusive=true&limit=1"
@@ -752,10 +755,13 @@ describe("getMessageFiles", () => {
       })
     );
 
-    const files = await getMessageFiles("xoxb-token", "C123", "1.5", "1.0");
+    const result = await getMessageFiles("xoxb-token", "C123", "1.5", "1.0");
 
-    expect(files).toHaveLength(1);
-    expect(files[0]!.id).toBe("F2");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]!.id).toBe("F2");
+    }
     const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toBe(
       "https://slack.com/api/conversations.replies?channel=C123&ts=1.0&latest=1.5&inclusive=true&limit=1"
@@ -773,19 +779,22 @@ describe("getMessageFiles", () => {
     expect(String(url)).toContain("conversations.history");
   });
 
-  it("returns [] when the message has no files or is not found", async () => {
+  it("returns empty files when the message has none or is not found", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({ ok: true, messages: [{ ts: "9.9" }] })
     );
 
-    expect(await getMessageFiles("xoxb-token", "C123", "1.0")).toEqual([]);
+    expect(await getMessageFiles("xoxb-token", "C123", "1.0")).toEqual({ ok: true, files: [] });
   });
 
-  it("returns [] on Slack API errors (e.g. missing_scope)", async () => {
+  it("returns the failure arm on Slack API errors (e.g. missing_scope)", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({ ok: false, error: "missing_scope" })
     );
 
-    expect(await getMessageFiles("xoxb-token", "C123", "1.0")).toEqual([]);
+    expect(await getMessageFiles("xoxb-token", "C123", "1.0")).toEqual({
+      ok: false,
+      error: "missing_scope",
+    });
   });
 });

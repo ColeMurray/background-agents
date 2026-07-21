@@ -1,9 +1,8 @@
-import type { SlackMessageFile } from "@open-inspect/shared";
+import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES, type SlackMessageFile } from "@open-inspect/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractImageFiles,
   notifyDroppedAttachments,
-  SLACK_ATTACHMENT_MAX_FILE_BYTES,
   uploadSlackImageAttachments,
 } from "./attachments";
 import type { Env } from "./types";
@@ -72,13 +71,14 @@ describe("uploadSlackImageAttachments", () => {
     const result = await uploadSlackImageAttachments(env, "sess-1", [pngFile]);
 
     expect(result.references).toEqual([{ attachmentId: "att-1", name: "screenshot.png" }]);
-    expect(result.droppedCount).toBe(0);
+    expect(result.dropped).toEqual([]);
 
     const [downloadUrl, downloadInit] = downloadSpy.mock.calls[0]!;
     expect(downloadUrl).toBe(pngFile.url_private);
     expect((downloadInit!.headers as Record<string, string>).Authorization).toBe(
       "Bearer xoxb-test"
     );
+    expect(downloadInit!.redirect).toBe("manual");
 
     const [uploadUrl, uploadInit] = controlPlaneFetch.mock.calls[0]!;
     expect(uploadUrl).toBe("https://internal/sessions/sess-1/attachments");
@@ -102,6 +102,85 @@ describe("uploadSlackImageAttachments", () => {
     expect(downloadSpy.mock.calls[0]![0]).toBe("https://files.slack.com/download/F1");
   });
 
+  it("never sends the bot token to non-Slack hosts", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const env = makeEnv();
+
+    const result = await uploadSlackImageAttachments(env, "sess-1", [
+      { ...pngFile, url_private: "https://evil.example.com/steal-token.png" },
+      { ...pngFile, id: "F2", url_private: "http://files.slack.com/not-https.png" },
+      { ...pngFile, id: "F3", url_private: "https://files.slack.com.evil.com/x.png" },
+    ]);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.references).toEqual([]);
+    expect(result.dropped).toEqual(["download_failed", "download_failed", "download_failed"]);
+  });
+
+  it("skips remote (mode external) files without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const env = makeEnv();
+
+    const result = await uploadSlackImageAttachments(env, "sess-1", [
+      { ...pngFile, mode: "external" },
+    ]);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.dropped).toEqual(["download_failed"]);
+  });
+
+  it("treats redirects as failures so the token cannot leak downstream", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(null, { status: 302, headers: { Location: "https://evil.example.com" } })
+    );
+    const env = makeEnv();
+
+    const result = await uploadSlackImageAttachments(env, "sess-1", [pngFile]);
+
+    expect(result.dropped).toEqual(["download_failed"]);
+  });
+
+  it("rejects oversized bodies via Content-Length before reading them", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(new Uint8Array(16), {
+        status: 200,
+        headers: { "Content-Length": String(SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 1) },
+      })
+    );
+    const env = makeEnv();
+
+    const result = await uploadSlackImageAttachments(env, "sess-1", [
+      { ...pngFile, size: undefined },
+    ]);
+
+    expect(result.dropped).toEqual(["too_large"]);
+  });
+
+  it("caps streamed bodies that exceed the limit without a Content-Length", async () => {
+    const chunk = new Uint8Array(1024 * 1024).fill(1);
+    let pushed = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pushed * chunk.byteLength > SESSION_ATTACHMENT_IMAGE_MAX_BYTES) {
+          controller.close();
+          return;
+        }
+        pushed += 1;
+        controller.enqueue(chunk);
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(body, { status: 200 }));
+    const controlPlaneFetch = vi.fn();
+    const env = makeEnv(controlPlaneFetch);
+
+    const result = await uploadSlackImageAttachments(env, "sess-1", [
+      { ...pngFile, size: undefined },
+    ]);
+
+    expect(result.dropped).toEqual(["too_large"]);
+    expect(controlPlaneFetch).not.toHaveBeenCalled();
+  });
+
   it("returns immediately when there are no image files", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const env = makeEnv();
@@ -110,7 +189,7 @@ describe("uploadSlackImageAttachments", () => {
       { id: "F2", mimetype: "text/plain", url_private: "https://x/txt" },
     ]);
 
-    expect(result).toEqual({ references: [], droppedCount: 0 });
+    expect(result).toEqual({ references: [], dropped: [] });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -119,10 +198,10 @@ describe("uploadSlackImageAttachments", () => {
     const env = makeEnv();
 
     const result = await uploadSlackImageAttachments(env, "sess-1", [
-      { ...pngFile, size: SLACK_ATTACHMENT_MAX_FILE_BYTES + 1 },
+      { ...pngFile, size: SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 1 },
     ]);
 
-    expect(result).toEqual({ references: [], droppedCount: 1 });
+    expect(result).toEqual({ references: [], dropped: ["too_large"] });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -139,7 +218,7 @@ describe("uploadSlackImageAttachments", () => {
     ]);
 
     expect(result.references).toEqual([{ attachmentId: "att-2", name: "second.png" }]);
-    expect(result.droppedCount).toBe(1);
+    expect(result.dropped).toEqual(["download_failed"]);
   });
 
   it("counts rejected uploads as dropped", async () => {
@@ -151,7 +230,7 @@ describe("uploadSlackImageAttachments", () => {
 
     const result = await uploadSlackImageAttachments(env, "sess-1", [pngFile]);
 
-    expect(result).toEqual({ references: [], droppedCount: 1 });
+    expect(result).toEqual({ references: [], dropped: ["upload_rejected"] });
   });
 
   it("caps forwarded images at the per-message maximum and drops the rest", async () => {
@@ -167,7 +246,7 @@ describe("uploadSlackImageAttachments", () => {
     const result = await uploadSlackImageAttachments(env, "sess-1", files);
 
     expect(result.references).toHaveLength(6);
-    expect(result.droppedCount).toBe(2);
+    expect(result.dropped).toEqual(["over_cap", "over_cap"]);
     expect(controlPlaneFetch).toHaveBeenCalledTimes(6);
   });
 
@@ -178,25 +257,28 @@ describe("uploadSlackImageAttachments", () => {
       { id: "F1", mimetype: "image/png" },
     ]);
 
-    expect(result).toEqual({ references: [], droppedCount: 1 });
+    expect(result).toEqual({ references: [], dropped: ["download_failed"] });
   });
 });
 
 describe("notifyDroppedAttachments", () => {
-  it("does nothing when droppedCount is 0", async () => {
+  it("does nothing when nothing was dropped", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-    await notifyDroppedAttachments(makeEnv(), "C1", "1.0", 0);
+    await notifyDroppedAttachments(makeEnv(), "C1", "1.0", { references: [], dropped: [] });
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("posts a threaded warning naming the files:read scope", async () => {
+  it("names the files:read scope only for download failures", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
 
-    await notifyDroppedAttachments(makeEnv(), "C1", "1.0", 2);
+    await notifyDroppedAttachments(makeEnv(), "C1", "1.0", {
+      references: [],
+      dropped: ["download_failed", "download_failed"],
+    });
 
     const [url, init] = fetchSpy.mock.calls[0]!;
     expect(String(url)).toContain("chat.postMessage");
@@ -205,5 +287,21 @@ describe("notifyDroppedAttachments", () => {
     expect(body.thread_ts).toBe("1.0");
     expect(body.text).toContain("2 attached images");
     expect(body.text).toContain("files:read");
+  });
+
+  it("gives size and cap guidance instead of the scope hint when those caused the drops", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    await notifyDroppedAttachments(makeEnv(), "C1", "1.0", {
+      references: [],
+      dropped: ["too_large", "over_cap"],
+    });
+
+    const body = JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string);
+    expect(body.text).not.toContain("files:read");
+    expect(body.text).toContain("10 MB or smaller");
+    expect(body.text).toContain("at most 6 images");
   });
 });

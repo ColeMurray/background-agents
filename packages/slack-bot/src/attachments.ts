@@ -13,6 +13,7 @@ import {
   buildInternalAuthHeaders,
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   postMessage,
+  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   type SessionAttachmentReference,
   type SlackMessageFile,
@@ -23,23 +24,25 @@ import type { Env } from "./types";
 
 const log = createLogger("attachments");
 
-/** Mirrors the control plane's SESSION_ATTACHMENT_IMAGE_MAX_BYTES cap. */
-export const SLACK_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
-
 const ATTACHMENT_NAME_MAX_LENGTH = 255;
 
 const SUPPORTED_MIME_TYPES = new Set<string>(SESSION_ATTACHMENT_IMAGE_MIME_TYPES);
 
+/** Why an attached image did not make it to the session. */
+export type SlackAttachmentDropReason =
+  | "download_failed"
+  | "too_large"
+  | "over_cap"
+  | "upload_rejected";
+
 export interface SlackAttachmentUploadResult {
   references: SessionAttachmentReference[];
   /**
-   * How many image files the user attached that did NOT make it through
-   * (download failure, oversized, upload rejection, or over the per-message
-   * cap). Lets callers surface a visible "couldn't read your image" note
-   * instead of silently dropping it — the most common cause is a missing
-   * `files:read` scope.
+   * One entry per image file the user attached that did NOT make it through.
+   * Lets callers surface a visible "couldn't read your image" note — tailored
+   * to the reason — instead of silently dropping it.
    */
-  droppedCount: number;
+  dropped: SlackAttachmentDropReason[];
 }
 
 /** The image files on a message, i.e. the ones eligible for forwarding. */
@@ -53,16 +56,69 @@ function attachmentName(file: SlackMessageFile): string {
   return name.slice(0, ATTACHMENT_NAME_MAX_LENGTH);
 }
 
+/**
+ * Only Slack-hosted file URLs may see the bot token. File objects arrive on
+ * webhook payloads, and Slack "remote" files (files.remote.add) carry an
+ * arbitrary registrant-supplied `url_private` — following one would hand the
+ * `Authorization: Bearer` header to that host.
+ */
+function isTrustedSlackFileUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  return url.hostname === "slack.com" || url.hostname.endsWith(".slack.com");
+}
+
+/** Read the body with a hard byte cap, cancelling as soon as it is exceeded. */
+async function readBodyCapped(res: Response, maxBytes: number): Promise<Uint8Array | null> {
+  if (!res.body) return new Uint8Array();
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
 async function downloadSlackFile(
   token: string,
   file: SlackMessageFile,
   traceId?: string
-): Promise<Uint8Array | null> {
+): Promise<{ bytes: Uint8Array } | { dropReason: SlackAttachmentDropReason }> {
   const downloadUrl = file.url_private_download || file.url_private;
-  if (!downloadUrl) return null;
+  // Remote files (mode "external") are third-party-hosted and not fetchable
+  // with the bot token; their URLs must never receive it either.
+  if (!downloadUrl || file.mode === "external" || !isTrustedSlackFileUrl(downloadUrl)) {
+    log.warn("slack.attachment.untrusted_url", {
+      trace_id: traceId,
+      file_id: file.id,
+      file_mode: file.mode,
+    });
+    return { dropReason: "download_failed" };
+  }
   try {
     const res = await fetch(downloadUrl, {
       headers: { Authorization: `Bearer ${token}` },
+      // A redirect off *.slack.com must not carry the token; fail instead.
+      redirect: "manual",
       signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) {
@@ -71,25 +127,34 @@ async function downloadSlackFile(
         file_id: file.id,
         http_status: res.status,
       });
-      return null;
+      return { dropReason: "download_failed" };
     }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.byteLength === 0 || bytes.byteLength > SLACK_ATTACHMENT_MAX_FILE_BYTES) {
+    const contentLength = Number(res.headers.get("Content-Length"));
+    if (Number.isFinite(contentLength) && contentLength > SESSION_ATTACHMENT_IMAGE_MAX_BYTES) {
       log.warn("slack.attachment.size_rejected", {
         trace_id: traceId,
         file_id: file.id,
-        size_bytes: bytes.byteLength,
+        size_bytes: contentLength,
       });
-      return null;
+      return { dropReason: "too_large" };
     }
-    return bytes;
+    const bytes = await readBodyCapped(res, SESSION_ATTACHMENT_IMAGE_MAX_BYTES);
+    if (bytes === null || bytes.byteLength === 0) {
+      log.warn("slack.attachment.size_rejected", {
+        trace_id: traceId,
+        file_id: file.id,
+        size_bytes: bytes === null ? -1 : 0,
+      });
+      return { dropReason: bytes === null ? "too_large" : "download_failed" };
+    }
+    return { bytes };
   } catch (e) {
     log.warn("slack.attachment.download_error", {
       trace_id: traceId,
       file_id: file.id,
       error: e instanceof Error ? e : new Error(String(e)),
     });
-    return null;
+    return { dropReason: "download_failed" };
   }
 }
 
@@ -152,7 +217,7 @@ async function uploadToSession(
  * Download the image files in `files` and store them as attachments on
  * `sessionId`, returning prompt references. Non-images, oversized files, and
  * failed downloads/uploads are skipped (logged) so a bad file never blocks the
- * message; `droppedCount` reports how many images were lost so the caller can
+ * message; `dropped` records each lost image with the reason so the caller can
  * tell the user.
  */
 export async function uploadSlackImageAttachments(
@@ -162,56 +227,79 @@ export async function uploadSlackImageAttachments(
   traceId?: string
 ): Promise<SlackAttachmentUploadResult> {
   const images = extractImageFiles(files);
-  if (images.length === 0) return { references: [], droppedCount: 0 };
+  if (images.length === 0) return { references: [], dropped: [] };
 
   const references: SessionAttachmentReference[] = [];
+  const dropped: SlackAttachmentDropReason[] = [];
   for (const file of images.slice(0, MAX_SESSION_ATTACHMENTS_PER_MESSAGE)) {
-    if (typeof file.size === "number" && file.size > SLACK_ATTACHMENT_MAX_FILE_BYTES) {
+    if (typeof file.size === "number" && file.size > SESSION_ATTACHMENT_IMAGE_MAX_BYTES) {
       log.warn("slack.attachment.too_large", {
         trace_id: traceId,
         file_id: file.id,
         size_bytes: file.size,
       });
+      dropped.push("too_large");
       continue;
     }
-    const bytes = await downloadSlackFile(env.SLACK_BOT_TOKEN, file, traceId);
-    if (!bytes) continue;
-    const reference = await uploadToSession(env, sessionId, file, bytes, traceId);
+    const download = await downloadSlackFile(env.SLACK_BOT_TOKEN, file, traceId);
+    if ("dropReason" in download) {
+      dropped.push(download.dropReason);
+      continue;
+    }
+    const reference = await uploadToSession(env, sessionId, file, download.bytes, traceId);
     if (reference) references.push(reference);
+    else dropped.push("upload_rejected");
+  }
+  for (const _ of images.slice(MAX_SESSION_ATTACHMENTS_PER_MESSAGE)) {
+    dropped.push("over_cap");
   }
 
-  // Everything the user attached as an image that didn't survive (failed
-  // downloads/uploads, oversized files, and anything beyond the per-message cap).
-  return { references, droppedCount: images.length - references.length };
+  return { references, dropped };
 }
 
 /**
- * Tell the user how many of their attached images could not be forwarded. The
- * most common root cause is the Slack app missing the `files:read` scope, so
- * the note names it. Best effort — never blocks the message.
+ * Tell the user how many of their attached images could not be forwarded, with
+ * guidance matched to why. Call this only once the prompt outcome is known —
+ * uploads against a stale session fail spuriously and are retried against the
+ * replacement session. Best effort — never blocks the message.
  */
 export async function notifyDroppedAttachments(
   env: Env,
   channel: string,
   threadTs: string,
-  droppedCount: number,
+  result: SlackAttachmentUploadResult,
   traceId?: string
 ): Promise<void> {
+  const droppedCount = result.dropped.length;
   if (droppedCount <= 0) return;
   const noun = droppedCount === 1 ? "image" : "images";
   const pronoun = droppedCount === 1 ? "it wasn't" : "they weren't";
-  const result = await postMessage(
-    env.SLACK_BOT_TOKEN,
-    channel,
-    `:warning: I couldn't read ${droppedCount} attached ${noun}, so ${pronoun} sent to the agent. ` +
-      "If this keeps happening, the bot may be missing the `files:read` Slack scope — an admin can add it and reinstall the app.",
-    { thread_ts: threadTs }
-  );
-  if (!result.ok) {
+  const reasons = new Set(result.dropped);
+  const hints: string[] = [];
+  if (reasons.has("download_failed")) {
+    hints.push(
+      "If this keeps happening, the bot may be missing the `files:read` Slack scope — an admin can add it and reinstall the app."
+    );
+  }
+  if (reasons.has("too_large")) {
+    const maxMb = Math.floor(SESSION_ATTACHMENT_IMAGE_MAX_BYTES / (1024 * 1024));
+    hints.push(`Images must be ${maxMb} MB or smaller.`);
+  }
+  if (reasons.has("over_cap")) {
+    hints.push(`I can forward at most ${MAX_SESSION_ATTACHMENTS_PER_MESSAGE} images per message.`);
+  }
+  const message = [
+    `:warning: I couldn't read ${droppedCount} attached ${noun}, so ${pronoun} sent to the agent.`,
+    ...hints,
+  ].join(" ");
+  const postResult = await postMessage(env.SLACK_BOT_TOKEN, channel, message, {
+    thread_ts: threadTs,
+  });
+  if (!postResult.ok) {
     log.warn("slack.attachment.notify_failed", {
       trace_id: traceId,
       channel,
-      slack_error: result.error,
+      slack_error: postResult.error,
     });
   }
 }

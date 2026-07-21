@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const MAX_SESSION_ATTACHMENTS_PER_MESSAGE = 6;
+/** Per-image byte cap, enforced by the attachment store and every producer. */
+export const SESSION_ATTACHMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const SESSION_ATTACHMENT_IMAGE_MIME_TYPES = [
   "image/png",
   "image/jpeg",

@@ -205,6 +205,14 @@ function makeSessionEnv(
         );
       }
 
+      if (url.includes("/attachments")) {
+        order.push("attachment");
+        return new Response(JSON.stringify({ attachmentId: "att-1", mimeType: "image/png" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       if (url.includes("/prompt")) {
         order.push("prompt");
         const promptResponse = Array.isArray(responses.prompt)
@@ -268,6 +276,11 @@ function mockSlackFetch(
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
+    }
+
+    if (url.includes("files.slack.com")) {
+      order.push("filedownload");
+      return new Response(new Uint8Array(16).fill(1), { status: 200 });
     }
 
     if (url.includes("chat.postMessage")) {
@@ -972,6 +985,139 @@ describe("POST /events", () => {
     await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(
       expect.objectContaining({ sessionId: "session-1", lastPromptTs: "333.444" })
     );
+
+    slackFetch.mockRestore();
+  });
+
+  it("uploads event-carried images on follow-ups and references them in the prompt", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+        lastPromptTs: "111.222",
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> what is wrong in this screenshot?",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+        files: [
+          {
+            id: "F1",
+            name: "screenshot.png",
+            mimetype: "image/png",
+            url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
+            size: 16,
+          },
+        ],
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    // Event already carried files, so no single-message recovery lookup runs
+    // (limit=1); the interim-history fetch (limit=200) is unrelated.
+    expect(
+      slackFetch.mock.calls.some(
+        ([input]) =>
+          String(input).includes("conversations.replies") && String(input).includes("limit=1")
+      )
+    ).toBe(false);
+    expect(order).toContain("filedownload");
+    expect(order).toContain("attachment");
+    expect(order).not.toContain("session");
+    expect(order.indexOf("attachment")).toBeLessThan(order.indexOf("prompt"));
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0].attachments).toEqual([
+      { attachmentId: "att-1", name: "screenshot.png" },
+    ]);
+
+    slackFetch.mockRestore();
+  });
+
+  it("recovers files for mentions whose event lacks them via conversation history", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      threadMessages: [
+        {
+          type: "message",
+          text: "<@B123> look at this",
+          user: "U123",
+          ts: "333.444",
+          files: [
+            {
+              id: "F1",
+              name: "bug.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/files-pri/T1-F1/bug.png",
+              size: 16,
+            },
+          ],
+        },
+      ],
+    });
+    const env = makeSessionEnv(order);
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+        lastPromptTs: "111.222",
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> look at this",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    // The single-message lookup recovered the file, which was then forwarded.
+    const lookupCalls = slackFetch.mock.calls.filter(
+      ([input]) =>
+        String(input).includes("conversations.replies") && String(input).includes("limit=1")
+    );
+    expect(lookupCalls).toHaveLength(1);
+    expect(order).toContain("filedownload");
+    expect(order).toContain("attachment");
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0].attachments).toEqual([{ attachmentId: "att-1", name: "bug.png" }]);
 
     slackFetch.mockRestore();
   });

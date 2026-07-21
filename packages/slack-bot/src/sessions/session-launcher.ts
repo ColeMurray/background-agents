@@ -113,13 +113,7 @@ export async function startSessionAndSendPrompt(
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-  const { references, droppedCount } = await uploadSlackImageAttachments(
-    env,
-    session.sessionId,
-    files,
-    traceId
-  );
-  await notifyDroppedAttachments(env, channel, threadTs, droppedCount, traceId);
+  const uploadResult = await uploadSlackImageAttachments(env, session.sessionId, files, traceId);
   const promptResult = await sendPrompt(
     env,
     session.sessionId,
@@ -127,7 +121,7 @@ export async function startSessionAndSendPrompt(
     `slack:${userId}`,
     callbackContext,
     traceId,
-    references
+    uploadResult.references
   );
   if (!promptResult.ok) {
     await postMessage(
@@ -138,6 +132,9 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
+  // Only notify about dropped images once the prompt landed — a failed prompt
+  // already gets its own error message above.
+  await notifyDroppedAttachments(env, channel, threadTs, uploadResult, traceId);
   await storeThreadSession(
     env,
     channel,

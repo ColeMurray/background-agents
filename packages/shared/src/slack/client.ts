@@ -404,6 +404,8 @@ export interface SlackMessageFile {
   url_private?: string;
   url_private_download?: string;
   size?: number;
+  /** "external" marks remote files whose url_private is third-party-hosted. */
+  mode?: string;
 }
 
 /**
@@ -412,14 +414,15 @@ export interface SlackMessageFile {
  * `app_mention` events don't include the message's `files` array, so when an
  * event arrives without files we recover them from conversation history. Pass
  * `threadTs` when the message is a thread reply; otherwise the top-level
- * message at `ts` is fetched.
+ * message at `ts` is fetched. Returns the failure arm on API errors so callers
+ * can distinguish "the message has no files" from "the lookup failed".
  */
 export async function getMessageFiles(
   token: string,
   channelId: string,
   ts: string,
   threadTs?: string
-): Promise<SlackMessageFile[]> {
+): Promise<SlackEnvelope<{ files: SlackMessageFile[] }>> {
   // Single-message fetch: `latest=<ts>&inclusive=true&limit=1`. Do NOT also set
   // `oldest=<ts>` — an equal oldest/latest is a zero-width window that Slack
   // returns empty for. See conversations.history docs ("Retrieving messages").
@@ -439,9 +442,9 @@ export async function getMessageFiles(
           inclusive: "true",
           limit: "1",
         });
-  if (!res.ok) return [];
+  if (!res.ok) return res;
   const message = res.messages?.find((m) => m.ts === ts);
-  return message?.files ?? [];
+  return { ok: true, files: message?.files ?? [] };
 }
 
 export interface SlackUser {
