@@ -775,7 +775,10 @@ describe("POST /events", () => {
     expect(promptBodies[0].content).not.toContain("Context from the Slack thread");
     expect(promptBodies[0].content).not.toContain("The latest commit is");
     expect(
-      slackFetch.mock.calls.some(([input]) => String(input).includes("conversations.replies"))
+      slackFetch.mock.calls.some(
+        ([input]) =>
+          String(input).includes("conversations.replies") && String(input).includes("limit=200")
+      )
     ).toBe(false);
     // Legacy mappings without lastPromptTs get stamped so the next follow-up
     // can scope interim thread context.
@@ -831,7 +834,10 @@ describe("POST /events", () => {
       expect.objectContaining({ text: "Sorry, I couldn't send your follow-up. Please try again." })
     );
     expect(
-      slackFetch.mock.calls.some(([input]) => String(input).includes("conversations.replies"))
+      slackFetch.mock.calls.some(
+        ([input]) =>
+          String(input).includes("conversations.replies") && String(input).includes("limit=200")
+      )
     ).toBe(false);
 
     slackFetch.mockRestore();
@@ -875,7 +881,10 @@ describe("POST /events", () => {
     await flushWaitUntil(ctx);
 
     expect(
-      slackFetch.mock.calls.filter(([input]) => String(input).includes("conversations.replies"))
+      slackFetch.mock.calls.filter(
+        ([input]) =>
+          String(input).includes("conversations.replies") && String(input).includes("limit=200")
+      )
     ).toHaveLength(1);
     const promptBodies = promptFetchBodies(
       env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
@@ -939,8 +948,9 @@ describe("POST /events", () => {
     await flushWaitUntil(ctx);
 
     expect(order).not.toContain("session");
-    const repliesCalls = slackFetch.mock.calls.filter(([input]) =>
-      String(input).includes("conversations.replies")
+    const repliesCalls = slackFetch.mock.calls.filter(
+      ([input]) =>
+        String(input).includes("conversations.replies") && String(input).includes("limit=200")
     );
     expect(repliesCalls).toHaveLength(1);
     expect(String(repliesCalls[0][0])).toContain("oldest=111.222");

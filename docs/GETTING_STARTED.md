@@ -360,6 +360,7 @@ Skip this step if you don't need Slack integration.
    - `groups:read`
    - `im:history`
    - `im:read`
+   - `files:read` (lets the bot read images attached to messages and forward them to sessions)
    - `files:write`
    - `reactions:write`
 3. Click **"Install to Workspace"**

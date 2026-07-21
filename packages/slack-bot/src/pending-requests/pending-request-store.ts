@@ -4,12 +4,24 @@ import type { Env } from "../types";
 
 const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
 
+const pendingFileSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  mimetype: z.string().optional(),
+  url_private: z.string().optional(),
+  url_private_download: z.string().optional(),
+  size: z.number().optional(),
+});
+
 const pendingRequestSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
   previousMessages: z.array(z.string()).optional(),
   channelName: z.string().optional(),
   channelDescription: z.string().optional(),
+  /** Image files from the original message, re-fetched from Slack at launch. */
+  files: z.array(pendingFileSchema).optional(),
 });
 
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;

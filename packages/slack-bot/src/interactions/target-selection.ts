@@ -31,7 +31,7 @@ export async function handleTargetSelection(
     return;
   }
 
-  const { message, userId, previousMessages, channelName, channelDescription } = pendingData;
+  const { message, userId, previousMessages, channelName, channelDescription, files } = pendingData;
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
     await postMessage(
@@ -63,6 +63,7 @@ export async function handleTargetSelection(
     previousMessages,
     channelName,
     channelDescription,
+    files,
     traceId,
   });
   if (!sessionResult) return;

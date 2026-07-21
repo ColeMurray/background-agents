@@ -8,10 +8,16 @@ import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession, sendPrompt } from "./control-plane-client";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import { getUserInfo, postMessage } from "@open-inspect/shared";
+import { notifyDroppedAttachments, uploadSlackImageAttachments } from "../attachments";
 
 vi.mock("@open-inspect/shared", () => ({
   getUserInfo: vi.fn(),
   postMessage: vi.fn(),
+}));
+
+vi.mock("../attachments", () => ({
+  uploadSlackImageAttachments: vi.fn(async () => ({ references: [], droppedCount: 0 })),
+  notifyDroppedAttachments: vi.fn(async () => {}),
 }));
 
 vi.mock("../app-home/models", () => ({
@@ -163,7 +169,8 @@ describe("startSessionAndSendPrompt", () => {
         model: "openai/gpt-5.4",
         reasoningEffort: "high",
       },
-      "trace-1"
+      "trace-1",
+      []
     );
     expect(buildThreadSession).toHaveBeenCalledWith(
       "session-1",
@@ -204,7 +211,8 @@ describe("startSessionAndSendPrompt", () => {
       "Inspect production",
       "slack:U123",
       expect.objectContaining({ repoFullName: "Production Debug" }),
-      undefined
+      undefined,
+      []
     );
   });
 
@@ -253,5 +261,38 @@ describe("startSessionAndSendPrompt", () => {
       { thread_ts: "111.222" }
     );
     expect(storeThreadSession).not.toHaveBeenCalled();
+  });
+
+  it("uploads message images to the new session and passes references with the prompt", async () => {
+    vi.mocked(uploadSlackImageAttachments).mockResolvedValue({
+      references: [{ attachmentId: "att-1", name: "screenshot.png" }],
+      droppedCount: 1,
+    });
+    const env = makeEnv();
+    const files = [{ id: "F1", mimetype: "image/png", url_private: "https://files/x" }];
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "What is wrong in this screenshot?",
+        userId: "U123",
+        files,
+        traceId: "trace-1",
+      })
+    ).resolves.toEqual({ sessionId: "session-1" });
+
+    expect(uploadSlackImageAttachments).toHaveBeenCalledWith(env, "session-1", files, "trace-1");
+    expect(notifyDroppedAttachments).toHaveBeenCalledWith(env, "C123", "111.222", 1, "trace-1");
+    expect(sendPrompt).toHaveBeenCalledWith(
+      env,
+      "session-1",
+      expect.stringContaining("What is wrong in this screenshot?"),
+      "slack:U123",
+      expect.anything(),
+      "trace-1",
+      [{ attachmentId: "att-1", name: "screenshot.png" }]
+    );
   });
 });

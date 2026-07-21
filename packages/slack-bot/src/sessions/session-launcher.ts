@@ -1,5 +1,11 @@
-import { getUserInfo, postMessage, type CallbackContext } from "@open-inspect/shared";
+import {
+  getUserInfo,
+  postMessage,
+  type CallbackContext,
+  type SlackMessageFile,
+} from "@open-inspect/shared";
 import { getAvailableModels, getSlackDefaultModel } from "../app-home/models";
+import { notifyDroppedAttachments, uploadSlackImageAttachments } from "../attachments";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
@@ -22,6 +28,8 @@ export interface StartSessionOptions {
   previousMessages?: string[];
   channelName?: string;
   channelDescription?: string;
+  /** Files attached to the triggering Slack message; images are forwarded. */
+  files?: SlackMessageFile[];
   traceId?: string;
 }
 
@@ -39,6 +47,7 @@ export async function startSessionAndSendPrompt(
     previousMessages,
     channelName,
     channelDescription,
+    files,
     traceId,
   } = options;
   const [availableModels, slackDefaultModel] = await Promise.all([
@@ -104,13 +113,21 @@ export async function startSessionAndSendPrompt(
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+  const { references, droppedCount } = await uploadSlackImageAttachments(
+    env,
+    session.sessionId,
+    files,
+    traceId
+  );
+  await notifyDroppedAttachments(env, channel, threadTs, droppedCount, traceId);
   const promptResult = await sendPrompt(
     env,
     session.sessionId,
     channelContext + threadContext + messageText,
     `slack:${userId}`,
     callbackContext,
-    traceId
+    traceId,
+    references
   );
   if (!promptResult.ok) {
     await postMessage(
