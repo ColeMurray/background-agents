@@ -227,7 +227,14 @@ export class SessionSandboxEventProcessor {
           isProcessing: this.repository.getProcessingMessage() !== null,
         });
         this.ctx.waitUntil(
-          this.callbackService.notifyComplete(completionMessageId, event.success, event.error)
+          this.callbackService
+            .notifyComplete(completionMessageId, event.success, event.error)
+            .catch((error) => {
+              this.log.error("callback.complete.background_error", {
+                message_id: completionMessageId,
+                error,
+              });
+            })
         );
 
         await this.statusService.reconcileAfterExecution(event.success);
@@ -239,7 +246,14 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
+      this.ctx.waitUntil(
+        this.triggerSnapshot("execution_complete").catch((error) => {
+          this.log.error("snapshot.trigger.background_error", {
+            reason: "execution_complete",
+            error,
+          });
+        })
+      );
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
       await this.processMessageQueue();
