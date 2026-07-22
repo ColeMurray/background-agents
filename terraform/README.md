@@ -116,12 +116,12 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 - Signing Secret
 
 The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
-`groups:history`, `groups:read`, `im:history`, `im:read`, `files:write`, and `reactions:write`.
-Reinstall the app after changing scopes.
+`groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`, `files:write`, and
+`reactions:write`. Reinstall the app after changing scopes.
 
 When upgrading an existing Slack deployment, add **Queues: Edit** to the Cloudflare API token before
-running `terraform apply`. Add `files:write`, reinstall the Slack app, and update the deployed bot
-token if Slack issued a replacement before deploying this version.
+running `terraform apply`. Add `files:write` and `files:read`, reinstall the Slack app, and update
+the deployed bot token if Slack issued a replacement before deploying this version.
 
 ## Quick Start
 

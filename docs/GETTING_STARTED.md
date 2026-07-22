@@ -376,7 +376,8 @@ Queued delivery applies to every Slack completion, including text-only replies. 
 
 1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
    this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
-2. Add the Slack bot scope `files:write`, reinstall the app once for the workspace, and update
+2. Add the Slack bot scopes `files:write` and `files:read` (needed to forward images attached to
+   Slack messages into sessions), reinstall the app once for the workspace, and update
    `slack_bot_token` if Slack issued a replacement.
 3. Run `terraform apply`, then verify a text completion and a generated-media attachment. If the
    token lacks Queue access, the apply fails while provisioning the new resources; grant the
