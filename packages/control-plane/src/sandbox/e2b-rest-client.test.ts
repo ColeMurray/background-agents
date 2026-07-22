@@ -4,6 +4,7 @@ import {
   E2BNotFoundError,
   E2BConflictError,
   E2BApiError,
+  stripSnapshotTag,
   type E2BRestConfig,
 } from "./e2b-rest-client";
 
@@ -197,5 +198,56 @@ describe("E2BRestClient", () => {
   it("getHostnameForPort is deterministic", () => {
     const client = new E2BRestClient(defaultConfig);
     expect(client.getHostnameForPort("abc", 8080)).toBe("https://8080-abc.e2b.app");
+  });
+
+  it("pauseSandbox sends no body by default but forwards memory:false for a disk-only pause", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+    await client.pauseSandbox("sb-1");
+    expect(fetchSpy.mock.calls[0][1].body).toBeUndefined();
+
+    await client.pauseSandbox("sb-1", { memory: false });
+    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ memory: false });
+  });
+
+  it("createSnapshot posts to the snapshots endpoint and returns the snapshot id", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(
+      jsonResponse({ snapshotID: "snap-abc:default", names: ["team/snap:default"] }, 201)
+    );
+    const snapshot = await client.createSnapshot("sb-1");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("https://api.e2b.app/sandboxes/sb-1/snapshots");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({});
+    expect(snapshot.snapshotID).toBe("snap-abc:default");
+  });
+
+  it("createSnapshot forwards an optional name", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ snapshotID: "snap-x:default", names: [] }, 201));
+    await client.createSnapshot("sb-1", "my-snap");
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ name: "my-snap" });
+  });
+
+  it("deleteTemplate strips the snapshot tag and DELETEs the bare template id", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+    await client.deleteTemplate("snap-abc:default");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("https://api.e2b.app/templates/snap-abc");
+    expect(init.method).toBe("DELETE");
+  });
+});
+
+describe("stripSnapshotTag", () => {
+  it("removes a trailing build tag", () => {
+    expect(stripSnapshotTag("abc123:default")).toBe("abc123");
+    expect(stripSnapshotTag("team/my-snapshot:v2")).toBe("team/my-snapshot");
+  });
+
+  it("leaves ids without a tag untouched", () => {
+    expect(stripSnapshotTag("abc123")).toBe("abc123");
+    expect(stripSnapshotTag("team/my-snapshot")).toBe("team/my-snapshot");
   });
 });

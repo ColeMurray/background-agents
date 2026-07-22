@@ -12,12 +12,13 @@ supervisor with the merged environment — so the supervisor starts fresh per
 session regardless of E2B's snapshot/resume model.
 
 On pause/resume the supervisor process itself is frozen/thawed by E2B, so this
-launcher only runs for a fresh spawn.
+launcher only runs for a fresh spawn (including a prebuilt-image spawn, whose
+snapshot was cold-booted back into this env-wait state — see the E2B provider's
+takeSnapshot).
 """
 
 import json
 import os
-import sys
 import time
 
 SESSION_ENV_PATH = "/tmp/oi-session.env"
@@ -69,6 +70,17 @@ def main() -> None:
                 else:
                     _log("session env is not a JSON object — retrying")
         time.sleep(POLL_INTERVAL_SECONDS)
+
+    # Delete the consumed env file before exec. An image-build sandbox is baked
+    # into a reusable snapshot; if this file survived on disk, a sandbox cold-
+    # booted from that snapshot would read the *build's* stale env (build mode,
+    # build callbacks) before the control plane wrote the new session env. The
+    # image build additionally sanitizes via pause(keepMemory:false)+connect, but
+    # removing the file here keeps the snapshot filesystem clean regardless.
+    try:
+        os.remove(SESSION_ENV_PATH)
+    except OSError as e:
+        _log(f"could not remove session env file (continuing): {e}")
 
     env = {**os.environ, **STATIC_ENV}
     for k, v in session_env.items():
