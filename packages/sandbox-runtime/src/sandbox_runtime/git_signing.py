@@ -133,6 +133,13 @@ class GitSigningRuntime:
                 )
                 response.raise_for_status()
                 payload = response.json()
+        except httpx.HTTPStatusError as e:
+            # Keep the status in the message: the bridge's fatal-error matcher
+            # keys on "HTTP 401"/"403"/"404"/"410" to stop reconnecting when
+            # the control plane has rejected this sandbox for good.
+            raise GitSigningError(
+                f"Commit signing configuration unavailable (HTTP {e.response.status_code})"
+            ) from None
         except (httpx.HTTPError, ValueError):
             raise GitSigningError("Commit signing configuration unavailable") from None
 

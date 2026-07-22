@@ -134,6 +134,7 @@ export interface SandboxRow {
   git_sync_status: GitSyncStatus;
   last_heartbeat: number | null;
   last_activity: number | null; // Last activity timestamp for inactivity-based snapshot
+  last_boot_progress: number | null; // Last boot-progress ping; feeds the connecting watchdog during long boots
   last_spawn_error: string | null;
   last_spawn_error_at: number | null;
   code_server_url: string | null;

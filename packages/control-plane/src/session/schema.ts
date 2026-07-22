@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot
+  last_boot_progress INTEGER,                       -- Last boot-progress ping; feeds the connecting watchdog during long boots
   last_spawn_error TEXT,                            -- Last sandbox spawn error (if any)
   last_spawn_error_at INTEGER,                      -- Timestamp of last spawn error
   spawn_failure_count INTEGER DEFAULT 0,            -- Circuit breaker: consecutive spawn failures
@@ -479,6 +480,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 36,
     description: "Add durable latest session diff bundle",
     run: SESSION_DIFF_TABLE_SQL,
+  },
+  {
+    id: 37,
+    description: "Add last_boot_progress to sandbox (connecting watchdog liveness)",
+    run: `ALTER TABLE sandbox ADD COLUMN last_boot_progress INTEGER`,
   },
 ];
 

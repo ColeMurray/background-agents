@@ -163,6 +163,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     git_sync_status: "completed",
     last_heartbeat: null,
     last_activity: null,
+    last_boot_progress: null,
     last_spawn_error: null,
     last_spawn_error_at: null,
     code_server_url: null,

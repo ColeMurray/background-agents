@@ -501,7 +501,7 @@ export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
 export interface ConnectingTimeoutResult {
   /** Whether the sandbox has exceeded the connecting timeout */
   isTimedOut: boolean;
-  /** Time elapsed since sandbox was created (ms) */
+  /** Time since the last sign of boot life (spawn or boot-progress ping), ms */
   elapsedMs: number;
 }
 
@@ -513,6 +513,12 @@ export interface ConnectingTimeoutResult {
  * (crash, network failure, etc.), this function detects the timeout so the
  * alarm handler can fail the sandbox.
  *
+ * The watchdog measures silence, not wall-clock boot time: the sandbox
+ * entrypoint POSTs boot-progress pings while it boots (cold multi-repo clones
+ * and setup hooks legitimately exceed any fixed deadline), so the timeout is
+ * measured from the most recent of createdAt and lastBootProgress. The max()
+ * makes stale pings from a previous boot inert.
+ *
  * Covers both "connecting" and "spawning": a spawn that is interrupted before
  * the provider call returns leaves the status at "spawning" (the transition to
  * "connecting" never happens), so the timeout must apply there too.
@@ -522,13 +528,15 @@ export interface ConnectingTimeoutResult {
  *
  * @param status - Current sandbox status
  * @param createdAt - Timestamp (ms) when the sandbox was spawned
+ * @param lastBootProgress - Timestamp (ms) of the last boot-progress ping, if any
  * @param config - Connecting timeout configuration
  * @param now - Current timestamp (ms)
- * @returns Whether the sandbox has timed out and how long it's been spawning/connecting
+ * @returns Whether the sandbox has timed out and how long it's been silent
  */
 export function evaluateConnectingTimeout(
   status: SandboxStatus,
   createdAt: number,
+  lastBootProgress: number | null,
   config: ConnectingTimeoutConfig,
   now: number
 ): ConnectingTimeoutResult {
@@ -536,7 +544,7 @@ export function evaluateConnectingTimeout(
     return { isTimedOut: false, elapsedMs: 0 };
   }
 
-  const elapsedMs = now - createdAt;
+  const elapsedMs = now - Math.max(createdAt, lastBootProgress ?? 0);
   return {
     isTimedOut: elapsedMs >= config.timeoutMs,
     elapsedMs,

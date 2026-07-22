@@ -1117,6 +1117,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     const connectingResult = evaluateConnectingTimeout(
       sandbox.status as SandboxStatus,
       sandbox.created_at,
+      sandbox.last_boot_progress,
       this.config.connectingTimeout,
       now
     );

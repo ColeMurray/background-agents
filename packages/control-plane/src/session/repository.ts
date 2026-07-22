@@ -565,6 +565,13 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxBootProgress(timestamp: number): void {
+    this.sql.exec(
+      `UPDATE sandbox SET last_boot_progress = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      timestamp
+    );
+  }
+
   updateSandboxGitSyncStatus(status: GitSyncStatus): void {
     this.sql.exec(
       `UPDATE sandbox SET git_sync_status = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,

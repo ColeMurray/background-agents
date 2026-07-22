@@ -729,7 +729,7 @@ describe("evaluateConnectingTimeout", () => {
 
   it("returns not timed out for non-connecting status", () => {
     const now = Date.now();
-    const result = evaluateConnectingTimeout("ready", now - 200_000, config, now);
+    const result = evaluateConnectingTimeout("ready", now - 200_000, null, config, now);
 
     expect(result.isTimedOut).toBe(false);
     expect(result.elapsedMs).toBe(0);
@@ -739,7 +739,7 @@ describe("evaluateConnectingTimeout", () => {
     const now = Date.now();
     const createdAt = now - 60_000; // 60s ago, well within 120s timeout
 
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
+    const result = evaluateConnectingTimeout("connecting", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(false);
     expect(result.elapsedMs).toBe(60_000);
@@ -749,7 +749,7 @@ describe("evaluateConnectingTimeout", () => {
     const now = Date.now();
     const createdAt = now - 130_000; // 130s ago, past 120s timeout
 
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
+    const result = evaluateConnectingTimeout("connecting", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(130_000);
@@ -759,7 +759,7 @@ describe("evaluateConnectingTimeout", () => {
     const now = Date.now();
     const createdAt = now - config.timeoutMs; // Exactly at timeout
 
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
+    const result = evaluateConnectingTimeout("connecting", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(config.timeoutMs);
@@ -769,7 +769,7 @@ describe("evaluateConnectingTimeout", () => {
     const now = Date.now();
     const createdAt = now - 130_000; // 130s ago, past 120s timeout
 
-    const result = evaluateConnectingTimeout("spawning", createdAt, config, now);
+    const result = evaluateConnectingTimeout("spawning", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(130_000);
@@ -777,7 +777,7 @@ describe("evaluateConnectingTimeout", () => {
 
   it("returns not timed out for spawning within timeout window", () => {
     const now = Date.now();
-    const result = evaluateConnectingTimeout("spawning", now - 60_000, config, now);
+    const result = evaluateConnectingTimeout("spawning", now - 60_000, null, config, now);
 
     expect(result.isTimedOut).toBe(false);
   });
@@ -787,13 +787,64 @@ describe("evaluateConnectingTimeout", () => {
     const old = now - 999_999;
 
     for (const status of ["pending", "ready", "running", "stopped", "failed", "stale"] as const) {
-      const result = evaluateConnectingTimeout(status, old, config, now);
+      const result = evaluateConnectingTimeout(status, old, null, config, now);
       expect(result.isTimedOut).toBe(false);
     }
   });
 
   it("uses correct default config value", () => {
     expect(DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs).toBe(120_000);
+  });
+
+  it("does not time out a long boot with a recent boot-progress ping", () => {
+    const now = Date.now();
+    const createdAt = now - 600_000; // 10 minutes of legitimate boot time
+    const lastBootProgress = now - 20_000; // pinged 20s ago
+
+    const result = evaluateConnectingTimeout(
+      "connecting",
+      createdAt,
+      lastBootProgress,
+      config,
+      now
+    );
+
+    expect(result.isTimedOut).toBe(false);
+    expect(result.elapsedMs).toBe(20_000);
+  });
+
+  it("times out when boot-progress pings have been silent past the timeout", () => {
+    const now = Date.now();
+    const createdAt = now - 600_000;
+    const lastBootProgress = now - 130_000; // silent for 130s > 120s timeout
+
+    const result = evaluateConnectingTimeout(
+      "connecting",
+      createdAt,
+      lastBootProgress,
+      config,
+      now
+    );
+
+    expect(result.isTimedOut).toBe(true);
+    expect(result.elapsedMs).toBe(130_000);
+  });
+
+  it("ignores a boot-progress ping older than createdAt (stale ping from a previous boot)", () => {
+    const now = Date.now();
+    const createdAt = now - 60_000; // fresh spawn 60s ago
+    const lastBootProgress = now - 500_000; // leftover from an earlier boot
+
+    const result = evaluateConnectingTimeout(
+      "connecting",
+      createdAt,
+      lastBootProgress,
+      config,
+      now
+    );
+
+    expect(result.isTimedOut).toBe(false);
+    expect(result.elapsedMs).toBe(60_000);
   });
 });
 

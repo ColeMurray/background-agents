@@ -118,6 +118,7 @@ class SandboxSupervisor:
     START_SCRIPT_PATH = ".openinspect/start.sh"
     DEFAULT_SETUP_TIMEOUT_SECONDS = 300
     DEFAULT_START_TIMEOUT_SECONDS = 120
+    BOOT_PROGRESS_INTERVAL_SECONDS = 30
     DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS = 30
     TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.2
     CLONE_DEPTH_COMMITS = 100
@@ -1794,6 +1795,28 @@ class SandboxSupervisor:
         )
         return False
 
+    async def _post_boot_progress(self) -> None:
+        """POST boot-progress pings to the control plane until cancelled.
+
+        Keeps the connecting watchdog fed during legitimately long boots (cold
+        multi-repo clones, slow setup hooks) so it measures silence rather than
+        wall-clock boot time. Best-effort: HTTP/network errors are swallowed —
+        a missed ping just brings the watchdog closer to firing.
+        """
+        session_id = self.session_config.get("session_id", "")
+        if not (self.control_plane_url and session_id and self.sandbox_token):
+            return
+
+        url = f"{self.control_plane_url}/sessions/{session_id}/boot-progress"
+        headers = {"Authorization": f"Bearer {self.sandbox_token}"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            while True:
+                try:
+                    await client.post(url, headers=headers)
+                except httpx.HTTPError as e:
+                    self.log.debug("boot_progress.ping_failed", exc=e)
+                await asyncio.sleep(self.BOOT_PROGRESS_INTERVAL_SECONDS)
+
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
@@ -1820,6 +1843,14 @@ class SandboxSupervisor:
 
         # Expose boot mode to repo hooks and child processes.
         os.environ["OPENINSPECT_BOOT_MODE"] = self.boot_mode
+
+        # Feed the control plane's connecting watchdog while the boot runs.
+        # Cancelled once the bridge starts — from there the watchdog must
+        # apply unmodified so a bridge that can't connect still fails the
+        # sandbox. Builds have no session watching them.
+        boot_progress_task: asyncio.Task | None = None
+        if not image_build_mode:
+            boot_progress_task = asyncio.create_task(self._post_boot_progress())
 
         if not self.has_repository:
             self.log.info("supervisor.no_repo_configured")
@@ -2025,6 +2056,8 @@ class SandboxSupervisor:
 
             # Phase 5: Start bridge (after OpenCode is ready)
             await self.start_bridge()
+            if boot_progress_task is not None:
+                boot_progress_task.cancel()
 
             # Emit sandbox.startup wide event
             duration_ms = int((time.time() - startup_start) * 1000)
@@ -2053,6 +2086,8 @@ class SandboxSupervisor:
             await self._report_fatal_error(str(e))
 
         finally:
+            if boot_progress_task is not None:
+                boot_progress_task.cancel()
             await self.shutdown()
 
     async def _handle_signal(self, sig: signal.Signals) -> None:
