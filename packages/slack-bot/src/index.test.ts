@@ -1032,11 +1032,12 @@ describe("POST /events", () => {
     await flushWaitUntil(ctx);
 
     // Event already carried files, so no single-message recovery lookup runs
-    // (limit=1); the interim-history fetch (limit=200) is unrelated.
+    // (inclusive-anchored); the interim-history fetch (limit=200) is unrelated.
     expect(
       slackFetch.mock.calls.some(
         ([input]) =>
-          String(input).includes("conversations.replies") && String(input).includes("limit=1")
+          String(input).includes("conversations.replies") &&
+          String(input).includes("inclusive=true")
       )
     ).toBe(false);
     expect(order).toContain("filedownload");
@@ -1106,9 +1107,13 @@ describe("POST /events", () => {
     await flushWaitUntil(ctx);
 
     // The single-message lookup recovered the file, which was then forwarded.
+    // The lookup anchors on oldest=<target ts> with inclusive=true (replies are
+    // oldest-first); the interim-history fetch never sets inclusive.
     const lookupCalls = slackFetch.mock.calls.filter(
       ([input]) =>
-        String(input).includes("conversations.replies") && String(input).includes("limit=1")
+        String(input).includes("conversations.replies") &&
+        String(input).includes("oldest=333.444") &&
+        String(input).includes("inclusive=true")
     );
     expect(lookupCalls).toHaveLength(1);
     expect(order).toContain("filedownload");

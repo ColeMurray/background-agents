@@ -423,18 +423,23 @@ export async function getMessageFiles(
   ts: string,
   threadTs?: string
 ): Promise<SlackEnvelope<{ files: SlackMessageFile[] }>> {
-  // Single-message fetch: `latest=<ts>&inclusive=true&limit=1`. Do NOT also set
-  // `oldest=<ts>` — an equal oldest/latest is a zero-width window that Slack
-  // returns empty for. See conversations.history docs ("Retrieving messages").
+  // Single-message fetch. The two endpoints sort differently, so the window
+  // anchor differs: conversations.history returns newest-first, so
+  // `latest=<ts>&inclusive=true&limit=1` yields the target; conversations.replies
+  // returns oldest-first, so the anchor must be `oldest=<ts>&inclusive=true` (a
+  // `latest` anchor would yield the thread root instead). Never set oldest and
+  // latest to the same ts — an equal pair is a zero-width window that Slack
+  // returns empty for. `limit=2` on replies tolerates the thread root being
+  // included alongside the target; the find-by-ts below is the source of truth.
   type HistoryResult = { messages?: Array<{ ts?: string; files?: SlackMessageFile[] }> };
   const res =
     threadTs && threadTs !== ts
       ? await slackGet<HistoryResult>(token, "conversations.replies", {
           channel: channelId,
           ts: threadTs,
-          latest: ts,
+          oldest: ts,
           inclusive: "true",
-          limit: "1",
+          limit: "2",
         })
       : await slackGet<HistoryResult>(token, "conversations.history", {
           channel: channelId,

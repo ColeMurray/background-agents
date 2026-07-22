@@ -747,11 +747,14 @@ describe("getMessageFiles", () => {
     );
   });
 
-  it("fetches a thread reply via conversations.replies when threadTs differs", async () => {
+  it("fetches a thread reply via conversations.replies anchored on oldest", async () => {
+    // conversations.replies returns oldest-first, so an oldest=<ts> anchor puts
+    // the target reply first in the window; a latest anchor would return the
+    // thread root instead.
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
         ok: true,
-        messages: [{ ts: "1.0" }, { ts: "1.5", files: [{ id: "F2", mimetype: "image/jpeg" }] }],
+        messages: [{ ts: "1.5", files: [{ id: "F2", mimetype: "image/jpeg" }] }, { ts: "1.7" }],
       })
     );
 
@@ -764,8 +767,26 @@ describe("getMessageFiles", () => {
     }
     const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toBe(
-      "https://slack.com/api/conversations.replies?channel=C123&ts=1.0&latest=1.5&inclusive=true&limit=1"
+      "https://slack.com/api/conversations.replies?channel=C123&ts=1.0&oldest=1.5&inclusive=true&limit=2"
     );
+  });
+
+  it("finds the target reply even when the thread root is included in the page", async () => {
+    // Some conversations.replies responses include the thread root alongside
+    // the windowed replies; find-by-ts must still pick the target.
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        messages: [{ ts: "1.0" }, { ts: "1.5", files: [{ id: "F3", mimetype: "image/png" }] }],
+      })
+    );
+
+    const result = await getMessageFiles("xoxb-token", "C123", "1.5", "1.0");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.files[0]!.id).toBe("F3");
+    }
   });
 
   it("uses conversations.history when threadTs equals ts (thread parent)", async () => {
