@@ -4,14 +4,14 @@ import type { Env } from "../types";
 
 const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
 
-const pendingFileSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  title: z.string().optional(),
-  mimetype: z.string().optional(),
-  url_private: z.string().optional(),
-  url_private_download: z.string().optional(),
-  size: z.number().optional(),
+/**
+ * Locator of the Slack message whose image files are re-fetched at launch.
+ * Only the coordinates are persisted — never the file objects themselves — so
+ * no URL-bearing Slack payloads sit in KV across the clarification round-trip.
+ */
+const sourceMessageSchema = z.object({
+  ts: z.string().min(1),
+  threadTs: z.string().optional(),
 });
 
 const pendingRequestSchema = z.object({
@@ -20,8 +20,9 @@ const pendingRequestSchema = z.object({
   previousMessages: z.array(z.string()).optional(),
   channelName: z.string().optional(),
   channelDescription: z.string().optional(),
-  /** Image files from the original message, re-fetched from Slack at launch. */
-  files: z.array(pendingFileSchema).optional(),
+  /** True when the original message had no user text, only images. */
+  imageOnly: z.boolean().optional(),
+  sourceMessage: sourceMessageSchema.optional(),
 });
 
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;
@@ -38,7 +39,8 @@ export async function storePendingRequest(
 ): Promise<void> {
   await createKvCacheStore(env.SLACK_KV).put(
     pendingRequestKey(channel, threadTs),
-    JSON.stringify(request),
+    // Parse before persisting so only schema-known fields reach KV.
+    JSON.stringify(pendingRequestSchema.parse(request)),
     { expirationTtl: PENDING_REQUEST_TTL_MS / 1000 }
   );
 }

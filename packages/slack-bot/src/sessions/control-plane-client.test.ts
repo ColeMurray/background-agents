@@ -59,7 +59,11 @@ describe("control plane client timeouts", () => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
       });
     });
-    const result = sendPrompt(makeEnv(fetch), "session-1", "Fix it", "slack:U123");
+    const result = sendPrompt(makeEnv(fetch), {
+      sessionId: "session-1",
+      content: "Fix it",
+      authorId: "slack:U123",
+    });
 
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     controller.abort(new DOMException("Timed out", "TimeoutError"));
@@ -74,10 +78,18 @@ describe("control plane client timeouts", () => {
     const serverErrorFetch = vi.fn(async () => new Response(null, { status: 503 }));
 
     await expect(
-      sendPrompt(makeEnv(notFoundFetch), "missing-session", "Fix it", "slack:U123")
+      sendPrompt(makeEnv(notFoundFetch), {
+        sessionId: "missing-session",
+        content: "Fix it",
+        authorId: "slack:U123",
+      })
     ).resolves.toEqual({ ok: false, reason: "stale" });
     await expect(
-      sendPrompt(makeEnv(serverErrorFetch), "session-1", "Fix it", "slack:U123")
+      sendPrompt(makeEnv(serverErrorFetch), {
+        sessionId: "session-1",
+        content: "Fix it",
+        authorId: "slack:U123",
+      })
     ).resolves.toEqual({ ok: false, reason: "transient" });
   });
 });

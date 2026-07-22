@@ -1,4 +1,11 @@
-import { escapeMrkdwnText, postMessage, updateMessage } from "@open-inspect/shared";
+import {
+  escapeMrkdwnText,
+  getMessageFiles,
+  postMessage,
+  updateMessage,
+} from "@open-inspect/shared";
+import { toImageAttachments, type SlackImageAttachment } from "../attachments";
+import { createLogger } from "../logger";
 import {
   buildWorkingMessageBlocks,
   scheduleStartingStatus,
@@ -9,6 +16,8 @@ import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
+
+const log = createLogger("target-selection");
 
 export async function handleTargetSelection(
   selectedValue: string,
@@ -31,7 +40,15 @@ export async function handleTargetSelection(
     return;
   }
 
-  const { message, userId, previousMessages, channelName, channelDescription, files } = pendingData;
+  const {
+    message,
+    userId,
+    previousMessages,
+    channelName,
+    channelDescription,
+    imageOnly,
+    sourceMessage,
+  } = pendingData;
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
     await postMessage(
@@ -41,6 +58,38 @@ export async function handleTargetSelection(
       { thread_ts: threadKey }
     );
     return;
+  }
+
+  // Pending requests persist only the source-message locator; re-fetch the
+  // files from Slack now that the target is known.
+  let images: SlackImageAttachment[] = [];
+  if (sourceMessage) {
+    const lookup = await getMessageFiles(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      sourceMessage.ts,
+      sourceMessage.threadTs
+    );
+    if (lookup.ok) {
+      images = toImageAttachments(lookup.files, traceId);
+    } else {
+      log.warn("slack.attachment.file_lookup_failed", {
+        trace_id: traceId,
+        channel,
+        message_ts: sourceMessage.ts,
+        slack_error: lookup.error,
+      });
+    }
+    if (imageOnly && images.length === 0) {
+      // The request had no text: without its images there is nothing to run.
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        "Sorry, I couldn't retrieve the attached image(s) from Slack, so I didn't start on this request. Please try again.",
+        { thread_ts: threadKey }
+      );
+      return;
+    }
   }
 
   const label = escapeMrkdwnText(targetLabel(target));
@@ -63,7 +112,8 @@ export async function handleTargetSelection(
     previousMessages,
     channelName,
     channelDescription,
-    files,
+    images,
+    imageOnly,
     traceId,
   });
   if (!sessionResult) return;

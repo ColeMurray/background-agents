@@ -242,6 +242,8 @@ function mockSlackFetch(
     statusResponse?: Response | Promise<Response>;
     threadMessages?: unknown[];
     threadRepliesError?: string;
+    /** HTTP status for files.slack.com downloads (default 200 with bytes). */
+    fileDownloadStatus?: number;
   } = {}
 ) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -280,6 +282,9 @@ function mockSlackFetch(
 
     if (url.includes("files.slack.com")) {
       order.push("filedownload");
+      if (options.fileDownloadStatus && options.fileDownloadStatus !== 200) {
+        return new Response("denied", { status: options.fileDownloadStatus });
+      }
       return new Response(new Uint8Array(16).fill(1), { status: 200 });
     }
 
@@ -1123,6 +1128,53 @@ describe("POST /events", () => {
     );
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0].attachments).toEqual([{ attachmentId: "att-1", name: "bug.png" }]);
+
+    slackFetch.mockRestore();
+  });
+
+  it("starts nothing for an image-only DM whose images all fail to download", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, { fileDownloadStatus: 403 });
+    const env = makeSessionEnv(order);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        subtype: "file_share",
+        user: "U123",
+        channel: "D123",
+        ts: "444.555",
+        channel_type: "im",
+        files: [
+          {
+            id: "F1",
+            name: "screenshot.png",
+            mimetype: "image/png",
+            url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
+            size: 16,
+          },
+        ],
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    // The placeholder prompt would be meaningless with no image attached, so
+    // no session is created and the user is told nothing ran.
+    expect(order).toContain("filedownload");
+    expect(order).not.toContain("session");
+    expect(order).not.toContain("prompt");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: expect.stringContaining("didn't start on this request"),
+        }),
+      ])
+    );
 
     slackFetch.mockRestore();
   });

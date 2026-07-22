@@ -1,17 +1,17 @@
-import {
-  getUserInfo,
-  postMessage,
-  type CallbackContext,
-  type SlackMessageFile,
-} from "@open-inspect/shared";
+import { getUserInfo, postMessage, type CallbackContext } from "@open-inspect/shared";
 import { getAvailableModels, getSlackDefaultModel } from "../app-home/models";
-import { notifyDroppedAttachments, uploadSlackImageAttachments } from "../attachments";
+import {
+  notifyDroppedAttachments,
+  prepareImageAttachments,
+  type SlackImageAttachment,
+} from "../attachments";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import { getResolvedUserPreferences } from "../user-preferences";
-import { createSession, sendPrompt } from "./control-plane-client";
+import { createSession } from "./control-plane-client";
+import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 
 export interface StartSessionOptions {
@@ -28,8 +28,10 @@ export interface StartSessionOptions {
   previousMessages?: string[];
   channelName?: string;
   channelDescription?: string;
-  /** Files attached to the triggering Slack message; images are forwarded. */
-  files?: SlackMessageFile[];
+  /** Images attached to the triggering Slack message, normalized at ingress. */
+  images?: SlackImageAttachment[];
+  /** True when the triggering message had no user text, only images. */
+  imageOnly?: boolean;
   traceId?: string;
 }
 
@@ -47,9 +49,23 @@ export async function startSessionAndSendPrompt(
     previousMessages,
     channelName,
     channelDescription,
-    files,
+    images,
+    imageOnly,
     traceId,
   } = options;
+  // Download image bytes before creating the session: an image-only request
+  // whose images are all lost must never create a session it will not prompt.
+  const preparedImages = await prepareImageAttachments(env, images ?? [], traceId);
+  if (imageOnly && preparedImages.files.length === 0) {
+    await notifyDroppedAttachments(
+      env,
+      channel,
+      threadTs,
+      { references: [], dropped: preparedImages.dropped },
+      { traceId, nothingSent: true }
+    );
+    return null;
+  }
   const [availableModels, slackDefaultModel] = await Promise.all([
     getAvailableModels(env, traceId),
     getSlackDefaultModel(env, traceId),
@@ -113,28 +129,30 @@ export async function startSessionAndSendPrompt(
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-  const uploadResult = await uploadSlackImageAttachments(env, session.sessionId, files, traceId);
-  const promptResult = await sendPrompt(
-    env,
-    session.sessionId,
-    channelContext + threadContext + messageText,
-    `slack:${userId}`,
+  const delivery = await deliverPrompt(env, {
+    sessionId: session.sessionId,
+    content: channelContext + threadContext + messageText,
+    authorId: `slack:${userId}`,
+    attachments: preparedImages,
+    imageOnly: Boolean(imageOnly),
     callbackContext,
+    channel,
+    threadTs,
     traceId,
-    uploadResult.references
-  );
-  if (!promptResult.ok) {
-    await postMessage(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      "Session created but failed to send prompt. Please try again.",
-      { thread_ts: threadTs }
-    );
+  });
+  if (!delivery.ok) {
+    // "no_images_delivered" already told the user nothing ran; the other
+    // failures deserve an explicit retry hint against the created session.
+    if (delivery.reason !== "no_images_delivered") {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        "Session created but failed to send prompt. Please try again.",
+        { thread_ts: threadTs }
+      );
+    }
     return null;
   }
-  // Only notify about dropped images once the prompt landed — a failed prompt
-  // already gets its own error message above.
-  await notifyDroppedAttachments(env, channel, threadTs, uploadResult, traceId);
   await storeThreadSession(
     env,
     channel,

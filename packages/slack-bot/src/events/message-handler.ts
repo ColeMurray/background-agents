@@ -11,9 +11,10 @@ import {
   type SlackMessageFile,
 } from "@open-inspect/shared";
 import {
-  extractImageFiles,
-  notifyDroppedAttachments,
-  uploadSlackImageAttachments,
+  IMAGE_ONLY_PROMPT_TEXT,
+  prepareImageAttachments,
+  toImageAttachments,
+  type SlackImageAttachment,
 } from "../attachments";
 import { createClassifier } from "../classifier";
 import { loadTargetCatalog } from "../classifier/catalog";
@@ -26,7 +27,7 @@ import {
 } from "../messages/blocks";
 import { formatChannelContext, formatInterimThreadContext } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
-import { sendPrompt } from "../sessions/control-plane-client";
+import { deliverPrompt } from "../sessions/prompt-delivery";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import {
   advanceLastPromptTs,
@@ -98,8 +99,8 @@ interface IncomingMessageParams {
   threadTs?: string;
   channelName?: string;
   channelDescription?: string;
-  /** Files attached to the Slack message; images are forwarded to the session. */
-  files?: SlackMessageFile[];
+  /** Images attached to the Slack message, normalized at event ingress. */
+  images: SlackImageAttachment[];
   env: Env;
   traceId?: string;
   scheduleBackground: BackgroundTaskScheduler;
@@ -119,13 +120,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     threadTs,
     channelName,
     channelDescription,
-    files,
+    images,
     env,
     traceId,
     scheduleBackground,
   } = params;
-  const imageFiles = extractImageFiles(files);
-  if (!messageText && imageFiles.length === 0) {
+  if (!messageText && images.length === 0) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
@@ -135,7 +135,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     return;
   }
   // An image-only message still needs prompt content for the agent to act on.
-  const promptText = messageText || "See the attached image(s).";
+  const imageOnly = !messageText;
+  const promptText = messageText || IMAGE_ONLY_PROMPT_TEXT;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -162,26 +163,18 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           })
         : undefined;
       const interimContext = interimMessages ? formatInterimThreadContext(interimMessages) : "";
-      const uploadResult = await uploadSlackImageAttachments(
-        env,
-        existingSession.sessionId,
-        imageFiles,
-        traceId
-      );
-      const promptResult = await sendPrompt(
-        env,
-        existingSession.sessionId,
-        channelContext + interimContext + promptText,
-        `slack:${user}`,
+      const promptResult = await deliverPrompt(env, {
+        sessionId: existingSession.sessionId,
+        content: channelContext + interimContext + promptText,
+        authorId: `slack:${user}`,
+        attachments: await prepareImageAttachments(env, images, traceId),
+        imageOnly,
         callbackContext,
+        channel,
+        threadTs,
         traceId,
-        uploadResult.references
-      );
+      });
       if (promptResult.ok) {
-        // Notify about dropped images only now that the session proved live —
-        // uploads against a stale session fail spuriously and are retried
-        // against the replacement session below.
-        await notifyDroppedAttachments(env, channel, threadTs, uploadResult, traceId);
         // Only advance the checkpoint past messages we know were considered.
         // When the interim fetch failed, keeping the old watermark lets the
         // next follow-up retry the window; at worst it re-includes this
@@ -202,6 +195,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         }
         return;
       }
+      // An image-only follow-up that lost every image sends no prompt; the
+      // user was already told inside deliverPrompt.
+      if (promptResult.reason === "no_images_delivered") return;
       if (promptResult.reason === "transient") {
         await postMessage(
           env.SLACK_BOT_TOKEN,
@@ -247,7 +243,10 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       previousMessages,
       channelName,
       channelDescription,
-      files: imageFiles.length > 0 ? imageFiles : undefined,
+      imageOnly: imageOnly || undefined,
+      // Persist where the images live, not the file objects; they are
+      // re-fetched from Slack when the user resolves the clarification.
+      sourceMessage: images.length > 0 ? { ts, threadTs } : undefined,
     });
     await postMessage(
       env.SLACK_BOT_TOKEN,
@@ -279,7 +278,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     previousMessages,
     channelName,
     channelDescription,
-    files: imageFiles,
+    images,
+    imageOnly,
     traceId,
   });
   if (!sessionResult) return;
@@ -344,7 +344,8 @@ export async function handleAppMention(
     () => undefined
   );
   const [files, channelInfo] = await Promise.all([filesPromise, channelInfoPromise]);
-  if (!messageText && extractImageFiles(files).length > 0) {
+  const images = toImageAttachments(files, traceId);
+  if (!messageText && images.length > 0) {
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   }
   let channelName: string | undefined;
@@ -361,7 +362,7 @@ export async function handleAppMention(
     threadTs: event.thread_ts,
     channelName,
     channelDescription,
-    files,
+    images,
     env,
     traceId,
     scheduleBackground,
@@ -386,7 +387,8 @@ export async function handleDirectMessage(
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
   const messageText = stripMentions(event.text);
-  const hasContent = Boolean(messageText) || extractImageFiles(event.files).length > 0;
+  const images = toImageAttachments(event.files, traceId);
+  const hasContent = Boolean(messageText) || images.length > 0;
   const threadKey = event.thread_ts || event.ts;
   if (hasContent)
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
@@ -396,7 +398,7 @@ export async function handleDirectMessage(
     channel: event.channel,
     ts: event.ts,
     threadTs: event.thread_ts,
-    files: event.files,
+    images,
     env,
     traceId,
     scheduleBackground,
