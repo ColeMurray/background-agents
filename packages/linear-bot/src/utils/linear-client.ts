@@ -2,7 +2,13 @@
  * Linear API client utilities — OAuth + raw GraphQL.
  */
 
-import type { Env, LinearIssueDetails } from "../types";
+import {
+  linearIssueDetailsResponseSchema,
+  linearRepoSuggestionsResponseSchema,
+  linearUserResponseSchema,
+  type Env,
+  type LinearIssueDetails,
+} from "../types";
 import { timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./crypto";
 import { createLogger } from "../logger";
@@ -211,25 +217,13 @@ export async function fetchIssueDetails(
       { id: issueId }
     );
 
-    const issue = (data as { data?: { issue?: Record<string, unknown> } }).data?.issue;
+    const parsed = linearIssueDetailsResponseSchema.safeParse(data);
+    if (!parsed.success) return null;
+
+    const issue = parsed.data.data?.issue;
     if (!issue) return null;
 
-    return {
-      id: issue.id as string,
-      identifier: issue.identifier as string,
-      title: issue.title as string,
-      description: issue.description as string | null,
-      url: issue.url as string,
-      priority: issue.priority as number,
-      priorityLabel: issue.priorityLabel as string,
-      labels: (issue.labels as { nodes: Array<{ id: string; name: string }> })?.nodes || [],
-      project: issue.project as { id: string; name: string } | null,
-      assignee: issue.assignee as { id: string; name: string } | null,
-      team: issue.team as { id: string; key: string; name: string },
-      comments:
-        (issue.comments as { nodes: Array<{ body: string; user?: { name: string } }> })?.nodes ||
-        [],
-    };
+    return issue;
   } catch (err) {
     log.error("linear.fetch_issue_details", {
       issue_id: issueId,
@@ -298,14 +292,10 @@ export async function getRepoSuggestions(
       { issueId, agentSessionId, candidateRepositories: candidateRepos }
     );
 
-    const result = data as {
-      data?: {
-        issueRepositorySuggestions?: {
-          suggestions: Array<{ repositoryFullName: string; confidence: number }>;
-        };
-      };
-    };
-    return result.data?.issueRepositorySuggestions?.suggestions || [];
+    const parsed = linearRepoSuggestionsResponseSchema.safeParse(data);
+    if (!parsed.success) return [];
+
+    return parsed.data.data?.issueRepositorySuggestions?.suggestions || [];
   } catch (err) {
     log.error("linear.repo_suggestions_failed", {
       issue_id: issueId,
@@ -339,13 +329,16 @@ export async function fetchUser(
       { id: userId }
     );
 
-    const user = (data as { data?: { user?: Record<string, unknown> } }).data?.user;
+    const parsed = linearUserResponseSchema.safeParse(data);
+    if (!parsed.success) return null;
+
+    const user = parsed.data.data?.user;
     if (!user) return null;
 
     return {
-      id: user.id as string,
-      name: user.name as string,
-      email: (user.email as string) ?? null,
+      id: user.id,
+      name: user.name,
+      email: user.email ?? null,
     };
   } catch (err) {
     log.error("linear.fetch_user", {
