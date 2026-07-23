@@ -19,11 +19,15 @@ const COOKIE_CHUNK_SIZE = 4096 - 163;
 export const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 /**
- * Whether next-auth uses `__Secure-`-prefixed cookies: it does exactly when
- * the canonical app URL is https (mirrors v4 init's useSecureCookies).
+ * Whether next-auth uses `__Secure-`-prefixed cookies. Must resolve exactly
+ * like the paired reader — next-auth v4 `getToken`'s `secureCookie` default:
+ * an https NEXTAUTH_URL when the variable is set, else the presence of
+ * Vercel's injected VERCEL env. Vercel preview deployments serve https
+ * without NEXTAUTH_URL, so dropping the fallback would write a cookie
+ * next-auth never reads back.
  */
 function secureCookiesEnabled(): boolean {
-  return (process.env.NEXTAUTH_URL ?? "").startsWith("https://");
+  return process.env.NEXTAUTH_URL?.startsWith("https://") ?? Boolean(process.env.VERCEL);
 }
 
 export function sessionCookieName(): string {

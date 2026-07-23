@@ -60,6 +60,15 @@ describe("sessionCookieName", () => {
     vi.stubEnv("NEXTAUTH_URL", "http://localhost:3000");
     expect(sessionCookieName()).toBe("next-auth.session-token");
   });
+
+  it("falls back to the VERCEL secure-cookie default when NEXTAUTH_URL is unset", () => {
+    // Vercel preview deployments: https, VERCEL injected, no NEXTAUTH_URL.
+    vi.stubEnv("NEXTAUTH_URL", undefined);
+    vi.stubEnv("VERCEL", "1");
+    expect(sessionCookieName()).toBe(SECURE_COOKIE);
+    vi.stubEnv("VERCEL", undefined);
+    expect(sessionCookieName()).toBe("next-auth.session-token");
+  });
 });
 
 describe("writeSessionCookie", () => {
@@ -74,6 +83,26 @@ describe("writeSessionCookie", () => {
       name: SECURE_COOKIE,
       options: { httpOnly: true, secure: true },
     });
+    await expect(readOiAccessTokenFromCookiePairs(toCookiePairs({}, store.sets))).resolves.toBe(
+      "oi_at_round_trip"
+    );
+  });
+
+  it("persists to the secure cookie next-auth reads on Vercel previews", async () => {
+    vi.stubEnv("NEXTAUTH_URL", undefined);
+    vi.stubEnv("VERCEL", "1");
+    const jwt = await encodeSessionJwt();
+    const store = fakeStore();
+
+    writeSessionCookie(store, jwt);
+
+    expect(store.sets).toHaveLength(1);
+    expect(store.sets[0]).toMatchObject({
+      name: SECURE_COOKIE,
+      options: { httpOnly: true, secure: true },
+    });
+    // The reader is next-auth's own getToken — this fails if writer and
+    // reader ever disagree on the preview cookie name again.
     await expect(readOiAccessTokenFromCookiePairs(toCookiePairs({}, store.sets))).resolves.toBe(
       "oi_at_round_trip"
     );
