@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Environment } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { createSession, sendPrompt } from "./control-plane-client";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
@@ -24,6 +25,28 @@ const target = {
     private: true,
   },
 };
+
+const environmentTarget = {
+  kind: "environment" as const,
+  environment: {
+    id: "env-1",
+    name: "Production triage",
+    description: null,
+    prebuildEnabled: true,
+    createdAt: 1,
+    updatedAt: 2,
+    repositories: [{ repoOwner: "acme", repoName: "app", repoId: 123, baseBranch: "main" }],
+  } satisfies Environment,
+};
+
+function okJson(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+function parseRequestBody(fetch: ReturnType<typeof vi.fn>, index = 0): unknown {
+  const [, init] = fetch.mock.calls[index] as [RequestInfo | URL, RequestInit];
+  return JSON.parse(init.body as string);
+}
 
 describe("control plane client timeouts", () => {
   afterEach(() => {
@@ -91,5 +114,94 @@ describe("control plane client timeouts", () => {
         authorId: "slack:U123",
       })
     ).resolves.toEqual({ ok: false, reason: "transient" });
+  });
+});
+
+describe("control plane client request payloads", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("creates repository sessions with target, model, branch, and Slack actor identity", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      okJson({ sessionId: "session-1", status: "created" })
+    );
+
+    await expect(
+      createSession(makeEnv(fetch), {
+        target,
+        model: "openai/gpt-5.4",
+        reasoningEffort: "high",
+        branch: "feature/slack-images",
+        slackUserId: "U123",
+        actorDisplayName: "Ada Lovelace",
+        actorEmail: "ada@example.com",
+        traceId: "trace-1",
+      })
+    ).resolves.toEqual({ sessionId: "session-1", status: "created" });
+
+    const [url, init] = fetch.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(url).toBe("https://internal/sessions");
+    expect(init.method).toBe("POST");
+    expect(parseRequestBody(fetch)).toEqual({
+      repoOwner: "acme",
+      repoName: "app",
+      branch: "feature/slack-images",
+      model: "openai/gpt-5.4",
+      reasoningEffort: "high",
+      spawnSource: "slack-bot",
+      actorUserId: "U123",
+      actorDisplayName: "Ada Lovelace",
+      actorEmail: "ada@example.com",
+    });
+  });
+
+  it("creates environment sessions without repository or branch fields", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      okJson({ sessionId: "session-1", status: "created" })
+    );
+
+    await createSession(makeEnv(fetch), {
+      target: environmentTarget,
+      model: "anthropic/claude-sonnet-4-6",
+      branch: "ignored-for-environments",
+    });
+
+    expect(parseRequestBody(fetch)).toEqual({
+      environmentId: "env-1",
+      model: "anthropic/claude-sonnet-4-6",
+      spawnSource: "slack-bot",
+    });
+  });
+
+  it("sends prompt attachment references only when present", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      okJson({ messageId: "message-1", status: "queued" })
+    );
+
+    await sendPrompt(makeEnv(fetch), {
+      sessionId: "session-1",
+      content: "Use the screenshot",
+      authorId: "slack:U123",
+      attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
+    });
+    await sendPrompt(makeEnv(fetch), {
+      sessionId: "session-1",
+      content: "No attachments",
+      authorId: "slack:U123",
+      attachments: [],
+    });
+
+    expect(parseRequestBody(fetch, 0)).toEqual({
+      content: "Use the screenshot",
+      authorId: "slack:U123",
+      source: "slack",
+      attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
+    });
+    expect(parseRequestBody(fetch, 1)).toEqual({
+      content: "No attachments",
+      authorId: "slack:U123",
+      source: "slack",
+    });
   });
 });
