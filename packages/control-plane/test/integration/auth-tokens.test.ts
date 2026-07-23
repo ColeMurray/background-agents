@@ -308,4 +308,32 @@ describe("api_tokens retention sweep", () => {
       "hash-recent-a",
     ]);
   });
+
+  it("retains family-scoped refresh rows until the family expires", async () => {
+    const store = new ApiTokenStore(env.DB);
+    const now = Date.now();
+    const longPast = now - EXPIRED_TOKEN_RETENTION_MS - 60_000;
+    // Both rows are long past their own expiry; only the dead family's row
+    // may go — a consumed ancestor in a live family must survive so its
+    // replay still reads as reuse instead of an unknown token.
+    await store.createPair([
+      {
+        ...newToken("live-family", longPast),
+        kind: "web_session_refresh",
+        familyExpiresAt: now + 60_000,
+      },
+      {
+        ...newToken("dead-family", longPast),
+        kind: "web_session_refresh",
+        familyExpiresAt: longPast,
+      },
+    ]);
+
+    expect(await store.deleteExpired(now)).toBe(1);
+
+    const remaining = await env.DB.prepare("SELECT token_hash FROM api_tokens").all<{
+      token_hash: string;
+    }>();
+    expect(remaining.results.map((r) => r.token_hash)).toEqual(["hash-live-family"]);
+  });
 });

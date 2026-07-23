@@ -51,10 +51,12 @@ export interface WebSessionTokenStore {
 }
 
 /**
- * How long past `expires_at` a row must be before the retention sweep deletes
- * it. Generous compared to REFRESH_REUSE_GRACE_MS: the grace check resolves a
- * rotated token's successor by id, so both rows must outlive the window —
- * a day past expiry, nothing can still legitimately reference the row.
+ * How long past a row's retention anchor — `expires_at` for access tokens,
+ * `family_expires_at` for family-scoped refresh rows — the sweep waits before
+ * deleting it. Generous compared to REFRESH_REUSE_GRACE_MS: the grace check
+ * resolves a rotated token's successor by id, so both rows must outlive the
+ * window — a day past the anchor, nothing can still legitimately reference
+ * the row.
  */
 export const EXPIRED_TOKEN_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -182,16 +184,24 @@ export class ApiTokenStore implements WebSessionTokenStore {
   }
 
   /**
-   * Retention sweep: delete rows EXPIRED_TOKEN_RETENTION_MS past expiry.
-   * Bare-column comparison on purpose — anything fancier skips the plain
-   * expires_at index (migration 0044; see the 0024 lesson). Returns the
-   * number of rows deleted.
+   * Retention sweep. Rows without family scope (access tokens) go
+   * EXPIRED_TOKEN_RETENTION_MS past their own expiry. Family-scoped refresh
+   * rows are kept until the same margin past `family_expires_at`: a consumed
+   * ancestor must stay resolvable for the family's whole lifetime so a late
+   * replay still reads as reuse (revoking the family) rather than as an
+   * unknown token. Bare-column comparisons on purpose — anything fancier
+   * skips the plain indexes (migrations 0044/0045; see the 0024 lesson).
+   * NULL family_expires_at never satisfies `<=`, so the second delete only
+   * touches family-scoped rows. Returns the number of rows deleted.
    */
   async deleteExpired(now: number): Promise<number> {
-    const result = await this.db
-      .prepare("DELETE FROM api_tokens WHERE expires_at <= ?")
-      .bind(now - EXPIRED_TOKEN_RETENTION_MS)
-      .run();
-    return result.meta?.changes ?? 0;
+    const cutoff = now - EXPIRED_TOKEN_RETENTION_MS;
+    const results = await this.db.batch([
+      this.db
+        .prepare("DELETE FROM api_tokens WHERE family_expires_at IS NULL AND expires_at <= ?")
+        .bind(cutoff),
+      this.db.prepare("DELETE FROM api_tokens WHERE family_expires_at <= ?").bind(cutoff),
+    ]);
+    return results.reduce((sum, result) => sum + (result.meta?.changes ?? 0), 0);
   }
 }

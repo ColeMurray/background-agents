@@ -63,6 +63,14 @@ describe("github-access-token", () => {
       failure: "provider_unavailable",
     });
   });
+
+  it("maps 429 throttling to provider_unavailable, not subject_rejected", async () => {
+    mockFetchResponse(429, { message: "rate limited" });
+    expect(await verifySubjectToken("github-access-token", "t")).toEqual({
+      ok: false,
+      failure: "provider_unavailable",
+    });
+  });
 });
 
 describe("google-access-token", () => {
@@ -96,6 +104,22 @@ describe("google-access-token", () => {
       ok: false,
       failure: "subject_rejected",
     });
+  });
+
+  it("never exposes an unverified email as the subject's providerEmail", async () => {
+    for (const email_verified of [false, undefined]) {
+      mockFetchResponse(200, {
+        sub: "1078462347",
+        email: "victim@example.com",
+        ...(email_verified === undefined ? {} : { email_verified }),
+        name: "A Person",
+      });
+      const result = await verifySubjectToken("google-access-token", "ya29.token");
+      expect(result).toMatchObject({
+        ok: true,
+        subject: { providerUserId: "1078462347", providerEmail: undefined },
+      });
+    }
   });
 
   it("treats malformed userinfo responses as provider_unavailable", async () => {

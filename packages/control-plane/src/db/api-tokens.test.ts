@@ -41,24 +41,28 @@ class RecordingDatabase implements SqlDatabase {
   }
 
   async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
-    return statements.map(() => ({ results: [], meta: { changes: 1 } }));
+    return Promise.all(statements.map((statement) => statement.run<T>()));
   }
 }
 
 describe("deleteExpired", () => {
-  it("deletes by bare expires_at comparison, cut off a retention window before now", async () => {
+  it("sweeps access rows by expires_at and family rows by family_expires_at", async () => {
     const db = new RecordingDatabase(3);
     const store = new ApiTokenStore(db);
     const now = 1_750_000_000_000;
 
     const deleted = await store.deleteExpired(now);
 
-    expect(deleted).toBe(3);
-    expect(db.statements).toHaveLength(1);
-    // Bare-column predicate on purpose: anything fancier skips the plain
-    // expires_at index (migration 0044).
-    expect(db.statements[0].query).toBe("DELETE FROM api_tokens WHERE expires_at <= ?");
-    expect(db.statements[0].boundValues).toEqual([now - EXPIRED_TOKEN_RETENTION_MS]);
+    expect(deleted).toBe(6);
+    // Bare-column predicates on purpose: anything fancier skips the plain
+    // indexes (migrations 0044/0045).
+    expect(db.statements.map((statement) => statement.query)).toEqual([
+      "DELETE FROM api_tokens WHERE family_expires_at IS NULL AND expires_at <= ?",
+      "DELETE FROM api_tokens WHERE family_expires_at <= ?",
+    ]);
+    for (const statement of db.statements) {
+      expect(statement.boundValues).toEqual([now - EXPIRED_TOKEN_RETENTION_MS]);
+    }
   });
 
   it("returns 0 when nothing is past the retention window", async () => {

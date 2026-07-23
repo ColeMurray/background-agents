@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 function createEnv(verifyStatus: number) {
   const fetch = vi
@@ -76,4 +77,30 @@ describe("router sandbox-token fallback", () => {
     expect(response.status).toBe(401);
     expect(doFetch).not.toHaveBeenCalled();
   });
+});
+
+describe("auth token routes are SCM-agnostic", () => {
+  // Guards the isScmAgnosticRoute entry for /auth/tokens/*: dropping it would
+  // 501 exchange/refresh on non-GitHub deployments before the handlers run.
+  it.each(["exchange", "refresh"])(
+    "reaches /auth/tokens/%s under a gitlab provider",
+    async (route) => {
+      const env = {
+        ...TEST_SERVICE_SECRETS,
+        SCM_PROVIDER: "gitlab",
+        DB: { prepare: vi.fn(), batch: vi.fn(), exec: vi.fn(), dump: vi.fn() },
+      };
+
+      const response = await handleRequest(
+        await signedServiceRequest(`https://test.local/auth/tokens/${route}`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        }),
+        env as never
+      );
+
+      // 400 = the handler's schema rejection; the SCM gate (501) did not fire.
+      expect(response.status).toBe(400);
+    }
+  );
 });

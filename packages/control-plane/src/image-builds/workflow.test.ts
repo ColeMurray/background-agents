@@ -454,14 +454,16 @@ describe("ImageBuildWorkflow", () => {
   describe("acceptBuildComplete", () => {
     function readyBuildStore() {
       const store = createStore();
-      store.getCallbackBuild.mockResolvedValue({
+      const build = {
         id: "imgb-env_1-1-abcd",
         scope: ENV_SCOPE,
         provider: "modal",
         providerSessionId: null,
         status: "building",
-      });
+      };
+      store.getCallbackBuild.mockResolvedValue(build);
       store.verifyCallbackToken.mockResolvedValue(true);
+      store.consumeCallbackToken.mockResolvedValue(build);
       return store;
     }
 
@@ -527,6 +529,48 @@ describe("ImageBuildWorkflow", () => {
           tokenHash: expect.any(String),
         })
       );
+    });
+
+    it("consumes the single-use token before the ready transition", async () => {
+      const store = readyBuildStore();
+      store.tryMarkImageBuildReady.mockResolvedValue({
+        type: "marked_ready",
+        supersededImages: [],
+      });
+      const { workflow } = createWorkflow({ store });
+
+      await workflow.acceptBuildComplete({
+        completion: validCompletion(),
+        callbackToken: MODAL_CALLBACK_TOKEN,
+        context: ctx,
+      });
+
+      expect(store.consumeCallbackToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buildId: "imgb-env_1-1-abcd",
+          provider: "modal",
+          providerSessionId: null,
+          tokenHash: expect.any(String),
+        })
+      );
+      expect(store.consumeCallbackToken.mock.invocationCallOrder[0]).toBeLessThan(
+        store.tryMarkImageBuildReady.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("rejects a replayed completion whose token no longer consumes", async () => {
+      const store = readyBuildStore();
+      store.consumeCallbackToken.mockResolvedValue(null);
+      const { workflow } = createWorkflow({ store });
+
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion(),
+          callbackToken: MODAL_CALLBACK_TOKEN,
+          context: ctx,
+        })
+      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
+      expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
     });
 
     it.each([

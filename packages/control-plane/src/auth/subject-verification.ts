@@ -33,7 +33,8 @@ export type SubjectVerificationResult =
   /**
    * `subject_rejected`: the provider says the token is invalid (401/403) —
    * the caller's assertion failed verification. `provider_unavailable`: the
-   * provider itself failed (5xx/timeout/network) — fail closed, retryable.
+   * provider itself failed (429/other 4xx/5xx/timeout/network) — fail
+   * closed, retryable.
    */
   | { ok: false; failure: "subject_rejected" | "provider_unavailable" };
 
@@ -58,10 +59,10 @@ class ProviderStatusError extends Error {
 
 /**
  * Run one provider identity fetch under the shared contract: a
- * PROVIDER_FETCH_TIMEOUT_MS abort, status classification (< 500 means the
- * subject was rejected, everything else — 5xx/timeout/network/malformed —
- * means the provider failed), and the single failure log site. Per-provider
- * code contributes only the URL/schema/shape mapping.
+ * PROVIDER_FETCH_TIMEOUT_MS abort, status classification (401/403 means the
+ * subject was rejected, everything else — 429/other 4xx/5xx/timeout/network/
+ * malformed — means the provider failed), and the single failure log site.
+ * Per-provider code contributes only the URL/schema/shape mapping.
  */
 async function fetchProviderIdentity(
   provider: WebAuthProvider,
@@ -76,8 +77,10 @@ async function fetchProviderIdentity(
       error instanceof GitHubUserApiError || error instanceof ProviderStatusError
         ? error.status
         : undefined;
-    const failure =
-      status !== undefined && status < 500 ? "subject_rejected" : "provider_unavailable";
+    // 401/403 are the provider judging the credential. Everything else —
+    // 429 throttling, other 4xx (our request shape), 5xx/timeout/network —
+    // is the provider failing, so fail closed and retryable.
+    const failure = status === 401 || status === 403 ? "subject_rejected" : "provider_unavailable";
     logger.warn("Subject verification failed", {
       event: "auth.subject_verification_failed",
       provider,
@@ -120,7 +123,9 @@ function verifyGoogleSubject(accessToken: string): Promise<SubjectVerificationRe
     return {
       provider: "google",
       providerUserId: parsed.data.sub,
-      providerEmail: parsed.data.email,
+      // Email-keyed account linking downstream means an unverified email
+      // must never leave this boundary — the subject stays valid by `sub`.
+      providerEmail: parsed.data.email_verified === true ? parsed.data.email : undefined,
       displayName: parsed.data.name,
       avatarUrl: parsed.data.picture,
     };

@@ -461,6 +461,17 @@ export class ImageBuildWorkflow {
     }
     const providerImageId = completion.providerImageId;
 
+    // Same transition model as provider_session: consume the single-use token
+    // (CAS on callback_token_used_at) before the terminal state change, so a
+    // replayed callback fails authentication instead of racing the ready
+    // transition.
+    await this.consumeTokenBuildCallbackAuth(command.callbackToken, {
+      buildId: build.id,
+      provider,
+      providerSessionId: null,
+      ctx,
+    });
+
     let result;
     try {
       result = await this.store.tryMarkImageBuildReady(
@@ -854,7 +865,7 @@ export class ImageBuildWorkflow {
     params: {
       buildId: string;
       provider: ImageBuildProvider;
-      providerSessionId: string;
+      providerSessionId: string | null;
       ctx: ImageBuildWorkflowContext;
     }
   ): Promise<void> {
