@@ -164,16 +164,15 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       `${NPM_PREFIX}/bin/opencode --version`
     )
     .runCommands(
-      // GitHub CLI — installed to /usr/bin/gh (the path the runtime's gh wrapper expects).
-      // Best-effort end-to-end (keyring + apt source + install) so a cli.github.com hiccup
-      // can't fail the build, matching how vercel/bootstrap.ts best-efforts its whole gh block.
-      "if ! command -v gh >/dev/null 2>&1; then " +
+      // GitHub CLI must exist at the path used by the authentication wrapper.
+      "if [ ! -x /usr/bin/gh ]; then " +
         "sudo mkdir -p -m 755 /etc/apt/keyrings && " +
         "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null && " +
         "sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && " +
         'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null && ' +
         "sudo apt-get update && sudo apt-get install -y gh; " +
-        "fi || true",
+        "fi",
+      "test -x /usr/bin/gh",
       // ttyd (terminal) — pinned binary, checksum-verified (matches the Vercel base image).
       `curl -fsSL -o /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64`,
       `echo "${TTYD_SHA256}  /tmp/ttyd" | sha256sum -c -`,
@@ -201,22 +200,17 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       "sudo chmod 0755 /usr/local/bin/oi-git-credentials",
       "sudo git config --system credential.helper /usr/local/bin/oi-git-credentials",
       "sudo git config --system credential.useHttpPath true",
-      // gh CLI auth wrapper — baked here as root, at build time, rather than
-      // left to the runtime's _install_gh_wrapper(). That runtime install
-      // writes /usr/local/bin/gh as the non-root `sandbox` user, but the dir is
-      // root-owned, so the write fails with a swallowed PermissionError and gh
-      // is left unauthenticated — agents then can't post PR comments. (It works
-      // on Modal only because that runtime is root and can self-install.) Keep
-      // this body byte-identical to GH_WRAPPER_BODY in
-      // sandbox-runtime/src/sandbox_runtime/entrypoint.py so the runtime install
-      // sees a matching file and no-ops instead of failing to overwrite it.
-      "printf '%s\\n' '#!/bin/sh' 'REAL_GH=\"/usr/bin/gh\"' 'token=$(python3 -m sandbox_runtime.credentials.git_credential_helper gh-token || true)' 'if [ -n \"$token\" ]; then' '  export GH_TOKEN=\"$token\"' 'fi' 'exec \"$REAL_GH\" \"$@\"' | sudo tee /usr/local/bin/gh >/dev/null",
-      "sudo chmod 0755 /usr/local/bin/gh",
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates || true`,
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo git config --system http.sslCAInfo ${OPENSANDBOX_PROXY_CA} || true`
     );
 
   image = addRuntimeDir(image, runtimeDir);
+  image = image
+    .addLocalFile(join(runtimeDir, "gh-wrapper.sh"), "/usr/local/bin/gh")
+    .runCommands(
+      "sudo chmod 0755 /usr/local/bin/gh",
+      "PYTHONPATH=/app /usr/local/bin/gh --version"
+    );
 
   // The npm/bun/agent-browser installs above run as root (sudo) and write under the sandbox
   // user's HOME, and addRuntimeDir copies the runtime in as root too. Re-own HOME last so the

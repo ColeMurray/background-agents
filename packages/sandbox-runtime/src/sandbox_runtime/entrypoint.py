@@ -83,18 +83,8 @@ AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 # fresh token is needed (the precedence logic lives there, in Python). If it
 # prints one we export it as GH_TOKEN; otherwise gh runs with its own env.
 GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
-GH_WRAPPER_BODY = (
-    "#!/bin/sh\n"
-    f'REAL_GH="{GH_WRAPPER_REAL_PATH}"\n'
-    # stderr is left attached so the helper's diagnostic surfaces when a
-    # refresh fails — otherwise the user just sees an opaque gh 401.
-    "token=$(python3 -m sandbox_runtime.credentials.git_credential_helper gh-token || true)\n"
-    'if [ -n "$token" ]; then\n'
-    # export (not `env GH_TOKEN=… exec`) so the token never lands in argv.
-    '  export GH_TOKEN="$token"\n'
-    "fi\n"
-    'exec "$REAL_GH" "$@"\n'
-)
+GH_WRAPPER_INSTALL_PATH = Path("/usr/local/bin/gh")
+GH_WRAPPER_BODY = Path(__file__).with_name("gh-wrapper.sh").read_text()
 
 
 class SandboxSupervisor:
@@ -336,21 +326,27 @@ class SandboxSupervisor:
     def _install_gh_wrapper(self) -> None:
         """Install the gh CLI wrapper at /usr/local/bin/gh.
 
-        See ``GH_WRAPPER_BODY`` for the wrapper's behaviour. Installed at boot
-        (rather than baked into the image) so it also patches snapshots and
-        repo images built before this migration.
+        The canonical wrapper artifact is also baked into non-root provider
+        images. Writable legacy images are patched at boot; a non-writable
+        legacy image fails clearly rather than running gh unauthenticated.
         """
-        wrapper_path = Path("/usr/local/bin/gh")
+        real_path = Path(GH_WRAPPER_REAL_PATH)
+        if not os.access(real_path, os.X_OK):
+            return
+
         try:
-            # Only install if the real gh exists and we're not about to shadow
-            # ourselves (defensive against a previous wrapper at /usr/bin/gh).
-            if Path(GH_WRAPPER_REAL_PATH).exists() and (
-                not wrapper_path.exists() or wrapper_path.read_text() != GH_WRAPPER_BODY
+            if (
+                GH_WRAPPER_INSTALL_PATH.exists()
+                and GH_WRAPPER_INSTALL_PATH.read_text() == GH_WRAPPER_BODY
+                and os.access(GH_WRAPPER_INSTALL_PATH, os.X_OK)
             ):
-                wrapper_path.write_text(GH_WRAPPER_BODY)
-                wrapper_path.chmod(0o755)
+                return
+            GH_WRAPPER_INSTALL_PATH.write_text(GH_WRAPPER_BODY)
+            GH_WRAPPER_INSTALL_PATH.chmod(0o755)
         except OSError as e:
-            self.log.debug("gh_wrapper.install_failed", error=str(e))
+            raise RuntimeError(
+                f"Cannot install authenticated gh wrapper at {GH_WRAPPER_INSTALL_PATH}: {e}"
+            ) from e
 
     async def _ensure_plain_origin(self, repo: RepoEntry) -> bool:
         """Rewrite the `origin` remote to a credential-free HTTPS URL.
