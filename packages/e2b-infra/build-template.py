@@ -44,6 +44,7 @@ START_CMD = "python /usr/local/bin/oi-launch"
 READY_CMD = (
     "command -v python && command -v node && command -v opencode "
     "&& command -v code-server "
+    '&& test "$(command -v gh)" = /usr/local/bin/gh && test -x /usr/bin/gh '
     "&& PYTHONPATH=/app python -c 'import sandbox_runtime'"
 )
 
