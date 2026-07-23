@@ -22,6 +22,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared";
 import { z } from "zod";
+import { callbackSigningSecret } from "../auth/callback-signing";
 import {
   AutomationStore,
   toAutomationRun,
@@ -33,6 +34,7 @@ import {
   type AutomationRepositoryInsert,
   type AutomationEnvironmentRow,
 } from "../db/automation-store";
+import { ApiTokenStore } from "../db/api-tokens";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import {
   buildSlackCompletionNotification,
@@ -508,7 +510,11 @@ export class SchedulerDO extends DurableObject<Env> {
     // 1. Recovery sweep
     await this.recoverySweep(store);
 
-    // 2. Process overdue automations, bounded by the per-tick child budget.
+    // 2. Retention sweep: purge api_tokens rows long past expiry — nothing
+    // else ever deletes them (rotation mints 2 rows per user per period).
+    await this.apiTokenRetentionSweep(now);
+
+    // 3. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
     const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
       store.getRepositoriesForAutomationIds(overdue.map((automation) => automation.id)),
@@ -588,6 +594,25 @@ export class SchedulerDO extends DurableObject<Env> {
     return new Response(JSON.stringify({ processed, skipped, failed }), {
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  // ─── Retention sweep ─────────────────────────────────────────────────────
+
+  private async apiTokenRetentionSweep(now: number): Promise<void> {
+    try {
+      const deleted = await new ApiTokenStore(this.db).deleteExpired(now);
+      if (deleted > 0) {
+        this.log.info("Expired api_tokens rows purged", {
+          event: "scheduler.api_token_retention",
+          deleted,
+        });
+      }
+    } catch (e) {
+      this.log.error("api_tokens retention sweep failed", {
+        event: "scheduler.api_token_retention_error",
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   // ─── Recovery sweep ──────────────────────────────────────────────────────
@@ -1102,10 +1127,10 @@ export class SchedulerDO extends DurableObject<Env> {
   /**
    * Tell the slack-bot to post a slack-triggered run's result into the triggering
    * message's thread and clear the `eyes` reaction, via its
-   * `/callbacks/automation-complete` endpoint. Signs the body with
-   * `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the bot's other callbacks).
-   * No-ops when the run has no triggering message, when `SLACK_BOT` is unbound, or
-   * when the secret is unset — all best-effort.
+   * `/callbacks/automation-complete` endpoint. Signs the body with the
+   * slack-bot's own service secret (in-body HMAC, matching the bot's other
+   * callbacks). No-ops when the run has no triggering message, when
+   * `SLACK_BOT` is unbound, or when the secret is unset — all best-effort.
    */
   private async notifySlackCompletion(
     run: AutomationRunRow,
@@ -1113,7 +1138,7 @@ export class SchedulerDO extends DurableObject<Env> {
     ctx: SlackCompletionContext
   ): Promise<void> {
     const binding = this.env.SLACK_BOT;
-    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
     const body = buildSlackCompletionNotification(meta, ctx);
@@ -1151,7 +1176,7 @@ export class SchedulerDO extends DurableObject<Env> {
    */
   private async notifySlackConcurrencySkip(event: SlackAutomationEvent): Promise<void> {
     const binding = this.env.SLACK_BOT;
-    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
     const body = buildSlackSkipNotification({

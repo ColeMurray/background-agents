@@ -68,7 +68,15 @@ export interface Env {
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
   OPENCOMPUTER_API_KEY?: string; // OpenComputer REST API key (X-API-Key auth + HMAC derivation)
   VERCEL_TOKEN?: string; // Vercel API access token for Sandbox API
-  INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
+  // Pepper for image-build callback token hashes.
+  IMAGE_CALLBACK_TOKEN_PEPPER?: string;
+  // Per-service sig1 verification keys. Absent ⇒ that service cannot
+  // authenticate.
+  SERVICE_AUTH_SECRET_WEB?: string;
+  SERVICE_AUTH_SECRET_SLACK_BOT?: string;
+  SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
+  SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_MODAL?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)

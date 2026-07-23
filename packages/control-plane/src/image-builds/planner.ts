@@ -9,7 +9,7 @@ import {
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
 import type { ImageBuildProvider, ImageBuildScope } from "./model";
-import { getImageBuildCallbackMode, getImageBuildCloneAuthMode } from "./provider-policy";
+import { getImageBuildCloneAuthMode } from "./provider-policy";
 import {
   loadScopeBuildSecrets,
   resolveScopeSandboxSettings,
@@ -21,9 +21,12 @@ import type { ImageBuildCloneAuth, PlannedImageBuild } from "./types";
 const logger = createLogger("image-builds:planner");
 const MS_PER_SECOND = 1000;
 
-export type PlannedCallbackAuth =
-  | { kind: "none" }
-  | { kind: "bearer_token"; token: string; tokenHash: string; expiresAt: number };
+/** The single-use callback token every build authenticates with (planner mints, workflow verifies). */
+export interface PlannedCallbackAuth {
+  token: string;
+  tokenHash: string;
+  expiresAt: number;
+}
 
 export type { ResolvedImageBuildTarget } from "./scope";
 
@@ -52,13 +55,8 @@ export class ImageBuildPlanner {
   }
 
   async createCallbackAuth(): Promise<PlannedCallbackAuth> {
-    if (getImageBuildCallbackMode(this.provider) !== "provider_session") {
-      return { kind: "none" };
-    }
-
     const token = generateImageBuildCallbackToken();
     return {
-      kind: "bearer_token",
       token,
       tokenHash: await hashImageBuildCallbackToken(token, this.env),
       expiresAt: Date.now() + IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
@@ -99,46 +97,41 @@ export class ImageBuildPlanner {
       },
     };
 
+    const registration = { tokenHash: callbackAuth.tokenHash, expiresAt: callbackAuth.expiresAt };
+
     switch (this.provider) {
       case "modal":
         return {
-          plan: { ...basePlan, provider: "modal", callbackMode: "provider_image" },
-          callbackAuth: { type: "none" },
+          plan: {
+            ...basePlan,
+            provider: "modal",
+            callbackMode: "provider_image",
+            callbackToken: callbackAuth.token,
+          },
+          callbackAuth: registration,
         };
-      case "vercel": {
-        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+      case "vercel":
         return {
           plan: {
             ...basePlan,
             provider: "vercel",
             callbackMode: "provider_session",
-            callbackToken: bearerAuth.token,
+            callbackToken: callbackAuth.token,
             cloneAuth,
           },
-          callbackAuth: {
-            type: "bearer_token",
-            tokenHash: bearerAuth.tokenHash,
-            expiresAt: bearerAuth.expiresAt,
-          },
+          callbackAuth: registration,
         };
-      }
-      case "opencomputer": {
-        const bearerAuth = requireBearerCallbackAuth(this.provider, callbackAuth);
+      case "opencomputer":
         return {
           plan: {
             ...basePlan,
             provider: "opencomputer",
             callbackMode: "provider_session",
-            callbackToken: bearerAuth.token,
+            callbackToken: callbackAuth.token,
             cloneAuth,
           },
-          callbackAuth: {
-            type: "bearer_token",
-            tokenHash: bearerAuth.tokenHash,
-            expiresAt: bearerAuth.expiresAt,
-          },
+          callbackAuth: registration,
         };
-      }
       default: {
         const exhaustive: never = this.provider;
         throw new Error(`Unsupported image build provider: ${String(exhaustive)}`);
@@ -164,14 +157,4 @@ export class ImageBuildPlanner {
       return { type: "unavailable" };
     }
   }
-}
-
-function requireBearerCallbackAuth(
-  provider: ImageBuildProvider,
-  callbackAuth: PlannedCallbackAuth
-): Extract<PlannedCallbackAuth, { kind: "bearer_token" }> {
-  if (callbackAuth.kind !== "bearer_token") {
-    throw new Error(`${provider} image builds require callback token auth`);
-  }
-  return callbackAuth;
 }

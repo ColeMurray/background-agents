@@ -1,4 +1,5 @@
 import { isCanonicalUserId } from "@open-inspect/shared";
+import { enforceProviderIdentityPath } from "../auth/identity-enforcement";
 import { UserStore, type ProviderIdentity } from "../db/user-store";
 import type { Env } from "../types";
 import {
@@ -46,7 +47,7 @@ function isObjectRecord(value: unknown): value is UpsertProviderIdentityRequest 
 
 export async function handleUpsertProviderIdentity(
   request: Request,
-  env: Env,
+  _env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
@@ -65,6 +66,8 @@ export async function handleUpsertProviderIdentity(
   if (!providerUserId) {
     return error("providerUserId is required", 400);
   }
+  const mismatch = enforceProviderIdentityPath(ctx, provider, providerUserId);
+  if (mismatch) return mismatch;
 
   const identity: ProviderIdentity = {
     provider,

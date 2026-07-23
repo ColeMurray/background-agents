@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { generateInternalToken } from "./auth/internal";
 import { handleRequest } from "./router";
-
-const secret = "test-internal-secret";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 function createEnv() {
   const fetch = vi.fn(async (request: Request) => {
@@ -22,7 +20,7 @@ function createEnv() {
   return {
     fetch,
     env: {
-      INTERNAL_CALLBACK_SECRET: secret,
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
       GITLAB_ACCESS_TOKEN: "glpat-test",
       DB: {
@@ -42,12 +40,10 @@ function createEnv() {
 describe("SCM credentials router provider gate", () => {
   it("allows GitLab deployments to reach the SCM credential broker", async () => {
     const { env, fetch } = createEnv();
-    const token = await generateInternalToken(secret);
 
     const response = await handleRequest(
-      new Request("https://test.local/sessions/session-1/scm-credentials", {
+      await signedServiceRequest("https://test.local/sessions/session-1/scm-credentials", {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
       }),
       env as never
     );
@@ -60,13 +56,9 @@ describe("SCM credentials router provider gate", () => {
 
   it("allows GitLab deployments to reach the tunnel URLs endpoint", async () => {
     const { env, fetch } = createEnv();
-    const token = await generateInternalToken(secret);
 
     const response = await handleRequest(
-      new Request("https://test.local/sessions/session-1/tunnel-urls", {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
-      }),
+      await signedServiceRequest("https://test.local/sessions/session-1/tunnel-urls"),
       env as never
     );
 
@@ -93,14 +85,11 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
   });
 
-  it("rejects internal HMAC authentication for the signing-key broker", async () => {
+  it("rejects service authentication for the signing-key broker", async () => {
     const { env } = createEnv();
-    const token = await generateInternalToken(secret);
 
     const response = await handleRequest(
-      new Request("https://test.local/sessions/session-1/commit-signing", {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
+      await signedServiceRequest("https://test.local/sessions/session-1/commit-signing"),
       env as never
     );
 
@@ -109,12 +98,10 @@ describe("SCM credentials router provider gate", () => {
 
   it("continues blocking unrelated GitLab session routes", async () => {
     const { env, fetch } = createEnv();
-    const token = await generateInternalToken(secret);
 
     const response = await handleRequest(
-      new Request("https://test.local/sessions/session-1/pr", {
+      await signedServiceRequest("https://test.local/sessions/session-1/pr", {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
       }),
       env as never
     );

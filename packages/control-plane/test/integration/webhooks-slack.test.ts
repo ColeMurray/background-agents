@@ -2,15 +2,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
-import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
+import { serviceFetch } from "./helpers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
 
 function makeSlackEventBody(overrides?: Record<string, unknown>): Record<string, unknown> {
   const ts = `${Date.now()}.${Math.floor(Math.random() * 1e6)}`;
@@ -72,13 +67,10 @@ async function seedSlackAutomation(): Promise<string> {
   return automation.id;
 }
 
-async function postEvent(
-  body: Record<string, unknown>,
-  headers?: Record<string, string>
-): Promise<Response> {
-  return SELF.fetch("https://test.local/internal/slack-event", {
+async function postEvent(body: Record<string, unknown>): Promise<Response> {
+  return serviceFetch("https://test.local/internal/slack-event", {
     method: "POST",
-    headers: headers ?? (await authHeaders()),
+    service: "slack-bot",
     body: JSON.stringify(body),
   });
 }
@@ -88,23 +80,31 @@ async function postEvent(
 describe("POST /internal/slack-event (integration)", () => {
   beforeEach(cleanD1Tables);
 
-  it("returns 401 without an internal token", async () => {
-    const res = await postEvent(makeSlackEventBody(), { "Content-Type": "application/json" });
+  it("returns 401 without service auth", async () => {
+    const res = await SELF.fetch("https://test.local/internal/slack-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(makeSlackEventBody()),
+    });
     expect(res.status).toBe(401);
   });
 
-  it("returns 401 with an invalid internal token", async () => {
-    const res = await postEvent(makeSlackEventBody(), {
-      Authorization: "Bearer not-a-valid-token",
-      "Content-Type": "application/json",
+  it("returns 401 for a legacy bearer token (scheme retired)", async () => {
+    const res = await SELF.fetch("https://test.local/internal/slack-event", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer not-a-valid-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(makeSlackEventBody()),
     });
     expect(res.status).toBe(401);
   });
 
   it("returns 400 for invalid JSON", async () => {
-    const res = await SELF.fetch("https://test.local/internal/slack-event", {
+    const res = await serviceFetch("https://test.local/internal/slack-event", {
       method: "POST",
-      headers: await authHeaders(),
+      service: "slack-bot",
       body: "not json",
     });
     expect(res.status).toBe(400);
@@ -113,9 +113,9 @@ describe("POST /internal/slack-event (integration)", () => {
   it.each(["null", "[]", "42"])(
     "returns 400 when the JSON body is not an object (%s)",
     async (raw) => {
-      const res = await SELF.fetch("https://test.local/internal/slack-event", {
+      const res = await serviceFetch("https://test.local/internal/slack-event", {
         method: "POST",
-        headers: await authHeaders(),
+        service: "slack-bot",
         body: raw,
       });
       expect(res.status).toBe(400);

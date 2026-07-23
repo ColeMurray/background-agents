@@ -189,7 +189,7 @@ export class ImageBuildStore {
     buildId: string;
     provider: ImageBuildProvider;
     tokenHash: string;
-    providerSessionId: string;
+    providerSessionId: string | null;
     now: number;
   }): Promise<ImageBuildCallbackBuild | null> {
     const build = await this.readCallbackTokenRow(params.buildId, params.provider);
@@ -198,7 +198,7 @@ export class ImageBuildStore {
     const result = await this.db
       .prepare(
         `UPDATE image_builds SET callback_token_used_at = ?
-         WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
+         WHERE id = ? AND provider = ? AND provider_session_id IS ? AND status = 'building'
            AND callback_token_hash = ?
            AND callback_token_expires_at >= ?
            AND callback_token_used_at IS NULL`
@@ -228,18 +228,35 @@ export class ImageBuildStore {
     buildId: string;
     provider: ImageBuildProvider;
     tokenHash: string;
-    providerSessionId: string;
+    providerSessionId: string | null;
     now: number;
   }): Promise<boolean> {
     const build = await this.readCallbackTokenRow(params.buildId, params.provider);
     return this.callbackTokenRowIsUsable(build, params);
   }
 
+  /**
+   * Token check for late-artifact recording: the row has already left
+   * 'building', so only the hash binding and expiry gate — not status,
+   * session binding, or single-use consumption.
+   */
+  async verifyCallbackTokenForArtifactRecording(params: {
+    buildId: string;
+    provider: ImageBuildProvider;
+    tokenHash: string;
+    now: number;
+  }): Promise<boolean> {
+    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
+    if (!build || !build.callback_token_hash || !build.callback_token_expires_at) return false;
+    if (build.callback_token_expires_at < params.now) return false;
+    return timingSafeEqual(build.callback_token_hash, params.tokenHash);
+  }
+
   async markBuildFailedWithCallbackToken(params: {
     buildId: string;
     provider: ImageBuildProvider;
     tokenHash: string;
-    providerSessionId: string;
+    providerSessionId: string | null;
     error: string;
     now: number;
   }): Promise<boolean> {
@@ -250,7 +267,7 @@ export class ImageBuildStore {
       .prepare(
         `UPDATE image_builds
          SET status = 'failed', error_message = ?, callback_token_used_at = ?
-         WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
+         WHERE id = ? AND provider = ? AND provider_session_id IS ? AND status = 'building'
            AND callback_token_hash = ?
            AND callback_token_expires_at >= ?
            AND callback_token_used_at IS NULL`
@@ -286,7 +303,7 @@ export class ImageBuildStore {
   /** Timing-safe, single-use, unexpired token bound to the build's provider session. */
   private callbackTokenRowIsUsable(
     build: CallbackTokenRow | null,
-    params: { tokenHash: string; providerSessionId: string; now: number }
+    params: { tokenHash: string; providerSessionId: string | null; now: number }
   ): build is CallbackTokenRow {
     if (!build || build.status !== "building") return false;
     if (!build.callback_token_hash || !build.callback_token_expires_at) return false;

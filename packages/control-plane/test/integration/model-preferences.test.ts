@@ -1,16 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
-import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-}
+import { serviceFetch } from "./helpers";
 
 async function seedPreferences(enabledModels: unknown): Promise<void> {
   await env.DB.prepare(
@@ -31,9 +23,7 @@ describe("Model preferences API", () => {
   beforeEach(cleanD1Tables);
 
   it("returns defaults when no preferences are stored", async () => {
-    const response = await SELF.fetch("https://test.local/model-preferences", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/model-preferences");
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS });
@@ -43,9 +33,7 @@ describe("Model preferences API", () => {
     const stored = ["openai/gpt-5.2", "openai/gpt-5.4", "anthropic/claude-sonnet-4-6"];
     await seedPreferences(stored);
 
-    const response = await SELF.fetch("https://test.local/model-preferences", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/model-preferences");
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -57,9 +45,7 @@ describe("Model preferences API", () => {
   it("normalizes and deduplicates stored legacy model IDs", async () => {
     await seedPreferences(["gpt-5.4", "openai/gpt-5.4", "claude-sonnet-4-6"]);
 
-    const response = await SELF.fetch("https://test.local/model-preferences", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/model-preferences");
 
     expect(await response.json()).toEqual({
       enabledModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
@@ -69,9 +55,7 @@ describe("Model preferences API", () => {
   it("returns defaults when all stored models have been removed", async () => {
     await seedPreferences(["openai/gpt-5.2", "unknown/model"]);
 
-    const response = await SELF.fetch("https://test.local/model-preferences", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/model-preferences");
 
     expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS });
   });
@@ -79,9 +63,7 @@ describe("Model preferences API", () => {
   it("returns defaults for a malformed stored value", async () => {
     await seedPreferences({ model: "openai/gpt-5.4" });
 
-    const response = await SELF.fetch("https://test.local/model-preferences", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/model-preferences");
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS });
@@ -89,9 +71,8 @@ describe("Model preferences API", () => {
 
   it("normalizes, deduplicates, and replaces preferences on PUT", async () => {
     await seedPreferences(["anthropic/claude-sonnet-4-6"]);
-    const response = await SELF.fetch("https://test.local/model-preferences", {
+    const response = await serviceFetch("https://test.local/model-preferences", {
       method: "PUT",
-      headers: await authHeaders(),
       body: JSON.stringify({
         enabledModels: ["gpt-5.4", "openai/gpt-5.4", "claude-sonnet-4-6"],
       }),
@@ -106,9 +87,8 @@ describe("Model preferences API", () => {
   it("rejects invalid models atomically", async () => {
     const stored = ["anthropic/claude-sonnet-4-6"];
     await seedPreferences(stored);
-    const response = await SELF.fetch("https://test.local/model-preferences", {
+    const response = await serviceFetch("https://test.local/model-preferences", {
       method: "PUT",
-      headers: await authHeaders(),
       body: JSON.stringify({ enabledModels: ["openai/gpt-5.4", "openai/gpt-5.2"] }),
     });
 
@@ -117,9 +97,8 @@ describe("Model preferences API", () => {
   });
 
   it("rejects non-string model IDs", async () => {
-    const response = await SELF.fetch("https://test.local/model-preferences", {
+    const response = await serviceFetch("https://test.local/model-preferences", {
       method: "PUT",
-      headers: await authHeaders(),
       body: JSON.stringify({ enabledModels: ["openai/gpt-5.4", null] }),
     });
 

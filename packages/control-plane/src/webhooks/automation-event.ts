@@ -10,33 +10,10 @@
  */
 
 import type { AutomationEventSource } from "@open-inspect/shared";
-import { verifyInternalToken } from "../auth/internal";
+import { requireEventPoster } from "../auth/identity-enforcement";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
 import type { Env } from "../types";
-
-/**
- * Authenticate the internal bot→control-plane call. Fails closed when the
- * secret is unconfigured. The router-level gate already enforces this;
- * repeated here for defense-in-depth. Returns the error response, or null
- * when authenticated.
- */
-export async function authenticateAutomationEvent(
-  request: Request,
-  env: Env
-): Promise<Response | null> {
-  if (!env.INTERNAL_CALLBACK_SECRET) {
-    return error("Internal authentication not configured", 500);
-  }
-  const isValid = await verifyInternalToken(
-    request.headers.get("Authorization"),
-    env.INTERNAL_CALLBACK_SECRET
-  );
-  if (!isValid) {
-    return error("Unauthorized", 401);
-  }
-  return null;
-}
 
 export type AutomationEventEnvelopeResult =
   | { event: Record<string, unknown>; response?: never }
@@ -111,9 +88,9 @@ export function createAutomationEventRoute(opts: {
     request: Request,
     env: Env,
     _match: RegExpMatchArray,
-    _ctx: RequestContext
+    ctx: RequestContext
   ): Promise<Response> {
-    const authFailure = await authenticateAutomationEvent(request, env);
+    const authFailure = requireEventPoster(ctx, opts.source);
     if (authFailure) return authFailure;
 
     let body: unknown;

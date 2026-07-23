@@ -28,8 +28,8 @@ import {
 import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
-import { resolveProviderIdentity, type SessionIdentityFields } from "../session/identity";
 import { generateId } from "../auth/crypto";
+import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
 import {
@@ -301,8 +301,22 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<CreateAutomationRequest & SessionIdentityFields>(request);
+  const body = await parseJsonBody<
+    CreateAutomationRequest & {
+      // Bot-asserted actor display fields — cosmetic, never identity.
+      actorDisplayName?: string;
+      actorEmail?: string;
+      actorAvatarUrl?: string;
+    }
+  >(request);
   if (body instanceof Response) return body;
+
+  // Automation attribution comes from the verified principal. The stored
+  // values are replayed by the scheduler as session identity at fire time,
+  // so this is where they become trustworthy.
+  const enforcement = applyIdentityEnforcement(ctx, "automation-create", body);
+  if (enforcement.rejection) return enforcement.rejection;
+  const enforced = enforcement.enforced;
 
   // Validate required fields
   if (!body.name || typeof body.name !== "string" || body.name.trim().length === 0) {
@@ -440,27 +454,16 @@ async function handleCreateAutomation(
     triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
-  // Resolve canonical user model ID (best-effort, same pattern as handleCreateSession).
-  // Automations are created by web users, so resolve through the provider-agnostic
-  // "user" path: this populates user_id for both GitHub (scm*) and Google (auth*)
-  // users at creation time. Without it a Google automation would store user_id = NULL,
-  // and the github-only scheduler fallback (createSessionForAutomation) could never
-  // recover the canonical user — losing attribution, enrichment, and tokens at fire time.
-  let resolvedUserId: string | null = null;
-  const providerIdentity = resolveProviderIdentity("user", body);
-  if (providerIdentity) {
-    try {
-      const userStore = new UserStore(ctx.db);
-      const resolvedUser = await userStore.resolveOrCreateUser(providerIdentity);
-      resolvedUserId = resolvedUser.id;
-    } catch (e) {
-      logger.warn("Failed to resolve user identity for automation", {
-        error: e instanceof Error ? e : String(e),
-        provider: providerIdentity.provider,
-        providerUserId: providerIdentity.providerUserId,
-      });
-    }
-  }
+  // Resolve the canonical user model ID fail-closed from the verified
+  // principal — the scheduler replays user_id as session identity at fire
+  // time, so an automation must never be created with lost attribution.
+  const resolution = await resolveCanonicalUserId(new UserStore(ctx.db), ctx, enforced, {
+    displayName: body.actorDisplayName,
+    email: body.actorEmail,
+    avatarUrl: body.actorAvatarUrl,
+  });
+  if (resolution instanceof Response) return resolution;
+  const resolvedUserId = resolution.userId;
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
@@ -476,7 +479,7 @@ async function handleCreateAutomation(
     enabled: 1,
     next_run_at: nextRunAt,
     consecutive_failures: 0,
-    created_by: body.userId || "anonymous",
+    created_by: enforced.participantUserId,
     user_id: resolvedUserId,
     created_at: now,
     updated_at: now,

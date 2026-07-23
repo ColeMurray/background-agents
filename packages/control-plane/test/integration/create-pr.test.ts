@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { SessionDO } from "../../src/session/durable-object";
-import { generateInternalToken } from "../../src/auth/internal";
-import { initNamedSession, initSession, queryDO, seedMessage } from "./helpers";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
+import { initNamedSession, initSession, queryDO, seedMessage, serviceFetch } from "./helpers";
 
 describe("POST /internal/create-pr", () => {
   it("returns 404 when session is not initialized", async () => {
@@ -511,9 +505,8 @@ describe("POST /internal/create-pr", () => {
       const sessionName = `pr-target-400-${Date.now()}`;
       await initNamedSession(sessionName, multiRepoInit);
 
-      const res = await SELF.fetch(`https://test.local/sessions/${sessionName}/pr`, {
+      const res = await serviceFetch(`https://test.local/sessions/${sessionName}/pr`, {
         method: "POST",
-        headers: await authHeaders(),
         body: JSON.stringify({ title: "PR", body: "desc" }),
       });
 
@@ -528,9 +521,8 @@ describe("POST /internal/create-pr", () => {
       const sessionName = `pr-target-403-${Date.now()}`;
       await initNamedSession(sessionName, multiRepoInit);
 
-      const res = await SELF.fetch(`https://test.local/sessions/${sessionName}/pr`, {
+      const res = await serviceFetch(`https://test.local/sessions/${sessionName}/pr`, {
         method: "POST",
-        headers: await authHeaders(),
         body: JSON.stringify({
           title: "PR",
           body: "desc",

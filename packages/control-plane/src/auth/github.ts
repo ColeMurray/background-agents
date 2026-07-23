@@ -93,12 +93,23 @@ export async function refreshAccessToken(
   return parseGitHubTokenResponse(response);
 }
 
+/** Error from a GitHub API call, carrying the HTTP status for callers that map it. */
+export class GitHubUserApiError extends Error {
+  constructor(readonly status: number) {
+    super(`GitHub API error: ${status}`);
+    this.name = "GitHubUserApiError";
+  }
+}
+
 /**
  * Get current user info from GitHub.
+ *
+ * @throws {GitHubUserApiError} on non-2xx responses, with `status` set.
  */
 export async function getGitHubUser(
   accessToken: string,
-  userAgent: string = DEFAULT_APP_NAME
+  userAgent: string = DEFAULT_APP_NAME,
+  signal?: AbortSignal
 ): Promise<GitHubUser> {
   const response = await fetch("https://api.github.com/user", {
     headers: {
@@ -106,10 +117,11 @@ export async function getGitHubUser(
       Accept: "application/vnd.github.v3+json",
       "User-Agent": userAgent,
     },
+    signal,
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub API error: ${response.status}`);
+    throw new GitHubUserApiError(response.status);
   }
 
   return response.json() as Promise<GitHubUser>;

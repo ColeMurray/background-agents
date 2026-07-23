@@ -8,6 +8,7 @@
  */
 
 import { computeHmacHex } from "@open-inspect/shared";
+import { callbackSigningSecret, type CallbackDestination } from "../auth/callback-signing";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
@@ -27,7 +28,11 @@ export interface CallbackRepository {
  * Narrow env interface — only the bindings CallbackNotificationService needs.
  */
 export interface CallbackServiceEnv {
-  INTERNAL_CALLBACK_SECRET?: string;
+  // Destination-bot signing keys for callback bodies; the CP
+  // holds every bot's key as verifier and signs callbacks with the
+  // destination's own.
+  SERVICE_AUTH_SECRET_SLACK_BOT?: string;
+  SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
   SCHEDULER_CALLBACK?: Fetcher;
@@ -92,21 +97,22 @@ export class CallbackNotificationService {
   }
 
   /**
-   * Resolve the callback service binding based on the message source.
-   * Returns the appropriate Fetcher for the originating client.
+   * Where a non-automation callback goes and which key signs it — one
+   * decision, so destination and signing key cannot diverge (the CP signs
+   * with the DESTINATION bot's secret). Automation callbacks
+   * are routed to the SchedulerDO before this is consulted. Non-linear
+   * sources default to the slack bot for backward compatibility (web
+   * sources, etc.).
    */
-  private getBinding(source: string | null): Fetcher | undefined {
-    switch (source) {
-      case "automation":
-        return this.env.SCHEDULER_CALLBACK;
-      case "linear":
-        return this.env.LINEAR_BOT;
-      case "slack":
-        return this.env.SLACK_BOT;
-      default:
-        // Default to SLACK_BOT for backward compatibility (web sources, etc.)
-        return this.env.SLACK_BOT;
-    }
+  private resolveCallbackRoute(source: string | null): {
+    binding: Fetcher | undefined;
+    secret: string | undefined;
+  } {
+    const destination: CallbackDestination = source === "linear" ? "linear-bot" : "slack-bot";
+    return {
+      binding: destination === "linear-bot" ? this.env.LINEAR_BOT : this.env.SLACK_BOT,
+      secret: callbackSigningSecret(this.env, destination),
+    };
   }
 
   /** Notify the Linear worker after a Linear message is dispatched to a live sandbox. */
@@ -121,7 +127,8 @@ export class CallbackNotificationService {
       return;
     }
 
-    if (!this.env.INTERNAL_CALLBACK_SECRET) {
+    const { binding, secret } = this.resolveCallbackRoute("linear");
+    if (!secret) {
       this.log.debug("callback.started", {
         message_id: messageId,
         outcome: "skipped",
@@ -129,7 +136,7 @@ export class CallbackNotificationService {
       });
       return;
     }
-    if (!this.env.LINEAR_BOT) {
+    if (!binding) {
       this.log.debug("callback.started", {
         message_id: messageId,
         outcome: "skipped",
@@ -142,8 +149,8 @@ export class CallbackNotificationService {
       messageId,
       callbackContext: message.callback_context,
       sessionId: this.getSessionId(),
-      secret: this.env.INTERNAL_CALLBACK_SECRET,
-      binding: this.env.LINEAR_BOT,
+      secret,
+      binding,
       log: this.log,
       sleep: this.sleep,
     });
@@ -180,12 +187,11 @@ export class CallbackNotificationService {
         return;
       }
 
-      if (!this.env.INTERNAL_CALLBACK_SECRET) {
+      const { binding, secret } = this.resolveCallbackRoute(source);
+      if (!secret) {
         result.rejectReason = "no_secret";
         return;
       }
-
-      const binding = this.getBinding(source);
       if (!binding) {
         result.rejectReason = "no_binding";
         return;
@@ -200,7 +206,7 @@ export class CallbackNotificationService {
         timestamp,
         context,
       };
-      const signature = await this.signPayload(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
+      const signature = await this.signPayload(payloadData, secret);
       const payload = { ...payloadData, signature };
       result = await deliverWithRetry(
         (signal) =>
@@ -350,21 +356,11 @@ export class CallbackNotificationService {
       });
       return;
     }
-    if (!this.env.INTERNAL_CALLBACK_SECRET) {
-      this.log.debug("callback.tool_call", {
-        message_id: messageId,
-        tool,
-        outcome: "skipped",
-        skip_reason: "no_secret",
-      });
-      return;
-    }
-
     const source = message.source ?? null;
 
-    // Automation runs have no tool-call progress consumer: getBinding routes them
-    // to the SchedulerDO, which only implements /internal/run-complete — every
-    // /callbacks/tool_call forward 404s. Skip rather than spam best-effort calls.
+    // Automation runs have no tool-call progress consumer: the SchedulerDO
+    // only implements /internal/run-complete — every /callbacks/tool_call
+    // forward 404s. Skip rather than spam best-effort calls.
     if (source === "automation") {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
@@ -376,7 +372,16 @@ export class CallbackNotificationService {
       return;
     }
 
-    const binding = this.getBinding(source);
+    const { binding, secret } = this.resolveCallbackRoute(source);
+    if (!secret) {
+      this.log.debug("callback.tool_call", {
+        message_id: messageId,
+        tool,
+        outcome: "skipped",
+        skip_reason: "no_secret",
+      });
+      return;
+    }
     if (!binding) {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
@@ -401,7 +406,7 @@ export class CallbackNotificationService {
       context,
     };
 
-    const signature = await this.signPayload(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
+    const signature = await this.signPayload(payloadData, secret);
     const payload = { ...payloadData, signature };
 
     try {

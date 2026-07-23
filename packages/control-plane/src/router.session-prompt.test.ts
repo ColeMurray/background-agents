@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { generateInternalToken } from "./auth/internal";
 import { UserStore } from "./db/user-store";
 import { handleRequest } from "./router";
 
@@ -8,9 +7,61 @@ vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
 }));
 
-describe("session prompt identity enrichment", () => {
-  const secret = "test-internal-secret";
+// Prompts attribute to the verified principal, never a body field. Resolve
+// the bearer token to a fixed user principal so the tests exercise the
+// principal-derived author path through the real router.
+vi.mock("./auth/web-session-tokens", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    WebSessionTokenService: vi.fn(function () {
+      return {
+        verifyAccessToken: async () => ({
+          ok: true,
+          tokenId: "token-1",
+          userId: "user-1",
+          provider: "github",
+          providerUserId: "583231",
+        }),
+      };
+    }),
+  };
+});
 
+function userPromptRequest(body: Record<string, unknown>): Request {
+  return new Request("https://test.local/sessions/session-1/prompt", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer oi_at_test-token",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function createEnv(sessionFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const statement = {
+    bind: vi.fn(() => statement),
+    first: vi.fn(async () => null),
+    all: vi.fn(async () => ({ results: [] })),
+    run: vi.fn(async () => ({ meta: { changes: 0 } })),
+  };
+  return {
+    SCM_PROVIDER: "github",
+    DB: {
+      prepare: vi.fn(() => statement),
+      batch: vi.fn(),
+      exec: vi.fn(),
+      dump: vi.fn(),
+    },
+    SESSION: {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: sessionFetch }),
+    },
+  };
+}
+
+describe("session prompt identity enrichment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -45,37 +96,9 @@ describe("session prompt identity enrichment", () => {
       });
       return Response.json({ status: "queued" });
     });
-    const statement = {
-      bind: vi.fn(() => statement),
-      first: vi.fn(async () => null),
-      all: vi.fn(async () => ({ results: [] })),
-      run: vi.fn(async () => ({ meta: { changes: 0 } })),
-    };
-    const token = await generateInternalToken(secret);
-
     const response = await handleRequest(
-      new Request("https://test.local/sessions/session-1/prompt", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ content: "Fix the bug", authorId: "user-1" }),
-      }),
-      {
-        INTERNAL_CALLBACK_SECRET: secret,
-        SCM_PROVIDER: "github",
-        DB: {
-          prepare: vi.fn(() => statement),
-          batch: vi.fn(),
-          exec: vi.fn(),
-          dump: vi.fn(),
-        },
-        SESSION: {
-          idFromName: (name: string) => name,
-          get: () => ({ fetch: sessionFetch }),
-        },
-      } as never
+      userPromptRequest({ content: "Fix the bug" }),
+      createEnv(sessionFetch) as never
     );
 
     expect(response.status).toBe(200);
@@ -96,37 +119,9 @@ describe("session prompt identity enrichment", () => {
       expect(body).not.toHaveProperty("scmEnrichment");
       return Response.json({ status: "queued" });
     });
-    const statement = {
-      bind: vi.fn(() => statement),
-      first: vi.fn(async () => null),
-      all: vi.fn(async () => ({ results: [] })),
-      run: vi.fn(async () => ({ meta: { changes: 0 } })),
-    };
-    const token = await generateInternalToken(secret);
-
     const response = await handleRequest(
-      new Request("https://test.local/sessions/session-1/prompt", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ content: "Fix the bug", authorId: "user-1" }),
-      }),
-      {
-        INTERNAL_CALLBACK_SECRET: secret,
-        SCM_PROVIDER: "github",
-        DB: {
-          prepare: vi.fn(() => statement),
-          batch: vi.fn(),
-          exec: vi.fn(),
-          dump: vi.fn(),
-        },
-        SESSION: {
-          idFromName: (name: string) => name,
-          get: () => ({ fetch: sessionFetch }),
-        },
-      } as never
+      userPromptRequest({ content: "Fix the bug" }),
+      createEnv(sessionFetch) as never
     );
 
     expect(response.status).toBe(200);
@@ -146,40 +141,26 @@ describe("session prompt identity enrichment", () => {
       expect(body).not.toHaveProperty("scmEnrichment");
       return Response.json({ status: "queued" });
     });
-    const statement = {
-      bind: vi.fn(() => statement),
-      first: vi.fn(async () => null),
-      all: vi.fn(async () => ({ results: [] })),
-      run: vi.fn(async () => ({ meta: { changes: 0 } })),
-    };
-    const token = await generateInternalToken(secret);
-
     const response = await handleRequest(
-      new Request("https://test.local/sessions/session-1/prompt", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ content: "Fix the bug", authorId: "user-1" }),
-      }),
-      {
-        INTERNAL_CALLBACK_SECRET: secret,
-        SCM_PROVIDER: "github",
-        DB: {
-          prepare: vi.fn(() => statement),
-          batch: vi.fn(),
-          exec: vi.fn(),
-          dump: vi.fn(),
-        },
-        SESSION: {
-          idFromName: (name: string) => name,
-          get: () => ({ fetch: sessionFetch }),
-        },
-      } as never
+      userPromptRequest({ content: "Fix the bug" }),
+      createEnv(sessionFetch) as never
     );
 
     expect(response.status).toBe(200);
     expect(sessionFetch).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a caller-asserted authorId without forwarding to the runtime", async () => {
+    const sessionFetch = vi.fn(async () => Response.json({ status: "queued" }));
+    const response = await handleRequest(
+      userPromptRequest({ content: "Fix the bug", authorId: "someone-else" }),
+      createEnv(sessionFetch) as never
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Field 'authorId' is not accepted from verified callers",
+    });
+    expect(sessionFetch).not.toHaveBeenCalled();
   });
 });

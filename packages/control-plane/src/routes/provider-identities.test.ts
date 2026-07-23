@@ -25,6 +25,9 @@ function createCtx(): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     db: {} as SqlDatabase,
+    // The real upsert caller: web's BFF during the OAuth sign-in flow. Only
+    // it (or the matching user) passes enforceProviderIdentityPath.
+    principal: { kind: "service", service: "web", actor: null },
     metrics: {
       d1Queries: [],
       spans: {},
