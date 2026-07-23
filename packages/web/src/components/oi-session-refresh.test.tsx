@@ -15,6 +15,10 @@ vi.mock("next-auth/react", () => ({
 
 let fetchSpy: ReturnType<typeof vi.fn>;
 
+function setVisibilityState(state: DocumentVisibilityState): void {
+  Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+}
+
 beforeEach(() => {
   mocks.status = "loading";
   fetchSpy = vi.fn().mockResolvedValue(new Response("{}"));
@@ -40,11 +44,18 @@ describe("OiSessionRefresh", () => {
     expect(fetchSpy).toHaveBeenCalledWith("/api/auth/oi-refresh", { method: "POST" });
   });
 
-  it("pings again when the tab becomes visible", () => {
+  it("pings again when the tab becomes visible, not while hidden", () => {
     mocks.status = "authenticated";
     render(<OiSessionRefresh />);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
+    // Explicit state on both sides — the handler gates on visibilityState,
+    // so the test must not lean on jsdom's default being "visible".
+    setVisibilityState("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    setVisibilityState("visible");
     document.dispatchEvent(new Event("visibilitychange"));
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
