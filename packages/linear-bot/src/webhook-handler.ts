@@ -212,6 +212,14 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
           `https://internal/sessions/${existingSession.sessionId}/stop`,
           { method: "POST", headers }
         );
+        if (!stopRes.ok) {
+          log.error("agent_session.stop_failed", {
+            trace_id: traceId,
+            session_id: existingSession.sessionId,
+            stop_status: stopRes.status,
+          });
+          return;
+        }
         log.info("agent_session.stopped", {
           trace_id: traceId,
           agent_session_id: agentSessionId,
@@ -225,6 +233,7 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
           session_id: existingSession.sessionId,
           error: e instanceof Error ? e : new Error(String(e)),
         });
+        return;
       }
       await env.LINEAR_KV.delete(`issue:${issueId}`);
     }
@@ -679,7 +688,11 @@ export async function handleAgentSessionEvent(
   });
 
   // Stop handling
-  if (webhook.action === "stopped" || webhook.action === "cancelled") {
+  if (
+    webhook.agentActivity?.signal === "stop" ||
+    webhook.action === "stopped" ||
+    webhook.action === "cancelled"
+  ) {
     return handleStop(webhook, env, traceId);
   }
 
