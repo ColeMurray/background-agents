@@ -109,6 +109,14 @@ export async function dispatchControlPlaneFetch(
  * SERVICE_AUTH_SECRET is not configured; callers treat that as an exchange
  * failure.
  */
+/**
+ * Token calls sit on the sign-in path and the background refresh ping — an
+ * unresponsive control plane must fail fast into the callers' existing
+ * exchange_fallback/request_failed paths, not hang until the platform's own
+ * timeout.
+ */
+const SERVICE_FETCH_TIMEOUT_MS = 10_000;
+
 export async function controlPlaneServiceFetch(
   path: string,
   init: { method: string; body?: string }
@@ -139,7 +147,12 @@ export async function controlPlaneServiceFetch(
 
   return dispatchControlPlaneFetch(
     url,
-    { method: init.method, headers, body: init.body },
+    {
+      method: init.method,
+      headers,
+      body: init.body,
+      signal: AbortSignal.timeout(SERVICE_FETCH_TIMEOUT_MS),
+    },
     correlationFields
   );
 }
