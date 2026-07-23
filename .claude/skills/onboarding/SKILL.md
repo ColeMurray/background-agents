@@ -177,12 +177,15 @@ Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
 2. OAuth & Permissions → Add scopes: `app_mentions:read`, `chat:write`, `channels:history`,
-   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `files:write`,
-   `reactions:write`
+   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`,
+   `files:write`, `reactions:write`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL
    verification)
+
+`files:read` forwards user-attached images into sessions; `files:write` posts generated media back
+to Slack. Reinstall the app whenever either scope is added to an existing installation.
 
 ## Phase 6: Generate Security Secrets
 

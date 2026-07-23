@@ -87,13 +87,14 @@ if needed.
 
 ### What's Stored in a Session
 
-| Data          | Description                                       |
-| ------------- | ------------------------------------------------- |
-| Messages      | Prompts you've sent and their metadata            |
-| Events        | Tool calls, token streams, status updates         |
-| Artifacts     | PRs created, screenshots captured                 |
-| Participants  | Users who have joined the session                 |
-| Sandbox state | Reference to the current sandbox and its snapshot |
+| Data               | Description                                       |
+| ------------------ | ------------------------------------------------- |
+| Messages           | Prompts you've sent and their metadata            |
+| Prompt attachments | Images uploaded with web or Slack prompts         |
+| Events             | Tool calls, token streams, status updates         |
+| Artifacts          | PRs created, screenshots captured                 |
+| Participants       | Users who have joined the session                 |
+| Sandbox state      | Reference to the current sandbox and its snapshot |
 
 Each session gets its own SQLite database in a Cloudflare Durable Object, ensuring isolation and
 high performance even with hundreds of concurrent sessions.
@@ -221,7 +222,8 @@ can make HTTP requests and maintain WebSocket connections can participate.
 **Current clients:**
 
 - **Web**: Next.js app with real-time streaming, session management, and settings
-- **Slack**: Bot that responds to @mentions and direct messages, classifies repos, and posts results
+- **Slack**: Bot that responds to @mentions and direct messages, forwards supported image
+  attachments, classifies repos, and posts results
 - **GitHub**: Bot that reviews PRs and responds to PR `@mentions`
 - **Linear**: Agent workflow that starts sessions from Linear issue activity
 

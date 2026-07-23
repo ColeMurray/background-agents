@@ -379,9 +379,9 @@ Queued delivery applies to every Slack completion, including text-only replies. 
 2. Add the Slack bot scopes `files:write` and `files:read` (needed to forward images attached to
    Slack messages into sessions), reinstall the app once for the workspace, and update
    `slack_bot_token` if Slack issued a replacement.
-3. Run `terraform apply`, then verify a text completion and a generated-media attachment. If the
-   token lacks Queue access, the apply fails while provisioning the new resources; grant the
-   permission and rerun the apply.
+3. Run `terraform apply`, then verify a text completion, an inbound image attached to a prompt, and
+   a generated-media attachment. If the token lacks Queue access, the apply fails while provisioning
+   the new resources; grant the permission and rerun the apply.
 
 No individual Slack user needs to reauthorize the app. Teams with `enable_slack_bot = false` do not
 create the Queue resources.
@@ -1109,6 +1109,20 @@ If the bot doesn't see the original message when tagged in a thread reply:
    check these scopes and that the bot is invited to the target channel.
 3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
    take effect.
+
+### Slack image attachment does not reach the agent
+
+1. Verify the bot has the `files:read` scope and reinstall the app after adding it. The
+   `files:write` scope is for generated media posted back to Slack, not images sent to the agent.
+2. Use PNG, JPEG, WebP, or GIF images no larger than 10 MiB. Open-Inspect forwards at most six
+   images per message.
+3. In a channel, `@mention` the bot with the image. DMs do not require a mention. Watched-channel
+   automations do not forward file attachments.
+4. For channel mentions and replies, verify `channels:history` for public channels or
+   `groups:history` for private channels. Slack may omit files from the mention event, so the bot
+   uses conversation history to retrieve them.
+5. Check the Slack thread for a warning about images that were too large or could not be downloaded
+   or uploaded. Other images and any text are still sent when possible.
 
 ### Slack completion does not attach generated media
 
