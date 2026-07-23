@@ -17,6 +17,7 @@ import {
   type GitHubOrganizationAccessResult,
 } from "./github-org-membership";
 import { type AuthProvider, isAuthProvider } from "./build-auth-identity";
+import { applyOiSessionTokens } from "./oi-session";
 import { githubEmailListSchema, type GitHubEmail } from "./github-email-schema";
 
 const GITHUB_EMAIL_FETCH_TIMEOUT_MS = 5_000;
@@ -148,6 +149,12 @@ declare module "next-auth/jwt" {
     githubLogin?: string;
     provider?: AuthProvider;
     providerUserId?: string; // GitHub numeric id or Google sub
+    // CP-issued web session tokens: minted by the provider-verified
+    // exchange at sign-in, renewed via the rotating refresh grant through
+    // the /api/auth/oi-refresh route (the jwt callback never renews).
+    oiAccessToken?: string;
+    oiAccessTokenExpiresAt?: number; // Unix timestamp in milliseconds
+    oiRefreshToken?: string;
   }
 }
 
@@ -260,7 +267,7 @@ export function applyJwtClaims(
 
     if (provider === "github") {
       token.accessToken = account.access_token;
-      token.refreshToken = account.refresh_token as string | undefined;
+      token.refreshToken = account.refresh_token;
       // expires_at is in seconds, convert to milliseconds (only set if provided)
       token.accessTokenExpiresAt = account.expires_at ? account.expires_at * 1000 : undefined;
     } else {
@@ -450,7 +457,7 @@ export const authOptions: NextAuthOptions = {
       return orgMembership.allowed;
     },
     async jwt({ token, account, profile }) {
-      return applyJwtClaims(token, account, profile);
+      return applyOiSessionTokens(applyJwtClaims(token, account, profile), account);
     },
     async session({ session, token }) {
       return applySessionUser(session, token);

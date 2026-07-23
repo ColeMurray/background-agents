@@ -20,7 +20,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
 
   const { id } = await params;
-  const userId = session.user.id || session.user.email || "anonymous";
 
   let body: { title?: string } | null;
   try {
@@ -36,7 +35,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const response = await controlPlaneFetch(`/sessions/${id}/title`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, title: body.title }),
+      // userId is derived by the control plane from the Bearer principal and
+      // is rejected in the body under strict enforcement.
+      body: JSON.stringify({ title: body.title }),
     });
 
     const data = await response.json();

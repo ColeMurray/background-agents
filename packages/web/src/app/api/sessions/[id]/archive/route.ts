@@ -12,12 +12,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   const { id } = await params;
-  const userId = session.user.id || session.user.email || "anonymous";
 
   try {
+    // userId is derived by the control plane from the Bearer principal and
+    // is rejected in the body under strict enforcement.
     const response = await controlPlaneFetch(`/sessions/${id}/archive`, {
       method: "POST",
-      body: JSON.stringify({ userId }),
+      body: JSON.stringify({}),
     });
 
     const data = await response.json();

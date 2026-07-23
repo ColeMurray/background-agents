@@ -30,14 +30,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     const { content, model, reasoningEffort, attachments } = parsed.data;
 
-    const user = session.user;
-    const userId = user.id || user.email || "anonymous";
-
+    // authorId is derived by the control plane from the Bearer principal and
+    // is rejected in the body under strict enforcement.
     const response = await controlPlaneFetch(`/sessions/${sessionId}/prompt`, {
       method: "POST",
       body: JSON.stringify({
         content,
-        authorId: userId,
         source: "web",
         model,
         reasoningEffort,

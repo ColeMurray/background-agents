@@ -3,6 +3,7 @@
 import { SessionProvider } from "next-auth/react";
 import { ThemeProvider } from "next-themes";
 import { SWRConfig } from "swr";
+import { OiSessionRefresh } from "@/components/oi-session-refresh";
 import { Toaster } from "@/components/ui/sonner";
 import { SyntaxHighlightTheme } from "@/components/syntax-highlight-theme";
 
@@ -18,6 +19,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <SWRConfig value={{ fetcher: swrFetcher, revalidateOnFocus: true, dedupingInterval: 2000 }}>
         <SessionProvider>
           {children}
+          <OiSessionRefresh />
           <SyntaxHighlightTheme />
           <Toaster />
         </SessionProvider>

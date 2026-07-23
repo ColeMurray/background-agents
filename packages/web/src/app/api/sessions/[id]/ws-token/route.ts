@@ -1,9 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
-import { buildAuthIdentity, buildScmCredentials } from "@/lib/build-auth-identity";
+import { buildAuthDisplay, buildScmAttribution } from "@/lib/build-auth-identity";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 /**
@@ -15,7 +14,7 @@ import { controlPlaneFetch } from "@/lib/control-plane";
  * 3. Proxies the request to the control plane to generate a token
  * 4. Returns the token to the client for WebSocket connection
  */
-export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const routeStart = Date.now();
 
   const session = await getServerSession(authOptions);
@@ -28,31 +27,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id: sessionId } = await params;
 
   try {
-    // Extract user info from NextAuth session
+    // Extract user info from NextAuth session. Participant identity (userId)
+    // and SCM credentials are derived by the control plane from the Bearer
+    // principal and are rejected in the body under strict enforcement — the
+    // body carries display/attribution fields only.
     const user = session.user;
-    const userId = user.id || user.email || "anonymous";
-    const { authName } = buildAuthIdentity(user);
-
-    const jwtStart = Date.now();
-    const jwt = await getToken({ req: request });
-    const jwtMs = Date.now() - jwtStart;
+    const { authName } = buildAuthDisplay(user);
 
     const fetchStart = Date.now();
     const response = await controlPlaneFetch(`/sessions/${sessionId}/ws-token`, {
       method: "POST",
       body: JSON.stringify({
-        userId,
         authName,
-        // GitHub-only SCM credentials + attribution; empty for Google, which
-        // keeps participant identity via userId and writes no SCM token.
-        ...buildScmCredentials(user, jwt),
+        // GitHub-only commit attribution; empty for Google.
+        ...buildScmAttribution(user),
       }),
     });
     const fetchMs = Date.now() - fetchStart;
     const totalMs = Date.now() - routeStart;
 
     console.log(
-      `[ws-token] session=${sessionId} total=${totalMs}ms auth=${authMs}ms jwt=${jwtMs}ms fetch=${fetchMs}ms status=${response.status}`
+      `[ws-token] session=${sessionId} total=${totalMs}ms auth=${authMs}ms fetch=${fetchMs}ms status=${response.status}`
     );
 
     if (!response.ok) {
