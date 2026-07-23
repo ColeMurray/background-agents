@@ -1,3 +1,4 @@
+import { encodeRepositoryPathSegments, parseRepositoryFullName } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { Logger } from "../logger";
@@ -41,8 +42,14 @@ export async function getGitHubConfig(
   repo: string,
   log?: Logger
 ): Promise<ResolvedGitHubConfig> {
-  const [owner, name] = repo.split("/");
-  const url = `https://internal/integration-settings/github/resolved/${owner}/${name}`;
+  // Owners may be nested namespaces — split on the last slash and encode the
+  // owner as a single route segment (see the repo-owner gotcha in AGENTS.md).
+  const repository = parseRepositoryFullName(repo);
+  if (!repository) {
+    log?.warn("config.invalid_repo", { repo, fallback: "fail_closed" });
+    return { ...FAIL_CLOSED, model: env.DEFAULT_MODEL };
+  }
+  const url = `https://internal/integration-settings/github/resolved/${encodeRepositoryPathSegments(repository)}`;
 
   let response: Response;
   try {

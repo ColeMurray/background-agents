@@ -10,7 +10,7 @@
  * session must always be able to check out the PR under review.
  */
 
-import { resolveAppName } from "@open-inspect/shared";
+import { encodeRepositoryPathSegments, resolveAppName } from "@open-inspect/shared";
 import { z } from "zod";
 import type { Env } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";
@@ -47,7 +47,8 @@ async function fetchDefaultEnvironmentId(
   const repo = `${owner}/${repoName}`.toLowerCase();
   let response: Response;
   try {
-    const url = `https://internal/repos/${owner}/${repoName}/metadata`;
+    // Owner encoded as one route segment — owners can be nested namespaces.
+    const url = `https://internal/repos/${encodeRepositoryPathSegments({ repoOwner: owner, repoName })}/metadata`;
     response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
   } catch (err) {
     log.warn("target.metadata_fetch_failed", {

@@ -49,7 +49,8 @@ export function createStartCallbackRouter(
 
     const rejection = await rejectInvalidCallback(
       c,
-      rawPayload as Record<string, unknown> & { signature: string }
+      rawPayload as Record<string, unknown> & { signature: string },
+      { path: "/start", traceId, startTime: requestStartedAt, sessionId: payload.sessionId }
     );
     if (rejection) return rejection;
 

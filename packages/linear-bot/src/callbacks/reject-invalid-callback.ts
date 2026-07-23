@@ -9,9 +9,9 @@ const log = createLogger("callback");
  * Shared rejection guard for signed callback routes: require the signing
  * secret, then verify the in-body HMAC signature. Returns a Response to
  * short-circuit on any failure, or null when the request is authentic and
- * the caller may proceed. Routes that log rejections pass `logContext`
- * (the start callback rejects silently and omits it); parsing stays in
- * each route so the caller controls how a malformed body is surfaced.
+ * the caller may proceed. Every route passes `logContext` so rejections are
+ * observable; parsing stays in each route so the caller controls how a
+ * malformed body is surfaced.
  */
 export async function rejectInvalidCallback(
   c: Context<{ Bindings: Env }>,
