@@ -4,10 +4,11 @@ import {
   buildServiceAuthHeaders,
   generateInternalToken,
   SERVICE_HEADER,
+  SERVICE_SIGNATURE_HEADER,
   type ServiceName,
 } from "@open-inspect/shared";
 
-import { authenticate, isAuthError } from "./authenticate";
+import { authenticate, isAuthError, SERVICE_REQUEST_MAX_BODY_BYTES } from "./authenticate";
 import type { RequestContext } from "../routes/shared";
 import type { Env } from "../types";
 
@@ -218,6 +219,45 @@ describe("authenticate — service credentials", () => {
         failedScheme: "per-service",
       });
     }
+  });
+
+  it("rejects a malformed signature header without reading the body", async () => {
+    const request = new Request("https://cp.test.local/sessions", {
+      method: "POST",
+      headers: {
+        [SERVICE_HEADER]: "modal",
+        [SERVICE_SIGNATURE_HEADER]: "sig1.not-a-timestamp.nonce.sig",
+      },
+      body: "{}",
+    });
+
+    const result = await authenticate(request, createEnv(), createCtx());
+    expect(result).toEqual({ reason: "Unauthorized", status: 401, failedScheme: "per-service" });
+    expect(request.bodyUsed).toBe(false);
+  });
+
+  it("rejects an over-cap body as 413 before signature verification", async () => {
+    const url = "https://cp.test.local/sessions";
+    const headers = await buildServiceAuthHeaders({
+      service: "modal",
+      secret: SERVICE_SECRET.modal,
+      method: "POST",
+      url,
+      body: "{}",
+    });
+    const request = new Request(url, {
+      method: "POST",
+      headers,
+      body: new Uint8Array(SERVICE_REQUEST_MAX_BODY_BYTES + 1),
+    });
+
+    // 413 (not the 401 this body mismatch would earn) proves the cap runs first.
+    const result = await authenticate(request, createEnv(), createCtx());
+    expect(result).toEqual({
+      reason: "Request body too large",
+      status: 413,
+      failedScheme: "per-service",
+    });
   });
 
   it("rejects expired signatures", async () => {

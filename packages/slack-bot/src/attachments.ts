@@ -15,6 +15,7 @@
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   postMessage,
+  readBodyCapped,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   type SessionAttachmentReference,
@@ -136,31 +137,6 @@ export function toImageAttachments(
   return attachments;
 }
 
-/** Read the body with a hard byte cap, cancelling as soon as it is exceeded. */
-async function readBodyCapped(res: Response, maxBytes: number): Promise<Uint8Array | null> {
-  if (!res.body) return new Uint8Array();
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
-}
-
 /**
  * Fetch an image's bytes with the bot token, enforcing the trusted host policy
  * (re-checked here as defense in depth) and the image byte cap. Returns a drop
@@ -199,7 +175,7 @@ async function downloadSlackFile(
       });
       return { dropReason: "too_large" };
     }
-    const bytes = await readBodyCapped(res, SESSION_ATTACHMENT_IMAGE_MAX_BYTES);
+    const bytes = await readBodyCapped(res.body, SESSION_ATTACHMENT_IMAGE_MAX_BYTES);
     if (bytes === null || bytes.byteLength === 0) {
       log.warn("slack.attachment.size_rejected", {
         trace_id: traceId,

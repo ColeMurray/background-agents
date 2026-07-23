@@ -11,6 +11,7 @@ import {
   buildServiceAuthHeaders,
   canonicalizeQuery,
   isServiceName,
+  parseServiceSignatureHeader,
   resolveOutboundCredential,
   SERVICE_HEADER,
   SERVICE_SIGNATURE_HEADER,
@@ -183,6 +184,37 @@ describe("buildServiceAuthHeaders", () => {
       actor: "",
     });
     expect(result).toMatchObject({ ok: true });
+  });
+});
+
+describe("parseServiceSignatureHeader", () => {
+  const vector = vectors[1]; // slack-bot POST with actor
+
+  it("parses a fresh well-formed header into its wire components", () => {
+    vi.spyOn(Date, "now").mockReturnValue(vector.timestampMs);
+    expect(parseServiceSignatureHeader(vector.expected.signatureHeader)).toEqual({
+      ok: true,
+      timestampMs: vector.timestampMs,
+      nonce: vector.nonce,
+      signature: vector.expected.signatureHex,
+    });
+  });
+
+  it("rejects every malformed fixture header without needing a secret or body", () => {
+    for (const malformed of malformedHeaders) {
+      expect(parseServiceSignatureHeader(malformed.signatureHeader), malformed.name).toEqual({
+        ok: false,
+        reason: malformed.reason,
+      });
+    }
+  });
+
+  it("rejects timestamps outside the validity window as expired", () => {
+    vi.spyOn(Date, "now").mockReturnValue(vector.timestampMs + 6 * 60 * 1000);
+    expect(parseServiceSignatureHeader(vector.expected.signatureHeader)).toEqual({
+      ok: false,
+      reason: "expired",
+    });
   });
 });
 

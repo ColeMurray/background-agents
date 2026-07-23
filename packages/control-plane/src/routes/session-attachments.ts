@@ -16,7 +16,7 @@
  * deletes them from storage.
  */
 
-import { sessionAttachmentIdSchema } from "@open-inspect/shared";
+import { readBodyCapped, sessionAttachmentIdSchema } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {
@@ -44,32 +44,6 @@ import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
-
-async function readAttachmentRequestBody(request: Request): Promise<Uint8Array | null> {
-  if (!request.body) return new Uint8Array();
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > SESSION_ATTACHMENT_MAX_REQUEST_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
-}
 
 function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
   const headers = new Headers();
@@ -102,7 +76,7 @@ async function handleAttachmentPost(
     return error("Attachment request is too large", 413);
   }
 
-  const requestBody = await readAttachmentRequestBody(request);
+  const requestBody = await readBodyCapped(request.body, SESSION_ATTACHMENT_MAX_REQUEST_BYTES);
   if (!requestBody) {
     return error("Attachment request is too large", 413);
   }

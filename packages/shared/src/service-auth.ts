@@ -182,22 +182,18 @@ export async function buildServiceAuthHeaders(p: {
   return headers;
 }
 
+export type ServiceSignatureHeaderParse =
+  | { ok: true; timestampMs: number; nonce: string; signature: string }
+  | { ok: false; reason: "format" | "expired" };
+
 /**
- * Verify a sig1 signature header against the named service's secret and the
- * request it claims to sign. The caller supplies the body hash (the body must
- * be buffered exactly once at the edge) and the actor header value (empty
- * string when absent), both of which are covered by the signature.
+ * Parse a sig1 signature header and check everything that does not need the
+ * request body: grammar, then timestamp freshness. Verifiers call this before
+ * buffering the body so a malformed or stale header never costs a body read —
+ * only the HMAC comparison itself needs the body hash.
  */
-export async function verifyServiceSignature(p: {
-  signatureHeader: string;
-  service: ServiceName;
-  secret: string;
-  method: string;
-  url: string;
-  bodySha256Hex: string;
-  actor: string;
-}): Promise<ServiceSignatureResult> {
-  const parts = p.signatureHeader.split(".");
+export function parseServiceSignatureHeader(header: string): ServiceSignatureHeaderParse {
+  const parts = header.split(".");
   if (parts.length !== 4 || parts[0] !== SIG1_PREFIX) {
     return { ok: false, reason: "format" };
   }
@@ -215,20 +211,42 @@ export async function verifyServiceSignature(p: {
   if (Math.abs(Date.now() - timestampMs) > TOKEN_VALIDITY_MS) {
     return { ok: false, reason: "expired" };
   }
+  return { ok: true, timestampMs, nonce, signature };
+}
+
+/**
+ * Verify a sig1 signature header against the named service's secret and the
+ * request it claims to sign. The caller supplies the body hash (the body must
+ * be buffered exactly once at the edge) and the actor header value (empty
+ * string when absent), both of which are covered by the signature.
+ */
+export async function verifyServiceSignature(p: {
+  signatureHeader: string;
+  service: ServiceName;
+  secret: string;
+  method: string;
+  url: string;
+  bodySha256Hex: string;
+  actor: string;
+}): Promise<ServiceSignatureResult> {
+  const parsed = parseServiceSignatureHeader(p.signatureHeader);
+  if (!parsed.ok) {
+    return parsed;
+  }
   const expected = await signCanonicalRequest({
     service: p.service,
     secret: p.secret,
-    timestampMs,
-    nonce,
+    timestampMs: parsed.timestampMs,
+    nonce: parsed.nonce,
     method: p.method,
     url: p.url,
     bodySha256Hex: p.bodySha256Hex,
     actor: p.actor,
   });
-  if (!timingSafeEqual(signature, expected)) {
+  if (!timingSafeEqual(parsed.signature, expected)) {
     return { ok: false, reason: "mismatch" };
   }
-  return { ok: true, timestampMs, nonce };
+  return { ok: true, timestampMs: parsed.timestampMs, nonce: parsed.nonce };
 }
 
 /** A sender's outbound credential: sig1 with the sender's own secret. */

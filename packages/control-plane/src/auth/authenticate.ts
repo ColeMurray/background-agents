@@ -16,6 +16,8 @@ import {
   SERVICE_SIGNATURE_HEADER,
   TOKEN_VALIDITY_MS,
   isServiceName,
+  parseServiceSignatureHeader,
+  readBodyCapped,
   sha256Hex,
   verifyServiceSignature,
   type ServiceName,
@@ -39,7 +41,7 @@ const logger = createLogger("auth");
 export interface AuthError {
   /** Response body message (also the log detail). Never carries token material. */
   reason: string;
-  status: 401 | 500;
+  status: 401 | 413 | 500;
   /**
    * Which scheme was attempted and failed. A per-service or user-token
    * attempt is terminal; "none" means no recognized credential was presented
@@ -47,6 +49,16 @@ export interface AuthError {
    */
   failedScheme: "per-service" | "user-token" | "none";
 }
+
+/**
+ * Hard cap on a service-signed request body. The signature covers the body
+ * hash, so the body must be buffered and hashed before verification can
+ * finish — this cap bounds what an unauthenticated sender can make the edge
+ * buffer. The largest legitimate signed body is a session-attachment
+ * multipart upload (see SESSION_ATTACHMENT_MAX_REQUEST_BYTES, ~10MB); sandbox
+ * media uploads authenticate with sandbox tokens and never pass through here.
+ */
+export const SERVICE_REQUEST_MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 export type AuthResult = { principal: Principal; request: Request } | AuthError;
 
@@ -160,7 +172,34 @@ async function authenticateServiceCredential(
     };
   }
 
-  const bodyBuffer = request.body === null ? null : await request.arrayBuffer();
+  // Reject everything rejectable before paying for the body: a malformed or
+  // stale header must not cost a body buffer + hash.
+  const parsedSignature = parseServiceSignatureHeader(signatureHeader);
+  if (!parsedSignature.ok) {
+    logger.warn("Service auth failed: signature rejected", {
+      event: "auth.service_failed",
+      failure: parsedSignature.reason,
+      service,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+  }
+
+  let bodyBuffer: Uint8Array | null = null;
+  if (request.body !== null) {
+    bodyBuffer = await readBodyCapped(request.body, SERVICE_REQUEST_MAX_BODY_BYTES);
+    if (bodyBuffer === null) {
+      logger.warn("Service auth failed: body over size cap", {
+        event: "auth.service_failed",
+        failure: "body_too_large",
+        service,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return { reason: "Request body too large", status: 413, failedScheme: "per-service" };
+    }
+  }
   const bodySha256Hex = await sha256Hex(bodyBuffer ?? "");
   const actor = request.headers.get(ACTOR_HEADER) ?? "";
 
