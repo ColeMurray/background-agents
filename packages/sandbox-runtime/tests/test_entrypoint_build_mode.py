@@ -1070,6 +1070,7 @@ class TestEnsureCredentialHelperConfigured:
             patch("sandbox_runtime.entrypoint.Path.write_text"),
             patch("sandbox_runtime.entrypoint.Path.chmod"),
             patch("sandbox_runtime.entrypoint.Path.exists", return_value=False),
+            patch.object(supervisor, "_install_gh_wrapper"),
         ):
             await supervisor._ensure_credential_helper_configured()
 
@@ -1099,6 +1100,7 @@ class TestEnsureCredentialHelperConfigured:
             ),
             patch("sandbox_runtime.entrypoint.Path.write_text", side_effect=OSError("read-only")),
             patch("sandbox_runtime.entrypoint.Path.exists", return_value=False),
+            patch.object(supervisor, "_install_gh_wrapper"),
         ):
             await supervisor._ensure_credential_helper_configured()
 
