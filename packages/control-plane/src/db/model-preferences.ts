@@ -1,4 +1,5 @@
-import { isValidModel } from "@open-inspect/shared";
+import { isValidModel, normalizeValidModels, type ValidModel } from "@open-inspect/shared";
+import type { SqlDatabase } from "./sql-database";
 
 export class ModelPreferencesValidationError extends Error {
   constructor(message: string) {
@@ -8,7 +9,7 @@ export class ModelPreferencesValidationError extends Error {
 }
 
 export class ModelPreferencesStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Get the list of enabled model IDs, or null if no preferences stored.
@@ -20,21 +21,26 @@ export class ModelPreferencesStore {
 
     if (!row) return null;
 
-    return JSON.parse(row.enabled_models) as string[];
+    const enabledModels: unknown = JSON.parse(row.enabled_models);
+    if (!Array.isArray(enabledModels) || !enabledModels.every((id) => typeof id === "string")) {
+      throw new Error("Stored model preferences must be an array of strings");
+    }
+
+    return enabledModels;
   }
 
   /**
    * Set the list of enabled model IDs.
    * Validates all IDs against VALID_MODELS.
    */
-  async setEnabledModels(modelIds: string[]): Promise<void> {
-    const unique = [...new Set(modelIds)];
-    const invalid = unique.filter((id) => !isValidModel(id));
+  async setEnabledModels(modelIds: string[]): Promise<ValidModel[]> {
+    const invalid = [...new Set(modelIds)].filter((id) => !isValidModel(id));
     if (invalid.length > 0) {
       throw new ModelPreferencesValidationError(`Invalid model IDs: ${invalid.join(", ")}`);
     }
 
-    if (unique.length === 0) {
+    const normalized = normalizeValidModels(modelIds);
+    if (normalized.length === 0) {
       throw new ModelPreferencesValidationError("At least one model must be enabled");
     }
 
@@ -47,7 +53,9 @@ export class ModelPreferencesStore {
            enabled_models = excluded.enabled_models,
            updated_at = excluded.updated_at`
       )
-      .bind(JSON.stringify(unique), now)
+      .bind(JSON.stringify(normalized), now)
       .run();
+
+    return normalized;
   }
 }

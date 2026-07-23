@@ -2,16 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomations } from "@/hooks/use-automations";
 import { AutomationsList } from "@/components/automations/automations-list";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon, PlusIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { PlusIcon } from "@/components/ui/icons";
 
 export default function AutomationsPage() {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const { automations, loading, mutate } = useAutomations();
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -40,15 +39,7 @@ export default function AutomationsPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
+            <CollapsedSidebarControls />
           </div>
         </header>
       )}
@@ -57,14 +48,17 @@ export default function AutomationsPage() {
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center justify-between mb-6">
             <h1 className="text-3xl font-semibold text-foreground">Automations</h1>
-            <Link href="/automations/new">
-              <Button size="sm">
-                <span className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/automations/templates">Browse templates</Link>
+              </Button>
+              <Button size="sm" asChild>
+                <Link href="/automations/new" className="flex items-center gap-1.5">
                   <PlusIcon className="w-4 h-4" />
                   Create Automation
-                </span>
+                </Link>
               </Button>
-            </Link>
+            </div>
           </div>
 
           {actionError && (

@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
   ON users(email COLLATE NOCASE) WHERE email IS NOT NULL;
 
--- Links provider identities (GitHub, Slack, Linear) to canonical users
+-- Links provider identities (GitHub, Slack, Linear, Google) to canonical users.
+-- `provider` is intentionally free-form (no CHECK constraint) so new auth/SCM
+-- providers can be added without a migration.
 CREATE TABLE IF NOT EXISTS user_identities (
   id               TEXT PRIMARY KEY,
   user_id          TEXT NOT NULL,

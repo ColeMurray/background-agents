@@ -22,18 +22,9 @@ SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
 # OpenCode version to install.
 #
-# Pinned to 1.14.41 — the last release before opencode's Hono → Effect Schema
-# migration (landed across v1.14.42+, released 2026-05-09 onward) broke event
-# publishing on the legacy `/event` SSE endpoint. With newer versions the
-# bridge connects, posts the prompt, opencode processes it and records the
-# assistant response in the session store, but no `message.updated` /
-# `message.part.updated` / `session.idle` events are streamed back — so the
-# session shows execution_complete with no reply.
-#
-# Symptom in bridge logs: `prompt.run outcome=success duration_ms=35-367`,
-# which means `_stream_opencode_response_sse` returned with zero yielded
-# events. Tracked in #567.
-OPENCODE_VERSION = "1.14.41"
+# OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
+# eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
+OPENCODE_VERSION = "1.17.18"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -46,8 +37,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v51: SCM credential helper backed by control plane; remove embedded VCS tokens
-CACHE_BUSTER = "v51-scm-credential-helper"
+# v54: upgrade OpenCode after upstream SSE fixes
+CACHE_BUSTER = "v54-opencode-1-17-18"
 
 # Base image with all development tools
 base_image = (
@@ -132,6 +123,13 @@ base_image = (
     # OpenCode's Npm.install() finds package-lock.json in sync and skips
     # the slow arborist reify() call (2-22s) that would otherwise block
     # the first prompt and exceed the bridge's HTTP timeout.
+    #
+    # Also bake the same tree into OpenCode's GLOBAL config dir. OpenCode installs
+    # @opencode-ai/plugin into every config directory it discovers — including the
+    # global one (HOME=/root, so ~/.config/opencode), which it creates empty on
+    # startup — so without this the runtime _seed_global_opencode_deps() pays a
+    # multi-second node_modules copy on every boot. Baking it makes that seed a
+    # no-op (it skips when node_modules already exists). See #767 / #790.
     .run_commands(
         "mkdir -p /app/opencode-deps",
         # Pin staged plugin to OPENCODE_VERSION so the pre-staged tree copied
@@ -140,6 +138,9 @@ base_image = (
         f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
         " > /app/opencode-deps/package.json",
         "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
+        # Bake the in-sync tree into the global config dir so the runtime seed is a no-op.
+        "mkdir -p /root/.config/opencode",
+        "cp -a /app/opencode-deps/. /root/.config/opencode/",
     )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
@@ -209,16 +210,4 @@ base_image = (
         str(SANDBOX_RUNTIME_DIR),
         remote_path="/app/sandbox_runtime",
     )
-)
-
-# Image variant optimized for Node.js/TypeScript projects
-node_image = base_image.run_commands(
-    # Pre-cache common Node.js development dependencies
-    "npm cache clean --force",
-)
-
-# Image variant optimized for Python projects
-python_image = base_image.run_commands(
-    # Pre-create virtual environment
-    "uv venv /workspace/.venv",
 )

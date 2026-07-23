@@ -1,34 +1,127 @@
 /**
  * GitHub automation event webhook route — internal endpoint that receives
- * pre-normalized GitHubAutomationEvents from the github-bot and proxies
- * them to the SchedulerDO for automation matching and session dispatch.
+ * pre-normalized GitHubAutomationEvents from the github-bot, proxies them to
+ * the SchedulerDO for automation matching, and piggybacks PR lifecycle
+ * tracking (design §5.2) on the same forward. The lifecycle step runs in the
+ * background and is additive: its failure never affects automation matching.
  */
 
-import type { GitHubAutomationEvent } from "@open-inspect/shared";
-import { verifyInternalToken } from "../auth/internal";
-import type { Route, RequestContext } from "../routes/shared";
-import { parsePattern, json, error } from "../routes/shared";
+import { automationEventSchema } from "@open-inspect/shared";
+import { SessionIndexStore } from "../db/session-index";
+import { SessionPullRequestStore } from "../db/session-pull-request-store";
+import { createLogger, parseLogLevel } from "../logger";
+import { SessionInternalPaths } from "../session/contracts";
+import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
+import type { RequestContext, Route } from "../routes/shared";
+import { error, parsePattern } from "../routes/shared";
+import {
+  authenticateAutomationEvent,
+  forwardAutomationEventToScheduler,
+  validateAutomationEventEnvelope,
+} from "./automation-event";
+import {
+  processPullRequestLifecycleEvent,
+  type PullRequestLifecycleDeps,
+  type SessionArtifactSummary,
+} from "./pull-request-lifecycle";
+
+function validateGitHubEvent(event: Record<string, unknown>): string | null {
+  return !event.repoOwner || !event.repoName
+    ? "Invalid event: repoOwner and repoName are required"
+    : null;
+}
+
+/**
+ * Best-effort PR lifecycle tracking for one normalized event. Runs in
+ * waitUntil off the request path; every failure is logged and swallowed.
+ */
+async function trackPullRequestLifecycle(
+  env: Env,
+  rawEvent: Record<string, unknown>,
+  ctx: RequestContext
+): Promise<void> {
+  const log = createLogger(
+    "webhook:pr-lifecycle",
+    { trace_id: ctx.trace_id, request_id: ctx.request_id },
+    parseLogLevel(env.LOG_LEVEL)
+  );
+  try {
+    if (!env.SESSION) return;
+
+    const parsed = automationEventSchema.safeParse(rawEvent);
+    if (!parsed.success) {
+      // Distinguish schema drift from the benign "not a PR event" skip: if
+      // the bot and control plane ever disagree on the envelope shape, PR
+      // tracking would otherwise go dark with zero signal.
+      if (typeof rawEvent.eventType === "string" && rawEvent.eventType.startsWith("pull_request")) {
+        log.warn("pull_request_lifecycle.envelope_parse_failed", {
+          event_type: rawEvent.eventType,
+          issues: parsed.error.issues.slice(0, 5).map((issue) => issue.path.join(".")),
+        });
+      }
+      return;
+    }
+    if (parsed.data.source !== "github" || !parsed.data.pullRequest) return;
+    const event = parsed.data;
+
+    const sessionRuntime = createSessionRuntimeClient(env, ctx);
+    const deps: PullRequestLifecycleDeps = {
+      store: new SessionPullRequestStore(ctx.db),
+      sessions: new SessionIndexStore(ctx.db),
+      listSessionArtifacts: async (sessionId): Promise<SessionArtifactSummary[]> => {
+        const response = await sessionRuntime.fetch(sessionId, SessionInternalPaths.artifacts, {
+          method: "GET",
+        });
+        if (!response.ok) return [];
+        const body = await response.json<{ artifacts?: SessionArtifactSummary[] }>();
+        return body.artifacts ?? [];
+      },
+      pushSnapshotToSession: async (sessionId, artifactId, snapshot) => {
+        const response = await sessionRuntime.fetch(
+          sessionId,
+          SessionInternalPaths.pullRequestArtifactSnapshot,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(snapshot),
+          },
+          `?artifactId=${encodeURIComponent(artifactId)}`
+        );
+        // fetch resolves on 4xx/5xx — a rejected push must fail loudly
+        // instead of reading as a mirrored update. The D1 authority has
+        // already advanced; read-through repairs the mirror.
+        if (!response.ok) {
+          throw new Error(`Snapshot push to session DO failed (status ${response.status})`);
+        }
+      },
+      now: () => Date.now(),
+    };
+
+    const outcome = await processPullRequestLifecycleEvent(deps, event);
+    log.info("pull_request_lifecycle.processed", {
+      outcome,
+      event_type: event.eventType,
+      repo_owner: event.repoOwner,
+      repo_name: event.repoName,
+      pr_number: event.pullRequest?.number,
+    });
+  } catch (err) {
+    log.error("pull_request_lifecycle.failed", {
+      error: err instanceof Error ? err : String(err),
+    });
+  }
+}
 
 async function handleGitHubAutomationEvent(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
-  // 0. Authenticate — fail closed if secret is unconfigured or token is invalid
-  if (!env.INTERNAL_CALLBACK_SECRET) {
-    return error("Internal authentication not configured", 500);
-  }
-  const isValid = await verifyInternalToken(
-    request.headers.get("Authorization"),
-    env.INTERNAL_CALLBACK_SECRET
-  );
-  if (!isValid) {
-    return error("Unauthorized", 401);
-  }
+  const authFailure = await authenticateAutomationEvent(request, env);
+  if (authFailure) return authFailure;
 
-  // 1. Parse body
   let body: unknown;
   try {
     body = await request.json();
@@ -36,45 +129,17 @@ async function handleGitHubAutomationEvent(
     return error("Invalid JSON", 400);
   }
 
-  // 2. Validate required fields
-  const event = body as Partial<GitHubAutomationEvent>;
-  if (event.source !== "github") {
-    return error("Invalid event: source must be 'github'", 400);
-  }
-  if (!event.repoOwner || !event.repoName) {
-    return error("Invalid event: repoOwner and repoName are required", 400);
-  }
-  if (!event.eventType || !event.triggerKey || !event.concurrencyKey) {
-    return error("Invalid event: eventType, triggerKey, and concurrencyKey are required", 400);
+  const validated = validateAutomationEventEnvelope(body, "github", validateGitHubEvent);
+  if (validated.response) return validated.response;
+
+  const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
+  if (ctx.executionCtx) {
+    ctx.executionCtx.waitUntil(lifecycleWork);
+  } else {
+    await lifecycleWork;
   }
 
-  // 3. Forward to SchedulerDO
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-
-  const doId = env.SCHEDULER.idFromName("global-scheduler");
-  const stub = env.SCHEDULER.get(doId);
-
-  let response: Response;
-  try {
-    response = await stub.fetch("http://internal/internal/event", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-    });
-  } catch (_e) {
-    return json({ ok: false, error: "Failed to reach scheduler" }, 502);
-  }
-
-  let result: { triggered: number; skipped: number };
-  try {
-    result = await response.json<{ triggered: number; skipped: number }>();
-  } catch {
-    return json({ ok: false, error: "Invalid response from scheduler" }, 502);
-  }
-
-  return json({ ok: true, ...result }, response.status);
+  return forwardAutomationEventToScheduler(env, validated.event);
 }
 
 export const githubAutomationEventRoute: Route = {

@@ -1,6 +1,9 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
+import type { SandboxStatus } from "../../src/types";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+
+const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
 
 /**
  * Create a fresh DO, call /internal/init, return the stub and id.
@@ -10,6 +13,14 @@ export async function initSession(overrides?: {
   repoOwner?: string;
   repoName?: string;
   repoId?: number;
+  defaultBranch?: string;
+  repositories?: Array<{
+    repoOwner: string;
+    repoName: string;
+    repoId: number;
+    baseBranch: string;
+  }>;
+  environmentId?: string | null;
   title?: string;
   model?: string;
   reasoningEffort?: string;
@@ -46,6 +57,25 @@ export async function queryDO<T>(
   return runInDurableObject(stub, (instance: SessionDO) => {
     return instance.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
   });
+}
+
+export async function waitForSandboxStatus(
+  stub: DurableObjectStub,
+  status: string,
+  timeoutMs = DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus: string | undefined;
+  while (Date.now() < deadline) {
+    const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    lastStatus = rows[0]?.status;
+    if (lastStatus === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for sandbox status "${status}"; last status was "${lastStatus ?? "missing"}"`
+  );
 }
 
 /**
@@ -118,6 +148,13 @@ export async function initNamedSession(
     repoOwner?: string;
     repoName?: string;
     repoId?: number;
+    defaultBranch?: string;
+    repositories?: Array<{
+      repoOwner: string;
+      repoName: string;
+      repoId: number;
+      baseBranch: string;
+    }>;
     title?: string;
     model?: string;
     userId?: string;
@@ -238,39 +275,48 @@ export async function openSandboxWs(
 }
 
 /**
- * Seed auth_token and modal_sandbox_id on the sandbox row so sandbox
- * WebSocket auth can pass.
+ * Seed a sandbox with auth_token and modal_sandbox_id so sandbox auth can
+ * pass, in the given lifecycle status (default: the "ready" steady state).
+ * Waits out the (always-failing) test spawn first so its status write can't
+ * clobber the seeded status.
  */
 export async function seedSandboxAuth(
   stub: DurableObjectStub,
-  opts: { authToken: string; sandboxId: string }
+  opts: { authToken: string; sandboxId: string; status?: SandboxStatus }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
       tokenHash,
-      opts.sandboxId
+      opts.sandboxId,
+      opts.status ?? "ready"
     );
   });
 }
 
 /**
- * Seed auth_token_hash and modal_sandbox_id on the sandbox row.
+ * Seed a sandbox with auth_token_hash and modal_sandbox_id, in the given
+ * lifecycle status (default: the "ready" steady state). Waits out the
+ * (always-failing) test spawn first so its status write can't clobber the
+ * seeded status.
  */
 export async function seedSandboxAuthHash(
   stub: DurableObjectStub,
-  opts: { authToken: string; sandboxId: string }
+  opts: { authToken: string; sandboxId: string; status?: SandboxStatus }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,
-      opts.sandboxId
+      opts.sandboxId,
+      opts.status ?? "ready"
     );
   });
 }

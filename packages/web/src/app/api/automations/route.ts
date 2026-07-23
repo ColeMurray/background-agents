@@ -1,7 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
+import { buildAuthIdentity, buildScmCredentials } from "@/lib/build-auth-identity";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
@@ -31,6 +33,14 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
+
+    const jwt = await getToken({ req: request });
+
+    // Derive identity from the server-side NextAuth session, routed through the
+    // shared chokepoint (same as the sessions/ws-token routes): provider-agnostic
+    // auth* resolves the canonical user for BOTH GitHub and Google, while the
+    // GitHub-only scm* block is empty for Google — so a Google sub never reaches
+    // the SCM path (F1/F2).
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
 
@@ -39,11 +49,8 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         ...body,
         userId,
-        scmUserId: user.id,
-        scmLogin: user.login,
-        scmName: user.name,
-        scmEmail: user.email,
-        scmAvatarUrl: user.image,
+        ...buildAuthIdentity(user),
+        ...buildScmCredentials(user, jwt),
       }),
     });
     const data = await response.json();

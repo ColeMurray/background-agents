@@ -29,15 +29,15 @@ def _make_supervisor(env_overrides: dict[str, str] | None = None) -> SandboxSupe
 class TestBuildRepoUrl:
     def test_github_default(self) -> None:
         sup = _make_supervisor({"VCS_HOST": "github.com"})
-        assert sup._build_repo_url() == "https://github.com/acme/app.git"
+        assert sup._build_repo_url(sup.repositories[0]) == "https://github.com/acme/app.git"
 
     def test_bitbucket(self) -> None:
         sup = _make_supervisor({"VCS_HOST": "bitbucket.org"})
-        assert sup._build_repo_url() == "https://bitbucket.org/acme/app.git"
+        assert sup._build_repo_url(sup.repositories[0]) == "https://bitbucket.org/acme/app.git"
 
     def test_defaults_to_github(self) -> None:
         sup = _make_supervisor()
-        assert sup._build_repo_url() == "https://github.com/acme/app.git"
+        assert sup._build_repo_url(sup.repositories[0]) == "https://github.com/acme/app.git"
 
     def test_token_env_vars_are_ignored(self) -> None:
         """Stale snapshot tokens in env must NOT leak into the remote URL."""
@@ -48,4 +48,4 @@ class TestBuildRepoUrl:
                 "GITHUB_TOKEN": "ghp_legacy_2",
             }
         )
-        assert sup._build_repo_url() == "https://github.com/acme/app.git"
+        assert sup._build_repo_url(sup.repositories[0]) == "https://github.com/acme/app.git"

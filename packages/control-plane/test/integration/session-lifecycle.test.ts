@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
-import { initSession, seedSandboxAuthHash } from "./helpers";
+import { initSession, seedSandboxAuthHash, waitForSandboxStatus } from "./helpers";
 
 describe("GET /internal/state", () => {
   it("state includes sandbox after init", async () => {
@@ -18,9 +18,9 @@ describe("GET /internal/state", () => {
 
     expect(state.sandbox).not.toBeNull();
     expect(state.sandbox!.id).toEqual(expect.any(String));
-    // Status may be "pending" or "spawning" depending on whether warmSandbox()
-    // has begun the spawn attempt (it fires via ctx.waitUntil).
-    expect(["pending", "spawning"]).toContain(state.sandbox!.status);
+    // Status depends on how far the background warmSandbox() waitUntil has run.
+    // In CI the provider call can fail before this state read completes.
+    expect(["pending", "spawning", "failed"]).toContain(state.sandbox!.status);
   });
 
   it("state reflects custom model", async () => {
@@ -191,12 +191,13 @@ describe("POST /internal/verify-sandbox-token", () => {
 
   it("validates correct token and rejects wrong token", async () => {
     const { stub } = await initSession();
+    await waitForSandboxStatus(stub, "failed");
 
-    // Seed auth_token on the sandbox directly
+    // Seed auth_token on a live sandbox directly
     const authToken = "test-sandbox-auth-token-12345";
     await runInDurableObject(stub, (instance: SessionDO) => {
       instance.ctx.storage.sql.exec(
-        "UPDATE sandbox SET auth_token = ?, auth_token_hash = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)",
+        "UPDATE sandbox SET auth_token = ?, auth_token_hash = NULL, status = 'ready' WHERE id = (SELECT id FROM sandbox LIMIT 1)",
         authToken
       );
     });

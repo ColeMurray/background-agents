@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { MAX_SLACK_ROUTING_KEYWORD_LENGTH, MAX_SLACK_ROUTING_RULES } from "@open-inspect/shared";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
   isValidIntegrationId,
   resolveSlackSettings,
+  supportsEnvironmentSettings,
 } from "./integration-settings";
 
 type GlobalRow = {
@@ -21,6 +23,14 @@ type RepoRow = {
   updated_at: number;
 };
 
+type EnvironmentRow = {
+  integration_id: string;
+  environment_id: string;
+  settings: string;
+  created_at: number;
+  updated_at: number;
+};
+
 const QUERY_PATTERNS = {
   SELECT_GLOBAL: /^SELECT settings FROM integration_settings WHERE integration_id = \?$/,
   UPSERT_GLOBAL: /^INSERT INTO integration_settings/,
@@ -30,6 +40,11 @@ const QUERY_PATTERNS = {
   UPSERT_REPO: /^INSERT INTO integration_repo_settings/,
   DELETE_REPO: /^DELETE FROM integration_repo_settings WHERE integration_id = \? AND repo = \?$/,
   LIST_REPO: /^SELECT repo, settings FROM integration_repo_settings WHERE integration_id = \?$/,
+  SELECT_ENVIRONMENT:
+    /^SELECT settings FROM integration_environment_settings WHERE integration_id = \? AND environment_id = \?$/,
+  UPSERT_ENVIRONMENT: /^INSERT INTO integration_environment_settings/,
+  DELETE_ENVIRONMENT:
+    /^DELETE FROM integration_environment_settings WHERE integration_id = \? AND environment_id = \?$/,
 } as const;
 
 function normalizeQuery(query: string): string {
@@ -39,6 +54,7 @@ function normalizeQuery(query: string): string {
 class FakeD1Database {
   private globalRows = new Map<string, GlobalRow>();
   private repoRows = new Map<string, RepoRow>();
+  private environmentRows = new Map<string, EnvironmentRow>();
 
   private repoKey(integrationId: string, repo: string): string {
     return `${integrationId}:${repo}`;
@@ -60,6 +76,12 @@ class FakeD1Database {
     if (QUERY_PATTERNS.SELECT_REPO.test(normalized)) {
       const [integrationId, repo] = args as [string, string];
       const row = this.repoRows.get(this.repoKey(integrationId, repo));
+      return row ? { settings: row.settings } : null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_ENVIRONMENT.test(normalized)) {
+      const [integrationId, environmentId] = args as [string, string];
+      const row = this.environmentRows.get(this.repoKey(integrationId, environmentId));
       return row ? { settings: row.settings } : null;
     }
 
@@ -132,6 +154,32 @@ class FakeD1Database {
     if (QUERY_PATTERNS.DELETE_REPO.test(normalized)) {
       const [integrationId, repo] = args as [string, string];
       this.repoRows.delete(this.repoKey(integrationId, repo));
+      return { meta: { changes: 1 } };
+    }
+
+    if (QUERY_PATTERNS.UPSERT_ENVIRONMENT.test(normalized)) {
+      const [integrationId, environmentId, settings, createdAt, updatedAt] = args as [
+        string,
+        string,
+        string,
+        number,
+        number,
+      ];
+      const key = this.repoKey(integrationId, environmentId);
+      const existing = this.environmentRows.get(key);
+      this.environmentRows.set(key, {
+        integration_id: integrationId,
+        environment_id: environmentId,
+        settings,
+        created_at: existing ? existing.created_at : createdAt,
+        updated_at: updatedAt,
+      });
+      return { meta: { changes: 1 } };
+    }
+
+    if (QUERY_PATTERNS.DELETE_ENVIRONMENT.test(normalized)) {
+      const [integrationId, environmentId] = args as [string, string];
+      this.environmentRows.delete(this.repoKey(integrationId, environmentId));
       return { meta: { changes: 1 } };
     }
 
@@ -600,6 +648,79 @@ describe("IntegrationSettingsStore", () => {
     });
   });
 
+  describe("environment-level settings", () => {
+    it("round-trips environment settings", async () => {
+      await store.setEnvironmentSettings("sandbox", "env_1", { buildTimeoutSeconds: 2400 });
+
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toEqual({
+        buildTimeoutSeconds: 2400,
+      });
+
+      await store.deleteEnvironmentSettings("sandbox", "env_1");
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toBeNull();
+    });
+
+    it("validates environment settings on write like repo overrides", async () => {
+      await expect(
+        store.setEnvironmentSettings("sandbox", "env_1", {
+          tunnelPorts: [70000],
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("layers environment overrides on top of repo overrides and global defaults", async () => {
+      await store.setGlobal("sandbox", {
+        defaults: { buildTimeoutSeconds: 600, terminalEnabled: true, tunnelPorts: [3000] },
+      });
+      await store.setRepoSettings("sandbox", "acme/widgets", {
+        buildTimeoutSeconds: 1200,
+        maxConcurrentChildSessions: 3,
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", { buildTimeoutSeconds: 3600 });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/widgets", "env_1");
+      // Environment wins the key it sets…
+      expect(config.settings.buildTimeoutSeconds).toBe(3600);
+      // …and unset keys keep inheriting from the repo and global layers.
+      expect(config.settings.maxConcurrentChildSessions).toBe(3);
+      expect(config.settings.terminalEnabled).toBe(true);
+      expect(config.settings.tunnelPorts).toEqual([3000]);
+    });
+
+    it("resolves identically to the repo config when no environmentId is given", async () => {
+      await store.setRepoSettings("sandbox", "acme/widgets", { buildTimeoutSeconds: 1200 });
+      await store.setEnvironmentSettings("sandbox", "env_1", { buildTimeoutSeconds: 3600 });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/widgets");
+      expect(config.settings.buildTimeoutSeconds).toBe(1200);
+    });
+
+    it("applies code-server environment overrides", async () => {
+      await store.setGlobal("code-server", { defaults: { enabled: false } });
+      await store.setEnvironmentSettings("code-server", "env_1", { enabled: true });
+
+      const config = await store.getResolvedConfig("code-server", "acme/widgets", "env_1");
+      expect(config.settings.enabled).toBe(true);
+    });
+
+    it("skips the environment layer for integrations that don't support it", async () => {
+      await store.setGlobal("github", { defaults: { autoReviewOnOpen: true } });
+
+      // No SELECT against integration_environment_settings is issued (the fake
+      // DB would answer it, but the resolved config must not change shape).
+      const config = await store.getResolvedConfig("github", "acme/widgets", "env_1");
+      expect(config.settings).toEqual({ autoReviewOnOpen: true });
+    });
+
+    it("declares environment support for exactly the session-scoped integrations", () => {
+      expect(supportsEnvironmentSettings("sandbox")).toBe(true);
+      expect(supportsEnvironmentSettings("code-server")).toBe(true);
+      expect(supportsEnvironmentSettings("github")).toBe(false);
+      expect(supportsEnvironmentSettings("linear")).toBe(false);
+      expect(supportsEnvironmentSettings("slack")).toBe(false);
+    });
+  });
+
   describe("cross-field validation", () => {
     it("rejects invalid reasoning effort for model on write", async () => {
       await expect(
@@ -753,6 +874,56 @@ describe("IntegrationSettingsStore", () => {
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
+
+    it("normalizes cross-field violations that only appear after merge", async () => {
+      // Each blob is individually valid — neither write throws — because the
+      // invariant (concurrent <= total) spans two fields set in different scopes.
+      // The violation only materializes in the merged result, so getResolvedConfig's
+      // normalize pass is the only thing that catches it. This pins that pass.
+      await store.setGlobal("sandbox", { defaults: { maxConcurrentChildSessions: 3 } });
+      await store.setRepoSettings("sandbox", "acme/app", { maxTotalChildSessions: 2 });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/app");
+      // Merge would be { maxConcurrentChildSessions: 3, maxTotalChildSessions: 2 };
+      // the resolve-time normalize drops the inverted concurrent limit.
+      expect(config.settings).toEqual({ maxTotalChildSessions: 2 });
+    });
+
+    it("round-trips fractional cpuCores and small memoryMib", async () => {
+      await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 0.5, memoryMib: 64 });
+
+      const result = await store.getRepoSettings("sandbox", "acme/app");
+      expect(result).toEqual({ cpuCores: 0.5, memoryMib: 64 });
+    });
+
+    it("preserves null repo resource overrides over inherited global defaults", async () => {
+      await store.setGlobal("sandbox", { defaults: { cpuCores: 2, memoryMib: 4096 } });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuCores: null, memoryMib: null });
+
+      const repoSettings = await store.getRepoSettings("sandbox", "acme/app");
+      expect(repoSettings).toEqual({ cpuCores: null, memoryMib: null });
+
+      const resolved = await store.getResolvedConfig("sandbox", "acme/app");
+      expect(resolved.settings).toEqual({ cpuCores: null, memoryMib: null });
+    });
+
+    it("rejects non-positive cpuCores", async () => {
+      await expect(store.setGlobal("sandbox", { defaults: { cpuCores: 0 } })).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
+
+    it("rejects non-integer memoryMib", async () => {
+      await expect(store.setGlobal("sandbox", { defaults: { memoryMib: 256.5 } })).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
+
+    it("rejects non-positive memoryMib", async () => {
+      await expect(store.setGlobal("sandbox", { defaults: { memoryMib: 0 } })).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
   });
 
   describe("linear settings", () => {
@@ -839,6 +1010,23 @@ describe("IntegrationSettingsStore", () => {
       });
     });
 
+    it("round-trips a global slack default model", async () => {
+      await store.setGlobal("slack", {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.model).toBe("anthropic/claude-sonnet-4-6");
+    });
+
+    it("rejects invalid slack default models", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { model: "not-a-real-model" },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("accepts every valid mentionsPolicy value at global level", async () => {
       for (const policy of ["allow", "escape", "strip"] as const) {
         await store.setGlobal("slack", { defaults: { mentionsPolicy: policy } });
@@ -884,6 +1072,14 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setRepoSettings("slack", "acme/widgets", {
           mentionsPolicy: "escape",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects model at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          model: "anthropic/claude-sonnet-4-6",
         } as unknown as { agentNotificationsEnabled?: boolean })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
@@ -943,6 +1139,130 @@ describe("IntegrationSettingsStore", () => {
       const config = await store.getResolvedConfig("slack", "acme/widgets");
       expect(config.settings.agentNotificationsEnabled).toBe(true);
       expect(config.settings.mentionsPolicy).toBe("allow");
+    });
+
+    it("round-trips and normalizes routingRules at global level", async () => {
+      await store.setGlobal("slack", {
+        defaults: {
+          routingRules: [
+            { keyword: "  FrontEnd ", target: "Acme/Platform/Web-App" },
+            { keyword: "api", target: "acme/api" },
+          ],
+        },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.routingRules).toEqual([
+        { keyword: "frontend", target: "acme/platform/web-app" },
+        { keyword: "api", target: "acme/api" },
+      ]);
+    });
+
+    it("rejects routingRules at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects non-array routingRules", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: "frontend" as unknown as [] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects a routing rule with an empty keyword", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "   ", target: "acme/web" }] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects a routing rule whose target is not in owner/name form", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "frontend", target: "not-a-repo" }] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("round-trips an environment-targeted routing rule", async () => {
+      await store.setGlobal("slack", {
+        defaults: {
+          routingRules: [
+            { keyword: "FullStack", target: "env_abc123", targetType: "environment" },
+            { keyword: "api", target: "acme/api" },
+          ],
+        },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.routingRules).toEqual([
+        { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
+        { keyword: "api", target: "acme/api" },
+      ]);
+    });
+
+    it("rejects an environment-targeted rule whose target is not an env_ id", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: {
+            routingRules: [{ keyword: "fullstack", target: "acme/web", targetType: "environment" }],
+          },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects a repository target whose owner contains a colon", async () => {
+      // "env:foo/bar" must not be storable as a repository — it would collide
+      // with the bots' env:<id> option-value encoding.
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "frontend", target: "env:foo/bar" }] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects an unknown routing rule targetType", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: {
+            routingRules: [
+              {
+                keyword: "fullstack",
+                target: "acme/web",
+                targetType: "team" as unknown as "repository",
+              },
+            ],
+          },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects a routing rule keyword longer than the maximum", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: {
+            routingRules: [
+              { keyword: "x".repeat(MAX_SLACK_ROUTING_KEYWORD_LENGTH + 1), target: "acme/web" },
+            ],
+          },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects more than the maximum number of routing rules", async () => {
+      const tooMany = Array.from({ length: MAX_SLACK_ROUTING_RULES + 1 }, (_, i) => ({
+        keyword: `kw${i}`,
+        target: `acme/repo${i}`,
+      }));
+      await expect(
+        store.setGlobal("slack", { defaults: { routingRules: tooMany } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
     });
   });
 

@@ -5,14 +5,15 @@ import {
   type SlackDenialReason,
   type SlackNotifySuccessOutput,
   type SlackNotifyToolEnvelope,
+  slackNotifyToolEnvelopeSchema,
 } from "@open-inspect/shared";
 import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
+import { APP_NAME } from "@/lib/site-config";
 import { ChevronRightIcon, ErrorIcon, LinkIcon, SlackIcon } from "@/components/ui/icons";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
-type ParsedDenial = Exclude<SlackNotifyToolEnvelope, SlackNotifySuccessOutput>;
 
 const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }> = {
   feature_unavailable: {
@@ -26,7 +27,7 @@ const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }
   },
   channel_not_found_or_forbidden: {
     headline: "Channel not found or bot is not in the channel.",
-    hint: "Invite the Open-Inspect bot to the channel and try again.",
+    hint: `Invite the ${APP_NAME} bot to the channel and try again.`,
   },
   rate_limited: {
     headline: "Slack rate-limited the request.",
@@ -51,19 +52,8 @@ function parseEnvelope(output: string | undefined): SlackNotifyToolEnvelope | nu
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object") return null;
-  const obj = parsed as Record<string, unknown>;
-  if (obj.ok === true && typeof obj.channelInput === "string") {
-    return obj as unknown as SlackNotifySuccessOutput;
-  }
-  if (
-    obj.ok === false &&
-    typeof obj.reason === "string" &&
-    (SLACK_DENIAL_REASONS as readonly string[]).includes(obj.reason)
-  ) {
-    return obj as unknown as ParsedDenial;
-  }
-  return null;
+  const result = slackNotifyToolEnvelopeSchema.safeParse(parsed);
+  return result.success ? result.data : null;
 }
 
 function getLegacyDenialReason(event: ToolCallEvent): SlackDenialReason | null {
@@ -111,6 +101,7 @@ export function SlackNotifyEvent({
   return (
     <div className="py-0.5">
       <button
+        type="button"
         onClick={onToggle}
         className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
       >
@@ -138,7 +129,7 @@ export function SlackNotifyEvent({
             <SlackNotifyDenialBody
               reason={denial}
               channelInput={channelInput}
-              retryAfterSeconds={envelopeDenial?.retryAfter}
+              retryAfterSeconds={envelopeDenial?.retryAfterSeconds}
             />
           ) : (
             <span className="text-secondary-foreground">No details available</span>

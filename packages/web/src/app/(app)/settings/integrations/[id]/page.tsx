@@ -2,34 +2,27 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { INTEGRATION_DEFINITIONS, type IntegrationId } from "@open-inspect/shared";
-import { useSidebarContext } from "@/components/sidebar-layout";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared";
+import {
+  CollapsedSidebarControls,
+  SidebarToggleButton,
+  useSidebarContext,
+} from "@/components/sidebar-layout";
+import { BackIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
-import { CodeServerIntegrationSettings } from "@/components/settings/integrations/code-server-integration-settings";
-import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
-import { LinearIntegrationSettings } from "@/components/settings/integrations/linear-integration-settings";
-import { SlackIntegrationSettings } from "@/components/settings/integrations/slack-integration-settings";
+import { integrationSettingsComponents } from "@/components/settings/integrations/integration-settings-registry";
 
 function getIntegration(id: string) {
   return INTEGRATION_DEFINITIONS.find((d) => d.id === id);
 }
 
-function IntegrationDetail({ integrationId }: { integrationId: IntegrationId }) {
-  if (integrationId === "github") return <GitHubIntegrationSettings />;
-  if (integrationId === "linear") return <LinearIntegrationSettings />;
-  if (integrationId === "code-server") return <CodeServerIntegrationSettings />;
-  if (integrationId === "slack") return <SlackIntegrationSettings />;
-  return null;
-}
-
 export default function IntegrationDetailPage() {
   const params = useParams<{ id: string }>();
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const isMobile = useIsMobile();
 
   const integration = getIntegration(params.id);
+  const IntegrationDetail = integration ? integrationSettingsComponents[integration.id] : undefined;
 
   if (!integration) {
     return (
@@ -43,16 +36,8 @@ export default function IntegrationDetailPage() {
     <div className="h-full flex flex-col">
       <header className="border-b border-border-muted flex-shrink-0">
         <div className="px-4 py-3 flex items-center gap-2">
-          {(!isOpen || isMobile) && (
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
-          )}
+          {!isOpen && <CollapsedSidebarControls />}
+          {isOpen && isMobile && <SidebarToggleButton label="Toggle sidebar" />}
           <Link
             href="/settings?tab=integrations"
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
@@ -65,9 +50,7 @@ export default function IntegrationDetailPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 md:p-8">
-        <div className="max-w-2xl">
-          <IntegrationDetail integrationId={integration.id} />
-        </div>
+        <div className="max-w-2xl">{IntegrationDetail ? <IntegrationDetail /> : null}</div>
       </div>
     </div>
   );

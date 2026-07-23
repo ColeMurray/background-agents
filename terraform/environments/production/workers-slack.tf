@@ -2,6 +2,20 @@
 # Slack Bot Worker
 # =============================================================================
 
+resource "cloudflare_queue" "slack_completion_delivery" {
+  count = var.enable_slack_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-slack-completion-${local.name_suffix}"
+}
+
+resource "cloudflare_queue" "slack_completion_delivery_dlq" {
+  count = var.enable_slack_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-slack-completion-dlq-${local.name_suffix}"
+}
+
 # Build slack-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "slack_bot_build" {
   count = var.enable_slack_bot ? 1 : 0
@@ -22,9 +36,10 @@ module "slack_bot_worker" {
   count  = var.enable_slack_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-slack-bot-${local.name_suffix}"
-  script_path = local.slack_bot_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-slack-bot-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.slack_bot_script_path
 
   kv_namespaces = [
     {
@@ -42,6 +57,13 @@ module "slack_bot_worker" {
 
   enable_service_bindings = var.enable_service_bindings
 
+  queue_bindings = [
+    {
+      binding_name = "SLACK_COMPLETION_QUEUE"
+      queue_name   = cloudflare_queue.slack_completion_delivery[0].queue_name
+    }
+  ]
+
   plain_text_bindings = [
     { name = "CONTROL_PLANE_URL", value = local.control_plane_url },
     { name = "WEB_APP_URL", value = local.web_app_url },
@@ -49,6 +71,9 @@ module "slack_bot_worker" {
     { name = "APP_NAME", value = var.app_name },
     { name = "DEFAULT_MODEL", value = var.default_model },
     { name = "CLASSIFICATION_MODEL", value = var.classification_model },
+    # Kill switch for Slack channel-message triggers; the bot only ingests/
+    # forwards channel messages when this is exactly "true" (dark by default).
+    { name = "SLACK_TRIGGERS_ENABLED", value = var.slack_triggers_enabled ? "true" : "false" },
   ]
 
   secrets = [
@@ -62,4 +87,23 @@ module "slack_bot_worker" {
   compatibility_flags = ["nodejs_compat"]
 
   depends_on = [null_resource.slack_bot_build[0], module.slack_kv[0]]
+}
+
+resource "cloudflare_queue_consumer" "slack_completion_delivery" {
+  count = var.enable_slack_bot ? 1 : 0
+
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.slack_completion_delivery[0].queue_id
+  type              = "worker"
+  script_name       = module.slack_bot_worker[0].worker_name
+  dead_letter_queue = cloudflare_queue.slack_completion_delivery_dlq[0].queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 5
+    max_retries      = 1
+    retry_delay      = 15
+  }
+
+  depends_on = [module.slack_bot_worker]
 }

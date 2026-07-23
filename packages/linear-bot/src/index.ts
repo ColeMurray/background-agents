@@ -9,12 +9,16 @@ import { Hono } from "hono";
 import type { Env, UserPreferences, AgentSessionWebhook } from "./types";
 import {
   buildOAuthAuthorizeUrl,
-  exchangeCodeForToken,
+  completeLinearOAuthInstallation,
   verifyLinearWebhook,
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { resolveAppName, verifyInternalToken } from "@open-inspect/shared";
+import {
+  resolveAppName,
+  userPreferencesRequestSchema,
+  verifyInternalToken,
+} from "@open-inspect/shared";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import {
   getTeamRepoMapping,
@@ -26,7 +30,7 @@ import {
 
 // Re-export pure functions for existing test imports
 export {
-  resolveStaticRepo,
+  resolveStaticTarget,
   extractModelFromLabels,
   resolveSessionModelSettings,
 } from "./model-resolution";
@@ -61,10 +65,18 @@ function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSession
   const type = readStringField(payload, "type");
   const action = readStringField(payload, "action");
   const organizationId = readStringField(payload, "organizationId");
+  const appUserId = readStringField(payload, "appUserId");
   const webhookId = readStringField(payload, "webhookId");
   const agentSession = payload.agentSession;
 
-  if (!type || !action || !organizationId || !isObjectRecord(agentSession) || !webhookId) {
+  if (
+    !type ||
+    !action ||
+    !organizationId ||
+    !appUserId ||
+    !isObjectRecord(agentSession) ||
+    !webhookId
+  ) {
     return false;
   }
 
@@ -93,12 +105,13 @@ app.get("/oauth/callback", async (c) => {
   if (!code) return c.text("Missing required OAuth parameters", 400);
 
   try {
-    const { orgName } = await exchangeCodeForToken(c.env, code);
+    const { orgName } = await completeLinearOAuthInstallation(c.env, code);
     return c.html(buildOAuthSuccessHtml(resolveAppName(c.env), orgName));
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error("oauth.callback_error", { error: err instanceof Error ? err : new Error(msg) });
-    return c.text(`Token exchange error: ${msg}`, 500);
+    log.error("oauth.callback_error", {
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    return c.text("Linear authentication setup failed", 500);
   }
 });
 
@@ -194,7 +207,12 @@ app.get("/config/team-repos", async (c) => {
 });
 
 app.put("/config/team-repos", async (c) => {
-  const body = await c.req.json();
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid request body" }, 400);
+  }
   await c.env.LINEAR_KV.put("config:team-repos", JSON.stringify(body));
   return c.json({ ok: true });
 });
@@ -204,7 +222,12 @@ app.get("/config/triggers", async (c) => {
 });
 
 app.put("/config/triggers", async (c) => {
-  const body = await c.req.json();
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid request body" }, 400);
+  }
   await c.env.LINEAR_KV.put("config:triggers", JSON.stringify(body));
   return c.json({ ok: true });
 });
@@ -214,7 +237,12 @@ app.get("/config/project-repos", async (c) => {
 });
 
 app.put("/config/project-repos", async (c) => {
-  const body = await c.req.json();
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid request body" }, 400);
+  }
   await c.env.LINEAR_KV.put("config:project-repos", JSON.stringify(body));
   return c.json({ ok: true });
 });
@@ -228,7 +256,15 @@ app.get("/config/user-prefs/:userId", async (c) => {
 
 app.put("/config/user-prefs/:userId", async (c) => {
   const userId = c.req.param("userId");
-  const body = (await c.req.json()) as Partial<UserPreferences>;
+  let rawBody: unknown;
+  try {
+    rawBody = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid request body" }, 400);
+  }
+  const parsedBody = userPreferencesRequestSchema.safeParse(rawBody);
+  if (!parsedBody.success) return c.json({ error: "invalid request body" }, 400);
+  const body = parsedBody.data;
   const prefs: UserPreferences = {
     userId,
     model: body.model || c.env.DEFAULT_MODEL,

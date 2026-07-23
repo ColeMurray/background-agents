@@ -6,7 +6,7 @@ main = "dist/index.js"
 compatibility_date = "2024-12-30"
 compatibility_flags = ["nodejs_compat"]
 
-# KV namespace for OAuth tokens, issue-to-session mapping, and config
+# KV namespace for the runtime-token cache, issue-to-session mapping, and config
 [[kv_namespaces]]
 binding = "LINEAR_KV"
 id = ""  # Fill in after creating: wrangler kv namespace create LINEAR_KV

@@ -6,6 +6,7 @@ import type {
   AnalyticsTimeseriesResponse,
   SpawnSource,
 } from "@open-inspect/shared";
+import type { SqlDatabase } from "./sql-database";
 
 /** Spawn sources that represent direct human-initiated sessions. */
 export const HUMAN_SPAWN_SOURCES: SpawnSource[] = ["user", "slack-bot", "linear-bot", "github-bot"];
@@ -36,8 +37,8 @@ interface TimeseriesRow {
 }
 
 interface BreakdownRow {
-  key: string;
-  display_name?: string;
+  key: string | null;
+  display_name?: string | null;
   sessions: number;
   completed: number;
   failed: number;
@@ -49,8 +50,10 @@ interface BreakdownRow {
   last_active: number;
 }
 
+const NO_REPOSITORY_ANALYTICS_KEY = "No repository";
+
 export class AnalyticsStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async getSummary(filters: AnalyticsFilters): Promise<AnalyticsSummaryResponse> {
     const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
@@ -142,14 +145,16 @@ export class AnalyticsStore {
     by: AnalyticsBreakdownBy
   ): Promise<AnalyticsBreakdownResponse> {
     const isUserBreakdown = by === "user";
+    const repoGroupExpression =
+      "CASE WHEN s.repo_owner IS NULL OR s.repo_name IS NULL THEN NULL ELSE s.repo_owner || '/' || s.repo_name END";
 
     const groupExpression = isUserBreakdown
       ? "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')"
-      : "s.repo_owner || '/' || s.repo_name";
+      : repoGroupExpression;
 
     const displayNameSelect = isUserBreakdown
       ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
-      : "";
+      : "NULL AS display_name,";
 
     const joinClause = isUserBreakdown ? "LEFT JOIN users u ON s.user_id = u.id" : "";
 
@@ -186,7 +191,7 @@ export class AnalyticsStore {
       .all<BreakdownRow>();
 
     const entries: AnalyticsBreakdownEntry[] = (result.results ?? []).map((row) => ({
-      key: row.key,
+      key: row.key ?? NO_REPOSITORY_ANALYTICS_KEY,
       ...(row.display_name != null && { displayName: row.display_name }),
       sessions: row.sessions,
       completed: row.completed,

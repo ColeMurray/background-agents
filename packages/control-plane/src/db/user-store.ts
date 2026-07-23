@@ -1,9 +1,11 @@
 import { generateId } from "../auth/crypto";
+import { isUniqueConstraintError } from "./errors";
+import type { SqlDatabase } from "./sql-database";
 
 // ── Public types ────────────────────────────────────────────────────
 
 export interface ProviderIdentity {
-  provider: "github" | "slack" | "linear";
+  provider: "github" | "slack" | "linear" | "google";
   providerUserId: string;
   providerLogin?: string;
   providerEmail?: string;
@@ -106,7 +108,7 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
 // ── UserStore ───────────────────────────────────────────────────────
 
 export class UserStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Core resolution entry point. Finds or creates a canonical user for the
@@ -150,8 +152,12 @@ export class UserStore {
   }
 
   async getIdentitiesForUser(userId: string): Promise<UserIdentity[]> {
+    // ORDER BY created_at gives a deterministic order so callers that pick a
+    // single identity (e.g. resolveGitHubEnrichment) get a stable result.
+    // Google's email-based cross-provider linking makes multi-identity users
+    // more common, so the previously-unordered query could otherwise vary.
     const result = await this.db
-      .prepare("SELECT * FROM user_identities WHERE user_id = ?")
+      .prepare("SELECT * FROM user_identities WHERE user_id = ? ORDER BY created_at ASC")
       .bind(userId)
       .all<UserIdentityRow>();
     return (result.results ?? []).map(toUserIdentity);
@@ -394,9 +400,4 @@ export class UserStore {
       .bind(...values)
       .run();
   }
-}
-
-function isUniqueConstraintError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.toLowerCase().includes("unique constraint failed");
 }

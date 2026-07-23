@@ -1,6 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Suspense } from "react";
 import { ErrorBanner } from "@/components/ui/error-banner";
 
@@ -18,9 +19,9 @@ function AccessDeniedContent() {
     <div className="min-h-screen flex flex-col items-center justify-center gap-6">
       <h1 className="text-4xl font-bold text-foreground">Access Denied</h1>
       <ErrorBanner className="max-w-md px-6 py-4 text-center">{message}</ErrorBanner>
-      <a href="/" className="text-accent hover:underline">
+      <Link href="/" className="text-accent hover:underline">
         Return to homepage
-      </a>
+      </Link>
     </div>
   );
 }

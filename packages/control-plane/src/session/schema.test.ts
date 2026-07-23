@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { applyMigrations, MIGRATIONS } from "./schema";
-import type { SqlStorage, SqlResult } from "./repository";
+import { applyMigrations, MIGRATIONS, SCHEMA_SQL } from "./schema";
+import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
@@ -70,7 +70,7 @@ describe("applyMigrations", () => {
   });
 
   it("skips all migrations when fully migrated", () => {
-    // All 24 IDs already applied
+    // Every migration ID is already applied.
     const appliedRows = MIGRATIONS.map((m) => ({ id: m.id }));
     mock.setData("SELECT id FROM _schema_migrations", appliedRows);
 
@@ -130,8 +130,12 @@ describe("applyMigrations", () => {
       { name: "scm_access_token_encrypted" },
       { name: "scm_token_expires_at" },
     ]);
-    // Migration 24 checks session columns — include base_branch so it skips the rename
-    mock.setData("PRAGMA table_info(session)", [{ name: "base_branch" }]);
+    // Migration 24 checks session columns.
+    mock.setData("PRAGMA table_info(session)", [
+      { name: "repo_owner", notnull: 0 },
+      { name: "repo_name", notnull: 0 },
+      { name: "base_branch", notnull: 0 },
+    ]);
     const originalExec = mock.sql.exec.bind(mock.sql);
     mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
       if (query.includes("ALTER TABLE")) {
@@ -187,5 +191,75 @@ describe("applyMigrations", () => {
     for (const insert of inserts) {
       expect(insert.params[1]).toBe(1000);
     }
+  });
+
+  it("does not execute transaction-control statements in migrations", () => {
+    applyMigrations(mock.sql);
+
+    const transactionControlStatements = mock.calls.filter((c) =>
+      /\b(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(c.query.trim())
+    );
+    expect(transactionControlStatements).toEqual([]);
+  });
+
+  it("creates session_repositories for both fresh DOs and migrated DOs", () => {
+    // Fresh DOs get the table from SCHEMA_SQL; existing DOs via migration 31.
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
+
+    const migration = MIGRATIONS.find((m) => m.id === 31);
+    expect(migration).toBeDefined();
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
+  });
+
+  it("keeps repository context consistent at the session table boundary", () => {
+    expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
+    expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");
+    expect(SCHEMA_SQL).toContain("repo_id IS NULL AND base_branch IS NULL");
+  });
+
+  it("adds artifacts.updated_at for both fresh DOs and migrated DOs", () => {
+    // Fresh DOs get the column NOT NULL from SCHEMA_SQL; existing DOs get a
+    // nullable ADD COLUMN (SQLite restriction) plus a backfill via migration 34.
+    const artifactsTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS artifacts")[1]?.split(
+      ");"
+    )[0];
+    expect(artifactsTable).toContain("updated_at INTEGER NOT NULL");
+
+    const migration = MIGRATIONS.find((m) => m.id === 34);
+    expect(migration).toBeDefined();
+    expect(typeof migration?.run).toBe("function");
+
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+
+    const alter = mock.calls.find((c) =>
+      c.query.includes("ALTER TABLE artifacts ADD COLUMN updated_at INTEGER")
+    );
+    expect(alter).toBeDefined();
+    const backfill = mock.calls.find(
+      (c) =>
+        c.query.includes("UPDATE artifacts SET updated_at = created_at") &&
+        c.query.includes("updated_at IS NULL")
+    );
+    expect(backfill).toBeDefined();
+  });
+
+  it("creates the final attachments schema in its single unshipped migration", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 35);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");
+    expect(migration?.run).toContain("cleanup_claimed_at INTEGER");
+    expect(migration?.run).not.toContain("kind TEXT");
+  });
+
+  it("creates one latest-only session diff row for fresh and migrated sessions", () => {
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_diff");
+    expect(SCHEMA_SQL).toContain("singleton INTEGER PRIMARY KEY CHECK (singleton = 1)");
+    expect(SCHEMA_SQL).toContain("bundle_json TEXT");
+    expect(SCHEMA_SQL).not.toContain("diff_objects");
+    expect(SCHEMA_SQL).not.toContain("diff_capture_triggers");
+    expect(SCHEMA_SQL).not.toContain("session_alarm_deadlines");
+
+    const migration = MIGRATIONS.find((item) => item.id === 36);
+    expect(migration).toBeDefined();
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_diff");
   });
 });

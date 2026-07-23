@@ -11,3 +11,7 @@ export function buildAnalyticsTimeseriesPath(searchParams: URLSearchParams): str
 export function buildAnalyticsBreakdownPath(searchParams: URLSearchParams): string {
   return buildControlPlanePath("/analytics/breakdown", searchParams, ["days", "by"]);
 }
+
+export function buildAnalyticsPullRequestsPath(searchParams: URLSearchParams): string {
+  return buildControlPlanePath("/analytics/pull-requests", searchParams, ["days"]);
+}

@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
@@ -32,8 +33,36 @@ def _patch_manager(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
     monkeypatch.setattr(manager_module, "SandboxManager", FakeManager)
 
 
+def _patch_restore_manager(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
+    class FakeManager:
+        async def restore_from_snapshot(self, **kwargs):
+            captured["restore"] = kwargs
+            return SimpleNamespace(
+                sandbox_id="sandbox-123",
+                modal_object_id="obj-123",
+                status=SandboxStatus.WARMING,
+                code_server_url=None,
+                code_server_password=None,
+                ttyd_url=None,
+                tunnel_urls=None,
+            )
+
+    monkeypatch.setattr(manager_module, "SandboxManager", FakeManager)
+
+
 async def _call_create_sandbox(request: dict) -> dict:
     return await web_api.api_create_sandbox.get_raw_f()(
+        request,
+        authorization="Bearer test",
+        x_trace_id=None,
+        x_request_id=None,
+        x_session_id=None,
+        x_sandbox_id=None,
+    )
+
+
+async def _call_restore_sandbox(request: dict) -> dict:
+    return await web_api.api_restore_sandbox.get_raw_f()(
         request,
         authorization="Bearer test",
         x_trace_id=None,
@@ -51,7 +80,7 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_fresh_boot(monkey
 
     _patch_auth(monkeypatch)
     _patch_manager(monkeypatch, captured)
-    monkeypatch.setattr(web_api, "_resolve_clone_token", lambda: calls.append(True) or "ghs_token")
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
 
     result = await _call_create_sandbox(
         {
@@ -65,12 +94,12 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_fresh_boot(monkey
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].clone_token is None
+    assert captured["config"].fallback_clone_token is None
 
 
 @pytest.mark.asyncio
-async def test_create_sandbox_resolves_clone_token_for_prebuilt_boot(monkeypatch):
-    """Repo images may run pre-migration entrypoints, so they still need a fallback token."""
+async def test_create_sandbox_does_not_resolve_clone_token_for_repo_image_boot(monkeypatch):
+    """Repo-image boots authenticate via brokered credentials only."""
     captured = {}
     calls = []
 
@@ -81,7 +110,7 @@ async def test_create_sandbox_resolves_clone_token_for_prebuilt_boot(monkeypatch
         calls.append(True)
         return "ghs_prebuilt"
 
-    monkeypatch.setattr(web_api, "_resolve_clone_token", resolve_clone_token)
+    monkeypatch.setattr(web_api, "resolve_clone_token", resolve_clone_token)
 
     result = await _call_create_sandbox(
         {
@@ -95,5 +124,314 @@ async def test_create_sandbox_resolves_clone_token_for_prebuilt_boot(monkeypatch
     )
 
     assert result["success"] is True
+    assert calls == []
+    assert captured["config"].fallback_clone_token is None
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_resolves_clone_token_for_snapshot_boot(monkeypatch):
+    """Session snapshot boots still receive a legacy fallback token."""
+    captured = {}
+    calls = []
+
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    def resolve_clone_token() -> str:
+        calls.append(True)
+        return "ghs_snapshot"
+
+    monkeypatch.setattr(web_api, "resolve_clone_token", resolve_clone_token)
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+            "snapshot_id": "snap-1",
+        }
+    )
+
+    assert result["success"] is True
     assert calls == [True]
-    assert captured["config"].clone_token == "ghs_prebuilt"
+    assert captured["config"].fallback_clone_token == "ghs_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
+    """No-repository sandboxes are represented by null repo fields."""
+    captured = {}
+
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: "unused")
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    config = captured["config"]
+
+    assert result["success"] is True
+    assert config.repo_owner is None
+    assert config.repo_name is None
+    assert config.session_config.repo_owner is None
+    assert config.session_config.repo_name is None
+    assert config.fallback_clone_token is None
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_snapshot_without_repo_does_not_resolve_clone_token(monkeypatch):
+    """No-repository snapshot boots must not mint a repository clone token."""
+    captured = {}
+    calls = []
+
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+            "snapshot_id": "snap-1",
+        }
+    )
+
+    assert result["success"] is True
+    assert calls == []
+    assert captured["config"].fallback_clone_token is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_patch",
+    [
+        {"repo_owner": "acme"},
+        {"repo_name": "repo"},
+        {"repo_owner": "   ", "repo_name": "repo"},
+    ],
+)
+async def test_create_sandbox_rejects_partial_repo_context(monkeypatch, request_patch):
+    _patch_auth(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_create_sandbox(
+            {
+                "session_id": "sess-1",
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+                **request_patch,
+            }
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert "repo_owner and repo_name must be provided together" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_without_repo_does_not_resolve_clone_token(monkeypatch):
+    """No-repository snapshot restores must not mint a repository clone token."""
+    captured = {}
+    calls = []
+
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, captured)
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
+
+    result = await _call_restore_sandbox(
+        {
+            "snapshot_image_id": "img-abc",
+            "session_config": {
+                "session_id": "sess-1",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+            },
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    assert calls == []
+    assert captured["restore"]["clone_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_uses_normalized_repo_context(monkeypatch):
+    """Snapshot restores should validate and pass a single normalized repo context."""
+    captured = {}
+    calls = []
+
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, captured)
+    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
+
+    result = await _call_restore_sandbox(
+        {
+            "snapshot_image_id": "img-abc",
+            "session_config": {
+                "session_id": "sess-1",
+                "repo_owner": "  acme  ",
+                "repo_name": "  repo  ",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+            },
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    session_config = captured["restore"]["session_config"]
+
+    assert result["success"] is True
+    assert calls == [True]
+    assert session_config["repo_owner"] == "acme"
+    assert session_config["repo_name"] == "repo"
+    assert captured["restore"]["clone_token"] == "ghs_token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_config",
+    [
+        {"session_id": "sess-1", "repo_owner": "acme"},
+        {"session_id": "sess-1", "repo_name": "repo"},
+        {"session_id": "sess-1", "repo_owner": "", "repo_name": "repo"},
+    ],
+)
+async def test_restore_sandbox_rejects_partial_repo_context(monkeypatch, session_config):
+    _patch_auth(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_restore_sandbox(
+            {
+                "snapshot_image_id": "img-abc",
+                "session_config": {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-6",
+                    **session_config,
+                },
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+            }
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert "repo_owner and repo_name must be provided together" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_threads_repositories_into_session_config(monkeypatch):
+    """Create reconstructs a typed SessionConfig — new wire fields must be
+    threaded explicitly or pydantic silently drops them."""
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    members = [
+        {"repo_owner": "acme", "repo_name": "frontend", "branch": "main"},
+        {"repo_owner": "acme", "repo_name": "backend", "branch": "develop"},
+    ]
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "repo_owner": "acme",
+            "repo_name": "frontend",
+            "repositories": members,
+            "working_branch_name": "open-inspect/sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    session_config = captured["config"].session_config
+    assert [dict(r) for r in session_config.repositories] == members
+    assert session_config.working_branch_name == "open-inspect/sess-1"
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_repositories_default_to_none(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["config"].session_config.repositories is None
+    assert captured["config"].session_config.working_branch_name is None
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_forwards_session_config_verbatim(monkeypatch):
+    """Restore is a pass-through: the session_config dict reaches the manager
+    unmodified, so extra keys (repositories, working_branch_name) survive
+    without any Python change."""
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, captured)
+
+    session_config = {
+        "session_id": "sess-1",
+        "repo_owner": "acme",
+        "repo_name": "frontend",
+        "repositories": [
+            {"repo_owner": "acme", "repo_name": "frontend", "branch": "main"},
+            {"repo_owner": "acme", "repo_name": "backend", "branch": "develop"},
+        ],
+        "working_branch_name": "open-inspect/sess-1",
+        "some_future_field": {"nested": True},
+    }
+    result = await _call_restore_sandbox(
+        {
+            "snapshot_image_id": "im-snap-1",
+            "session_config": session_config,
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["restore"]["session_config"] == session_config
+
+
+def test_session_config_helper_prefers_normalized_identity():
+    """The helper must take identity from the normalized pair, not the raw request."""
+    config = web_api._session_config_from_create_request(
+        {"session_id": "s1", "repo_owner": " Acme ", "repo_name": " App "},
+        repo_owner="acme",
+        repo_name="app",
+    )
+
+    assert config.repo_owner == "acme"
+    assert config.repo_name == "app"
+
+
+def test_session_config_helper_ignores_null_wire_values():
+    """Explicit nulls on the wire must not clobber SessionConfig defaults."""
+    config = web_api._session_config_from_create_request(
+        {"session_id": "s1", "provider": None, "model": None, "branch": None},
+        repo_owner=None,
+        repo_name=None,
+    )
+
+    assert config.provider == "anthropic"
+    assert config.model == "claude-sonnet-4-6"
+    assert config.branch is None

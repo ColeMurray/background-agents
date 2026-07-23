@@ -1,22 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { WebhookConfig } from "@/components/automations/webhook-config";
+import { getTemplateById } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { BackIcon } from "@/components/ui/icons";
 import Link from "next/link";
 
-export default function NewAutomationPage() {
-  const { isOpen, toggle } = useSidebarContext();
+function NewAutomationContent() {
+  const { isOpen } = useSidebarContext();
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [webhookResult, setWebhookResult] = useState<{
@@ -25,6 +27,12 @@ export default function NewAutomationPage() {
     webhookUrl?: string;
     sentryWebhookUrl?: string;
   } | null>(null);
+
+  // A template id (from the gallery) pre-fills the form. Repository is never
+  // pre-filled, so the repo-required-at-creation invariant is untouched. The
+  // form coerces a template's suggested model against the user's enabled set.
+  const template = getTemplateById(searchParams.get("template") ?? "");
+  const initialValues: Partial<AutomationFormValues> | undefined = template?.prefill;
 
   const handleSubmit = async (values: AutomationFormValues) => {
     setSubmitting(true);
@@ -69,14 +77,7 @@ export default function NewAutomationPage() {
         {!isOpen && (
           <header className="border-b border-border-muted flex-shrink-0">
             <div className="px-4 py-3 flex items-center gap-2">
-              <button
-                onClick={toggle}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-                aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              >
-                <SidebarIcon className="w-4 h-4" />
-              </button>
+              <CollapsedSidebarControls />
             </div>
           </header>
         )}
@@ -124,14 +125,7 @@ export default function NewAutomationPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3 flex items-center gap-2">
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+            <CollapsedSidebarControls />
             <Link
               href="/automations"
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
@@ -153,9 +147,36 @@ export default function NewAutomationPage() {
             </ErrorBanner>
           )}
 
-          <AutomationForm mode="create" onSubmit={handleSubmit} submitting={submitting} />
+          {template && (
+            <div className="mb-4 rounded-md border border-border-muted bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              Prefilled from the{" "}
+              <span className="font-medium text-foreground">{template.title}</span> template. Review
+              the details and choose a repository to create it.
+            </div>
+          )}
+
+          <AutomationForm
+            mode="create"
+            initialValues={initialValues}
+            onSubmit={handleSubmit}
+            submitting={submitting}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+export default function NewAutomationPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="h-full flex items-center justify-center">
+          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
+        </div>
+      }
+    >
+      <NewAutomationContent />
+    </Suspense>
   );
 }

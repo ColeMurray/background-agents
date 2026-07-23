@@ -21,6 +21,7 @@ resource "null_resource" "web_app_cloudflare_build" {
       NEXT_PUBLIC_APP_NAME         = var.app_name
       NEXT_PUBLIC_APP_SHORT_NAME   = var.app_short_name
       NEXT_PUBLIC_APP_ICON_URL     = var.app_icon_url
+      NEXT_PUBLIC_GOOGLE_ENABLED   = tostring(local.google_enabled)
     }
   }
 }
@@ -33,6 +34,7 @@ resource "null_resource" "web_app_cloudflare_secrets" {
   triggers = {
     secrets_hash = sha256(join(",", [
       var.github_client_secret,
+      var.google_client_secret,
       var.nextauth_secret,
       var.internal_callback_secret,
     ]))
@@ -45,8 +47,9 @@ resource "null_resource" "web_app_cloudflare_secrets" {
     environment = {
       CLOUDFLARE_API_TOKEN     = var.cloudflare_api_token
       CLOUDFLARE_ACCOUNT_ID    = var.cloudflare_account_id
-      WORKER_NAME              = "open-inspect-web-${local.name_suffix}"
+      WORKER_NAME              = local.web_worker_name
       GITHUB_CLIENT_SECRET     = var.github_client_secret
+      GOOGLE_CLIENT_SECRET     = var.google_client_secret
       NEXTAUTH_SECRET          = var.nextauth_secret
       INTERNAL_CALLBACK_SECRET = var.internal_callback_secret
     }
@@ -61,13 +64,18 @@ resource "local_file" "web_app_wrangler_production" {
   count    = var.web_platform == "cloudflare" ? 1 : 0
   filename = "${var.project_root}/packages/web/wrangler.production.toml"
   content  = <<-TOML
-    name = "open-inspect-web-${local.name_suffix}"
+    name = "${local.web_worker_name}"
     main = ".open-next/worker.js"
     compatibility_date = "2025-08-15"
     compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
+    # The workers.dev route is disabled when a custom domain is attached, so the
+    # app is only reachable on the origin NEXTAUTH_URL points at.
+    workers_dev = ${local.web_custom_domain_enabled ? "false" : "true"}
+
     [vars]
     GITHUB_CLIENT_ID = "${var.github_client_id}"
+    GOOGLE_CLIENT_ID = "${var.google_client_id}"
     NEXTAUTH_URL = "${local.web_app_url}"
     CONTROL_PLANE_URL = "${local.control_plane_url}"
     NEXT_PUBLIC_WS_URL = "${local.ws_url}"
@@ -75,8 +83,11 @@ resource "local_file" "web_app_wrangler_production" {
     NEXT_PUBLIC_APP_NAME = "${var.app_name}"
     NEXT_PUBLIC_APP_SHORT_NAME = "${var.app_short_name}"
     NEXT_PUBLIC_APP_ICON_URL = "${var.app_icon_url}"
+    NEXT_PUBLIC_GOOGLE_ENABLED = "${tostring(local.google_enabled)}"
     ALLOWED_USERS = "${var.allowed_users}"
     ALLOWED_EMAIL_DOMAINS = "${var.allowed_email_domains}"
+    ALLOWED_EMAILS = "${var.allowed_emails}"
+    ALLOWED_GITHUB_ORGS = "${var.allowed_github_orgs}"
     UNSAFE_ALLOW_ALL_USERS = "${tostring(var.unsafe_allow_all_users)}"
 
     [assets]
@@ -112,4 +123,17 @@ resource "null_resource" "web_app_cloudflare_deploy" {
     module.control_plane_worker,
     local_file.web_app_wrangler_production,
   ]
+}
+
+# Attach a custom domain to the web Worker (when configured).
+# Cloudflare provisions and manages the DNS record + edge cert for the hostname.
+resource "cloudflare_workers_custom_domain" "web_app" {
+  count = local.web_custom_domain_enabled ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  zone_id    = local.web_custom_domain_zone_id
+  hostname   = local.web_custom_domain
+  service    = local.web_worker_name
+
+  depends_on = [null_resource.web_app_cloudflare_deploy]
 }

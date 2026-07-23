@@ -1,8 +1,16 @@
+import type { Logger } from "../../logger";
 import { SessionInternalPaths, type SessionInternalPath } from "../contracts";
 
+/**
+ * Route handler invoked by SessionDO.fetch dispatch. `log` is the
+ * request-scoped logger (the session logger enriched with trace_id /
+ * request_id correlation from the router); handlers thread it into any
+ * request-serving code that logs.
+ */
 export type SessionInternalRouteHandler = (
   request: Request,
-  url: URL
+  url: URL,
+  log: Logger
 ) => Promise<Response> | Response;
 
 export interface SessionInternalRoute {
@@ -18,12 +26,15 @@ export interface SessionInternalRouteHandlers {
   stop: SessionInternalRouteHandler;
   sandboxEvent: SessionInternalRouteHandler;
   createMediaArtifact: SessionInternalRouteHandler;
+  recordAttachment: SessionInternalRouteHandler;
   listParticipants: SessionInternalRouteHandler;
   addParticipant: SessionInternalRouteHandler;
   listEvents: SessionInternalRouteHandler;
   listArtifacts: SessionInternalRouteHandler;
   listMessages: SessionInternalRouteHandler;
   createPr: SessionInternalRouteHandler;
+  pullRequestArtifactSnapshot: SessionInternalRouteHandler;
+  pullRequestsRefresh: SessionInternalRouteHandler;
   wsToken: SessionInternalRouteHandler;
   updateTitle: SessionInternalRouteHandler;
   archive: SessionInternalRouteHandler;
@@ -31,10 +42,16 @@ export interface SessionInternalRouteHandlers {
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
   scmCredentials: SessionInternalRouteHandler;
+  tunnelUrls: SessionInternalRouteHandler;
   spawnContext: SessionInternalRouteHandler;
   childSummary: SessionInternalRouteHandler;
   cancel: SessionInternalRouteHandler;
   childSessionUpdate: SessionInternalRouteHandler;
+  diffState: SessionInternalRouteHandler;
+  diffStore: SessionInternalRouteHandler;
+  diffFailure: SessionInternalRouteHandler;
+  diffResolveFile: SessionInternalRouteHandler;
+  diffRetry: SessionInternalRouteHandler;
 }
 
 /**
@@ -55,6 +72,7 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.createMediaArtifact,
       handler: handlers.createMediaArtifact,
     },
+    { method: "POST", path: SessionInternalPaths.attachments, handler: handlers.recordAttachment },
     {
       method: "GET",
       path: SessionInternalPaths.participants,
@@ -69,6 +87,16 @@ export function createSessionInternalRoutes(
     { method: "GET", path: SessionInternalPaths.artifacts, handler: handlers.listArtifacts },
     { method: "GET", path: SessionInternalPaths.messages, handler: handlers.listMessages },
     { method: "POST", path: SessionInternalPaths.createPr, handler: handlers.createPr },
+    {
+      method: "POST",
+      path: SessionInternalPaths.pullRequestArtifactSnapshot,
+      handler: handlers.pullRequestArtifactSnapshot,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.pullRequestsRefresh,
+      handler: handlers.pullRequestsRefresh,
+    },
     { method: "POST", path: SessionInternalPaths.wsToken, handler: handlers.wsToken },
     { method: "POST", path: SessionInternalPaths.updateTitle, handler: handlers.updateTitle },
     { method: "POST", path: SessionInternalPaths.archive, handler: handlers.archive },
@@ -88,6 +116,7 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.scmCredentials,
       handler: handlers.scmCredentials,
     },
+    { method: "GET", path: SessionInternalPaths.tunnelUrls, handler: handlers.tunnelUrls },
     { method: "GET", path: SessionInternalPaths.spawnContext, handler: handlers.spawnContext },
     { method: "GET", path: SessionInternalPaths.childSummary, handler: handlers.childSummary },
     { method: "POST", path: SessionInternalPaths.cancel, handler: handlers.cancel },
@@ -96,5 +125,14 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.childSessionUpdate,
       handler: handlers.childSessionUpdate,
     },
+    { method: "GET", path: SessionInternalPaths.diffState, handler: handlers.diffState },
+    { method: "POST", path: SessionInternalPaths.diffStore, handler: handlers.diffStore },
+    { method: "POST", path: SessionInternalPaths.diffFailure, handler: handlers.diffFailure },
+    {
+      method: "GET",
+      path: SessionInternalPaths.diffResolveFile,
+      handler: handlers.diffResolveFile,
+    },
+    { method: "POST", path: SessionInternalPaths.diffRetry, handler: handlers.diffRetry },
   ];
 }

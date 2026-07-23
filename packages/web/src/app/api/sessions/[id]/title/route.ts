@@ -4,6 +4,15 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
+export function parseSessionTitlePatchBody(body: unknown): { title?: string } | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+
+  const title = (body as { title?: unknown }).title;
+  if (title !== undefined && typeof title !== "string") return null;
+
+  return { title };
+}
+
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -13,10 +22,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   const { id } = await params;
   const userId = session.user.id || session.user.email || "anonymous";
 
-  let body: { title?: string };
+  let body: { title?: string } | null;
   try {
-    body = (await request.json()) as { title?: string };
+    body = parseSessionTitlePatchBody(await request.json());
   } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+  if (!body) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 

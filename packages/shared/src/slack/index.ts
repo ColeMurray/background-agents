@@ -1,19 +1,37 @@
 export {
   addReaction,
+  authTest,
+  completeExternalUpload,
   getChannelInfo,
+  getExternalUploadUrl,
+  getMessageFiles,
   getPermalink,
   getThreadMessages,
   getUserInfo,
+  listChannels,
   openView,
+  postEphemeral,
   postMessage,
   publishView,
   removeReaction,
   updateMessage,
+  uploadToExternalUrl,
   verifySlackSignature,
 } from "./client";
-export type { SlackChannelInfo, SlackEnvelope, SlackThreadMessage, SlackUser } from "./client";
+export type {
+  SlackAuthTestResult,
+  SlackChannelInfo,
+  SlackChannelListing,
+  SlackEnvelope,
+  CompleteExternalUploadOptions,
+  ExternalUploadUrlOptions,
+  SlackMessageFile,
+  SlackThreadMessage,
+  SlackUser,
+} from "./client";
 export {
   applyMentionPolicy,
+  escapeMrkdwnText,
   sanitizeAgentText,
   sanitizeLinks,
   stripBroadcastMentions,
@@ -21,7 +39,14 @@ export {
 } from "./mrkdwn";
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
 export { resolveUserNames } from "./resolve-users";
-export { SLACK_DENIAL_REASONS, SLACK_DENIAL_STATUS, DEFAULT_MENTIONS_POLICY } from "./types";
+export {
+  SLACK_DENIAL_REASONS,
+  SLACK_DENIAL_STATUS,
+  DEFAULT_MENTIONS_POLICY,
+  slackDenialReasonSchema,
+  slackNotifySuccessOutputSchema,
+  slackNotifyToolEnvelopeSchema,
+} from "./types";
 export type {
   SlackDenialReason,
   SlackWireDenialReason,

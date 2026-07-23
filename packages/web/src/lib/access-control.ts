@@ -1,13 +1,21 @@
 export interface AccessControlConfig {
   allowedDomains: string[];
   allowedUsers: string[];
+  allowedEmails: string[];
+  allowedOrganizations?: string[];
   unsafeAllowAllUsers: boolean;
 }
 
 export interface AccessCheckParams {
   githubUsername?: string;
-  email?: string;
+  emails?: string[];
 }
+
+export type AccessAllowReason =
+  | "unsafe_allow_all"
+  | "username_allowlist"
+  | "email_allowlist"
+  | "email_domain_allowlist";
 
 /**
  * Parse comma-separated environment variable into a lowercase, trimmed array
@@ -24,40 +32,72 @@ export function parseBooleanEnv(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
 }
 
+function parseDomain(email: string): string | null {
+  const parts = email.split("@");
+  return parts.length === 2 ? parts[1].toLowerCase() : null;
+}
+
 /**
- * Check if a user is allowed to sign in based on access control configuration.
- *
- * Returns true if:
- * - Both allowlists are empty and unsafeAllowAllUsers is true
- * - User's GitHub username is in allowedUsers
- * - User's email domain is in allowedDomains
- *
- * Logic is OR-based: matching either list grants access.
+ * Boolean convenience over getAccessAllowReason: true when any synchronous
+ * allowlist admits the user. Does NOT cover GitHub organization membership, which
+ * is resolved asynchronously (see checkGitHubOrganizationAccess).
  */
 export function checkAccessAllowed(
   config: AccessControlConfig,
   params: AccessCheckParams
 ): boolean {
-  const { allowedDomains, allowedUsers, unsafeAllowAllUsers } = config;
-  const { githubUsername, email } = params;
+  return getAccessAllowReason(config, params) !== null;
+}
+
+/**
+ * Resolve which allowlist (if any) admits a sign-in, or null to deny.
+ *
+ * Matching is OR-based across the username, exact-email, and email-domain lists.
+ * GitHub organization membership is deliberately NOT evaluated here — it requires
+ * an async GitHub API call and is owned entirely by checkGitHubOrganizationAccess,
+ * which the sign-in callback applies as a fallback when this returns null.
+ * `allowedOrganizations` still participates in the empty-allowlist guard below so
+ * an org-only configuration does not collapse into unsafe allow-all.
+ */
+export function getAccessAllowReason(
+  config: AccessControlConfig,
+  params: AccessCheckParams
+): AccessAllowReason | null {
+  const { allowedDomains, allowedUsers, allowedEmails, unsafeAllowAllUsers } = config;
+  const allowedOrganizations = config.allowedOrganizations ?? [];
+  const { githubUsername, emails } = params;
 
   // Empty allowlists only permit sign-in when explicitly enabled.
-  if (allowedDomains.length === 0 && allowedUsers.length === 0) {
-    return unsafeAllowAllUsers;
+  if (
+    allowedDomains.length === 0 &&
+    allowedUsers.length === 0 &&
+    allowedEmails.length === 0 &&
+    allowedOrganizations.length === 0
+  ) {
+    return unsafeAllowAllUsers ? "unsafe_allow_all" : null;
   }
 
   // Check explicit user allowlist (GitHub username)
   if (githubUsername && allowedUsers.includes(githubUsername.toLowerCase())) {
-    return true;
+    return "username_allowlist";
   }
 
-  // Check email domain allowlist
-  if (email) {
-    const domain = email.toLowerCase().split("@")[1];
-    if (domain && allowedDomains.includes(domain)) {
-      return true;
-    }
+  // Check exact email allowlist. Provider-agnostic, and the only way to admit a
+  // specific address on a shared domain (e.g. one gmail.com user) without
+  // domain-allowing every gmail.com account.
+  if (emails?.some((email) => allowedEmails.includes(email.toLowerCase()))) {
+    return "email_allowlist";
   }
 
-  return false;
+  // Check email domain allowlist.
+  if (
+    emails
+      ?.map((email) => parseDomain(email))
+      ?.filter((domain) => domain !== null)
+      ?.some((domain) => allowedDomains.includes(domain))
+  ) {
+    return "email_domain_allowlist";
+  }
+
+  return null;
 }

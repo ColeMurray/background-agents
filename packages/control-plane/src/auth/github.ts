@@ -2,9 +2,30 @@
  * GitHub authentication utilities.
  */
 
-import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import { DEFAULT_APP_NAME, formatGitHubNoreplyEmail } from "@open-inspect/shared";
+import { z } from "zod";
 import { decryptToken, encryptToken } from "./crypto";
-import type { GitHubUser, GitHubTokenResponse } from "../types";
+import { githubTokenResponseSchema, type GitHubUser, type GitHubTokenResponse } from "../types";
+
+const githubOAuthErrorSchema = z.object({
+  error: z.string().optional(),
+  error_description: z.string().optional(),
+});
+
+async function parseGitHubTokenResponse(response: Response): Promise<GitHubTokenResponse> {
+  const data: unknown = await response.json();
+  const errorResult = githubOAuthErrorSchema.safeParse(data);
+  if (errorResult.success && errorResult.data.error) {
+    throw new Error(errorResult.data.error_description ?? errorResult.data.error);
+  }
+
+  const tokenResult = githubTokenResponseSchema.safeParse(data);
+  if (!tokenResult.success) {
+    throw new Error("Invalid GitHub token response");
+  }
+
+  return tokenResult.data;
+}
 
 /**
  * GitHub OAuth configuration.
@@ -45,16 +66,7 @@ export async function exchangeCodeForToken(
     }),
   });
 
-  const data = (await response.json()) as GitHubTokenResponse & {
-    error?: string;
-    error_description?: string;
-  };
-
-  if ("error" in data && data.error) {
-    throw new Error(data.error_description ?? data.error);
-  }
-
-  return data;
+  return parseGitHubTokenResponse(response);
 }
 
 /**
@@ -78,16 +90,7 @@ export async function refreshAccessToken(
     }),
   });
 
-  const data = (await response.json()) as GitHubTokenResponse & {
-    error?: string;
-    error_description?: string;
-  };
-
-  if ("error" in data && data.error) {
-    throw new Error(data.error_description ?? data.error);
-  }
-
-  return data;
+  return parseGitHubTokenResponse(response);
 }
 
 /**
@@ -198,7 +201,7 @@ export async function getValidAccessToken(
  * Generate noreply email for users with private email.
  */
 export function generateNoreplyEmail(githubUser: GitHubUser): string {
-  return `${githubUser.id}+${githubUser.login}@users.noreply.github.com`;
+  return formatGitHubNoreplyEmail(githubUser);
 }
 
 /**

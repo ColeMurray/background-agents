@@ -2,6 +2,8 @@
  * Type definitions for the Slack bot.
  */
 
+import type { SlackCompletionJob } from "../completion/job";
+
 /**
  * Cloudflare Worker environment bindings.
  */
@@ -12,6 +14,9 @@ export interface Env {
   // Service binding to control plane
   CONTROL_PLANE: Fetcher;
 
+  // Durable completion handoff. All Slack completion callbacks enqueue here.
+  SLACK_COMPLETION_QUEUE: Queue<SlackCompletionJob>;
+
   // Environment variables
   DEPLOYMENT_NAME: string;
   CONTROL_PLANE_URL: string;
@@ -19,6 +24,12 @@ export interface Env {
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
   APP_NAME?: string;
+  /**
+   * Kill switch for Slack channel-message automation triggers. The bot only
+   * ingests/forwards channel messages when this is exactly "true". Dark by
+   * default — any other value (or unset) disables the feature entirely.
+   */
+  SLACK_TRIGGERS_ENABLED?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;
@@ -51,10 +62,27 @@ export interface ThreadContext {
   previousMessages?: string[];
 }
 
+import type { ConfidenceLevel } from "@open-inspect/shared";
+// targets.ts is a pure leaf (types + policy functions, no I/O), so the types
+// barrel can depend on it without a cycle.
+import type { SlackSessionTarget } from "../targets";
+
 /**
- * Result of repository classification.
+ * Result of target classification. Unlike the shared repo-only
+ * `ClassificationResult` (still used by the Linear bot), the Slack bot
+ * classifies to a {@link SlackSessionTarget} — a repository or a saved
+ * environment — because routing rules can name either.
  */
-export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";
+export interface ClassificationResult {
+  target: SlackSessionTarget | null;
+  confidence: ConfidenceLevel;
+  reasoning: string;
+  alternatives?: SlackSessionTarget[];
+  needsClarification: boolean;
+}
+
+export type { ConfidenceLevel, Environment } from "@open-inspect/shared";
+export type { SlackSessionTarget } from "../targets";
 
 /**
  * Slack event types.
@@ -100,30 +128,7 @@ export interface SlackAppMentionEvent {
   thread_ts?: string;
 }
 
-/**
- * Slack interaction payload (buttons, selects, modals).
- */
-export type SlackInteractionPayload = {
-  type: string;
-  action_id?: string;
-  value?: string;
-  trigger_id?: string;
-  actions?: Array<{
-    action_id: string;
-    selected_option?: { value: string };
-    value?: string;
-  }>;
-  channel?: { id: string };
-  message?: { ts: string; thread_ts?: string };
-  user?: { id: string };
-  view?: {
-    callback_id?: string;
-    private_metadata?: string;
-    state?: {
-      values?: Record<string, Record<string, { type?: string; value?: string }>>;
-    };
-  };
-};
+export type { SlackInteractionPayload } from "../interaction-payload";
 
 /**
  * Callback context passed with prompts for follow-up notifications.
@@ -139,12 +144,20 @@ export type SlackBotCallbackContext = SlackCallbackContext;
  */
 export interface ThreadSession {
   sessionId: string;
+  /** Session-target id: the repo id ("owner/name") or environment id ("env_…"). */
   repoId: string;
+  /** Session-target display label: the repo fullName or environment name. */
   repoFullName: string;
   model: string;
   reasoningEffort?: string;
   /** Unix timestamp of when the session was created. Used for debugging and observability. */
   createdAt: number;
+  /**
+   * Slack ts of the last thread message forwarded to the session. Follow-up
+   * prompts include the human messages posted after this point so the agent
+   * sees discussion that happened between invocations.
+   */
+  lastPromptTs?: string;
 }
 
 /**

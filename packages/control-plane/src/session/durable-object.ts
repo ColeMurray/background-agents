@@ -9,14 +9,20 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  clientMessageSchema,
+  resolveAppName,
+  sandboxEventSchema,
+  timingSafeEqual,
+  type SessionAttachmentReference,
+} from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
-import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
-import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
-import { createModalProvider } from "../sandbox/providers/modal-provider";
-import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
+import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
+import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
+import { createImageBuildLookup } from "../image-builds/lookup";
+import { resolveImageBuildProvider } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -27,11 +33,10 @@ import {
   type WebSocketManager,
   type AlarmScheduler,
   type IdGenerator,
-  type RepoImageLookup,
+  type ImageBuildLookup,
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
-import { RepoImageStore } from "../db/repo-images";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
@@ -42,24 +47,38 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import { DEFAULT_MODEL, isValidReasoningEffort } from "../utils/models";
 import type {
   Env,
   ClientInfo,
-  ClientMessage,
   ServerMessage,
   SandboxEvent,
+  SessionRepositoryState,
   SessionState,
-  SessionStatus,
   SandboxStatus,
 } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { SessionAttachmentRepository } from "./session-attachment-repository";
+import { resolveParticipantName } from "./participant-name";
+import { validateReasoningEffort } from "./reasoning-effort";
+import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
-import { SessionPullRequestService } from "./pull-request-service";
+import { SessionPullRequestStore } from "../db/session-pull-request-store";
+import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
+import { refreshSessionPullRequests } from "./pull-request-refresh";
+import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
-import { mergeSecrets } from "../db/secrets-validation";
+import { EnvironmentSecretsStore } from "../db/environment-secrets";
+import { EnvironmentStore } from "../db/environments";
+import {
+  auditSecretsMerge,
+  mergeSecretSources,
+  parseSecretsCapMode,
+} from "../db/secrets-validation";
+import { buildSessionTargetSecretSources } from "./session-target-secrets";
+import type { SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
@@ -69,6 +88,7 @@ import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { SessionEventStream } from "./event-stream";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
 import {
@@ -76,6 +96,7 @@ import {
   type ChildSessionsHandler,
 } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
+import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
@@ -96,6 +117,11 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
+import { SessionDiffStore } from "./diffs/store";
+import { SessionDiffService } from "./diffs/service";
+import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
+import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
+import { SessionStatusService } from "./session-status-service";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -112,16 +138,35 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
  */
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-/** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
-const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+type BoundarySchema<T> = {
+  safeParse(
+    input: unknown
+  ): { success: true; data: T } | { success: false; error: { issues: unknown } };
+};
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
+  /**
+   * The DO's global-database handle — the single point where env.DB is read.
+   * Nullable to preserve the existing defensive guards against a missing
+   * binding at runtime. Distinct from `this.sql`, the DO-embedded SQLite.
+   */
+  private readonly db: SqlDatabase | null;
   private repository: SessionRepository;
+  private attachmentRepository: SessionAttachmentRepository;
   private initialized = false;
+  // Session-scoped logger. Assigned during initialization only — never
+  // per-request. Request-serving code receives a request-scoped child
+  // (with trace_id / request_id) threaded explicitly from fetch().
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
+  // Session messenger (constructed in ensureInitialized once the session logger exists)
+  private messenger!: SessionMessenger;
+  // Session diff service (constructed in ensureInitialized once the session logger exists)
+  private diffService!: SessionDiffService;
+  // Session diffs HTTP handler (constructed in ensureInitialized alongside the service)
+  private diffsHandler!: SessionDiffsHandler;
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
   // Source control provider (lazily initialized)
@@ -136,56 +181,86 @@ export class SessionDO extends DurableObject<Env> {
   private _messageQueue: SessionMessageQueue | null = null;
   // Message service (lazily initialized)
   private _messageService: MessageService | null = null;
+  private _eventStream: SessionEventStream | null = null;
   // Messages handler (lazily initialized)
   private _messagesHandler: MessagesHandler | null = null;
   // Child sessions handler (lazily initialized)
   private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox handler (lazily initialized)
   private _sandboxHandler: SandboxHandler | null = null;
+  // Session attachments handler (lazily initialized)
+  private _attachmentsHandler: AttachmentsHandler | null = null;
   // WebSocket token handler (lazily initialized)
   private _wsTokenHandler: WsTokenHandler | null = null;
   // Session lifecycle handler (lazily initialized)
   private _sessionLifecycleHandler: SessionLifecycleHandler | null = null;
   // Pull request handler (lazily initialized)
   private _pullRequestHandler: PullRequestHandler | null = null;
+  private readonly prCreationClaims = new PullRequestCreationClaims();
   // Participants handler (lazily initialized)
   private _participantsHandler: ParticipantsHandler | null = null;
   // Alarm handler (lazily initialized)
   private _alarmHandler: AlarmHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
+  // Session status service (lazily initialized)
+  private _statusService: SessionStatusService | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
-    init: (request) => this.sessionLifecycleHandler.init(request),
+    init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
-    prompt: (request) => this.messagesHandler.enqueuePrompt(request),
+    prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
+    recordAttachment: (request) => {
+      const session = this.getSession();
+      return this.attachmentsHandler.recordAttachment(
+        request,
+        session ? this.getPublicSessionId(session) : null
+      );
+    },
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => this.messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
-    createPr: (request) => this.pullRequestHandler.createPr(request),
-    wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
+    createPr: (request, _url, log) => this.pullRequestHandler.createPr(request, log),
+    pullRequestArtifactSnapshot: (request, url) =>
+      this.pullRequestHandler.pullRequestArtifactSnapshot(request, url),
+    pullRequestsRefresh: () => this.pullRequestHandler.refreshPullRequests(),
+    wsToken: (request, _url, log) => this.wsTokenHandler.generateWsToken(request, log),
     updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
     archive: (request) => this.sessionLifecycleHandler.archive(request),
     unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
-    verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
-    openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
-    scmCredentials: () => this.sandboxHandler.scmCredentials(),
+    verifySandboxToken: (request, _url, log) =>
+      this.sandboxHandler.verifySandboxToken(request, log),
+    openaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.openaiTokenRefresh(log),
+    scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
+    tunnelUrls: (_request, _url, log) => this.sandboxHandler.tunnelUrls(log),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
-    childSummary: () => this.childSessionsHandler.getChildSummary(),
+    childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
+    diffState: () => this.diffsHandler.state(),
+    diffStore: (request) => this.diffsHandler.storeBundle(request),
+    diffFailure: (request) => this.diffsHandler.recordFailure(request),
+    diffResolveFile: (_request, url) => this.diffsHandler.resolveFile(url),
+    diffRetry: () => this.diffsHandler.retry(),
   });
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
+    this.db = env.DB ?? null;
     this.sql = ctx.storage.sql;
-    this.repository = new SessionRepository(this.sql);
+    this.attachmentRepository = new SessionAttachmentRepository(this.sql);
+    this.repository = new SessionRepository(
+      this.sql,
+      (closure) => ctx.storage.transactionSync(closure),
+      this.attachmentRepository
+    );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -217,8 +292,8 @@ export class SessionDO extends DurableObject<Env> {
   private get participantService(): ParticipantService {
     if (!this._participantService) {
       const userScmTokenStore =
-        this.env.DB && this.env.TOKEN_ENCRYPTION_KEY
-          ? new UserScmTokenStore(this.env.DB, this.env.TOKEN_ENCRYPTION_KEY)
+        this.db && this.env.TOKEN_ENCRYPTION_KEY
+          ? new UserScmTokenStore(this.db, this.env.TOKEN_ENCRYPTION_KEY)
           : null;
       this._participantService = new ParticipantService({
         repository: this.repository,
@@ -265,7 +340,7 @@ export class SessionDO extends DurableObject<Env> {
       this._presenceService = new PresenceService({
         getAuthenticatedClients: () => this.wsManager.getAuthenticatedClients(),
         getClientInfo: (ws) => this.getClientInfo(ws),
-        broadcast: (msg) => this.broadcast(msg),
+        messenger: this.messenger,
         send: (ws, msg) => this.safeSend(ws, msg),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         isSpawning: () => this.lifecycleManager.isSpawning(),
@@ -296,35 +371,21 @@ export class SessionDO extends DurableObject<Env> {
 
   private get messageQueue(): SessionMessageQueue {
     if (!this._messageQueue) {
-      this._messageQueue = new SessionMessageQueue({
-        env: this.env,
-        ctx: this.ctx,
-        log: this.log,
-        repository: this.repository,
-        wsManager: this.wsManager,
-        participantService: this.participantService,
-        callbackService: this.callbackService,
-        scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
-        getClientInfo: (ws) => this.getClientInfo(ws),
-        validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
-        getSession: () => this.getSession(),
-        updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
-        spawnSandbox: () => this.spawnSandbox(),
-        broadcast: (message) => this.broadcast(message),
-        setSessionStatus: async (status) => {
-          await this.transitionSessionStatus(status);
-        },
-        reconcileSessionStatusAfterExecution: async (success) => {
-          await this.reconcileSessionStatusAfterExecution(success);
-        },
-        scheduleExecutionTimeout: async (startedAtMs: number) => {
-          const deadline = startedAtMs + this.executionTimeoutMs;
-          const currentAlarm = await this.ctx.storage.getAlarm();
-          if (!currentAlarm || deadline < currentAlarm) {
-            await this.ctx.storage.setAlarm(deadline);
-          }
-        },
-      });
+      this._messageQueue = new SessionMessageQueue(
+        this.ctx,
+        this.log,
+        this.repository,
+        this.attachmentRepository,
+        this.wsManager,
+        this.messenger,
+        this.participantService,
+        this.callbackService,
+        this.statusService,
+        this.lifecycleManager,
+        this.db ? new SessionIndexStore(this.db) : null,
+        resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+        this.executionTimeoutMs
+      );
     }
 
     return this._messageQueue;
@@ -343,11 +404,18 @@ export class SessionDO extends DurableObject<Env> {
     return this._messageService;
   }
 
+  private get eventStream(): SessionEventStream {
+    if (!this._eventStream) {
+      this._eventStream = new SessionEventStream(this.repository);
+    }
+
+    return this._eventStream;
+  }
+
   private get messagesHandler(): MessagesHandler {
     if (!this._messagesHandler) {
       this._messagesHandler = createMessagesHandler({
         messageService: this.messageService,
-        getLog: () => this.log,
       });
     }
 
@@ -361,7 +429,8 @@ export class SessionDO extends DurableObject<Env> {
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
-        broadcast: (message) => this.broadcast(message),
+        parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
+        messenger: this.messenger,
       });
     }
 
@@ -376,27 +445,33 @@ export class SessionDO extends DurableObject<Env> {
         getSandbox: () => this.getSandbox(),
         isValidSandboxToken: (token, sandbox) => this.isValidSandboxToken(token, sandbox),
         getSession: () => this.getSession(),
-        refreshOpenAIToken: async (session) => {
+        refreshOpenAIToken: async (session, log) => {
           const service = new OpenAITokenRefreshService(
-            this.env.DB!,
+            this.db!,
             this.env.REPO_SECRETS_ENCRYPTION_KEY!,
             (sessionRow) => this.ensureRepoId(sessionRow),
-            this.log
+            log
           );
           return service.refresh(session);
         },
-        isOpenAISecretsConfigured: () =>
-          Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
-        getScmCredentials: () =>
-          new ScmCredentialsService(this.sourceControlProvider, this.log).getCredentials(),
-        broadcast: (message) => this.broadcast(message),
+        isOpenAISecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        getScmCredentials: (log) =>
+          new ScmCredentialsService(this.sourceControlProvider, log).getCredentials(),
+        messenger: this.messenger,
         generateId: () => generateId(),
         now: () => Date.now(),
-        getLog: () => this.log,
       });
     }
 
     return this._sandboxHandler;
+  }
+
+  private get attachmentsHandler(): AttachmentsHandler {
+    if (!this._attachmentsHandler) {
+      this._attachmentsHandler = new AttachmentsHandler(this.attachmentRepository, this.log);
+    }
+
+    return this._attachmentsHandler;
   }
 
   private get wsTokenHandler(): WsTokenHandler {
@@ -407,7 +482,6 @@ export class SessionDO extends DurableObject<Env> {
         generateId: (bytes) => generateId(bytes),
         hashToken: (token) => hashToken(token),
         now: () => Date.now(),
-        getLog: () => this.log,
       });
     }
 
@@ -424,16 +498,16 @@ export class SessionDO extends DurableObject<Env> {
           const { encryptToken } = await import("../auth/crypto");
           return encryptToken(token, encryptionKey);
         },
-        validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
+        validateReasoningEffort: (model, effort) =>
+          validateReasoningEffort(model, effort, this.log),
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
         scheduleWarmSandbox: () => this.ctx.waitUntil(this.warmSandbox()),
-        getLog: () => this.log,
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
-        transitionSessionStatus: (status) => this.transitionSessionStatus(status),
+        statusService: this.statusService,
         applySessionTitleUpdate: (title, options) => this.applySessionTitleUpdate(title, options),
         stopExecution: (options) => this.stopExecution(options),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
@@ -449,6 +523,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._pullRequestHandler) {
       this._pullRequestHandler = createPullRequestHandler({
         getSession: () => this.getSession(),
+        getSessionRepositories: () => this.repository.getSessionRepositories(),
         getPromptingParticipantForPR: () => this.participantService.getPromptingParticipantForPR(),
         resolveAuthForPR: (participant) => this.participantService.resolveAuthForPR(participant),
         getSessionUrl: (session) => {
@@ -456,35 +531,63 @@ export class SessionDO extends DurableObject<Env> {
           const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
           return webAppUrl + "/session/" + sessionId;
         },
-        createPullRequest: async (input) => {
+        createPullRequest: async (input, log) => {
           const pullRequestService = new SessionPullRequestService({
             repository: this.repository,
+            claims: this.prCreationClaims,
             sourceControlProvider: this.sourceControlProvider,
-            log: this.log,
+            log,
             generateId: () => generateId(),
-            pushBranchToRemote: (headBranch, pushSpec) =>
-              this.pushBranchToRemote(headBranch, pushSpec),
-            broadcastSessionBranch: (branchName) => {
-              this.broadcast({
-                type: "session_branch",
-                branchName,
-              });
-            },
-            broadcastArtifactCreated: (artifact) => {
-              this.broadcast({
-                type: "artifact_created",
-                artifact,
-              });
-            },
+            pushBranchToRemote: (pushSpec) => this.pushBranchToRemote(pushSpec),
+            messenger: this.messenger,
             appName: resolveAppName(this.env),
+            sessionPullRequests: this.db ? new SessionPullRequestStore(this.db) : undefined,
           });
 
           return pullRequestService.createPullRequest(input);
         },
+        getArtifactById: (artifactId) => this.repository.getArtifactById(artifactId),
+        updateArtifact: (artifactId, data) => this.repository.updateArtifact(artifactId, data),
+        messenger: this.messenger,
+        now: () => Date.now(),
+        triggerPullRequestRefresh: () => this.schedulePullRequestRefresh("manual"),
       });
     }
 
     return this._pullRequestHandler;
+  }
+
+  /** Fire a background read-through refresh; failures only log. */
+  private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
+    this.ctx.waitUntil(
+      refreshSessionPullRequests(
+        this.repository,
+        this.sourceControlProvider,
+        this.db ? new SessionPullRequestStore(this.db) : null
+      )
+        .then(({ updated, failures }) => {
+          for (const artifact of updated) {
+            this.broadcast({ type: "artifact_updated", artifact });
+          }
+          for (const failure of failures) {
+            this.log.error("Pull request refresh failed for artifact", {
+              trigger,
+              reason: failure.reason,
+              artifact_id: failure.artifactId,
+              pr_number: failure.prNumber,
+              repo_owner: failure.repoOwner,
+              repo_name: failure.repoName,
+              error: failure.error instanceof Error ? failure.error : String(failure.error),
+            });
+          }
+        })
+        .catch((error) => {
+          this.log.error("Pull request refresh failed", {
+            trigger,
+            error: error instanceof Error ? error : String(error),
+          });
+        })
+    );
   }
 
   private get participantsHandler(): ParticipantsHandler {
@@ -505,7 +608,7 @@ export class SessionDO extends DurableObject<Env> {
         lifecycleManager: this.lifecycleManager,
         executionTimeoutMs: this.executionTimeoutMs,
         now: () => Date.now(),
-        getLog: () => this.log,
+        log: this.log,
       });
     }
 
@@ -514,26 +617,44 @@ export class SessionDO extends DurableObject<Env> {
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
     if (!this._sandboxEventProcessor) {
-      this._sandboxEventProcessor = new SessionSandboxEventProcessor({
-        ctx: this.ctx,
-        log: this.log,
-        repository: this.repository,
-        callbackService: this.callbackService,
-        wsManager: this.wsManager,
-        broadcast: (message) => this.broadcast(message),
-        applySessionTitleUpdate: (title, options) => this.applySessionTitleUpdate(title, options),
-        getIsProcessing: () => this.getIsProcessing(),
-        triggerSnapshot: (reason) => this.triggerSnapshot(reason),
-        reconcileSessionStatusAfterExecution: async (success) => {
-          await this.reconcileSessionStatusAfterExecution(success);
-        },
-        updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
-        scheduleInactivityCheck: () => this.scheduleInactivityCheck(),
-        processMessageQueue: () => this.messageQueue.processMessageQueue(),
-      });
+      this._sandboxEventProcessor = new SessionSandboxEventProcessor(
+        this.ctx,
+        () => this.log,
+        this.repository,
+        this.callbackService,
+        this.wsManager,
+        this.messenger,
+        this.diffService,
+        (title, options) => this.applySessionTitleUpdate(title, options),
+        (reason) => this.triggerSnapshot(reason),
+        this.statusService,
+        (timestamp) => this.updateLastActivity(timestamp),
+        () => this.scheduleInactivityCheck(),
+        () => this.messageQueue.processMessageQueue()
+      );
     }
 
     return this._sandboxEventProcessor;
+  }
+
+  /**
+   * Get the session status service, creating it lazily if needed.
+   * Lazy initialization ensures the session-scoped logger and messenger
+   * (set by ensureInitialized()) exist by the time the service is created.
+   */
+  private get statusService(): SessionStatusService {
+    if (!this._statusService) {
+      this._statusService = new SessionStatusService(
+        this.ctx,
+        this.log,
+        this.repository,
+        this.messenger,
+        this.db ? new SessionIndexStore(this.db) : null,
+        this.env.SESSION ?? null
+      );
+    }
+
+    return this._statusService;
   }
 
   /**
@@ -549,63 +670,20 @@ export class SessionDO extends DurableObject<Env> {
   private createLifecycleManager(): SandboxLifecycleManager {
     const sandboxBackend = resolveSandboxBackendName(this.env.SANDBOX_PROVIDER);
 
-    const provider =
-      sandboxBackend === "daytona"
-        ? (() => {
-            if (
-              !this.env.DAYTONA_API_URL ||
-              !this.env.DAYTONA_API_KEY ||
-              !this.env.DAYTONA_BASE_SNAPSHOT
-            ) {
-              throw new Error(
-                "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
-              );
-            }
-
-            const daytonaClient = createDaytonaRestClient({
-              apiUrl: this.env.DAYTONA_API_URL,
-              apiKey: this.env.DAYTONA_API_KEY,
-              target: this.env.DAYTONA_TARGET,
-              baseSnapshot: this.env.DAYTONA_BASE_SNAPSHOT,
-              autoStopIntervalMinutes: parseInt(
-                this.env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES || "120",
-                10
-              ),
-              autoArchiveIntervalMinutes: parseInt(
-                this.env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES || "10080",
-                10
-              ),
-            });
-
-            const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
-
-            return createDaytonaProvider(daytonaClient, {
-              scmProvider,
-              gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
-              // Reuses API key as HMAC secret for code-server password derivation
-              // (distinct message prefix prevents collision with auth use)
-              codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
-            });
-          })()
-        : (() => {
-            if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-              throw new Error(
-                "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
-              );
-            }
-
-            const modalClient = createModalClient(
-              this.env.MODAL_API_SECRET,
-              this.env.MODAL_WORKSPACE
-            );
-            return createModalProvider(modalClient);
-          })();
+    const provider = createSandboxProviderFromEnv(this.env, sandboxBackend);
 
     // Storage adapter
     const storage: SandboxStorage = {
       getSandbox: () => this.repository.getSandbox(),
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
+      getSessionRepositories: () =>
+        this.repository.getSessionRepositories().map((entry) => ({
+          repoOwner: entry.repoOwner,
+          repoName: entry.repoName,
+          baseBranch: entry.baseBranch ?? "main",
+          baseSha: entry.row?.base_sha ?? null,
+        })),
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
@@ -684,27 +762,29 @@ export class SessionDO extends DurableObject<Env> {
 
     // Create D1-backed lookups if database is available
     let mcpServerLookup: McpServerLookup | undefined;
-    if (this.env.DB) {
-      const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    if (this.db) {
+      const mcpStore = new McpServerStore(this.db, this.env.REPO_SECRETS_ENCRYPTION_KEY);
       mcpServerLookup = {
-        getDecryptedForSession: (repoOwner, repoName) =>
-          mcpStore.getDecryptedForSession(repoOwner, repoName),
+        getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
       };
     }
 
-    // Token absence short-circuits to false so a misconfigured deployment
-    // never installs a tool that would 503 on every call.
+    // Session-scoped gate: resolved from the primary member (the scalar mirror
+    // this lookup is called with) — see resolveSessionScopedSettings for the
+    // per-feature scope rules. Token absence short-circuits to false so a
+    // misconfigured deployment never installs a tool that would 503 on every call.
     let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
-    if (this.env.DB) {
+    if (this.db) {
       const tokenPresent = !!this.env.SLACK_BOT_TOKEN;
-      const settingsStore = new IntegrationSettingsStore(this.env.DB);
+      const settingsStore = new IntegrationSettingsStore(this.db);
       slackAgentNotifyLookup = {
         isEnabledForRepo: async (repoOwner, repoName) => {
           if (!tokenPresent) return false;
-          const { settings } = await settingsStore.getResolvedConfig(
-            "slack",
-            `${repoOwner}/${repoName}`
-          );
+          const settings =
+            repoOwner && repoName
+              ? (await settingsStore.getResolvedConfig("slack", `${repoOwner}/${repoName}`))
+                  .settings
+              : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
           return resolveSlackSettings(settings).agentNotificationsEnabled;
         },
       };
@@ -729,14 +809,12 @@ export class SessionDO extends DurableObject<Env> {
       sandboxDashboardUrlBuilder,
     };
 
-    // Create repo image lookup if D1 is available (Modal-only — Daytona doesn't use repo images)
-    let repoImageLookup: RepoImageLookup | undefined;
-    if (this.env.DB && sandboxBackend === "modal") {
-      const repoImageStore = new RepoImageStore(this.env.DB);
-      repoImageLookup = {
-        getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
-      };
+    // Create the image lookup if D1 is available and the provider supports
+    // prebuilt images.
+    let imageBuildLookup: ImageBuildLookup | undefined;
+    const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
+    if (this.db && imageBuildProvider) {
+      imageBuildLookup = createImageBuildLookup(this.db, imageBuildProvider);
     }
 
     return new SandboxLifecycleManager(
@@ -750,7 +828,7 @@ export class SessionDO extends DurableObject<Env> {
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
       },
-      repoImageLookup
+      imageBuildLookup
     );
   }
 
@@ -775,6 +853,17 @@ export class SessionDO extends DurableObject<Env> {
       { session_id: sessionId },
       parseLogLevel(this.env.LOG_LEVEL)
     );
+    // Constructed here rather than in the constructor so they (and the
+    // WebSocket manager they force) capture the session-scoped logger,
+    // never the request-scoped child installed by fetch().
+    this.messenger = new SessionMessengerImpl(this.wsManager);
+    this.diffService = new SessionDiffService(
+      new SessionDiffStore(this.sql),
+      this.repository,
+      this.messenger,
+      this.log
+    );
+    this.diffsHandler = new SessionDiffsHandler(this.diffService);
     this.wsManager.enableAutoPingPong();
   }
 
@@ -787,70 +876,68 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     const initMs = performance.now() - fetchStart;
 
-    const originalLogger = this.log;
-
-    // Extract correlation headers and create a request-scoped logger
+    // Derive a request-scoped logger from correlation headers and thread it
+    // explicitly to request-serving code. `this.log` stays session-scoped —
+    // it is never reassigned per request, so nothing that captures it can
+    // pin another request's correlation ids.
     const traceId = request.headers.get("x-trace-id");
     const requestId = request.headers.get("x-request-id");
+    let requestLog = this.log;
     if (traceId || requestId) {
       const correlationCtx: Record<string, unknown> = {};
       if (traceId) correlationCtx.trace_id = traceId;
       if (requestId) correlationCtx.request_id = requestId;
-      this.log = originalLogger.child(correlationCtx);
+      requestLog = this.log.child(correlationCtx);
     }
 
-    try {
-      const url = new URL(request.url);
-      const path = url.pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
 
-      // WebSocket upgrade (special case - header-based, not path-based)
-      if (request.headers.get("Upgrade") === "websocket") {
-        return this.handleWebSocketUpgrade(request, url);
-      }
-
-      // Match route from table
-      const route = this.routes.find((r) => r.path === path && r.method === request.method);
-
-      if (route) {
-        const handlerStart = performance.now();
-        let status = 500;
-        let outcome: "success" | "error" = "error";
-        try {
-          const response = await route.handler(request, url);
-          status = response.status;
-          outcome = status >= 500 ? "error" : "success";
-          return response;
-        } catch (e) {
-          status = 500;
-          outcome = "error";
-          throw e;
-        } finally {
-          const handlerMs = performance.now() - handlerStart;
-          const totalMs = performance.now() - fetchStart;
-          this.log.info("do.request", {
-            event: "do.request",
-            http_method: request.method,
-            http_path: path,
-            http_status: status,
-            duration_ms: Math.round(totalMs * 100) / 100,
-            init_ms: Math.round(initMs * 100) / 100,
-            handler_ms: Math.round(handlerMs * 100) / 100,
-            outcome,
-          });
-        }
-      }
-
-      return new Response("Not Found", { status: 404 });
-    } finally {
-      this.log = originalLogger;
+    // WebSocket upgrade (special case - header-based, not path-based)
+    if (request.headers.get("Upgrade") === "websocket") {
+      return this.handleWebSocketUpgrade(request, url, requestLog);
     }
+
+    // Match route from table
+    const route = this.routes.find((r) => r.path === path && r.method === request.method);
+
+    if (route) {
+      const handlerStart = performance.now();
+      let status = 500;
+      let outcome: "success" | "error" = "error";
+      try {
+        const response = await route.handler(request, url, requestLog);
+        status = response.status;
+        outcome = status >= 500 ? "error" : "success";
+        return response;
+      } catch (e) {
+        status = 500;
+        outcome = "error";
+        throw e;
+      } finally {
+        const handlerMs = performance.now() - handlerStart;
+        const totalMs = performance.now() - fetchStart;
+        requestLog.info("do.request", {
+          event: "do.request",
+          http_method: request.method,
+          http_path: path,
+          http_status: status,
+          duration_ms: Math.round(totalMs * 100) / 100,
+          init_ms: Math.round(initMs * 100) / 100,
+          handler_ms: Math.round(handlerMs * 100) / 100,
+          outcome,
+        });
+      }
+    }
+
+    return new Response("Not Found", { status: 404 });
   }
 
   /**
-   * Handle WebSocket upgrade request.
+   * Handle WebSocket upgrade request. `log` is the request-scoped logger.
    */
-  private async handleWebSocketUpgrade(request: Request, url: URL): Promise<Response> {
-    this.log.debug("WebSocket upgrade requested");
+  private async handleWebSocketUpgrade(request: Request, url: URL, log: Logger): Promise<Response> {
+    log.debug("WebSocket upgrade requested");
     const isSandbox = url.searchParams.get("type") === "sandbox";
 
     // Validate sandbox authentication
@@ -866,9 +953,12 @@ export class SessionDO extends DurableObject<Env> {
       const sandbox = this.getSandbox();
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
-      // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout)
+      // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout).
+      // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
+      // still connect — a slow boot that outlived the connecting watchdog
+      // self-heals here by flipping the status back to ready.
       if (sandbox?.status === "stopped" || sandbox?.status === "stale") {
-        this.log.warn("ws.connect", {
+        log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "rejected",
@@ -881,7 +971,7 @@ export class SessionDO extends DurableObject<Env> {
 
       // Validate sandbox ID first (catches stale sandboxes reconnecting after restore)
       if (expectedSandboxId && sandboxId !== expectedSandboxId) {
-        this.log.warn("ws.connect", {
+        log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "auth_failed",
@@ -896,7 +986,7 @@ export class SessionDO extends DurableObject<Env> {
       // Validate auth token
       const tokenMatches = await this.isValidSandboxToken(providedToken, sandbox);
       if (!tokenMatches) {
-        this.log.warn("ws.connect", {
+        log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "auth_failed",
@@ -933,7 +1023,7 @@ export class SessionDO extends DurableObject<Env> {
         this.updateLastActivity(now);
         await this.scheduleInactivityCheck();
 
-        this.log.info("ws.connect", {
+        log.info("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
           outcome: "success",
@@ -952,7 +1042,7 @@ export class SessionDO extends DurableObject<Env> {
 
       return new Response(null, { status: 101, webSocket: client });
     } catch (error) {
-      this.log.error("WebSocket upgrade failed", {
+      log.error("WebSocket upgrade failed", {
         error: error instanceof Error ? error : String(error),
       });
       return new Response("WebSocket upgrade failed", { status: 500 });
@@ -1075,8 +1165,10 @@ export class SessionDO extends DurableObject<Env> {
    * Handle messages from sandbox.
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
+    const event = this.parseWebSocketMessage(message, "sandbox", sandboxEventSchema);
+    if (!event) return;
+
     try {
-      const event = JSON.parse(message) as SandboxEvent;
       await this.processSandboxEvent(event);
     } catch (e) {
       this.log.error("Error processing sandbox message", {
@@ -1090,7 +1182,15 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleClientMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const data = JSON.parse(message) as ClientMessage;
+      const data = this.parseWebSocketMessage(message, "client", clientMessageSchema);
+      if (!data) {
+        this.safeSend(ws, {
+          type: "error",
+          code: "INVALID_MESSAGE",
+          message: "Failed to process message",
+        });
+        return;
+      }
 
       switch (data.type) {
         case "ping":
@@ -1131,6 +1231,34 @@ export class SessionDO extends DurableObject<Env> {
         message: "Failed to process message",
       });
     }
+  }
+
+  private parseWebSocketMessage<T>(
+    message: string,
+    boundary: "client" | "sandbox",
+    schema: BoundarySchema<T>
+  ): T | null {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(message);
+    } catch (e) {
+      this.log.error("Invalid WebSocket JSON", {
+        boundary,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+
+    const result = schema.safeParse(raw);
+    if (!result.success) {
+      this.log.warn("Invalid WebSocket message", {
+        boundary,
+        issues: result.error.issues,
+      });
+      return null;
+    }
+
+    return result.data;
   }
 
   /**
@@ -1197,7 +1325,7 @@ export class SessionDO extends DurableObject<Env> {
     const clientInfo: ClientInfo = {
       participantId: participant.id,
       userId: participant.user_id,
-      name: participant.scm_name || participant.scm_login || participant.user_id,
+      name: resolveParticipantName(participant),
       avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
       lastSeen: Date.now(),
@@ -1221,7 +1349,7 @@ export class SessionDO extends DurableObject<Env> {
     const sandbox = this.getSandbox();
     const state = await this.getSessionState(sandbox);
     const artifacts = this.messageService.listArtifacts();
-    const replay = this.getReplayData();
+    const replay = this.eventStream.getReplay();
 
     this.safeSend(ws, {
       type: "subscribed",
@@ -1231,7 +1359,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       participant: {
         participantId: participant.id,
-        name: participant.scm_name || participant.scm_login || participant.user_id,
+        name: resolveParticipantName(participant),
         avatar: getAvatarUrl(
           participant.scm_login,
           resolveScmProviderFromEnv(this.env.SCM_PROVIDER)
@@ -1246,33 +1374,10 @@ export class SessionDO extends DurableObject<Env> {
 
     // Notify others
     this.presenceService.broadcastPresence();
-  }
 
-  /**
-   * Collect historical events for replay.
-   * Returns parsed events and pagination metadata for inclusion in the subscribed message.
-   */
-  private getReplayData(): {
-    events: SandboxEvent[];
-    hasMore: boolean;
-    cursor: { timestamp: number; id: string } | null;
-  } {
-    const REPLAY_LIMIT = 500;
-    const rows = this.repository.getEventsForReplay(REPLAY_LIMIT);
-    const hasMore = rows.length >= REPLAY_LIMIT;
-
-    const events: SandboxEvent[] = [];
-    for (const row of rows) {
-      try {
-        events.push(JSON.parse(row.data));
-      } catch {
-        // Skip malformed events
-      }
-    }
-
-    const cursor = rows.length > 0 ? { timestamp: rows[0].created_at, id: rows[0].id } : null;
-
-    return { events, hasMore, cursor };
+    // Read-through backstop (design §5.3): opening the session refreshes its
+    // PR state from the provider; changes arrive as artifact_updated.
+    this.schedulePullRequestRefresh("open");
   }
 
   /**
@@ -1296,7 +1401,7 @@ export class SessionDO extends DurableObject<Env> {
     const clientInfo: ClientInfo = {
       participantId: mapping.participant_id,
       userId: mapping.user_id,
-      name: mapping.scm_name || mapping.scm_login || mapping.user_id,
+      name: resolveParticipantName(mapping),
       avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
       lastSeen: Date.now(),
@@ -1318,10 +1423,20 @@ export class SessionDO extends DurableObject<Env> {
       content: string;
       model?: string;
       reasoningEffort?: string;
-      attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+      attachments?: SessionAttachmentReference[];
     }
   ): Promise<void> {
-    await this.messageQueue.handlePromptMessage(ws, data);
+    const client = this.getClientInfo(ws);
+    if (!client) {
+      this.safeSend(ws, {
+        type: "error",
+        code: "NOT_SUBSCRIBED",
+        message: "Must subscribe first",
+      });
+      return;
+    }
+
+    await this.messageQueue.handlePromptMessage(ws, client, data);
   }
 
   /**
@@ -1367,27 +1482,16 @@ export class SessionDO extends DurableObject<Env> {
     }
     client.lastFetchHistoryAt = now;
 
-    const rawLimit = typeof data.limit === "number" ? data.limit : 200;
-    const limit = Math.max(1, Math.min(rawLimit, 500));
-    const page = this.repository.getEventsHistoryPage(data.cursor.timestamp, data.cursor.id, limit);
-
-    const items: SandboxEvent[] = [];
-    for (const event of page.events) {
-      try {
-        items.push(JSON.parse(event.data));
-      } catch {
-        // Skip malformed events
-      }
-    }
-
-    // Compute new cursor from oldest item in the page
-    const oldestEvent = page.events.length > 0 ? page.events[0] : null;
+    const page = this.eventStream.getHistoryPage({
+      cursor: data.cursor,
+      limit: data.limit,
+    });
 
     this.safeSend(ws, {
       type: "history_page",
-      items,
+      items: page.items,
       hasMore: page.hasMore,
-      cursor: oldestEvent ? { timestamp: oldestEvent.created_at, id: oldestEvent.id } : null,
+      cursor: page.cursor,
     } as ServerMessage);
   }
 
@@ -1405,10 +1509,9 @@ export class SessionDO extends DurableObject<Env> {
    * @returns Success result or error message
    */
   private async pushBranchToRemote(
-    branchName: string,
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    return await this.sandboxEventProcessor.pushBranchToRemote(branchName, pushSpec);
+    return await this.sandboxEventProcessor.pushBranchToRemote(pushSpec);
   }
 
   /**
@@ -1448,23 +1551,7 @@ export class SessionDO extends DurableObject<Env> {
    * Broadcast message to all authenticated clients.
    */
   private broadcast(message: ServerMessage): void {
-    this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
-      this.wsManager.send(ws, message);
-    });
-  }
-
-  /**
-   * Validate reasoning effort against a model's allowed values.
-   * Returns the validated effort string or null if invalid/absent.
-   */
-  private validateReasoningEffort(model: string, effort: string | undefined): string | null {
-    if (!effort) return null;
-    if (isValidReasoningEffort(model, effort)) return effort;
-    this.log.warn("Invalid reasoning effort for model, ignoring", {
-      model,
-      reasoning_effort: effort,
-    });
-    return null;
+    this.messenger.broadcast(message);
   }
 
   private getPublicSessionId(session?: SessionRow | null): string {
@@ -1472,57 +1559,9 @@ export class SessionDO extends DurableObject<Env> {
     return resolved?.session_name || resolved?.id || this.ctx.id.toString();
   }
 
-  private syncSessionIndexStatus(
-    sessionId: string,
-    status: SessionStatus,
-    updatedAt: number
-  ): void {
-    if (!this.env.DB) return;
-    const sessionStore = new SessionIndexStore(this.env.DB);
-    this.ctx.waitUntil(
-      sessionStore.updateStatus(sessionId, status, updatedAt).catch((error) => {
-        this.log.error("session_index.update_status.background_error", {
-          session_id: sessionId,
-          status,
-          updated_at: updatedAt,
-          error,
-        });
-      })
-    );
-  }
-
-  private syncSessionMetrics(sessionId: string): void {
-    if (!this.env.DB) return;
-
-    const session = this.repository.getSession();
-    if (!session) return;
-
-    const messageCount = this.repository.getMessageCount();
-    const activeDurationMs = this.repository.getActiveDurationMs();
-    const artifacts = this.repository.listArtifacts();
-    const prCount = artifacts.filter((a) => a.type === "pr").length;
-
-    const sessionStore = new SessionIndexStore(this.env.DB);
-    this.ctx.waitUntil(
-      sessionStore
-        .updateMetrics(sessionId, {
-          totalCost: session.total_cost ?? 0,
-          activeDurationMs,
-          messageCount,
-          prCount,
-        })
-        .catch((error) => {
-          this.log.error("session_index.update_metrics.background_error", {
-            session_id: sessionId,
-            error,
-          });
-        })
-    );
-  }
-
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
-    if (!this.env.DB) return;
-    const sessionStore = new SessionIndexStore(this.env.DB);
+    if (!this.db) return;
+    const sessionStore = new SessionIndexStore(this.db);
     this.ctx.waitUntil(
       sessionStore.updateTitleIfNewer(sessionId, title, updatedAt).catch((error) => {
         this.log.error("session_index.update_title.background_error", {
@@ -1533,35 +1572,6 @@ export class SessionDO extends DurableObject<Env> {
         });
       })
     );
-  }
-
-  private async transitionSessionStatus(status: SessionStatus): Promise<boolean> {
-    const session = this.getSession();
-    if (!session) return false;
-
-    const publicSessionId = this.getPublicSessionId(session);
-    if (session.status === status) {
-      this.syncSessionIndexStatus(publicSessionId, status, session.updated_at);
-      if (TERMINAL_STATUSES.includes(status)) {
-        this.syncSessionMetrics(publicSessionId);
-      }
-      return false;
-    }
-
-    const updatedAt = Math.max(Date.now(), session.updated_at + 1);
-    this.repository.updateSessionStatus(session.id, status, updatedAt);
-    this.syncSessionIndexStatus(publicSessionId, status, updatedAt);
-
-    this.broadcast({ type: "session_status", status });
-
-    if (TERMINAL_STATUSES.includes(status)) {
-      this.syncSessionMetrics(publicSessionId);
-    }
-
-    // Notify parent session (if this is a child) so its UI can refresh
-    this.notifyParentOfStatusChange(session, publicSessionId, status);
-
-    return true;
   }
 
   private applySessionTitleUpdate(
@@ -1594,70 +1604,17 @@ export class SessionDO extends DurableObject<Env> {
     this.broadcast({ type: "session_title", title: titleText });
 
     if (session.parent_session_id) {
-      this.notifyParentOfChildUpdate({ ...session, title: titleText }, publicSessionId, {
-        status: session.status,
-        title: titleText,
-      });
+      this.statusService.notifyParentOfChildUpdate(
+        { ...session, title: titleText },
+        publicSessionId,
+        {
+          status: session.status,
+          title: titleText,
+        }
+      );
     }
 
     return { ok: true, title: titleText };
-  }
-
-  /**
-   * Fire-and-forget notification to the parent session so its connected clients
-   * can refresh the child-sessions list in real time.
-   */
-  private notifyParentOfStatusChange(
-    session: Pick<SessionRow, "parent_session_id" | "title">,
-    childSessionId: string,
-    status: SessionStatus
-  ): void {
-    this.notifyParentOfChildUpdate(session, childSessionId, {
-      status,
-      title: session.title,
-    });
-  }
-
-  private notifyParentOfChildUpdate(
-    session: Pick<SessionRow, "parent_session_id" | "title">,
-    childSessionId: string,
-    update: { status: SessionStatus; title: string | null }
-  ): void {
-    const parentId = session.parent_session_id;
-    if (!parentId || !this.env.SESSION) return;
-
-    const parentDoId = this.env.SESSION.idFromName(parentId);
-    const parentStub = this.env.SESSION.get(parentDoId);
-
-    this.ctx.waitUntil(
-      parentStub
-        .fetch(
-          new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              childSessionId,
-              status: update.status,
-              title: update.title,
-            }),
-          })
-        )
-        .catch((error) => {
-          this.log.error("notify_parent.failed", {
-            parent_id: parentId,
-            child_id: childSessionId,
-            status: update.status,
-            error,
-          });
-        })
-    );
-  }
-
-  private async reconcileSessionStatusAfterExecution(success: boolean): Promise<void> {
-    const pendingOrProcessing = this.repository.getPendingOrProcessingCount();
-    const nextStatus: SessionStatus =
-      pendingOrProcessing > 0 ? "active" : success ? "completed" : "failed";
-    await this.transitionSessionStatus(nextStatus);
   }
 
   /**
@@ -1694,12 +1651,18 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
+    // Environment provenance: the id is stored on the session; the name is
+    // resolved live (resolveEnvironmentName) so a deleted environment surfaces
+    // as null — the UI renders "environment deleted" (§7.6).
+    const environmentId = session?.environment_id ?? null;
+    const environmentName = await this.resolveEnvironmentName(environmentId);
+
     return {
       id: this.getPublicSessionId(session),
       title: session?.title ?? null,
-      repoOwner: session?.repo_owner ?? "",
-      repoName: session?.repo_name ?? "",
-      baseBranch: session?.base_branch ?? "main",
+      repoOwner: session?.repo_owner ?? null,
+      repoName: session?.repo_name ?? null,
+      baseBranch: session?.base_branch ?? null,
       branchName: session?.branch_name ?? null,
       status: session?.status ?? "created",
       sandboxStatus: sandbox?.status ?? "pending",
@@ -1716,13 +1679,74 @@ export class SessionDO extends DurableObject<Env> {
       ttydUrl: sandbox?.ttyd_url ?? null,
       ttydToken,
       sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
+      repositories: this.getSessionRepositoryStates(session),
+      environmentId,
+      environmentName,
     };
+  }
+
+  /**
+   * The launch environment's current display name, or null when the session has
+   * no environment or the environment was deleted after launch (§7.6). Resolved
+   * live rather than snapshotted so deletion is reflected; best-effort, so a
+   * lookup failure resolves null rather than failing the whole state read.
+   */
+  private async resolveEnvironmentName(environmentId: string | null): Promise<string | null> {
+    if (!environmentId || !this.db) {
+      return null;
+    }
+    try {
+      const environment = await new EnvironmentStore(this.db).getById(environmentId);
+      return environment?.name ?? null;
+    } catch (e) {
+      this.log.warn("Failed to resolve environment name for session state", {
+        environment_id: environmentId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Member repositories for SessionState, in position order (see
+   * buildSessionRepositories for the scalar-mirror fallback). Members synthesized
+   * from the scalars — and member rows written before per-repo git state
+   * existed, whose git columns are null while the scalars are set — have the
+   * primary entry overlaid with the session scalars.
+   */
+  private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
+    const prUrlForRepo = this.getPrUrlLookup();
+    return this.repository.getSessionRepositories().map((member) => ({
+      position: member.position,
+      repoOwner: member.repoOwner,
+      repoName: member.repoName,
+      repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
+      baseBranch: member.baseBranch ?? "main",
+      branchName:
+        member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
+      baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),
+      currentSha:
+        member.row?.current_sha ?? (member.isPrimary ? (session?.current_sha ?? null) : null),
+      prUrl: prUrlForRepo(member.repoOwner, member.repoName, member.isPrimary),
+    }));
+  }
+
+  /** Per-repo PR URL lookup over the session's PR artifacts. */
+  private getPrUrlLookup(): (
+    repoOwner: string,
+    repoName: string,
+    isPrimary: boolean
+  ) => string | null {
+    const artifacts = this.repository.listArtifacts().filter((artifact) => artifact.url !== null);
+    return (repoOwner, repoName, isPrimary) =>
+      findPrArtifactForRepo(artifacts, { repoOwner, repoName }, isPrimary)?.url ?? null;
   }
 
   private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {
     if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
     return buildModalSandboxDashboardUrl({
       workspace: this.env.MODAL_WORKSPACE,
+      modalEnvironment: this.env.MODAL_ENVIRONMENT,
       providerObjectId,
     });
   }
@@ -1735,12 +1759,11 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private safeParseTunnelUrls(raw: string): Record<string, string> | null {
-    try {
-      return JSON.parse(raw) as Record<string, string>;
-    } catch {
+    const urls = parseTunnelUrls(raw);
+    if (!urls) {
       this.log.warn("Invalid sandbox tunnel_urls JSON");
-      return null;
     }
+    return urls;
   }
 
   // Database helpers
@@ -1756,6 +1779,9 @@ export class SessionDO extends DurableObject<Env> {
   private async ensureRepoId(session: SessionRow): Promise<number> {
     if (session.repo_id) {
       return session.repo_id;
+    }
+    if (!session.repo_owner || !session.repo_name) {
+      throw new Error("Session has no repository context");
     }
 
     const result = await this.sourceControlProvider.checkRepositoryAccess({
@@ -1777,40 +1803,69 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    if (!this.env.DB || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+    if (!this.db || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
       this.log.debug("Secrets not configured, skipping", {
-        has_db: !!this.env.DB,
+        has_db: !!this.db,
         has_encryption_key: !!this.env.REPO_SECRETS_ENCRYPTION_KEY,
       });
       return undefined;
     }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
-    const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
+    const globalStore = new GlobalSecretsStore(this.db, encryptionKey);
     const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    const repoId = await this.ensureRepoId(session);
-    const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-    const repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+    const repoStore = new RepoSecretsStore(this.db, encryptionKey);
+    const environmentSecretsStore = new EnvironmentSecretsStore(this.db, encryptionKey);
+    const sources = await buildSessionTargetSecretSources({
+      environmentId: session.environment_id,
+      globalSecrets,
+      members: this.repository.getSessionRepositories(),
+      loadMemberSecrets: (member) => this.loadMemberRepoSecrets(session, member, repoStore),
+      loadEnvironmentSecrets: (environmentId) =>
+        environmentSecretsStore.getDecryptedSecrets(environmentId),
+    });
 
-    // Merge: repo overrides global
-    const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
-    const globalCount = Object.keys(globalSecrets).length;
-    const repoCount = Object.keys(repoSecrets).length;
-    const mergedCount = Object.keys(merged).length;
+    const merge = mergeSecretSources(sources);
+    auditSecretsMerge({
+      merge,
+      mode: parseSecretsCapMode(this.env.SECRETS_CAP_ENFORCEMENT),
+      log: this.log,
+      context: { session_id: session.id },
+    });
 
+    const mergedCount = Object.keys(merge.merged).length;
     if (mergedCount > 0) {
-      const logLevel = exceedsLimit ? "warn" : "info";
-      this.log[logLevel]("Secrets merged for sandbox", {
-        global_count: globalCount,
-        repo_count: repoCount,
+      this.log.info("Secrets merged for sandbox", {
+        source_count: sources.length,
         merged_count: mergedCount,
-        payload_bytes: totalBytes,
-        exceeds_limit: exceedsLimit,
+        payload_bytes: merge.totalBytes,
+        exceeds_limit: merge.exceedsLimit,
       });
     }
 
-    return mergedCount === 0 ? undefined : merged;
+    return mergedCount === 0 ? undefined : merge.merged;
+  }
+
+  /**
+   * Decrypt one member repo's secrets — the injected leaf loader for
+   * buildSessionTargetSecretSources. The member row carries the repo id; a
+   * synthesized primary (legacy scalar row) resolves it lazily via ensureRepoId.
+   * A member without a resolvable id (a secondary with a null row id) can't be
+   * keyed, so it contributes nothing.
+   */
+  private async loadMemberRepoSecrets(
+    session: SessionRow,
+    member: SessionRepositoryEntry,
+    repoStore: RepoSecretsStore
+  ): Promise<Record<string, string>> {
+    const repoId =
+      member.row?.repo_id ?? (member.isPrimary ? await this.ensureRepoId(session) : null);
+    if (repoId === null) {
+      return {};
+    }
+    return repoStore.getDecryptedSecrets(repoId);
   }
 
   /**

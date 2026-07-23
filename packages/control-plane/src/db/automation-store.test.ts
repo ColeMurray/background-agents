@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   AutomationStore,
+  isDuplicateKeyError,
   toAutomation,
   toAutomationRun,
   type AutomationRow,
@@ -80,10 +81,6 @@ const now = Date.now();
 const sampleRow: AutomationRow = {
   id: "auto_test1",
   name: "Daily sync",
-  repo_owner: "acme",
-  repo_name: "web-app",
-  base_branch: "main",
-  repo_id: 12345,
   instructions: "Run daily sync tasks",
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
@@ -114,19 +111,33 @@ const sampleRunRow: AutomationRunRow = {
   started_at: null,
   completed_at: null,
   created_at: now,
-  trigger_key: null,
-  concurrency_key: null,
+  invocation_id: null,
+  repo_owner: null,
+  repo_name: null,
+  repo_id: null,
+  base_branch: null,
+  environment_id: null,
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("toAutomation", () => {
   it("converts row to camelCase Automation", () => {
-    const automation = toAutomation(sampleRow);
+    const automation = toAutomation(sampleRow, [
+      {
+        automation_id: "auto_test1",
+        repo_owner: "acme",
+        repo_name: "web-app",
+        repo_id: 12345,
+        base_branch: "main",
+        created_at: now,
+        updated_at: now,
+      },
+    ]);
     expect(automation.id).toBe("auto_test1");
-    expect(automation.repoOwner).toBe("acme");
-    expect(automation.repoName).toBe("web-app");
-    expect(automation.baseBranch).toBe("main");
+    expect(automation.repositories).toEqual([
+      { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
+    ]);
     expect(automation.scheduleCron).toBe("0 9 * * *");
     expect(automation.scheduleTz).toBe("UTC");
     expect(automation.reasoningEffort).toBeNull();
@@ -136,11 +147,39 @@ describe("toAutomation", () => {
     expect(automation.triggerConfig).toBeNull();
     expect(automation.consecutiveFailures).toBe(0);
     expect(automation.createdBy).toBe("user-1");
+    expect(automation.environmentIds).toEqual([]);
+  });
+
+  it("maps environment rows to environmentIds", () => {
+    const automation = toAutomation(
+      sampleRow,
+      [],
+      [
+        {
+          automation_id: "auto_test1",
+          environment_id: "env_abc",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          automation_id: "auto_test1",
+          environment_id: "env_def",
+          created_at: now,
+          updated_at: now,
+        },
+      ]
+    );
+    expect(automation.environmentIds).toEqual(["env_abc", "env_def"]);
   });
 
   it("converts enabled=0 to false", () => {
-    const automation = toAutomation({ ...sampleRow, enabled: 0 });
+    const automation = toAutomation({ ...sampleRow, enabled: 0 }, []);
     expect(automation.enabled).toBe(false);
+  });
+
+  it("maps repo-less automations to an empty repository list", () => {
+    const automation = toAutomation(sampleRow, []);
+    expect(automation.repositories).toEqual([]);
   });
 });
 
@@ -157,8 +196,6 @@ describe("toAutomationRun", () => {
     expect(run.sessionTitle).toBe("Test Session");
     expect(run.artifactSummary).toBe("2 artifacts");
     expect(run.status).toBe("starting");
-    expect(run.triggerKey).toBeNull();
-    expect(run.concurrencyKey).toBeNull();
   });
 });
 
@@ -173,6 +210,21 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("INSERT INTO automations");
       expect(statements[0].params[0]).toBe("auto_test1");
       expect(statements[0].params[1]).toBe("Daily sync");
+      expect(statements[0].params[2]).toBe("Run daily sync tasks");
+    });
+  });
+
+  describe("update", () => {
+    it("writes only whitelisted fields", async () => {
+      const { db, statements } = createFakeD1({ firstResult: sampleRow });
+      const store = new AutomationStore(db);
+
+      await store.update(sampleRow.id, { name: "Renamed" });
+
+      const updateStatement = statements.find((s) => s.sql.includes("UPDATE automations SET"));
+      expect(updateStatement).toBeDefined();
+      expect(updateStatement!.sql).toContain("name = ?");
+      expect(updateStatement!.sql).not.toContain("repo_owner");
     });
   });
 
@@ -268,36 +320,6 @@ describe("AutomationStore", () => {
     });
   });
 
-  describe("createRunAndAdvanceSchedule", () => {
-    it("calls db.batch with insert and update", async () => {
-      const batchSpy = vi.fn().mockResolvedValue([
-        { results: [], success: true, meta: { duration: 0, changes: 1 } },
-        { results: [], success: true, meta: { duration: 0, changes: 1 } },
-      ]);
-
-      const fakeStmt = {
-        bind: vi.fn().mockReturnThis(),
-        run: vi.fn(),
-        first: vi.fn(),
-        all: vi.fn(),
-      };
-
-      const db = {
-        prepare: vi.fn().mockReturnValue(fakeStmt),
-        batch: batchSpy,
-      } as unknown as D1Database;
-
-      const store = new AutomationStore(db);
-      const nextRunAt = now + 86400000;
-
-      await store.createRunAndAdvanceSchedule(sampleRunRow, "auto_test1", nextRunAt);
-
-      expect(batchSpy).toHaveBeenCalledTimes(1);
-      // Two statements: INSERT run + UPDATE automation
-      expect(batchSpy.mock.calls[0][0]).toHaveLength(2);
-    });
-  });
-
   describe("getActiveRunForAutomation", () => {
     it("returns active run", async () => {
       const { db } = createFakeD1({ firstResult: sampleRunRow });
@@ -354,7 +376,7 @@ describe("AutomationStore", () => {
         allResults: [sampleRunRow],
       });
       const store = new AutomationStore(db);
-      const result = await store.getOrphanedStartingRuns(5 * 60 * 1000);
+      const result = await store.getOrphanedStartingRuns(5 * 60 * 1000, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'starting'");
     });
@@ -366,7 +388,7 @@ describe("AutomationStore", () => {
         allResults: [{ ...sampleRunRow, status: "running", started_at: now }],
       });
       const store = new AutomationStore(db);
-      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000);
+      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'running'");
     });
@@ -395,39 +417,28 @@ describe("AutomationStore", () => {
       expect(statements).toHaveLength(0);
     });
   });
+});
 
-  describe("listRunsForAutomation", () => {
-    it("returns runs with enriched data", async () => {
-      const enrichedRow: EnrichedRunRow = {
-        ...sampleRunRow,
-        session_title: "Auto session",
-        artifact_summary: "1 artifacts",
-      };
+describe("isDuplicateKeyError", () => {
+  it("matches the trigger-key dedup index violation", () => {
+    expect(
+      isDuplicateKeyError(
+        new Error(
+          "D1_ERROR: UNIQUE constraint failed: automation_invocations.automation_id, automation_invocations.trigger_key"
+        )
+      )
+    ).toBe(true);
+  });
 
-      const fakeStmt = {
-        bind: vi.fn().mockReturnThis(),
-        first: vi.fn().mockResolvedValue({ count: 1 }),
-        all: vi.fn().mockResolvedValue({
-          results: [enrichedRow],
-          success: true,
-          meta: { duration: 0 },
-        }),
-        run: vi.fn(),
-      };
+  it("ignores unrelated UNIQUE violations so they surface as real errors", () => {
+    expect(isDuplicateKeyError(new Error("UNIQUE constraint failed: automation_runs.id"))).toBe(
+      false
+    );
+    expect(isDuplicateKeyError(new Error("some other write failure"))).toBe(false);
+  });
 
-      const db = {
-        prepare: vi.fn().mockReturnValue(fakeStmt),
-      } as unknown as D1Database;
-
-      const store = new AutomationStore(db);
-      const result = await store.listRunsForAutomation("auto_test1", {
-        limit: 20,
-        offset: 0,
-      });
-
-      expect(result.total).toBe(1);
-      expect(result.runs).toHaveLength(1);
-      expect(result.runs[0].session_title).toBe("Auto session");
-    });
+  it("handles non-Error throwables", () => {
+    expect(isDuplicateKeyError("UNIQUE constraint failed: x.trigger_key")).toBe(true);
+    expect(isDuplicateKeyError(null)).toBe(false);
   });
 });

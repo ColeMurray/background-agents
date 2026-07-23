@@ -23,8 +23,9 @@ async function seedSession(
   store: SessionIndexStore,
   input: {
     id: string;
-    repoOwner: string;
-    repoName: string;
+    repoOwner: string | null;
+    repoName: string | null;
+    baseBranch?: string | null;
     scmLogin: string | null;
     userId?: string | null;
     spawnSource?: SpawnSource;
@@ -44,7 +45,8 @@ async function seedSession(
     repoName: input.repoName,
     model: "anthropic/claude-haiku-4-5",
     reasoningEffort: null,
-    baseBranch: "main",
+    baseBranch:
+      input.repoOwner !== null && input.repoName !== null ? (input.baseBranch ?? "main") : null,
     status: input.status,
     spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,
@@ -405,6 +407,7 @@ describe("Analytics API", () => {
     const webPendingAt = now - 12 * 60 * 60 * 1000;
     const apiFailedAt = now - 3 * 24 * 60 * 60 * 1000;
     const apiActiveAt = now - 6 * 60 * 60 * 1000;
+    const noRepoCompletedAt = now - 5 * 60 * 60 * 1000;
 
     await seedSession(store, {
       id: "repo-web-completed",
@@ -471,6 +474,19 @@ describe("Analytics API", () => {
       messageCount: 0,
       prCount: 0,
     });
+    await seedSession(store, {
+      id: "no-repo-completed",
+      repoOwner: null,
+      repoName: null,
+      scmLogin: "dana",
+      status: "completed",
+      createdAt: noRepoCompletedAt,
+      updatedAt: noRepoCompletedAt + 9_000,
+      totalCost: 0.25,
+      activeDurationMs: 30_000,
+      messageCount: 1,
+      prCount: 0,
+    });
 
     const response = await SELF.fetch("https://test.local/analytics/breakdown?days=30&by=repo", {
       headers: await authHeaders(),
@@ -503,6 +519,18 @@ describe("Analytics API", () => {
         messageCount: 4,
         avgDuration: 300_000,
         lastActive: apiActiveAt + 8_000,
+      },
+      {
+        key: "No repository",
+        sessions: 1,
+        completed: 1,
+        failed: 0,
+        cancelled: 0,
+        cost: 0.25,
+        prs: 0,
+        messageCount: 1,
+        avgDuration: 30_000,
+        lastActive: noRepoCompletedAt + 9_000,
       },
     ]);
   });

@@ -11,6 +11,25 @@
 
 import type { SandboxStatus } from "../../types";
 
+// ==================== Dead-Sandbox Policy ====================
+
+/**
+ * States in which no live sandbox can legitimately act on the session: spawn
+ * gave up (failed) or the sandbox was shut down (stopped/stale). Deny-list,
+ * not allowlist: an unknown future state is treated as live, so callers fall
+ * through to their own checks (e.g. token comparison) instead of locking out
+ * every sandbox.
+ */
+export const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set([
+  "stopped",
+  "stale",
+  "failed",
+]);
+
+export function isDeadSandboxStatus(status: SandboxStatus): boolean {
+  return DEAD_SANDBOX_STATUSES.has(status);
+}
+
 // ==================== Circuit Breaker ====================
 
 /**
@@ -133,6 +152,17 @@ export interface SpawnConfig {
   cooldownMs: number;
   /** Time to wait for WebSocket after spawn (default: 60s) */
   readyWaitMs: number;
+  /**
+   * Max time a sandbox may remain in "spawning"/"connecting" before it is
+   * treated as dead and a fresh spawn is allowed (default: 120s).
+   *
+   * Guards against spawns interrupted before the sandbox connects (provider
+   * crash, redeploy, cancelled provider call). Such a spawn can leave the
+   * persisted status pinned at "spawning"/"connecting" indefinitely — the
+   * connecting-timeout alarm may never have been scheduled — which otherwise
+   * makes every later spawn attempt skip with "already spawning" forever.
+   */
+  spawningTimeoutMs: number;
 }
 
 /**
@@ -141,6 +171,7 @@ export interface SpawnConfig {
 export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
   cooldownMs: 30000, // 30 seconds
   readyWaitMs: 60000, // 60 seconds
+  spawningTimeoutMs: 120000, // 2 minutes — matches the connecting-timeout watchdog
 };
 
 /**
@@ -210,8 +241,16 @@ export function evaluateSpawnDecision(
     return { action: "restore", snapshotImageId: state.snapshotImageId };
   }
 
-  // Don't spawn if already spawning or connecting (persisted status)
-  if (state.status === "spawning" || state.status === "connecting") {
+  // Don't spawn if a spawn/connect is genuinely in progress (persisted status).
+  // But a spawn interrupted before the sandbox connects (provider crash,
+  // redeploy, cancelled provider call) can pin the status at "spawning"/
+  // "connecting" forever — the connecting-timeout alarm may never have been
+  // scheduled. Treat a stale spawn/connect as dead so a fresh spawn can recover
+  // the session, instead of skipping indefinitely.
+  if (
+    (state.status === "spawning" || state.status === "connecting") &&
+    timeSinceLastSpawn < config.spawningTimeoutMs
+  ) {
     return { action: "skip", reason: `already ${state.status}` };
   }
 
@@ -326,7 +365,7 @@ export function evaluateInactivityTimeout(
   now: number
 ): InactivityAction {
   // Skip for terminal states - they don't need inactivity monitoring
-  if (state.status === "stopped" || state.status === "failed" || state.status === "stale") {
+  if (isDeadSandboxStatus(state.status)) {
     return { action: "schedule", nextCheckMs: config.minCheckIntervalMs };
   }
 
@@ -474,14 +513,18 @@ export interface ConnectingTimeoutResult {
  * (crash, network failure, etc.), this function detects the timeout so the
  * alarm handler can fail the sandbox.
  *
+ * Covers both "connecting" and "spawning": a spawn that is interrupted before
+ * the provider call returns leaves the status at "spawning" (the transition to
+ * "connecting" never happens), so the timeout must apply there too.
+ *
  * Pure function: no side effects. Safe to call for any status — returns
- * `isTimedOut: false` for non-connecting sandboxes.
+ * `isTimedOut: false` for sandboxes that are not spawning/connecting.
  *
  * @param status - Current sandbox status
  * @param createdAt - Timestamp (ms) when the sandbox was spawned
  * @param config - Connecting timeout configuration
  * @param now - Current timestamp (ms)
- * @returns Whether the sandbox has timed out and how long it's been connecting
+ * @returns Whether the sandbox has timed out and how long it's been spawning/connecting
  */
 export function evaluateConnectingTimeout(
   status: SandboxStatus,
@@ -489,7 +532,7 @@ export function evaluateConnectingTimeout(
   config: ConnectingTimeoutConfig,
   now: number
 ): ConnectingTimeoutResult {
-  if (status !== "connecting") {
+  if (status !== "connecting" && status !== "spawning") {
     return { isTimedOut: false, elapsedMs: 0 };
   }
 

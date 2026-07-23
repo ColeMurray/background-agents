@@ -1,0 +1,205 @@
+import { describe, expect, it, vi } from "vitest";
+import { SessionEventStream, type SessionEventStreamRepository } from "./event-stream";
+import type { EventRow } from "./types";
+
+function createStream() {
+  const repository = {
+    getEventsForReplay: vi.fn(),
+    getEventTimelinePage: vi.fn(),
+    listEventPage: vi.fn(),
+  } as unknown as SessionEventStreamRepository;
+
+  return {
+    stream: new SessionEventStream(repository),
+    repository,
+  };
+}
+
+function eventRow(
+  id: string,
+  type: EventRow["type"],
+  data: Record<string, unknown> | string,
+  createdAt: number
+): EventRow {
+  return {
+    id,
+    type,
+    data: typeof data === "string" ? data : JSON.stringify(data),
+    message_id: null,
+    created_at: createdAt,
+  };
+}
+
+describe("SessionEventStream", () => {
+  describe("getReplay", () => {
+    it("loads replay rows with the default replay limit", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventsForReplay).mockReturnValue([]);
+
+      stream.getReplay();
+
+      expect(repository.getEventsForReplay).toHaveBeenCalledWith(500);
+    });
+
+    it("returns parsed replay events and the oldest cursor from the loaded window", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventsForReplay).mockReturnValue([
+        eventRow("e1", "tool_call", { type: "tool_call", tool: "read_file" }, 1000),
+        eventRow("e2", "tool_result", { type: "tool_result", result: "ok" }, 2000),
+      ]);
+
+      const replay = stream.getReplay();
+
+      expect(replay).toEqual({
+        events: [
+          { type: "tool_call", tool: "read_file" },
+          { type: "tool_result", result: "ok" },
+        ],
+        hasMore: false,
+        cursor: { timestamp: 1000, id: "e1" },
+      });
+    });
+
+    it("marks replay as having more when the loaded window reaches the limit", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventsForReplay).mockReturnValue([
+        eventRow("e1", "token", { type: "token", content: "a" }, 1000),
+        eventRow("e2", "token", { type: "token", content: "b" }, 2000),
+      ]);
+
+      const replay = stream.getReplay(2);
+
+      expect(replay.hasMore).toBe(true);
+    });
+
+    it("skips malformed replay event JSON", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventsForReplay).mockReturnValue([
+        eventRow("bad", "tool_call", "{bad", 1000),
+        eventRow("good", "tool_result", { type: "tool_result", result: "ok" }, 2000),
+      ]);
+
+      const replay = stream.getReplay();
+
+      expect(replay.events).toEqual([{ type: "tool_result", result: "ok" }]);
+      expect(replay.cursor).toEqual({ timestamp: 1000, id: "bad" });
+    });
+  });
+
+  describe("getHistoryPage", () => {
+    it("loads history after a client cursor while excluding heartbeats", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [eventRow("e1", "tool_call", { type: "tool_call", tool: "write_file" }, 1000)],
+        hasMore: false,
+        nextCursor: { kind: "timeline", createdAt: 1000, id: "e1" },
+      });
+
+      const page = stream.getHistoryPage({
+        cursor: { timestamp: 2000, id: "cursor-id" },
+        limit: 100,
+      });
+
+      expect(repository.getEventTimelinePage).toHaveBeenCalledWith({
+        cursor: { kind: "timeline", createdAt: 2000, id: "cursor-id" },
+        excludeTypes: ["heartbeat"],
+        limit: 100,
+      });
+      expect(page).toEqual({
+        items: [{ type: "tool_call", tool: "write_file" }],
+        hasMore: false,
+        cursor: { timestamp: 1000, id: "e1" },
+      });
+    });
+
+    it("clamps history limits to the supported range", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      stream.getHistoryPage({ cursor: { timestamp: 2000, id: "cursor-id" }, limit: 999 });
+      stream.getHistoryPage({ cursor: { timestamp: 2000, id: "cursor-id" }, limit: 0 });
+      stream.getHistoryPage({ cursor: { timestamp: 2000, id: "cursor-id" } });
+
+      expect(repository.getEventTimelinePage).toHaveBeenNthCalledWith(1, {
+        cursor: { kind: "timeline", createdAt: 2000, id: "cursor-id" },
+        excludeTypes: ["heartbeat"],
+        limit: 500,
+      });
+      expect(repository.getEventTimelinePage).toHaveBeenNthCalledWith(2, {
+        cursor: { kind: "timeline", createdAt: 2000, id: "cursor-id" },
+        excludeTypes: ["heartbeat"],
+        limit: 1,
+      });
+      expect(repository.getEventTimelinePage).toHaveBeenNthCalledWith(3, {
+        cursor: { kind: "timeline", createdAt: 2000, id: "cursor-id" },
+        excludeTypes: ["heartbeat"],
+        limit: 200,
+      });
+    });
+
+    it("skips malformed history event JSON", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [
+          eventRow("bad", "tool_call", "{bad", 1000),
+          eventRow("good", "tool_result", { type: "tool_result", result: "ok" }, 2000),
+        ],
+        hasMore: true,
+        nextCursor: { kind: "timeline", createdAt: 1000, id: "bad" },
+      });
+
+      const page = stream.getHistoryPage({
+        cursor: { timestamp: 3000, id: "cursor-id" },
+        limit: 10,
+      });
+
+      expect(page).toEqual({
+        items: [{ type: "tool_result", result: "ok" }],
+        hasMore: true,
+        cursor: { timestamp: 1000, id: "bad" },
+      });
+    });
+  });
+
+  describe("listEvents", () => {
+    it("projects event rows to the shared HTTP response shape", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.listEventPage).mockReturnValue({
+        events: [eventRow("e1", "token", { type: "token", content: "hello" }, 1000)],
+        hasMore: true,
+        nextCursor: { kind: "timeline", createdAt: 1000, id: "e1" },
+      });
+
+      const page = stream.listEvents({
+        cursor: null,
+        limit: 10,
+        type: "token",
+        messageId: "m1",
+      });
+
+      expect(repository.listEventPage).toHaveBeenCalledWith({
+        cursor: null,
+        limit: 10,
+        type: "token",
+        messageId: "m1",
+      });
+      expect(page).toEqual({
+        events: [
+          {
+            id: "e1",
+            type: "token",
+            data: { type: "token", content: "hello" },
+            messageId: null,
+            createdAt: 1000,
+          },
+        ],
+        cursor: "1000:e1",
+        hasMore: true,
+      });
+    });
+  });
+});

@@ -20,12 +20,23 @@ export interface ConditionConfigMap {
   sentry_project: { operator: "any_of"; value: string[] };
   sentry_level: { operator: "any_of"; value: string[] };
   jsonpath: { operator: "all_match"; value: JsonPathFilter[] };
+  text_match: { operator: "contains" | "exact" | "regex"; value: TextMatchValue };
+  slack_channel: { operator: "any_of"; value: string[] };
+  slack_actor: { operator: "include" | "exclude"; value: string[] };
 }
 
 export interface JsonPathFilter {
   path: string;
   comparison: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "exists";
   value?: string | number | boolean;
+}
+
+/** Value shape for the `text_match` condition (keyword / substring / regex). */
+export interface TextMatchValue {
+  /** Keyword/substring (contains/exact) or regular-expression source (regex). */
+  pattern: string;
+  /** Case/regex flags; only an allowlisted subset is accepted (see ALLOWED_REGEX_FLAGS). */
+  flags?: string;
 }
 
 // ─── 2. Derived discriminated union ──────────────────────────────────────────

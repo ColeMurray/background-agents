@@ -5,7 +5,13 @@ import { handleRequest } from "./router";
 const secret = "test-internal-secret";
 
 function createEnv() {
-  const fetch = vi.fn(async (_request: Request) => Response.json({ ok: true }, { status: 202 }));
+  const fetch = vi.fn(async (request: Request) => {
+    if (new URL(request.url).pathname === "/internal/verify-sandbox-token") {
+      const body = (await request.json()) as { token?: string };
+      return new Response(null, { status: body.token === "sandbox-token" ? 204 : 401 });
+    }
+    return Response.json({ ok: true }, { status: 202 });
+  });
   const statement = {
     bind: vi.fn(() => statement),
     first: vi.fn(async () => null),
@@ -50,6 +56,55 @@ describe("SCM credentials router provider gate", () => {
     expect(fetch).toHaveBeenCalledOnce();
     const request = fetch.mock.calls[0][0];
     expect(new URL(request.url).pathname).toBe("/internal/scm-credentials");
+  });
+
+  it("allows GitLab deployments to reach the tunnel URLs endpoint", async () => {
+    const { env, fetch } = createEnv();
+    const token = await generateInternalToken(secret);
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/tunnel-urls", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(202);
+    expect(fetch).toHaveBeenCalledOnce();
+    const request = fetch.mock.calls[0][0];
+    expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
+  });
+
+  it("returns an explicit disabled signing state for GitLab sandboxes", async () => {
+    const { env, fetch } = createEnv();
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/commit-signing", {
+        headers: { Authorization: "Bearer sandbox-token" },
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({ enabled: false });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
+  });
+
+  it("rejects internal HMAC authentication for the signing-key broker", async () => {
+    const { env } = createEnv();
+    const token = await generateInternalToken(secret);
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/commit-signing", {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(401);
   });
 
   it("continues blocking unrelated GitLab session routes", async () => {

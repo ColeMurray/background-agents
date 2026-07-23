@@ -7,14 +7,21 @@ import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type { SandboxSettings } from "@open-inspect/shared";
+import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
 import {
+  DEFAULT_BUILD_TIMEOUT_SECONDS,
+  DEFAULT_CODE_SERVER_PORT,
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  DEFAULT_TERMINAL_PORT,
+  encodeRepositoryPathSegments,
+  findSandboxPortConflict,
+  MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
 
 const GLOBAL_SCOPE = "__global__";
+type ResourceField = "cpuCores" | "memoryMib";
 
 interface GlobalSettingsResponse {
   integrationId: string;
@@ -24,6 +31,12 @@ interface GlobalSettingsResponse {
 interface RepoSettingsResponse {
   integrationId: string;
   repo: string;
+  settings: SandboxSettings | null;
+}
+
+interface EnvironmentSettingsResponse {
+  integrationId: string;
+  environmentId: string;
   settings: SandboxSettings | null;
 }
 
@@ -37,59 +50,204 @@ function isPositiveInteger(value: string): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1;
 }
 
-function SandboxSettingsEditor({
-  scope,
-  owner,
-  name,
-}: {
-  scope: "global" | "repo";
-  owner?: string;
-  name?: string;
-}) {
+function isValidCpuCores(value: string): boolean {
+  if (!/^\d*\.?\d+$/.test(value)) return false;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+}
+
+function isValidMemoryMib(value: string): boolean {
+  if (!/^\d+$/.test(value)) return false;
+  return Number(value) >= 1;
+}
+
+function isValidBuildTimeout(value: string): boolean {
+  if (!/^\d+$/.test(value)) return false;
+  const n = Number(value);
+  return n >= 1 && n <= MAX_BUILD_TIMEOUT_SECONDS;
+}
+
+const numOrUndef = (v: number | null | undefined): number | undefined =>
+  typeof v === "number" ? v : undefined;
+
+/** Value to show in the input: the scope's own override, else the inherited base (display only). */
+function resourceDisplayValue(
+  own: SandboxSettings | undefined,
+  base: SandboxSettings | undefined,
+  field: ResourceField
+): number | undefined {
+  const ownValue = own?.[field];
+  if (ownValue !== undefined) return numOrUndef(ownValue); // own value (null → blank)
+  return numOrUndef(base?.[field]);
+}
+
+/**
+ * The value to persist for a resource field, or `undefined` to omit it from the
+ * payload (`null` means "use the provider default"). A stored JSON value is never
+ * `undefined`, so returning `prior` directly preserves an existing override and
+ * skips an inherited-only field in one move.
+ */
+function resourcePayloadValue(
+  isGlobal: boolean,
+  editState: string | null,
+  trimmed: string,
+  prior: number | null | undefined
+): number | null | undefined {
+  if (isGlobal) return trimmed === "" ? undefined : Number(trimmed);
+  if (editState !== null) return trimmed === "" ? null : Number(trimmed);
+  return prior; // not edited: keep existing override, or undefined → don't pin
+}
+
+/**
+ * Like {@link resourcePayloadValue} but for optional numeric fields with no
+ * explicit-null form (service ports, build timeout): at override scopes a
+ * cleared field is omitted — back to inheriting — instead of pinned as null.
+ */
+function numberPayloadValue(
+  isGlobal: boolean,
+  editState: string | null,
+  trimmed: string,
+  prior: number | undefined
+): number | undefined {
+  if (isGlobal || editState !== null) return trimmed === "" ? undefined : Number(trimmed);
+  return prior; // not edited: keep existing override, or undefined → don't pin
+}
+
+/** What a sandbox-settings scope reads/writes and what it inherits from. */
+interface SandboxScopeModel {
+  apiUrl: string;
+  /** This scope's own stored settings (at global scope, the stored defaults). */
+  ownSettings: SandboxSettings | undefined;
+  /** The layer beneath this scope's overrides (undefined at global scope). */
+  baseDefaults: SandboxSettings | undefined;
+  /** Preserved on global saves so a defaults update can't drop the allowlist. */
+  enabledRepos: string[] | undefined;
+  isLoading: boolean;
+  mutate: () => Promise<unknown>;
+}
+
+/**
+ * Resolve a sandbox-settings scope so the form itself stays scope-agnostic:
+ *
+ * - **global** — edits the stored defaults; inherits nothing.
+ * - **repo** — edits that repo's overrides; inherits the global defaults.
+ * - **environment** — edits that environment's overrides (design §13.5);
+ *   inherits the global defaults merged with the PRIMARY repository's
+ *   overrides, mirroring what its sessions resolve beneath the environment
+ *   layer.
+ */
+function useSandboxSettingsScope(
+  scope: "global" | "repo" | "environment",
+  owner?: string,
+  name?: string,
+  environmentId?: string
+): SandboxScopeModel {
   const isGlobal = scope === "global";
   const globalApiUrl = "/api/integration-settings/sandbox";
+  const repoPath =
+    owner && name ? encodeRepositoryPathSegments({ repoOwner: owner, repoName: name }) : "";
+  const repoApiUrl = `/api/integration-settings/sandbox/repos/${repoPath}`;
   const apiUrl = isGlobal
     ? globalApiUrl
-    : `/api/integration-settings/sandbox/repos/${owner}/${name}`;
+    : scope === "repo"
+      ? repoApiUrl
+      : `/api/integration-settings/sandbox/environments/${environmentId}`;
 
-  const { data, mutate, isLoading } = useSWR<GlobalSettingsResponse | RepoSettingsResponse>(
-    apiUrl,
-    fetcher
-  );
+  const { data, mutate, isLoading } = useSWR<
+    GlobalSettingsResponse | RepoSettingsResponse | EnvironmentSettingsResponse
+  >(apiUrl, fetcher);
   const { data: globalData, isLoading: isLoadingGlobal } = useSWR<GlobalSettingsResponse>(
     isGlobal ? null : globalApiUrl,
     fetcher
   );
+  const { data: primaryRepoData, isLoading: isLoadingPrimaryRepo } = useSWR<RepoSettingsResponse>(
+    scope === "environment" && owner && name ? repoApiUrl : null,
+    fetcher
+  );
 
-  const globalDefaults = isGlobal
-    ? (data as GlobalSettingsResponse | undefined)?.settings?.defaults
-    : globalData?.settings?.defaults;
-  const repoSettings = isGlobal ? undefined : (data as RepoSettingsResponse | undefined)?.settings;
+  const globalSettings = isGlobal
+    ? (data as GlobalSettingsResponse | undefined)?.settings
+    : undefined;
+  const ownSettings = isGlobal
+    ? globalSettings?.defaults
+    : ((data as RepoSettingsResponse | EnvironmentSettingsResponse | undefined)?.settings ??
+      undefined);
+  const baseDefaults = isGlobal
+    ? undefined
+    : scope === "environment"
+      ? { ...globalData?.settings?.defaults, ...primaryRepoData?.settings }
+      : globalData?.settings?.defaults;
 
-  const currentPorts: number[] = isGlobal
-    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? [])
-    : ((data as RepoSettingsResponse)?.settings?.tunnelPorts ?? []);
+  return {
+    apiUrl,
+    ownSettings,
+    baseDefaults,
+    enabledRepos: globalSettings?.enabledRepos,
+    isLoading: isLoading || isLoadingGlobal || isLoadingPrimaryRepo,
+    mutate,
+  };
+}
 
-  const currentTerminalEnabled: boolean = isGlobal
-    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.terminalEnabled ?? false)
-    : ((data as RepoSettingsResponse)?.settings?.terminalEnabled ?? false);
+export function SandboxSettingsEditor({
+  scope,
+  owner,
+  name,
+  environmentId,
+}: {
+  scope: "global" | "repo" | "environment";
+  /**
+   * At repo scope: the repo being edited. At environment scope: the
+   * environment's primary repository, whose resolved settings are the
+   * inherited layer beneath the environment's overrides (design §13.5).
+   */
+  owner?: string;
+  name?: string;
+  environmentId?: string;
+}) {
+  const isGlobal = scope === "global";
+  const { apiUrl, ownSettings, baseDefaults, enabledRepos, isLoading, mutate } =
+    useSandboxSettingsScope(scope, owner, name, environmentId);
 
-  const currentMaxConcurrentChildSessions: number = isGlobal
-    ? (globalDefaults?.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
-    : (repoSettings?.maxConcurrentChildSessions ??
-      globalDefaults?.maxConcurrentChildSessions ??
-      DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS);
+  // Display values: the scope's own setting, else the inherited base. Only
+  // explicitly edited fields (or pre-existing overrides) are written back on
+  // save, so displaying an inherited value never silently pins it as an
+  // override.
+  const currentPorts: number[] = ownSettings?.tunnelPorts ?? baseDefaults?.tunnelPorts ?? [];
 
-  const currentMaxTotalChildSessions: number = isGlobal
-    ? (globalDefaults?.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS)
-    : (repoSettings?.maxTotalChildSessions ??
-      globalDefaults?.maxTotalChildSessions ??
-      DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
+  const currentTerminalEnabled: boolean =
+    ownSettings?.terminalEnabled ?? baseDefaults?.terminalEnabled ?? false;
+
+  const currentCodeServerPort: number | undefined =
+    ownSettings?.codeServerPort ?? baseDefaults?.codeServerPort;
+
+  const currentTerminalPort: number | undefined =
+    ownSettings?.terminalPort ?? baseDefaults?.terminalPort;
+
+  const currentBuildTimeoutSeconds: number | undefined =
+    ownSettings?.buildTimeoutSeconds ?? baseDefaults?.buildTimeoutSeconds;
+
+  const currentMaxConcurrentChildSessions: number =
+    ownSettings?.maxConcurrentChildSessions ??
+    baseDefaults?.maxConcurrentChildSessions ??
+    DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
+
+  const currentMaxTotalChildSessions: number =
+    ownSettings?.maxTotalChildSessions ??
+    baseDefaults?.maxTotalChildSessions ??
+    DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
+
+  const currentCpuCores = resourceDisplayValue(ownSettings, baseDefaults, "cpuCores");
+  const currentMemoryMib = resourceDisplayValue(ownSettings, baseDefaults, "memoryMib");
 
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
+  const [codeServerPort, setCodeServerPort] = useState<string | null>(null);
+  const [terminalPort, setTerminalPort] = useState<string | null>(null);
+  const [buildTimeoutSeconds, setBuildTimeoutSeconds] = useState<string | null>(null);
   const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
   const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
+  const [cpuCores, setCpuCores] = useState<string | null>(null);
+  const [memoryMib, setMemoryMib] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -103,6 +261,17 @@ function SandboxSettingsEditor({
     maxConcurrentChildSessions ?? String(currentMaxConcurrentChildSessions);
   const resolvedMaxTotalChildSessions =
     maxTotalChildSessions ?? String(currentMaxTotalChildSessions);
+  const resolvedCpuCores =
+    cpuCores ?? (currentCpuCores !== undefined ? String(currentCpuCores) : "");
+  const resolvedMemoryMib =
+    memoryMib ?? (currentMemoryMib !== undefined ? String(currentMemoryMib) : "");
+  const resolvedCodeServerPort =
+    codeServerPort ?? (currentCodeServerPort !== undefined ? String(currentCodeServerPort) : "");
+  const resolvedTerminalPort =
+    terminalPort ?? (currentTerminalPort !== undefined ? String(currentTerminalPort) : "");
+  const resolvedBuildTimeoutSeconds =
+    buildTimeoutSeconds ??
+    (currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "");
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
@@ -148,31 +317,129 @@ function SandboxSettingsEditor({
       return;
     }
 
+    const trimmedCpu = resolvedCpuCores.trim();
+    if (trimmedCpu !== "" && !isValidCpuCores(trimmedCpu)) {
+      setError("CPU cores must be a positive number.");
+      return;
+    }
+
+    const trimmedMemory = resolvedMemoryMib.trim();
+    if (trimmedMemory !== "" && !isValidMemoryMib(trimmedMemory)) {
+      setError("Memory must be a positive whole number of MiB.");
+      return;
+    }
+
+    const trimmedCodeServerPort = resolvedCodeServerPort.trim();
+    if (trimmedCodeServerPort !== "" && !isValidPort(trimmedCodeServerPort)) {
+      setError("Code server port must be a whole number between 1 and 65535.");
+      return;
+    }
+
+    const trimmedTerminalPort = resolvedTerminalPort.trim();
+    if (trimmedTerminalPort !== "" && !isValidPort(trimmedTerminalPort)) {
+      setError("Terminal port must be a whole number between 1 and 65535.");
+      return;
+    }
+
+    const trimmedBuildTimeout = resolvedBuildTimeoutSeconds.trim();
+    if (trimmedBuildTimeout !== "" && !isValidBuildTimeout(trimmedBuildTimeout)) {
+      setError(
+        `Build timeout must be a whole number of seconds, at most ${MAX_BUILD_TIMEOUT_SECONDS}.`
+      );
+      return;
+    }
+
+    // Validate against the EFFECTIVE service ports the runtime will bind: an
+    // explicit value, else the inherited base, else the shared default. A
+    // blank field still occupies its default port, so a tunnel on 8080/7680
+    // must be caught here just like an explicit collision.
+    const effectiveCodeServerPort =
+      trimmedCodeServerPort !== ""
+        ? Number(trimmedCodeServerPort)
+        : (baseDefaults?.codeServerPort ?? DEFAULT_CODE_SERVER_PORT);
+    const effectiveTerminalPort =
+      trimmedTerminalPort !== ""
+        ? Number(trimmedTerminalPort)
+        : (baseDefaults?.terminalPort ?? DEFAULT_TERMINAL_PORT);
+    const configuredPorts: ConfiguredSandboxPort[] = [
+      ...ports.map((port) => ({ port, label: "tunnel port" })),
+      { port: effectiveCodeServerPort, label: "code server port" },
+      { port: effectiveTerminalPort, label: "terminal port" },
+    ];
+    const portConflict = findSandboxPortConflict(configuredPorts);
+    if (portConflict) {
+      setError(
+        portConflict.kind === "reserved"
+          ? `Port ${portConflict.port} is reserved for the internal terminal and cannot be used.`
+          : "Code server, terminal, and tunnel ports must all be different."
+      );
+      return;
+    }
+
     setSaving(true);
     try {
-      const existingEnabledRepos = isGlobal
-        ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
-        : undefined;
-      const settingsPayload: SandboxSettings = {
-        tunnelPorts: ports,
-        terminalEnabled: resolvedTerminalEnabled,
-      };
+      // Every field follows the same rule: persist when edited, when this
+      // scope already stored it, or at global scope (where the form IS the
+      // stored defaults); otherwise omit it and keep inheriting.
+      const settingsPayload: SandboxSettings = {};
+      if (isGlobal || portRows !== null || ownSettings?.tunnelPorts !== undefined) {
+        settingsPayload.tunnelPorts = ports;
+      }
+      if (isGlobal || terminalEnabled !== null || ownSettings?.terminalEnabled !== undefined) {
+        settingsPayload.terminalEnabled = resolvedTerminalEnabled;
+      }
+      const codeServerPortValue = numberPayloadValue(
+        isGlobal,
+        codeServerPort,
+        trimmedCodeServerPort,
+        ownSettings?.codeServerPort
+      );
+      if (codeServerPortValue !== undefined) {
+        settingsPayload.codeServerPort = codeServerPortValue;
+      }
+      const terminalPortValue = numberPayloadValue(
+        isGlobal,
+        terminalPort,
+        trimmedTerminalPort,
+        ownSettings?.terminalPort
+      );
+      if (terminalPortValue !== undefined) {
+        settingsPayload.terminalPort = terminalPortValue;
+      }
+      const buildTimeoutValue = numberPayloadValue(
+        isGlobal,
+        buildTimeoutSeconds,
+        trimmedBuildTimeout,
+        ownSettings?.buildTimeoutSeconds
+      );
+      if (buildTimeoutValue !== undefined) {
+        settingsPayload.buildTimeoutSeconds = buildTimeoutValue;
+      }
       if (
         isGlobal ||
         maxConcurrentChildSessions !== null ||
-        repoSettings?.maxConcurrentChildSessions !== undefined
+        ownSettings?.maxConcurrentChildSessions !== undefined
       ) {
         settingsPayload.maxConcurrentChildSessions = Number(resolvedMaxConcurrentChildSessions);
       }
       if (
         isGlobal ||
         maxTotalChildSessions !== null ||
-        repoSettings?.maxTotalChildSessions !== undefined
+        ownSettings?.maxTotalChildSessions !== undefined
       ) {
         settingsPayload.maxTotalChildSessions = Number(resolvedMaxTotalChildSessions);
       }
+      const cpu = resourcePayloadValue(isGlobal, cpuCores, trimmedCpu, ownSettings?.cpuCores);
+      if (cpu !== undefined) settingsPayload.cpuCores = cpu;
+      const memory = resourcePayloadValue(
+        isGlobal,
+        memoryMib,
+        trimmedMemory,
+        ownSettings?.memoryMib
+      );
+      if (memory !== undefined) settingsPayload.memoryMib = memory;
       const body = isGlobal
-        ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
+        ? { settings: { defaults: settingsPayload, enabledRepos } }
         : { settings: settingsPayload };
 
       const res = await fetch(apiUrl, {
@@ -191,6 +458,11 @@ function SandboxSettingsEditor({
       setTerminalEnabled(null);
       setMaxConcurrentChildSessions(null);
       setMaxTotalChildSessions(null);
+      setCpuCores(null);
+      setMemoryMib(null);
+      setCodeServerPort(null);
+      setTerminalPort(null);
+      setBuildTimeoutSeconds(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -203,14 +475,27 @@ function SandboxSettingsEditor({
     isGlobal,
     apiUrl,
     mutate,
-    data,
+    enabledRepos,
     resolvedTerminalEnabled,
     resolvedMaxConcurrentChildSessions,
     resolvedMaxTotalChildSessions,
+    resolvedCpuCores,
+    resolvedMemoryMib,
+    resolvedCodeServerPort,
+    resolvedTerminalPort,
+    resolvedBuildTimeoutSeconds,
+    portRows,
+    terminalEnabled,
+    codeServerPort,
+    terminalPort,
+    buildTimeoutSeconds,
+    cpuCores,
+    memoryMib,
     maxConcurrentChildSessions,
     maxTotalChildSessions,
-    repoSettings?.maxConcurrentChildSessions,
-    repoSettings?.maxTotalChildSessions,
+    ownSettings,
+    baseDefaults?.codeServerPort,
+    baseDefaults?.terminalPort,
   ]);
 
   const hasPortChanges =
@@ -223,10 +508,34 @@ function SandboxSettingsEditor({
   const hasTotalLimitChange =
     maxTotalChildSessions !== null &&
     maxTotalChildSessions !== String(currentMaxTotalChildSessions);
+  const currentCpuCoresString = currentCpuCores !== undefined ? String(currentCpuCores) : "";
+  const currentMemoryMibString = currentMemoryMib !== undefined ? String(currentMemoryMib) : "";
+  const hasCpuChange = cpuCores !== null && cpuCores.trim() !== currentCpuCoresString;
+  const hasMemoryChange = memoryMib !== null && memoryMib.trim() !== currentMemoryMibString;
+  const currentCodeServerPortString =
+    currentCodeServerPort !== undefined ? String(currentCodeServerPort) : "";
+  const currentTerminalPortString =
+    currentTerminalPort !== undefined ? String(currentTerminalPort) : "";
+  const hasCodeServerPortChange =
+    codeServerPort !== null && codeServerPort.trim() !== currentCodeServerPortString;
+  const hasTerminalPortChange =
+    terminalPort !== null && terminalPort.trim() !== currentTerminalPortString;
+  const currentBuildTimeoutSecondsString =
+    currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "";
+  const hasBuildTimeoutChange =
+    buildTimeoutSeconds !== null && buildTimeoutSeconds.trim() !== currentBuildTimeoutSecondsString;
   const hasChanges =
-    hasPortChanges || hasTerminalChange || hasConcurrentLimitChange || hasTotalLimitChange;
+    hasPortChanges ||
+    hasTerminalChange ||
+    hasConcurrentLimitChange ||
+    hasTotalLimitChange ||
+    hasCpuChange ||
+    hasMemoryChange ||
+    hasCodeServerPortChange ||
+    hasTerminalPortChange ||
+    hasBuildTimeoutChange;
 
-  if (isLoading || isLoadingGlobal) {
+  if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
   }
 
@@ -256,6 +565,49 @@ function SandboxSettingsEditor({
               }`}
             />
           </button>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Service Ports</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Ports code-server and the web terminal bind to. Leave blank for the defaults (
+          {DEFAULT_CODE_SERVER_PORT} and {DEFAULT_TERMINAL_PORT}). Change a port to free the default
+          for your own service on a tunnel. Code-server is enabled in its own settings.
+        </p>
+        <div className="grid gap-3 max-w-sm sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="code-server-port"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              Code server port
+            </label>
+            <Input
+              id="code-server-port"
+              type="text"
+              inputMode="numeric"
+              value={resolvedCodeServerPort}
+              onChange={(e) => setCodeServerPort(e.target.value)}
+              placeholder={String(DEFAULT_CODE_SERVER_PORT)}
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="terminal-port"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              Terminal port
+            </label>
+            <Input
+              id="terminal-port"
+              type="text"
+              inputMode="numeric"
+              value={resolvedTerminalPort}
+              onChange={(e) => setTerminalPort(e.target.value)}
+              placeholder={String(DEFAULT_TERMINAL_PORT)}
+            />
+          </div>
         </div>
       </div>
 
@@ -343,6 +695,78 @@ function SandboxSettingsEditor({
               onChange={(e) => setMaxTotalChildSessions(e.target.value)}
             />
           </div>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Resources</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
+          reservation.
+        </p>
+        <div className="grid gap-3 max-w-sm sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="sandbox-cpu-cores"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              CPU cores
+            </label>
+            <Input
+              id="sandbox-cpu-cores"
+              type="text"
+              inputMode="decimal"
+              value={resolvedCpuCores}
+              onChange={(e) => setCpuCores(e.target.value)}
+              placeholder="provider default"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="sandbox-memory-mib"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              Memory (MiB)
+            </label>
+            <Input
+              id="sandbox-memory-mib"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={resolvedMemoryMib}
+              onChange={(e) => setMemoryMib(e.target.value)}
+              placeholder="provider default"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <label
+          htmlFor="sandbox-build-timeout"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Image Build Timeout
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          How long a pre-built image may take to build (clone + setup), in seconds. Raise it for
+          large repositories with slow setup. Leave blank for the default (
+          {DEFAULT_BUILD_TIMEOUT_SECONDS}s). Builds only — sessions are unaffected.
+        </p>
+        <div className="max-w-sm">
+          <Input
+            id="sandbox-build-timeout"
+            type="number"
+            min={1}
+            max={MAX_BUILD_TIMEOUT_SECONDS}
+            inputMode="numeric"
+            value={resolvedBuildTimeoutSeconds}
+            onChange={(e) => setBuildTimeoutSeconds(e.target.value)}
+            placeholder={String(DEFAULT_BUILD_TIMEOUT_SECONDS)}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Maximum: {MAX_BUILD_TIMEOUT_SECONDS} seconds.
+          </p>
         </div>
       </div>
 

@@ -288,22 +288,46 @@ describe("McpServerStore", () => {
     it("returns global and matching repo-scoped servers", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
       const store = new McpServerStore(db);
-      const results = await store.getDecryptedForSession("carboncopyinc", "habakkuk");
+      const results = await store.getDecryptedForSession([
+        { repoOwner: "carboncopyinc", repoName: "habakkuk" },
+      ]);
       expect(results).toHaveLength(2); // global + matching scoped
     });
 
     it("excludes servers scoped to different repos", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
       const store = new McpServerStore(db);
-      const results = await store.getDecryptedForSession("bencered", "dom");
+      const results = await store.getDecryptedForSession([
+        { repoOwner: "bencered", repoName: "dom" },
+      ]);
       expect(results).toHaveLength(1); // only the global server
+      expect(results[0].name).toBe("playwright");
+    });
+
+    it("matches scoped servers through any member of a multi-repo session", async () => {
+      const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
+      const store = new McpServerStore(db);
+      const results = await store.getDecryptedForSession([
+        { repoOwner: "bencered", repoName: "dom" },
+        { repoOwner: "carboncopyinc", repoName: "habakkuk" },
+      ]);
+      expect(results).toHaveLength(2); // global + scoped matched via the second member
+    });
+
+    it("returns only unscoped servers for repo-less sessions", async () => {
+      const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
+      const store = new McpServerStore(db);
+      const results = await store.getDecryptedForSession([]);
+      expect(results).toHaveLength(1);
       expect(results[0].name).toBe("playwright");
     });
 
     it("returns headers (not env) for remote servers", async () => {
       const { db } = createFakeD1({ allResults: [remoteRowWithHeaders] });
       const store = new McpServerStore(db);
-      const results = await store.getDecryptedForSession("carboncopyinc", "habakkuk");
+      const results = await store.getDecryptedForSession([
+        { repoOwner: "carboncopyinc", repoName: "habakkuk" },
+      ]);
       expect(results).toHaveLength(1);
       const remote = results[0];
       expect(remote.type).toBe("remote");
@@ -317,7 +341,7 @@ describe("McpServerStore", () => {
     it("returns env (not headers) for local servers", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow] });
       const store = new McpServerStore(db);
-      const results = await store.getDecryptedForSession("any", "repo");
+      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
       expect(results).toHaveLength(1);
       const local = results[0];
       expect(local.type).toBe("local");
@@ -396,14 +420,14 @@ describe("McpServerStore", () => {
     it("no-key path returns plaintext env as-is", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow] });
       const store = new McpServerStore(db); // no encryption key
-      const results = await store.getDecryptedForSession("any", "repo");
+      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
       expect(results[0].env).toEqual({ DEBUG: "1" });
     });
 
     it("falls back to plaintext when decryption fails (pre-encryption row)", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow] });
       const store = new McpServerStore(db, "bm90YXJlYWxrZXlub3RhcmVhbGtleW5vdGFyZWFsa2V5eA==");
-      const results = await store.getDecryptedForSession("any", "repo");
+      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
       expect(results[0].env).toEqual({ DEBUG: "1" });
     });
 
@@ -412,7 +436,7 @@ describe("McpServerStore", () => {
         allResults: [{ ...sampleRow, env: "notjson_notcipher" }],
       });
       const store = new McpServerStore(db, "bm90YXJlYWxrZXlub3RhcmVhbGtleW5vdGFyZWFsa2V5eA==");
-      const results = await store.getDecryptedForSession("any", "repo");
+      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
       expect(results[0].env).toEqual({});
     });
   });

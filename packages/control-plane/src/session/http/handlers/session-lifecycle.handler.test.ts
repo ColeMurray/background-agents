@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
-import { getValidModelOrDefault } from "../../../utils/models";
+import type { SessionStatusService } from "../../session-status-service";
+import { getValidModelOrDefault } from "@open-inspect/shared";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -25,6 +27,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    environment_id: null,
     created_at: 1000,
     updated_at: 2000,
     ...overrides,
@@ -64,6 +67,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: "octocat@example.com",
     scm_name: "The Octocat",
+    auth_name: null,
     role: "member",
     scm_access_token_encrypted: null,
     scm_refresh_token_encrypted: null,
@@ -78,6 +82,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 function createHandler() {
   const repository = {
     upsertSession: vi.fn(),
+    replaceSessionRepositories: vi.fn(),
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
   };
@@ -93,19 +98,20 @@ function createHandler() {
     warn: vi.fn(),
     error: vi.fn(),
     child: vi.fn(),
-  };
+  } as unknown as Logger;
   const getSession = vi.fn<() => SessionRow | null>();
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
   const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
-  const transitionSessionStatus = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const statusService = { transition } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const stopExecution = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
   const updateSandboxStatus = vi.fn();
 
-  const handler = createSessionLifecycleHandler({
+  const lifecycleHandler = createSessionLifecycleHandler({
     repository,
     getDurableObjectId,
     tokenEncryptionKey: "encryption-key",
@@ -114,18 +120,24 @@ function createHandler() {
     generateId,
     now,
     scheduleWarmSandbox,
-    getLog: () => log,
     getSession,
     getSandbox,
     getPublicSessionId,
     getParticipantByUserId,
-    transitionSessionStatus,
+    statusService,
     applySessionTitleUpdate,
     stopExecution,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
   });
+
+  // Bind the request-scoped log so call sites exercise the threading without
+  // repeating it at every invocation.
+  const handler = {
+    ...lifecycleHandler,
+    init: (request: Request) => lifecycleHandler.init(request, log),
+  };
 
   return {
     handler,
@@ -141,7 +153,7 @@ function createHandler() {
     getSandbox,
     getPublicSessionId,
     getParticipantByUserId,
-    transitionSessionStatus,
+    transition,
     applySessionTitleUpdate,
     stopExecution,
     getSandboxSocket,
@@ -151,6 +163,35 @@ function createHandler() {
 }
 
 describe("createSessionLifecycleHandler", () => {
+  it.each([
+    ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
+    ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
+    ["repository context without repoId", { repoOwner: "acme", repoName: "repo", repoId: null }],
+  ])("rejects partial repository contexts during init: %s", async (_name, repoFields) => {
+    const { handler, repository, scheduleWarmSandbox } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          ...repoFields,
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Repository context must include repoOwner, repoName, and repoId together",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+  });
+
   it("initializes session, sandbox, and owner participant", async () => {
     const {
       handler,
@@ -214,6 +255,7 @@ describe("createSessionLifecycleHandler", () => {
       spawnDepth: 1,
       codeServerEnabled: false,
       sandboxSettings: null,
+      environmentId: null,
       createdAt: 1234,
       updatedAt: 1234,
     });
@@ -236,8 +278,147 @@ describe("createSessionLifecycleHandler", () => {
       role: "owner",
       joinedAt: 1234,
     });
+    // Scalar init synthesizes a one-entry member set.
+    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([
+      {
+        position: 0,
+        repoOwner: "acme",
+        repoName: "repo",
+        repoId: 123,
+        baseBranch: "feature/work",
+      },
+    ]);
     expect(scheduleWarmSandbox).toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
+  });
+
+  it("persists the repositories list in position order", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repoId: 1,
+          defaultBranch: "main",
+          repositories: [
+            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+            { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
+          ],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([
+      { position: 0, repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+      { position: 1, repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
+    ]);
+  });
+
+  it("persists an empty member set for repo-less sessions", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([]);
+  });
+
+  it("rejects a repositories list whose primary does not match the scalar mirror", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repoId: 1,
+          defaultBranch: "main",
+          repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" }],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "repositories[0] must match the scalar repository mirror",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.replaceSessionRepositories).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit empty repositories list alongside scalar context", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "frontend",
+          repoId: 1,
+          repositories: [],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "repositories must include the scalar repository",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects a repositories list on a repo-less session", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" }],
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "repositories[0] must match the scalar repository mirror",
+    });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
   });
 
   it("falls back to pre-encrypted token when plain-token encryption fails", async () => {
@@ -255,6 +436,7 @@ describe("createSessionLifecycleHandler", () => {
           sessionName: "session-public-id",
           repoOwner: "acme",
           repoName: "repo",
+          repoId: 123,
           userId: "user-1",
           scmToken: "plain-scm-token",
           scmTokenEncrypted: "existing-encrypted-token",
@@ -287,6 +469,7 @@ describe("createSessionLifecycleHandler", () => {
           sessionName: "session-public-id",
           repoOwner: "acme",
           repoName: "repo",
+          repoId: 123,
           model: "invalid/model-name",
           userId: "user-1",
         }),
@@ -377,6 +560,23 @@ describe("createSessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(400);
+  });
+
+  it("returns 400 for malformed updateTitle fields", async () => {
+    const { handler, getSession, applySessionTitleUpdate } = createHandler();
+    getSession.mockReturnValue(createSession());
+
+    const response = await handler.updateTitle(
+      new Request("http://internal/internal/update-title", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", title: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(applySessionTitleUpdate).not.toHaveBeenCalled();
   });
 
   it("returns 400 for empty title", async () => {
@@ -480,11 +680,10 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("archives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transitionSessionStatus } =
-      createHandler();
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
     getSession.mockReturnValue(createSession());
     getParticipantByUserId.mockReturnValue(createParticipant());
-    transitionSessionStatus.mockResolvedValue(true);
+    transition.mockResolvedValue(true);
 
     const response = await handler.archive(
       new Request("http://internal/internal/archive", {
@@ -496,15 +695,14 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "archived" });
-    expect(transitionSessionStatus).toHaveBeenCalledWith("archived");
+    expect(transition).toHaveBeenCalledWith("archived");
   });
 
   it("unarchives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transitionSessionStatus } =
-      createHandler();
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
     getParticipantByUserId.mockReturnValue(createParticipant());
-    transitionSessionStatus.mockResolvedValue(true);
+    transition.mockResolvedValue(true);
 
     const response = await handler.unarchive(
       new Request("http://internal/internal/unarchive", {
@@ -516,7 +714,7 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "active" });
-    expect(transitionSessionStatus).toHaveBeenCalledWith("active");
+    expect(transition).toHaveBeenCalledWith("active");
   });
 
   it("returns 409 when cancelling terminal session", async () => {
@@ -535,7 +733,7 @@ describe("createSessionLifecycleHandler", () => {
       getSession,
       getSandbox,
       stopExecution,
-      transitionSessionStatus,
+      transition,
       getSandboxSocket,
       sendToSandbox,
       updateSandboxStatus,
@@ -544,7 +742,7 @@ describe("createSessionLifecycleHandler", () => {
     getSession.mockReturnValue(createSession({ status: "active" }));
     getSandbox.mockReturnValue(createSandbox({ status: "running" }));
     stopExecution.mockResolvedValue(undefined);
-    transitionSessionStatus.mockResolvedValue(true);
+    transition.mockResolvedValue(true);
     getSandboxSocket.mockReturnValue(ws);
 
     const response = await handler.cancel();
@@ -552,7 +750,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
     expect(stopExecution).toHaveBeenCalledWith({ suppressStatusReconcile: true });
-    expect(transitionSessionStatus).toHaveBeenCalledWith("cancelled");
+    expect(transition).toHaveBeenCalledWith("cancelled");
     expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
   });

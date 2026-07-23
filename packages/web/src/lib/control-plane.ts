@@ -8,6 +8,11 @@
  */
 
 import { buildInternalAuthHeaders } from "@open-inspect/shared";
+import { createLogger } from "@/lib/logger";
+import { getCorrelationLogFields } from "@/lib/request-correlation";
+import { getRequestCorrelation } from "@/lib/request-context";
+
+const log = createLogger("control-plane-client");
 
 /**
  * Get the control plane URL from environment.
@@ -40,11 +45,11 @@ function getInternalSecret(): string {
  *
  * @returns Headers object with Content-Type and Authorization
  */
-async function getControlPlaneHeaders(): Promise<HeadersInit> {
+async function getControlPlaneHeaders(traceId: string): Promise<HeadersInit> {
   const secret = getInternalSecret();
   return {
     "Content-Type": "application/json",
-    ...(await buildInternalAuthHeaders(secret)),
+    ...(await buildInternalAuthHeaders(secret, traceId)),
   };
 }
 
@@ -68,7 +73,9 @@ function isServiceBinding(value: unknown): value is ServiceBinding {
  * Try to get the Cloudflare Workers service binding for the control plane.
  * Returns null when not running on Cloudflare Workers.
  */
-async function getServiceBinding(): Promise<ServiceBinding | null> {
+async function getServiceBinding(
+  correlationFields: Record<string, string>
+): Promise<ServiceBinding | null> {
   // In local development, always use URL-based fetch — the service binding
   // resolves to a local wrangler proxy that won't be running.
   // In local development (next dev), always use URL-based fetch. When
@@ -87,7 +94,11 @@ async function getServiceBinding(): Promise<ServiceBinding | null> {
     // Expected on non-Cloudflare runtimes (missing package). Log on edge
     // so binding misconfigurations don't silently fall back to URL fetch.
     if (typeof caches !== "undefined") {
-      console.warn("[control-plane] getCloudflareContext failed, falling back to URL fetch:", err);
+      log.warn("control_plane.binding_lookup_failed", {
+        ...correlationFields,
+        outcome: "fallback",
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     }
     return null;
   }
@@ -109,23 +120,39 @@ export async function controlPlaneFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const headers = await getControlPlaneHeaders();
-  const fetchOptions: RequestInit = {
-    ...options,
-    headers: {
-      ...headers,
-      ...options.headers,
-    },
-  };
+  const correlation = await getRequestCorrelation();
+  const correlationFields = getCorrelationLogFields(correlation);
 
-  // On Cloudflare Workers, use the service binding to call the control plane
-  const binding = await getServiceBinding();
-  if (binding) {
+  try {
+    const headers = await getControlPlaneHeaders(correlation.traceId);
+    const mergedHeaders = new Headers(headers);
+    const optionHeaders = new Headers(options.headers);
+    optionHeaders.forEach((value, key) => {
+      mergedHeaders.set(key, value);
+    });
+
+    const fetchOptions: RequestInit = {
+      ...options,
+      headers: mergedHeaders,
+    };
+
+    // On Cloudflare Workers, use the service binding to call the control plane
+    const binding = await getServiceBinding(correlationFields);
+    if (binding) {
+      const baseUrl = getControlPlaneUrl().replace(/\/+$/, "");
+      return binding.fetch(`${baseUrl}${normalizedPath}`, fetchOptions);
+    }
+
+    // Fallback: direct fetch (works on Vercel / local dev)
     const baseUrl = getControlPlaneUrl().replace(/\/+$/, "");
-    return binding.fetch(`${baseUrl}${normalizedPath}`, fetchOptions);
+    return fetch(`${baseUrl}${normalizedPath}`, fetchOptions);
+  } catch (error) {
+    log.error("control_plane.fetch_failed", {
+      ...correlationFields,
+      http_path: normalizedPath,
+      http_method: options.method ?? "GET",
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    throw error;
   }
-
-  // Fallback: direct fetch (works on Vercel / local dev)
-  const baseUrl = getControlPlaneUrl().replace(/\/+$/, "");
-  return fetch(`${baseUrl}${normalizedPath}`, fetchOptions);
 }

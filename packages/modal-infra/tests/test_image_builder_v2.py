@@ -1,4 +1,4 @@
-"""Tests for the async image builder (v2)."""
+"""Tests for the async image build worker."""
 
 import json
 import time
@@ -16,7 +16,7 @@ from src.scheduler.image_builder import (
     BuildError,
     _callback_with_retry,
     _stream_build_logs,
-    build_repo_image,
+    build_image,
 )
 
 
@@ -197,10 +197,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123def456"
-        assert complete is True
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123def456"
+        assert result.complete is True
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_complete_without_sha(self):
@@ -212,10 +212,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is True
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is True
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_incomplete_when_sandbox_exits(self):
@@ -228,10 +228,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123"
-        assert complete is False
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123"
+        assert result.complete is False
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_captures_setup_failure_tail(self):
@@ -256,10 +256,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123"
-        assert complete is False
-        assert error == "setup.failed: npm install\nmissing dependency"
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123"
+        assert result.complete is False
+        assert result.error == "setup.failed: npm install\nmissing dependency"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_supervisor_error(self):
@@ -276,10 +276,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is False
-        assert error == "supervisor.error: unexpected startup failure"
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is False
+        assert result.error == "supervisor.error: unexpected startup failure"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_supervisor_fatal(self):
@@ -296,10 +296,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is False
-        assert error == "supervisor.fatal: unexpected startup failure"
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is False
+        assert result.error == "supervisor.fatal: unexpected startup failure"
 
     @pytest.mark.asyncio
     async def test_returns_incomplete_on_error(self):
@@ -312,10 +312,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = _raise()
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == ""
-        assert complete is False
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == ""
+        assert result.complete is False
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_handles_malformed_json(self):
@@ -328,10 +328,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete, error = await _stream_build_logs(mock_sandbox)
-        assert sha == "abc123"
-        assert complete is True
-        assert error is None
+        result = await _stream_build_logs(mock_sandbox)
+        assert result.head_sha == "abc123"
+        assert result.complete is True
+        assert result.error is None
 
 
 class TestBuildError:
@@ -343,8 +343,13 @@ class TestBuildError:
         assert str(err) == "sandbox exited with code 1"
 
 
-class TestBuildRepoImage:
-    """Test the async repo image build worker."""
+REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
+REPOSITORY_SHAS = [{"repoOwner": "acme", "repoName": "repo", "baseSha": "abc123"}]
+RUNTIME_VERSION = "v54-opencode-1-17-18"
+
+
+class TestBuildImage:
+    """Test the async scope image build worker."""
 
     @staticmethod
     def _async_stdout(lines):
@@ -365,8 +370,20 @@ class TestBuildRepoImage:
         terminate = SimpleNamespace(aio=terminate_aio)
         if stdout_lines is None:
             stdout_lines = [
-                json.dumps({"event": "git.sync_complete", "head_sha": "abc123"}),
-                json.dumps({"event": "image_build.complete", "duration_ms": 5000}),
+                json.dumps(
+                    {
+                        "event": "git.sync_complete",
+                        "head_sha": "abc123",
+                        "repository_shas": REPOSITORY_SHAS,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "image_build.complete",
+                        "duration_ms": 5000,
+                        "runtime_version": RUNTIME_VERSION,
+                    }
+                ),
             ]
         sandbox = SimpleNamespace(
             stdout=self._async_stdout(stdout_lines),
@@ -383,18 +400,21 @@ class TestBuildRepoImage:
 
         with (
             patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
-            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.scheduler.image_builder.resolve_clone_token", return_value="gh-token"),
             patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch("src.scheduler.image_builder.log") as mock_log,
             patch(
                 "src.scheduler.image_builder._callback_with_retry",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as callback,
         ):
-            await build_repo_image.local(
-                repo_owner="acme",
-                repo_name="repo",
-                callback_url="https://cp.test/repo-images/build-complete",
+            await build_image.local(
+                scope_kind="repo",
+                scope_id="acme/repo",
+                repositories=REPOSITORIES,
+                callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
             )
 
@@ -404,7 +424,81 @@ class TestBuildRepoImage:
         callback_payload = callback.await_args.args[1]
         assert callback_payload["build_id"] == "img-1"
         assert callback_payload["provider_image_id"] == "im-test"
-        assert callback_payload["base_sha"] == "abc123"
+        assert callback_payload["repository_shas"] == REPOSITORY_SHAS
+        assert callback_payload["runtime_version"] == RUNTIME_VERSION
+        event_call = next(
+            call for call in mock_log.info.call_args_list if call.args == ("image_build.complete",)
+        )
+        assert event_call.kwargs == {
+            "build_id": "img-1",
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "outcome": "success",
+            "duration_seconds": pytest.approx(event_call.kwargs["duration_seconds"]),
+            "repository_count": 1,
+            "provider_image_id": "im-test",
+            "runtime_version": RUNTIME_VERSION,
+        }
+
+    @pytest.mark.asyncio
+    async def test_forwards_build_timeout_to_create_build_sandbox(self):
+        handle, _snapshot_aio, _terminate_aio = self._build_handle()
+        create_build_sandbox = AsyncMock(return_value=handle)
+        manager = SimpleNamespace(create_build_sandbox=create_build_sandbox)
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder.resolve_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await build_image.local(
+                scope_kind="repo",
+                scope_id="acme/repo",
+                repositories=REPOSITORIES,
+                callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
+                build_id="img-1",
+                build_timeout_seconds=2400,
+            )
+
+        assert create_build_sandbox.await_args.kwargs["timeout_seconds"] == 2400
+
+    @pytest.mark.asyncio
+    async def test_defaults_build_timeout_when_unset(self):
+        from src.sandbox.manager import DEFAULT_BUILD_TIMEOUT_SECONDS
+
+        handle, _snapshot_aio, _terminate_aio = self._build_handle()
+        create_build_sandbox = AsyncMock(return_value=handle)
+        manager = SimpleNamespace(create_build_sandbox=create_build_sandbox)
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder.resolve_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await build_image.local(
+                scope_kind="repo",
+                scope_id="acme/repo",
+                repositories=REPOSITORIES,
+                callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
+                build_id="img-1",
+            )
+
+        assert (
+            create_build_sandbox.await_args.kwargs["timeout_seconds"]
+            == DEFAULT_BUILD_TIMEOUT_SECONDS
+        )
 
     @pytest.mark.asyncio
     async def test_terminates_and_reports_failure_when_snapshot_times_out(self):
@@ -415,18 +509,21 @@ class TestBuildRepoImage:
 
         with (
             patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
-            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.scheduler.image_builder.resolve_clone_token", return_value="gh-token"),
             patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch("src.scheduler.image_builder.log") as mock_log,
             patch(
                 "src.scheduler.image_builder._callback_with_retry",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as callback,
         ):
-            await build_repo_image.local(
-                repo_owner="acme",
-                repo_name="repo",
-                callback_url="https://cp.test/repo-images/build-complete",
+            await build_image.local(
+                scope_kind="repo",
+                scope_id="acme/repo",
+                repositories=REPOSITORIES,
+                callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
             )
 
@@ -434,10 +531,22 @@ class TestBuildRepoImage:
         terminate_aio.assert_awaited_once()
         callback.assert_awaited_once()
         failure_url, failure_payload = callback.await_args.args
-        assert failure_url == "https://cp.test/repo-images/build-failed"
+        assert failure_url == "https://cp.test/image-builds/build-failed"
         assert failure_payload == {
             "build_id": "img-1",
             "error": "Timed out waiting for image to be created",
+        }
+        event_call = next(
+            call for call in mock_log.error.call_args_list if call.args == ("image_build.complete",)
+        )
+        assert event_call.kwargs == {
+            "build_id": "img-1",
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "outcome": "error",
+            "error": "Timed out waiting for image to be created",
+            "duration_seconds": pytest.approx(event_call.kwargs["duration_seconds"]),
+            "repository_count": 1,
         }
 
     @pytest.mark.asyncio
@@ -464,7 +573,7 @@ class TestBuildRepoImage:
 
         with (
             patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
-            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.scheduler.image_builder.resolve_clone_token", return_value="gh-token"),
             patch("src.sandbox.manager.SandboxManager", return_value=manager),
             patch(
                 "src.scheduler.image_builder._callback_with_retry",
@@ -472,10 +581,12 @@ class TestBuildRepoImage:
                 return_value=True,
             ) as callback,
         ):
-            await build_repo_image.local(
-                repo_owner="acme",
-                repo_name="repo",
-                callback_url="https://cp.test/repo-images/build-complete",
+            await build_image.local(
+                scope_kind="repo",
+                scope_id="acme/repo",
+                repositories=REPOSITORIES,
+                callback_url="https://cp.test/image-builds/build-complete",
+                failure_callback_url="https://cp.test/image-builds/build-failed",
                 build_id="img-1",
                 user_env_vars={"PIN": "123", "API_TOKEN": "abcd1234"},
             )
@@ -484,7 +595,7 @@ class TestBuildRepoImage:
         terminate_aio.assert_awaited_once()
         callback.assert_awaited_once()
         failure_url, failure_payload = callback.await_args.args
-        assert failure_url == "https://cp.test/repo-images/build-failed"
+        assert failure_url == "https://cp.test/image-builds/build-failed"
         assert failure_payload == {
             "build_id": "img-1",
             "error": "Build sandbox exited without completing: setup.failed: npm install failed: PIN=*** TOKEN=***",

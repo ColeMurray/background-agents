@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStatus } from "@open-inspect/shared";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 
 const sessionStoreMock = {
@@ -10,13 +11,16 @@ const sessionStoreMock = {
 
 const integrationStoreMock = {
   getResolvedConfig: vi.fn(),
+  getGlobal: vi.fn(),
 };
 
 vi.mock("../db/session-index", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    SessionIndexStore: vi.fn().mockImplementation(() => sessionStoreMock),
+    SessionIndexStore: vi.fn().mockImplementation(function () {
+      return sessionStoreMock;
+    }),
   };
 });
 
@@ -24,7 +28,9 @@ vi.mock("../db/integration-settings", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    IntegrationSettingsStore: vi.fn().mockImplementation(() => integrationStoreMock),
+    IntegrationSettingsStore: vi.fn().mockImplementation(function () {
+      return integrationStoreMock;
+    }),
   };
 });
 
@@ -39,6 +45,7 @@ function createCtx(): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
+    db: {} as SqlDatabase,
     metrics: {
       d1Queries: [],
       spans: {},
@@ -84,14 +91,14 @@ function seedActiveSession(opts?: {
   spawnSource?: string;
   userId?: string | null;
   status?: SessionStatus;
-  repoOwner?: string;
-  repoName?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
 }) {
   sessionStoreMock.get.mockResolvedValue({
     id: "sess-1",
     title: "Test session",
-    repoOwner: opts?.repoOwner ?? "acme",
-    repoName: opts?.repoName ?? "web-app",
+    repoOwner: opts && "repoOwner" in opts ? opts.repoOwner : "acme",
+    repoName: opts && "repoName" in opts ? opts.repoName : "web-app",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     baseBranch: null,
@@ -410,6 +417,61 @@ describe("handleSlackNotify", () => {
     expect(logEntry?.repo).toBe("acme/web-app");
     expect(logEntry?.channel_id).toBe("C1");
     expect(logEntry?.request_reason).toBe("user asked");
+  });
+
+  it("uses global settings and a null repo audit field for no-repo sessions", async () => {
+    seedActiveSession({
+      parentSessionId: "parent-1",
+      spawnSource: "automation",
+      userId: "user-42",
+      repoOwner: null,
+      repoName: null,
+    });
+    integrationStoreMock.getGlobal.mockResolvedValue({
+      defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+    mockSlackResponse({
+      body: { ok: true, channel: "C1", ts: "12345.67890" },
+    });
+    mockSlackResponse({
+      body: {
+        ok: true,
+        permalink: "https://x.slack.com/archives/C1/p1234567890",
+        channel: "C1",
+      },
+    });
+
+    const res = await callHandler({ channel: "#ops", text: "Done" });
+
+    expect(res.status).toBe(200);
+    expect(integrationStoreMock.getGlobal).toHaveBeenCalledWith("slack");
+    expect(integrationStoreMock.getResolvedConfig).not.toHaveBeenCalled();
+
+    const logEntry = lastLogPayload(consoleLogSpy, "Slack notification posted");
+    expect(logEntry).toBeDefined();
+    expect(logEntry?.repo).toBeNull();
+  });
+
+  it("uses global wording when global Slack settings disable notifications", async () => {
+    seedActiveSession({
+      spawnSource: "automation",
+      repoOwner: null,
+      repoName: null,
+    });
+    integrationStoreMock.getGlobal.mockResolvedValue({
+      defaults: { agentNotificationsEnabled: false, mentionsPolicy: "allow" },
+    });
+
+    const res = await callHandler({ channel: "#ops", text: "Done" });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "feature_disabled",
+      message: "Slack agent notifications are disabled globally.",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(integrationStoreMock.getGlobal).toHaveBeenCalledWith("slack");
+    expect(integrationStoreMock.getResolvedConfig).not.toHaveBeenCalled();
   });
 
   it("logs an audit warning with attribution on Slack-side denial (no events emitted)", async () => {

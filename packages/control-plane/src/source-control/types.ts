@@ -4,7 +4,7 @@
  * Core interfaces and type definitions for source control platform abstraction.
  */
 
-import type { InstallationRepository } from "@open-inspect/shared";
+import type { InstallationRepository, PullRequestLifecycleState } from "@open-inspect/shared";
 
 /**
  * Repository information.
@@ -116,6 +116,10 @@ export interface GitPushSpec {
   refspec: string;
   /** Remote branch name (for observability and event correlation) */
   targetBranch: string;
+  /** Target repository owner — selects the checkout in multi-repo sandboxes */
+  repoOwner: string;
+  /** Target repository name — selects the checkout in multi-repo sandboxes */
+  repoName: string;
   /** Whether force push is required */
   force: boolean;
 }
@@ -176,12 +180,81 @@ export interface CreatePullRequestResult {
   webUrl: string;
   /** API URL for the pull request */
   apiUrl: string;
-  /** Current state of the pull request */
-  state: "open" | "closed" | "merged" | "draft";
+  /**
+   * Stored status facts (PR lifecycle tracking). Providers return only the
+   * facts; consumers derive any display state with toDisplayStatus at their
+   * own boundary, so a provider result can never carry an inconsistent pair.
+   */
+  lifecycleState: PullRequestLifecycleState;
+  /** Stored status fact; only meaningful while open */
+  isDraft: boolean;
   /** Source branch */
   sourceBranch: string;
   /** Target branch */
   targetBranch: string;
+  /** Head commit SHA at creation, when the provider response carries it */
+  headSha?: string;
+  /** Stable provider repo id (canonical PR identity), when carried */
+  repositoryExternalId?: string;
+  /**
+   * Provider's updated_at (epoch ms) from the create response, when carried.
+   * Seeds the monotonic guard so a creation write cannot regress a webhook
+   * for the same PR that landed first.
+   */
+  providerUpdatedAt?: number;
+}
+
+/**
+ * Configuration for reading a pull request's current state.
+ */
+export interface GetPullRequestConfig {
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  name: string;
+  /** Pull request number */
+  number: number;
+  /**
+   * Stable provider repo id, when known. Enables rename/transfer tolerance:
+   * on a 404 the provider re-resolves the repository's current location by
+   * id and retries once.
+   */
+  repositoryExternalId?: string;
+}
+
+/**
+ * Snapshot of a pull request's current provider state.
+ *
+ * Field names mirror PullRequestArtifactMetadata (shared) so the snapshot
+ * flows into the D1 record and DO artifact without a mapping layer;
+ * lifecycleState/isDraft structurally satisfy PullRequestStatus.
+ */
+export interface PullRequestSnapshot {
+  number: number;
+  /** Web URL of the pull request */
+  url: string;
+  lifecycleState: PullRequestLifecycleState;
+  /** Draft readiness; false whenever the PR is not open (invariant) */
+  isDraft: boolean;
+  /** Head (source) branch name */
+  headBranch: string;
+  /** Base (target) branch name */
+  baseBranch: string;
+  headSha?: string;
+  /** Canonical current owner (refreshed when a rename/transfer is detected) */
+  repoOwner: string;
+  /** Canonical current name (refreshed when a rename/transfer is detected) */
+  repoName: string;
+  /** Stable provider repo id */
+  repositoryExternalId?: string;
+  /** Provider's created_at (epoch ms) — analytics cohort bucketing */
+  providerCreatedAt?: number;
+  /** Provider's updated_at (epoch ms) — the monotonic write guard source */
+  providerUpdatedAt?: number;
+  /** Provider's merged_at (epoch ms); only meaningful when merged */
+  mergedAt?: number;
+  /** Provider's closed_at (epoch ms); only meaningful when not open */
+  closedAt?: number;
 }
 
 /**
@@ -287,6 +360,20 @@ export interface SourceControlProvider {
    * @throws SourceControlProviderError on configuration or API errors
    */
   listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]>;
+
+  /**
+   * Read the current state of a pull request.
+   *
+   * App-authenticated: credentials come from provider-level configuration
+   * (matching listRepositories), never a caller token — the webhook and
+   * read-through freshness paths run with no user in the loop.
+   *
+   * @param config - PR identifier; include repositoryExternalId when known
+   *   so a 404 triggers a resolve-by-id + single retry (rename tolerance)
+   * @returns Current PR snapshot
+   * @throws SourceControlProviderError
+   */
+  getPullRequest(config: GetPullRequestConfig): Promise<PullRequestSnapshot>;
 
   /**
    * Generate authentication for git push operations.

@@ -37,6 +37,11 @@ describe("scm", () => {
       expect(getScmRepoUrl("acme", "app")).toBe("https://gitlab.com/acme/app");
     });
 
+    it("preserves nested GitLab namespace separators", () => {
+      setProvider("gitlab");
+      expect(getScmRepoUrl("group/subgroup", "app")).toBe("https://gitlab.com/group/subgroup/app");
+    });
+
     it("returns bitbucket URL", () => {
       setProvider("bitbucket");
       expect(getScmRepoUrl("acme", "app")).toBe("https://bitbucket.org/acme/app");

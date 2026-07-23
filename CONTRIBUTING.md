@@ -6,7 +6,7 @@ contributing to the project.
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/open-inspect.git`
+2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/background-agents.git`
 3. Run the setup script: `bash .openinspect/setup.sh`
 4. Create a branch for your changes: `git checkout -b feature/your-feature-name`
 
@@ -45,12 +45,14 @@ npm test
 
 ## Project Structure
 
-| Package                  | Description                          |
-| ------------------------ | ------------------------------------ |
-| `packages/control-plane` | Cloudflare Workers + Durable Objects |
-| `packages/web`           | Next.js web application              |
-| `packages/modal-infra`   | Modal sandbox infrastructure         |
-| `packages/shared`        | Shared types and utilities           |
+| Package                    | Description                          |
+| -------------------------- | ------------------------------------ |
+| `packages/control-plane`   | Cloudflare Workers + Durable Objects |
+| `packages/web`             | Next.js web application              |
+| `packages/sandbox-runtime` | Shared in-sandbox agent runtime      |
+| `packages/modal-infra`     | Modal sandbox infrastructure         |
+| `packages/daytona-infra`   | Daytona snapshot infrastructure      |
+| `packages/shared`          | Shared types and utilities           |
 
 ## Making Changes
 

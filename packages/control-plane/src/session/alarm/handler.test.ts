@@ -27,7 +27,7 @@ function createHandler() {
     lifecycleManager,
     executionTimeoutMs: 1000,
     now,
-    getLog: () => log,
+    log,
   });
 
   return {

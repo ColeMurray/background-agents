@@ -1,0 +1,12 @@
+{
+  // Test-only typecheck pass. Co-located *.test.ts files use Node APIs
+  // (node:crypto, node:fs, import.meta.url) that the production tsconfig.json
+  // deliberately excludes — the worker has no `nodejs_compat`, so Node types
+  // must stay off the production type surface (see tsconfig.json).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

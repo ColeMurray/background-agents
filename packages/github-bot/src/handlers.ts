@@ -1,4 +1,10 @@
-import { buildInternalAuthHeaders, resolveAppName } from "@open-inspect/shared";
+import {
+  buildInternalAuthHeaders,
+  createSessionResponseSchema,
+  escapeRegExp,
+  resolveAppName,
+  sendPromptResponseSchema,
+} from "@open-inspect/shared";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -9,11 +15,19 @@ import type {
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
+import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
+import { requestedReviewerPayloadSchema } from "./payload-schemas";
 
 export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
   | { outcome: "skipped"; skip_reason: string };
+
+export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
+  const parsed = requestedReviewerPayloadSchema.safeParse(payload);
+  if (!parsed.success) return false;
+  return parsed.data.requested_reviewer?.login === botUsername;
+}
 
 async function getAuthHeaders(env: Env, traceId: string): Promise<Record<string, string>> {
   return {
@@ -26,8 +40,7 @@ async function createSession(
   controlPlane: Fetcher,
   headers: Record<string, string>,
   params: {
-    repoOwner: string;
-    repoName: string;
+    target: SessionTargetFields;
     title: string;
     model: string;
     reasoningEffort?: string | null;
@@ -37,8 +50,7 @@ async function createSession(
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
-    repoOwner: params.repoOwner,
-    repoName: params.repoName,
+    ...params.target,
     title: params.title,
     model: params.model,
     scmLogin: params.scmLogin,
@@ -58,8 +70,11 @@ async function createSession(
     const body = await response.text();
     throw new Error(`Session creation failed: ${response.status} ${body}`);
   }
-  const result = (await response.json()) as { sessionId: string };
-  return result.sessionId;
+  const result = createSessionResponseSchema.safeParse(await response.json());
+  if (!result.success) {
+    throw new Error("Session creation failed: invalid response");
+  }
+  return result.data.sessionId;
 }
 
 async function sendPrompt(
@@ -77,13 +92,15 @@ async function sendPrompt(
     const body = await response.text();
     throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
   }
-  const result = (await response.json()) as { messageId: string };
-  return result.messageId;
+  const result = sendPromptResponseSchema.safeParse(await response.json());
+  if (!result.success) {
+    throw new Error("Prompt delivery failed: invalid response");
+  }
+  return result.data.messageId;
 }
 
 function stripMention(body: string, botUsername: string): string {
-  const escaped = botUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return body.replace(new RegExp(`@${escaped}`, "gi"), "").trim();
+  return body.replace(new RegExp(`@${escapeRegExp(botUsername)}`, "gi"), "").trim();
 }
 
 function fireAndForgetReaction(
@@ -210,9 +227,17 @@ export async function handleReviewRequested(
     meta
   );
 
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
+  const target = await resolveSessionTarget(env, log, {
+    owner,
     repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
+  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+    target,
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
@@ -310,9 +335,17 @@ export async function handlePullRequestOpened(
     meta
   );
 
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
+  const target = await resolveSessionTarget(env, log, {
+    owner,
     repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
+  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+    target,
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
@@ -416,9 +449,17 @@ export async function handleIssueComment(
     meta
   );
 
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
+  const target = await resolveSessionTarget(env, log, {
+    owner,
     repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
+  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+    target,
     title: `GitHub: PR #${issue.number} comment`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
@@ -515,9 +556,17 @@ export async function handleReviewComment(
     meta
   );
 
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
-    repoOwner: owner,
+  const target = await resolveSessionTarget(env, log, {
+    owner,
     repoName,
+    senderLogin: sender.login,
+    config,
+    ghToken,
+    headers,
+    traceId,
+  });
+  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+    target,
     title: `GitHub: PR #${pr.number} review comment`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,

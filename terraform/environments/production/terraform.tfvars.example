@@ -18,6 +18,7 @@
 #   - Workers KV Storage: Edit
 #   - Workers R2 Storage: Edit
 #   - D1: Edit
+#   - Queues: Edit (required when enable_slack_bot = true)
 # Optional if you manage Cloudflare routes/custom domains:
 #   - Workers Routes: Edit
 # Create at: https://dash.cloudflare.com/profile/api-tokens
@@ -27,7 +28,16 @@ cloudflare_api_token = ""
 cloudflare_account_id = ""
 
 # Cloudflare zone ID (optional, only needed for custom domains)
+# In the Cloudflare dashboard, open the domain's Overview and use "Copy zone ID".
 # cloudflare_zone_id = ""
+
+# Custom domain (hostname) for the Cloudflare web Worker (optional).
+# Only used when web_platform = "cloudflare". Requires cloudflare_zone_id above
+# and a zone you control. Cloudflare provisions the DNS record + edge cert and
+# the web app URL becomes https://<this-hostname> instead of the workers.dev URL
+# (the workers.dev route is disabled). Remember to update the GitHub/Google
+# OAuth callback URLs to the new hostname.
+# cloudflare_custom_domain = "" # e.g., "app.example.com"
 
 # Cloudflare Workers subdomain (found in Workers & Pages -> Overview, bottom-right of panel)
 # This is the subdomain used for workers.dev URLs (e.g., "myaccount" in "worker.myaccount.workers.dev")
@@ -51,10 +61,16 @@ cloudflare_worker_subdomain = ""
 modal_token_id = ""
 modal_token_secret = ""
 
-# Modal workspace name (used in endpoint URLs)
+# Modal workspace, environment, and endpoint web suffix
 # Only required when sandbox_provider = "modal"
-# This is your Modal username/workspace (e.g., "myworkspace" in "https://myworkspace--app.modal.run")
-modal_workspace = ""
+# workspace: your Modal username (e.g., "myworkspace")
+# environment: Modal environment name used by the CLI
+# environment_web_suffix: Modal web suffix used in endpoint URLs:
+#   empty suffix:      https://myworkspace--app.modal.run
+#   "production":      https://myworkspace-production--app.modal.run
+modal_workspace               = ""
+modal_environment             = "main"
+modal_environment_web_suffix  = ""
 
 # Daytona REST API
 # Only required when sandbox_provider = "daytona"
@@ -65,6 +81,39 @@ daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
 daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Read/Write/Delete)
 daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
 # daytona_target = ""          # Optional Daytona target name
+
+# Vercel Sandbox API
+# Only required when sandbox_provider = "vercel"
+# Create a Vercel access token and use a project ID with Sandbox access.
+vercel_sandbox_token      = ""
+vercel_sandbox_project_id = "" # e.g., "prj_xxxxxxxxxxxxxxxxxxxx"
+# vercel_sandbox_team_id  = "" # Optional team ID, e.g., "team_xxxxxxxxxxxxxxxxxxxx"
+# vercel_sandbox_api_base_url = "" # Optional API override for advanced testing
+# vercel_base_snapshot_id = "" # Optional manual override; skips Terraform-managed snapshot builds
+# vercel_sandbox_runtime  = "node24"
+# vercel_snapshot_expiration_ms = 0
+
+# OpenComputer REST API
+# Only required when sandbox_provider = "opencomputer"
+# The template must include the OpenInspect sandbox runtime entrypoint.
+opencomputer_api_url = "https://app.opencomputer.dev/api"
+opencomputer_api_key = ""
+opencomputer_template = ""
+
+# E2B
+# Only required when sandbox_provider = "e2b"
+# - e2b_api_key: runtime key (control-plane → E2B API) AND template-build auth
+#                (the e2b-infra module builds via the Template SDK). Dashboard → API Keys.
+# The e2b-infra Terraform module builds the template automatically; e2b_template_id
+# is the name it creates/rebuilds (also used at runtime for fresh sandboxes).
+e2b_api_key = ""               # sensitive — runtime REST API key (also auths the build)
+e2b_template_id = ""           # e.g., "open-inspect-sandbox"
+# e2b_api_url = "https://api.e2b.app"
+# Sandbox TTL. Default 7200 (paid plans); on a plan with a ~1h cap, set 3300.
+# e2b_sandbox_timeout_seconds = 3300
+# Auto-pause makes a lapsed TTL recoverable (pause, not kill) and auto-resumes the
+# sandbox on inbound activity. Default true; set false to kill on timeout.
+# e2b_auto_pause = true
 
 # =============================================================================
 # GitHub App Credentials
@@ -119,6 +168,19 @@ github_webhook_secret = ""
 github_bot_username = ""
 
 # =============================================================================
+# Google OAuth Credentials (Optional)
+# =============================================================================
+# Enables "Sign in with Google" for non-developer users (PMs, support agents).
+# Create an OAuth 2.0 Client ID at: https://console.cloud.google.com/apis/credentials
+#   - Application type: Web application
+#   - Authorized redirect URI: {your-web-app-url}/api/auth/callback/google
+#   - Consent screen scopes: openid, email, profile (non-sensitive — no Google review)
+# Set BOTH values to enable Google login, or leave BOTH empty for GitHub-only.
+# Pair with allowed_emails / allowed_email_domains below to control who may sign in.
+google_client_id = ""
+google_client_secret = ""
+
+# =============================================================================
 # Slack App Credentials (Optional)
 # =============================================================================
 # From Slack App dashboard: https://api.slack.com/apps
@@ -135,9 +197,12 @@ slack_signing_secret = ""
 # - Set Callback URL to: https://<linear-bot-worker-url>/oauth/callback
 # - Set Webhook URL to: https://<linear-bot-worker-url>/webhook
 # - Enable scopes: read, write, app:assignable, app:mentionable
+# - Enable "Client credentials tokens" before installing or upgrading the agent
 # After creation, note the Client ID, Client Secret, and Webhook Signing Secret.
 # Then visit https://<linear-bot-worker-url>/oauth/authorize to install the agent
 # in your workspace (requires admin permissions).
+# Existing eligible installations do not need to be reinstalled. After enabling client
+# credentials, the first request mints and verifies a runtime token automatically.
 # Leave empty to disable Linear integration.
 
 enable_linear_bot = false
@@ -183,6 +248,9 @@ nextauth_secret = ""
 # Sandbox backend for session execution
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
 # - "daytona": direct Daytona REST API integration with stop/start resume
+# - "vercel": Vercel Sandbox API with filesystem snapshot restore
+# - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
+# - "e2b": direct E2B REST API integration with pause/resume
 sandbox_provider = "modal"
 
 # Platform for the web app deployment
@@ -220,8 +288,9 @@ project_root = "../../../"
 # app_short_name = "Inspect"
 
 # Optional URL (absolute or root-relative path) to a custom logo image for the
-# command menu and browser favicon. Leave empty to use the built-in icon.
-# Example: "/branding/logo.svg" (file under packages/web/public/) or
+# command menu and browser favicon. Leave empty to use the built-in favicon
+# and default in-app icon.
+# Example: "/branding/acme-logo.svg" (file under packages/web/public/) or
 #          "https://cdn.example.com/logo.svg".
 # app_icon_url = ""
 
@@ -281,15 +350,30 @@ enable_service_bindings = false
 # =============================================================================
 # Access Control
 # =============================================================================
+# Allowlists are OR-based: a user is admitted if they match ANY configured
+# allowlist (GitHub username, email domain, exact email, or GitHub org
+# membership). Set at least one unless you intentionally opt into open access
+# with unsafe_allow_all_users = true.
+
 # Comma-separated list of GitHub usernames allowed to sign in
-# Set at least one access-control allowlist unless you intentionally opt into
-# open access with unsafe_allow_all_users = true.
 allowed_users = ""
 
-# Comma-separated list of email domains allowed to sign in
-# Example: "example.com,corp.io"
+# Comma-separated list of email domains allowed to sign in (matches any
+# provider's verified email). Example: "example.com,corp.io"
 allowed_email_domains = ""
 
+# Comma-separated list of exact email addresses allowed to sign in. Use this for
+# individual users on shared domains (e.g. one person@gmail.com) where a domain
+# allowlist would admit too many. Example: "pm@gmail.com,agent@gmail.com"
+allowed_emails = ""
+
+# Comma-separated list of GitHub organizations whose active members can sign in.
+# Requests read:org only when set, then checks membership at sign-in with the
+# signing-in user's OAuth token. Existing sessions last until session expiry.
+# Requires GitHub App Organization permissions: Members read-only; existing apps
+# must republish/request approval after this permission changes.
+allowed_github_orgs = ""
+
 # Explicitly bypass the Terraform access-control safety check and allow any
-# authenticated GitHub user to sign in when both allowlists are empty.
+# authenticated user to sign in when all allowlists are empty.
 unsafe_allow_all_users = false

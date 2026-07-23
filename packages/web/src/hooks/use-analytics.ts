@@ -3,6 +3,7 @@ import useSWR from "swr";
 import type {
   AnalyticsBreakdownResponse,
   AnalyticsDays,
+  AnalyticsPullRequestsResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared";
@@ -32,16 +33,23 @@ export function useAnalyticsDashboard(days: AnalyticsDays) {
     { refreshInterval }
   );
 
+  const pullRequests = useSWR<AnalyticsPullRequestsResponse>(
+    session ? `/api/analytics/pull-requests?days=${days}` : null,
+    { refreshInterval }
+  );
+
   return {
     summary: summary.data,
     timeseries: timeseries.data,
     repoBreakdown: repos.data,
     userBreakdown: users.data,
+    pullRequests: pullRequests.data,
     loading:
       (!summary.data && summary.isLoading) ||
       (!timeseries.data && timeseries.isLoading) ||
       (!repos.data && repos.isLoading) ||
-      (!users.data && users.isLoading),
-    error: summary.error ?? timeseries.error ?? repos.error ?? users.error,
+      (!users.data && users.isLoading) ||
+      (!pullRequests.data && pullRequests.isLoading),
+    error: summary.error ?? timeseries.error ?? repos.error ?? users.error ?? pullRequests.error,
   };
 }

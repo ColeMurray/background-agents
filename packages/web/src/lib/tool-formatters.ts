@@ -278,6 +278,17 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       };
     }
 
+    case "get-task-status": {
+      const taskId = getStringArg(args, "taskId");
+
+      return {
+        toolName: "Task Status",
+        summary: taskId ? truncate(taskId, 20) : "List Tasks",
+        icon: "box",
+        getDetails: () => ({ args, output }),
+      };
+    }
+
     default:
       return {
         toolName: tool || "Unknown",

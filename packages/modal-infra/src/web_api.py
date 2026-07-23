@@ -11,7 +11,6 @@ SECURITY: All sensitive endpoints require authentication via HMAC-signed tokens.
 The control plane must include an Authorization header with a valid token.
 """
 
-import os
 import time
 
 from fastapi import Header, HTTPException
@@ -25,6 +24,7 @@ from .app import (
     validate_control_plane_url,
 )
 from .auth import AuthConfigurationError, verify_internal_token
+from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
 
 configure_logging()
@@ -55,41 +55,6 @@ def require_auth(authorization: str | None) -> None:
         )
 
 
-def _resolve_clone_token() -> str | None:
-    """Resolve a VCS clone token based on SCM_PROVIDER.
-
-    - "gitlab": reads GITLAB_ACCESS_TOKEN from the environment.
-    - "github" (default): generates a short-lived GitHub App installation token.
-
-    Returns None if credentials are missing or token generation fails.
-    """
-    from .auth import generate_installation_token
-
-    scm_provider = os.environ.get("SCM_PROVIDER", "github")
-
-    if scm_provider == "gitlab":
-        token = os.environ.get("GITLAB_ACCESS_TOKEN")
-        if not token:
-            log.warn("gitlab.token_missing")
-        return token
-
-    try:
-        app_id = os.environ.get("GITHUB_APP_ID")
-        private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-        installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-        if app_id and private_key and installation_id:
-            return generate_installation_token(
-                app_id=app_id,
-                private_key=private_key,
-                installation_id=installation_id,
-            )
-    except Exception as e:
-        log.warn("github.token_error", exc=e)
-
-    return None
-
-
 def require_valid_control_plane_url(url: str | None) -> None:
     """
     Validate control_plane_url, raising HTTPException on failure.
@@ -105,6 +70,45 @@ def require_valid_control_plane_url(url: str | None) -> None:
             status_code=400,
             detail=f"Invalid control_plane_url: {url}. URL must match allowed patterns.",
         )
+
+
+def _normalize_optional_repository_context(
+    repo_owner: str | None, repo_name: str | None
+) -> tuple[str | None, str | None]:
+    normalized_owner = repo_owner.strip() if isinstance(repo_owner, str) else None
+    normalized_name = repo_name.strip() if isinstance(repo_name, str) else None
+    normalized_owner = normalized_owner or None
+    normalized_name = normalized_name or None
+    if (normalized_owner is None) != (normalized_name is None):
+        raise HTTPException(
+            status_code=400,
+            detail="repo_owner and repo_name must be provided together",
+        )
+    return normalized_owner, normalized_name
+
+
+def _session_config_from_create_request(
+    request: dict, *, repo_owner: str | None, repo_name: str | None
+):
+    """Build the create-path SessionConfig from the flat wire request.
+
+    Create is a lossy reconstruction — the manager re-serializes this typed
+    model into SESSION_CONFIG — while restore forwards its session_config
+    dict verbatim. Wire fields share their names with SessionConfig fields,
+    so the model's own field list drives the pickup: a new field only needs
+    the SessionConfig change, not another line here. repo_owner/repo_name
+    are set from the normalized pair, never the raw request.
+    """
+    from .sandbox import SessionConfig
+
+    fields = {
+        name: request[name]
+        for name in SessionConfig.model_fields
+        if name in request and request[name] is not None
+    }
+    fields["repo_owner"] = repo_owner
+    fields["repo_name"] = repo_name
+    return SessionConfig(**fields)
 
 
 @app.function(
@@ -148,36 +152,33 @@ async def api_create_sandbox(
     require_valid_control_plane_url(control_plane_url)
 
     try:
-        # Import types and manager directly
-        from .sandbox import SessionConfig
         from .sandbox.manager import SandboxConfig, SandboxManager
 
         manager = SandboxManager()
 
         snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
-        clone_token = _resolve_clone_token() if snapshot_id or repo_image_id else None
+        repo_owner, repo_name = _normalize_optional_repository_context(
+            request.get("repo_owner"),
+            request.get("repo_name"),
+        )
+        fallback_clone_token = (
+            resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
+        )
 
-        session_config = SessionConfig(
-            session_id=request.get("session_id"),
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
-            branch=request.get("branch"),
-            opencode_session_id=request.get("opencode_session_id"),
-            provider=request.get("provider", "anthropic"),
-            model=request.get("model", "claude-sonnet-4-6"),
-            mcp_servers=request.get("mcp_servers"),
+        session_config = _session_config_from_create_request(
+            request, repo_owner=repo_owner, repo_name=repo_name
         )
 
         config = SandboxConfig(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
             snapshot_id=snapshot_id,
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
-            clone_token=clone_token,
+            fallback_clone_token=fallback_clone_token,
             user_env_vars=request.get("user_env_vars") or None,
             repo_image_id=repo_image_id,
             repo_image_sha=request.get("repo_image_sha") or None,
@@ -201,6 +202,10 @@ async def api_create_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        raise
     except Exception as e:
         outcome = "error"
         http_status = 500
@@ -216,79 +221,6 @@ async def api_create_sandbox(
             duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_create_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            session_id=x_session_id,
-            sandbox_id=x_sandbox_id,
-        )
-
-
-@app.function(
-    image=function_image,
-    secrets=[internal_api_secret],
-)
-@fastapi_endpoint(method="POST")
-async def api_warm_sandbox(
-    request: dict,
-    authorization: str | None = Header(None),
-    x_trace_id: str | None = Header(None),
-    x_request_id: str | None = Header(None),
-    x_session_id: str | None = Header(None),
-    x_sandbox_id: str | None = Header(None),
-) -> dict:
-    """
-    HTTP endpoint to warm a sandbox.
-
-    Requires authentication via Authorization header.
-
-    POST body:
-    {
-        "repo_owner": "...",
-        "repo_name": "...",
-        "control_plane_url": "..."
-    }
-    """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
-
-    try:
-        from .sandbox.manager import SandboxManager
-
-        manager = SandboxManager()
-        handle = await manager.warm_sandbox(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
-            control_plane_url=control_plane_url,
-        )
-
-        return {
-            "success": True,
-            "data": {
-                "sandbox_id": handle.sandbox_id,
-                "status": handle.status.value,
-            },
-        }
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_warm_sandbox",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_warm_sandbox",
             trace_id=x_trace_id,
             request_id=x_request_id,
             session_id=x_session_id,
@@ -465,9 +397,19 @@ async def api_restore_sandbox(
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
+        repo_owner, repo_name = _normalize_optional_repository_context(
+            session_config.get("repo_owner") if isinstance(session_config, dict) else None,
+            session_config.get("repo_name") if isinstance(session_config, dict) else None,
+        )
+        if isinstance(session_config, dict):
+            session_config = {
+                **session_config,
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
+            }
 
         manager = SandboxManager()
-        clone_token = _resolve_clone_token()
+        clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
         code_server_enabled = bool(request.get("code_server_enabled", False))
         agent_slack_notify_enabled = bool(request.get("agent_slack_notify_enabled", False))
@@ -531,28 +473,29 @@ async def api_restore_sandbox(
     secrets=[internal_api_secret, github_app_secrets],
 )
 @fastapi_endpoint(method="POST")
-async def api_build_repo_image(
+async def api_build_image(
     request: dict,
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
 ) -> dict:
     """
-    Kick off an async image build. Returns immediately.
+    Kick off an async scope image build (design §4). Returns immediately.
 
-    Spawns a build_repo_image async worker that will:
-    1. Create a build sandbox
-    2. Wait for it to finish (git clone + setup)
-    3. Snapshot the filesystem
-    4. POST the result to callback_url
+    Spawns a build_image worker that clones every repository in the set, runs
+    their setup hooks sequentially, snapshots the filesystem, and POSTs the
+    result (repository_shas + runtime_version) to callback_url.
 
     POST body:
     {
-        "repo_owner": "...",
-        "repo_name": "...",
-        "default_branch": "main",
+        "scope_kind": "repo" | "environment",  // logging only
+        "scope_id": "...",                      // logging only
         "build_id": "...",
-        "callback_url": "..."
+        "callback_url": "...",
+        "failure_callback_url": "...",
+        "repositories": [{"repo_owner": "...", "repo_name": "...", "branch": "..."}],
+        "user_env_vars": {...},          // optional
+        "build_timeout_seconds": 1800    // optional
     }
     """
     start_time = time.time()
@@ -562,29 +505,59 @@ async def api_build_repo_image(
     require_auth(authorization)
 
     try:
-        from .scheduler.image_builder import build_repo_image
+        from .sandbox.manager import (
+            DEFAULT_BUILD_TIMEOUT_SECONDS,
+            build_function_timeout_seconds,
+        )
+        from .scheduler.image_builder import build_image
 
-        repo_owner = request.get("repo_owner")
-        repo_name = request.get("repo_name")
-        default_branch = request.get("default_branch", "main")
+        scope_kind = request.get("scope_kind", "")
+        scope_id = request.get("scope_id", "")
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
+        failure_callback_url = request.get("failure_callback_url", "")
+        repositories = request.get("repositories")
         user_env_vars = request.get("user_env_vars") or None
-
-        if not repo_owner or not repo_name:
-            raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
+        # Already capped by the control plane; default when absent/null.
+        build_timeout_seconds = int(
+            request.get("build_timeout_seconds") or DEFAULT_BUILD_TIMEOUT_SECONDS
+        )
 
         if not build_id:
             raise HTTPException(status_code=400, detail="build_id is required")
 
+        if not callback_url:
+            raise HTTPException(status_code=400, detail="callback_url is required")
+
+        if not failure_callback_url:
+            raise HTTPException(status_code=400, detail="failure_callback_url is required")
+
+        if not isinstance(repositories, list) or not repositories:
+            raise HTTPException(status_code=400, detail="repositories must be a non-empty list")
+        for entry in repositories:
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("repo_owner")
+                or not entry.get("repo_name")
+                or not entry.get("branch")
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="repositories entries require repo_owner, repo_name, and branch",
+                )
+
+        function_timeout = build_function_timeout_seconds(build_timeout_seconds)
+
         # Spawn the async builder — returns immediately
-        await build_repo_image.spawn.aio(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            default_branch=default_branch,
+        await build_image.with_options(timeout=function_timeout).spawn.aio(
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            repositories=repositories,
             callback_url=callback_url,
+            failure_callback_url=failure_callback_url,
             build_id=build_id,
             user_env_vars=user_env_vars,
+            build_timeout_seconds=build_timeout_seconds,
         )
 
         return {
@@ -601,18 +574,18 @@ async def api_build_repo_image(
     except Exception as e:
         outcome = "error"
         http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_build_repo_image")
+        log.error("api.error", exc=e, endpoint_name="api_build_image")
         return {"success": False, "error": str(e)}
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
             "modal.http_request",
             http_method="POST",
-            http_path="/api_build_repo_image",
+            http_path="/api_build_image",
             http_status=http_status,
             duration_ms=duration_ms,
             outcome=outcome,
-            endpoint_name="api_build_repo_image",
+            endpoint_name="api_build_image",
             trace_id=x_trace_id,
             request_id=x_request_id,
         )

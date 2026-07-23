@@ -84,17 +84,23 @@ NEXTAUTH_SECRET=your_random_secret  # Generate: openssl rand -base64 32
 # Access Control
 ALLOWED_USERS=username1,username2          # Comma-separated GitHub usernames
 ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
-UNSAFE_ALLOW_ALL_USERS=false               # Set true to explicitly allow all users when both lists are empty
+ALLOWED_GITHUB_ORGS=acme,umbrella          # Comma-separated GitHub orgs with active members allowed
+UNSAFE_ALLOW_ALL_USERS=false               # Set true to explicitly allow all users when all lists are empty
 
 # Control Plane
 CONTROL_PLANE_URL=http://localhost:8787
 NEXT_PUBLIC_WS_URL=ws://localhost:8787
 ```
 
-> **Access Control**: If both `ALLOWED_USERS` and `ALLOWED_EMAIL_DOMAINS` are empty, sign-in is
-> denied unless `UNSAFE_ALLOW_ALL_USERS=true`. For Terraform-managed production deploys, Terraform
-> also fails validation unless you set at least one allowlist or explicitly opt in with
-> `unsafe_allow_all_users = true`.
+> **Access Control**: If `ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, and `ALLOWED_GITHUB_ORGS` are all
+> empty, sign-in is denied unless `UNSAFE_ALLOW_ALL_USERS=true`. For Terraform-managed production
+> deploys, Terraform also fails validation unless you set at least one allowlist or explicitly opt
+> in with `unsafe_allow_all_users = true`. **Allowlists use OR semantics**: matching any configured
+> username, email domain, or active GitHub org membership grants access. `ALLOWED_GITHUB_ORGS` is
+> checked at sign-in with the signing-in user's OAuth token; existing sessions last until session
+> expiry. The `read:org` OAuth scope is requested only when `ALLOWED_GITHUB_ORGS` is configured.
+> GitHub Apps using org access need Organization permissions: Members read-only; existing GitHub
+> Apps must republish/request approval after that permission changes.
 
 ### Development
 

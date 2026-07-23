@@ -71,6 +71,7 @@ export const ToolCallGroup = memo(
     return (
       <div className="py-1">
         <button
+          type="button"
           onClick={() => setIsExpanded(!isExpanded)}
           className="w-full flex items-center gap-2 text-sm text-left hover:bg-muted px-2 py-1 -mx-2 transition-colors"
         >
