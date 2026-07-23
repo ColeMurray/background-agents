@@ -36,7 +36,7 @@ resource "null_resource" "web_app_cloudflare_secrets" {
       var.github_client_secret,
       var.google_client_secret,
       var.nextauth_secret,
-      var.internal_callback_secret,
+      random_password.service_auth_secret_web.result,
     ]))
   }
 
@@ -45,13 +45,13 @@ resource "null_resource" "web_app_cloudflare_secrets" {
     working_dir = var.project_root
 
     environment = {
-      CLOUDFLARE_API_TOKEN     = var.cloudflare_api_token
-      CLOUDFLARE_ACCOUNT_ID    = var.cloudflare_account_id
-      WORKER_NAME              = local.web_worker_name
-      GITHUB_CLIENT_SECRET     = var.github_client_secret
-      GOOGLE_CLIENT_SECRET     = var.google_client_secret
-      NEXTAUTH_SECRET          = var.nextauth_secret
-      INTERNAL_CALLBACK_SECRET = var.internal_callback_secret
+      CLOUDFLARE_API_TOKEN  = var.cloudflare_api_token
+      CLOUDFLARE_ACCOUNT_ID = var.cloudflare_account_id
+      WORKER_NAME           = local.web_worker_name
+      GITHUB_CLIENT_SECRET  = var.github_client_secret
+      GOOGLE_CLIENT_SECRET  = var.google_client_secret
+      NEXTAUTH_SECRET       = var.nextauth_secret
+      SERVICE_AUTH_SECRET   = random_password.service_auth_secret_web.result
     }
   }
 

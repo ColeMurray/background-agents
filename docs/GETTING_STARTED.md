@@ -429,9 +429,6 @@ echo "token_encryption_key: $(openssl rand -base64 32)"
 # Repo secrets encryption key
 echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
 
-# Internal callback secret
-echo "internal_callback_secret: $(openssl rand -base64 32)"
-
 # Modal API secret (use hex for this one)
 echo "modal_api_secret: $(openssl rand -hex 32)"
 
@@ -556,7 +553,6 @@ anthropic_api_key = "sk-ant-..."
 # Security Secrets (from Step 5)
 token_encryption_key          = "your-generated-value"
 repo_secrets_encryption_key   = "your-generated-value"
-internal_callback_secret      = "your-generated-value"
 modal_api_secret         = "your-generated-value"
 nextauth_secret          = "your-generated-value"
 
@@ -950,7 +946,6 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `DEEPSEEK_API_KEY`               | DeepSeek API key (optional, required only for DeepSeek models)                              |
 | `TOKEN_ENCRYPTION_KEY`           | Generated encryption key (OAuth tokens)                                                     |
 | `REPO_SECRETS_ENCRYPTION_KEY`    | Generated encryption key (repo secrets)                                                     |
-| `INTERNAL_CALLBACK_SECRET`       | Generated callback secret                                                                   |
 | `MODAL_API_SECRET`               | Generated Modal API secret                                                                  |
 | `NEXTAUTH_SECRET`                | Generated NextAuth secret                                                                   |
 | `ALLOWED_USERS`                  | Comma-separated GitHub usernames (or empty for all users)                                   |

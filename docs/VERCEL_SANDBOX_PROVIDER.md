@@ -91,7 +91,7 @@ both the base runtime and repository-specific setup work.
 ## Image Build Callbacks
 
 Vercel image builds run inside a Vercel sandbox rather than a trusted Modal shim. The control plane
-therefore does not pass `INTERNAL_CALLBACK_SECRET` into the build sandbox.
+therefore passes no service credential into the build sandbox.
 
 When a Vercel image build is triggered, the control plane:
 

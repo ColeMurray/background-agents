@@ -484,7 +484,7 @@ service="modal-infra" msg="opencode.crash"
 The following must **never** appear in logs:
 
 - Authorization headers
-- HMAC tokens (`INTERNAL_CALLBACK_SECRET` derivatives)
+- HMAC tokens and sig1 service signatures (`MODAL_API_SECRET` / `SERVICE_AUTH_SECRET` derivatives)
 - GitHub App private keys or installation tokens
 - GitHub OAuth access/refresh tokens
 - Sandbox auth tokens

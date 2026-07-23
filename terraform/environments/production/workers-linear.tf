@@ -54,7 +54,7 @@ module "linear_bot_worker" {
   secrets = [
     { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
     { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
-    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_linear_bot.result },
     { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     { name = "LINEAR_API_KEY", value = var.linear_api_key },
   ]

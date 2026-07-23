@@ -122,7 +122,14 @@ module "control_plane_worker" {
       { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
-      { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+      # Pepper for image-build callback token hashes (see service-auth.tf)
+      { name = "IMAGE_CALLBACK_TOKEN_PEPPER", value = random_password.image_callback_token_pepper.result },
+      # Per-service sig1 verification keys
+      { name = "SERVICE_AUTH_SECRET_WEB", value = random_password.service_auth_secret_web.result },
+      { name = "SERVICE_AUTH_SECRET_SLACK_BOT", value = random_password.service_auth_secret_slack_bot.result },
+      { name = "SERVICE_AUTH_SECRET_GITHUB_BOT", value = random_password.service_auth_secret_github_bot.result },
+      { name = "SERVICE_AUTH_SECRET_LINEAR_BOT", value = random_password.service_auth_secret_linear_bot.result },
+      { name = "SERVICE_AUTH_SECRET_MODAL", value = random_password.service_auth_secret_modal.result },
       # GitHub App credentials for /repos endpoint (listInstallationRepositories)
       { name = "GITHUB_APP_ID", value = var.github_app_id },
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
