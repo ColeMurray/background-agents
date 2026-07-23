@@ -502,6 +502,65 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(body.callbackContext).not.toHaveProperty("transitionIssueOnStart");
   });
 
+  it("stops an existing session when Linear sends a stop signal", async () => {
+    const { kv, store } = createFakeKV({
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-xyz",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    controlPlaneFetch.mockResolvedValue(Response.json({ status: "stopping" }));
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+    webhook.agentActivity = {
+      userId: "follow-up-human-user",
+      signal: "stop",
+      content: { type: "prompt", body: "stop" },
+    };
+
+    await handleAgentSessionEvent(webhook, env, "trace-stop");
+
+    expect(controlPlaneFetch).toHaveBeenCalledOnce();
+    expect(controlPlaneFetch).toHaveBeenCalledWith(
+      "https://internal/sessions/session-xyz/stop",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(store.has("issue:issue-1")).toBe(false);
+  });
+
+  it("retains the session mapping when stopping the session fails", async () => {
+    const { kv, store } = createFakeKV({
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-xyz",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    controlPlaneFetch.mockResolvedValue(new Response(null, { status: 500 }));
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+    webhook.agentActivity = {
+      signal: "stop",
+      content: { type: "prompt", body: "stop" },
+    };
+
+    await handleAgentSessionEvent(webhook, env, "trace-stop-failed");
+
+    expect(controlPlaneFetch).toHaveBeenCalledOnce();
+    expect(store.has("issue:issue-1")).toBe(true);
+  });
+
   it("resolves current callback settings for an environment follow-up", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),

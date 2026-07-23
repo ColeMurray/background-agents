@@ -213,6 +213,7 @@ export interface AgentSessionWebhook {
   };
   agentActivity?: {
     userId?: string;
+    signal?: string;
     content?: {
       type?: string;
       body?: string;
