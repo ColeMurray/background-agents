@@ -2,6 +2,13 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## July 23, 2026
+
+**Slack image attachments.** Attach PNG, JPEG, WebP, and GIF images to Slack direct messages, app
+mentions, and thread follow-ups, and Open-Inspect forwards them to the agent with the prompt. Images
+also survive repository-selection clarification, and image-only requests are supported. Requires
+adding the Slack bot `files:read` scope and reinstalling the app.
+
 ## July 20, 2026
 
 **Delegated commit signing.** Agent commits are now SSH-signed by a single deployment-wide
