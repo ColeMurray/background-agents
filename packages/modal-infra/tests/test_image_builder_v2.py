@@ -9,12 +9,14 @@ import httpx
 import pytest
 
 from sandbox_runtime.auth.internal import generate_internal_token, verify_internal_token
+from sandbox_runtime.auth.service_auth import verify_service_signature
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from src.scheduler.image_builder import (
     CALLBACK_BACKOFF_BASE,
     CALLBACK_MAX_RETRIES,
     BuildError,
     _callback_with_retry,
+    _outbound_auth_headers,
     _stream_build_logs,
     build_image,
 )
@@ -57,6 +59,35 @@ class TestGenerateInternalToken:
         assert abs(now_ms - timestamp_ms) < 1000
 
 
+class TestOutboundAuthHeaders:
+    """Test the _outbound_auth_headers function."""
+
+    def test_signs_sig1_as_the_modal_service(self, monkeypatch):
+        from sandbox_runtime.auth.service_auth import sha256_hex
+
+        monkeypatch.setenv("SERVICE_AUTH_SECRET", "modal-sig1-secret")
+        url = "https://cp.test/image-builds/img-1/status"
+        headers = _outbound_auth_headers("GET", url)
+
+        assert "Authorization" not in headers
+        assert headers["X-OpenInspect-Service"] == "modal"
+        result = verify_service_signature(
+            signature_header=headers["X-OpenInspect-Service-Signature"],
+            service="modal",
+            secret="modal-sig1-secret",
+            method="GET",
+            url=url,
+            body_sha256_hex=sha256_hex(""),
+            actor="",
+        )
+        assert result.ok is True
+
+    def test_raises_without_service_auth_secret(self, monkeypatch):
+        monkeypatch.delenv("SERVICE_AUTH_SECRET", raising=False)
+        with pytest.raises(RuntimeError, match="SERVICE_AUTH_SECRET"):
+            _outbound_auth_headers("GET", "https://cp.test/image-builds/img-1/status")
+
+
 class TestCallbackWithRetry:
     """Test the _callback_with_retry function."""
 
@@ -76,7 +107,7 @@ class TestCallbackWithRetry:
             result = await _callback_with_retry(
                 "https://example.com/callback",
                 {"build_id": "test-123"},
-                secret="test-secret",
+                "cb-token-1",
             )
 
         assert result is True
@@ -113,7 +144,7 @@ class TestCallbackWithRetry:
             result = await _callback_with_retry(
                 "https://example.com/callback",
                 {"build_id": "test-123"},
-                secret="test-secret",
+                "cb-token-1",
             )
 
         assert result is True
@@ -136,15 +167,15 @@ class TestCallbackWithRetry:
             result = await _callback_with_retry(
                 "https://example.com/callback",
                 {"build_id": "test-123"},
-                secret="test-secret",
+                "cb-token-1",
             )
 
         assert result is False
         assert mock_client.post.call_count == CALLBACK_MAX_RETRIES
 
     @pytest.mark.asyncio
-    async def test_includes_auth_header(self):
-        """Should include Bearer token in auth header."""
+    async def test_presents_the_callback_token_as_bearer(self):
+        """Callbacks authenticate with the minted token, not a service credential."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
@@ -158,18 +189,13 @@ class TestCallbackWithRetry:
             await _callback_with_retry(
                 "https://example.com/callback",
                 {"build_id": "test-123"},
-                secret="test-secret",
+                "cb-token-1",
             )
 
-        # Verify the auth header was included
-        call_kwargs = mock_client.post.call_args
-        headers = call_kwargs.kwargs.get("headers", {})
-        assert "Authorization" in headers
-        assert headers["Authorization"].startswith("Bearer ")
-
-        # Verify the token is valid
-        token = headers["Authorization"]
-        assert verify_internal_token(token, "test-secret") is True
+        call_kwargs = mock_client.post.call_args.kwargs
+        headers = call_kwargs.get("headers", {})
+        assert headers["Authorization"] == "Bearer cb-token-1"
+        assert "X-OpenInspect-Service" not in headers
 
 
 class TestStreamBuildLogs:
@@ -530,7 +556,7 @@ class TestBuildImage:
         snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
         terminate_aio.assert_awaited_once()
         callback.assert_awaited_once()
-        failure_url, failure_payload = callback.await_args.args
+        failure_url, failure_payload, _failure_token = callback.await_args.args
         assert failure_url == "https://cp.test/image-builds/build-failed"
         assert failure_payload == {
             "build_id": "img-1",
@@ -594,7 +620,7 @@ class TestBuildImage:
         snapshot_aio.assert_not_awaited()
         terminate_aio.assert_awaited_once()
         callback.assert_awaited_once()
-        failure_url, failure_payload = callback.await_args.args
+        failure_url, failure_payload, _failure_token = callback.await_args.args
         assert failure_url == "https://cp.test/image-builds/build-failed"
         assert failure_payload == {
             "build_id": "img-1",
