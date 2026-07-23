@@ -65,11 +65,11 @@ export default function Home() {
     reasoningEffort?: string;
     branch: string;
   } | null>(null);
-  const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
+  const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
 
   useEffect(() => {
-    if (hasHydratedModelPreferences) return;
+    if (hasHydratedModelPreferencesRef.current) return;
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
@@ -77,8 +77,8 @@ export default function Home() {
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
-    setHasHydratedModelPreferences(true);
-  }, [hasHydratedModelPreferences]);
+    hasHydratedModelPreferencesRef.current = true;
+  }, []);
 
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? storedPreference,

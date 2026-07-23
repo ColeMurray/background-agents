@@ -6,14 +6,12 @@ import { z } from "zod";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
-const promptRequestSchema = z
-  .object({
-    content: z.string().min(1),
-    model: z.string().optional(),
-    reasoningEffort: z.string().optional(),
-    attachments: sessionAttachmentReferencesSchema.optional(),
-  })
-  .strict();
+const promptRequestSchema = z.strictObject({
+  content: z.string().min(1),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  attachments: sessionAttachmentReferencesSchema.optional(),
+});
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
