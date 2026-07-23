@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { linearStartCallbackSchema } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { verifyCallbackSignature } from "../utils/crypto";
+import { rejectInvalidCallback } from "./reject-invalid-callback";
 import { getLinearClient } from "../utils/linear-client";
 import { transitionIssueToStarted } from "../utils/issue-start-transition";
 
@@ -47,17 +47,11 @@ export function createStartCallbackRouter(
       issue_id: payload.context.issueId,
     };
 
-    if (!c.env.INTERNAL_CALLBACK_SECRET) {
-      return c.json({ error: "not configured" }, 500);
-    }
-    if (
-      !(await verifyCallbackSignature(
-        rawPayload as Record<string, unknown> & { signature: string },
-        c.env.INTERNAL_CALLBACK_SECRET
-      ))
-    ) {
-      return c.json({ error: "unauthorized" }, 401);
-    }
+    const rejection = await rejectInvalidCallback(
+      c,
+      rawPayload as Record<string, unknown> & { signature: string }
+    );
+    if (rejection) return rejection;
 
     const ageMs = requestStartedAt - payload.timestamp;
     if (ageMs > START_CALLBACK_MAX_AGE_MS || ageMs < -START_CALLBACK_MAX_FUTURE_SKEW_MS) {

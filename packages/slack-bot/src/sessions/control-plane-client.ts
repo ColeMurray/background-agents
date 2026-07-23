@@ -5,7 +5,7 @@ import {
   type SendPromptResponse,
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
-import { getAuthHeaders } from "../internal-auth";
+import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext, Env } from "../types";
@@ -52,21 +52,25 @@ export async function createSession(
     slack_user_id: slackUserId,
   };
   try {
-    const headers = await getAuthHeaders(env, traceId);
-    const response = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        ...buildSessionTargetRequestFields(target, branch),
-        model,
-        reasoningEffort,
-        spawnSource: "slack-bot",
-        actorUserId: slackUserId,
-        actorDisplayName,
-        actorEmail,
-      }),
-      signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
+    const url = "https://internal/sessions";
+    const body = JSON.stringify({
+      ...buildSessionTargetRequestFields(target, branch),
+      model,
+      reasoningEffort,
+      actorDisplayName,
+      actorEmail,
     });
+    const response = await signedControlPlaneFetch(
+      env,
+      {
+        method: "POST",
+        url,
+        body,
+        actor: slackUserId ? `slack:${slackUserId}` : undefined,
+        traceId,
+      },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
     if (!response.ok) {
       log.error("control_plane.create_session", {
         ...base,
@@ -119,21 +123,23 @@ export async function sendPrompt(env: Env, options: SendPromptOptions): Promise<
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
-    const headers = await getAuthHeaders(env, traceId);
-    const response = await env.CONTROL_PLANE.fetch(
-      `https://internal/sessions/${sessionId}/prompt`,
+    const url = `https://internal/sessions/${sessionId}/prompt`;
+    const body = JSON.stringify({
+      content,
+      source: "slack",
+      callbackContext,
+      ...(attachments?.length ? { attachments } : {}),
+    });
+    const response = await signedControlPlaneFetch(
+      env,
       {
         method: "POST",
-        headers,
-        body: JSON.stringify({
-          content,
-          authorId,
-          source: "slack",
-          callbackContext,
-          ...(attachments?.length ? { attachments } : {}),
-        }),
-        signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
-      }
+        url,
+        body,
+        actor: authorId.startsWith("slack:") ? authorId : undefined,
+        traceId,
+      },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
     );
     if (!response.ok) {
       log.error("control_plane.send_prompt", {

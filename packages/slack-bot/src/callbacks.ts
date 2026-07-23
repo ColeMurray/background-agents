@@ -2,7 +2,7 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { computeHmacHex, postEphemeral, timingSafeEqual } from "@open-inspect/shared";
+import { postEphemeral, verifyCallbackFromControlPlane } from "@open-inspect/shared";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "./types";
@@ -11,19 +11,6 @@ import { createLogger } from "./logger";
 import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity-status";
 
 const log = createLogger("callback");
-
-/**
- * Verify internal callback signature using shared secret.
- * Prevents external callers from forging completion callbacks.
- */
-async function verifyCallbackSignature<T extends { signature: string }>(
-  payload: T,
-  secret: string
-): Promise<boolean> {
-  const { signature, ...data } = payload;
-  const expectedHex = await computeHmacHex(JSON.stringify(data), secret);
-  return timingSafeEqual(signature, expectedHex);
-}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -117,7 +104,7 @@ async function rejectInvalidCallback(
 ): Promise<Response | null> {
   const { path, traceId, startTime } = opts;
 
-  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+  if (!c.env.SERVICE_AUTH_SECRET) {
     log.error("http.request", {
       trace_id: traceId,
       http_method: "POST",
@@ -130,7 +117,7 @@ async function rejectInvalidCallback(
     return c.json({ error: "not configured" }, 500);
   }
 
-  const authentic = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
+  const authentic = await verifyCallbackFromControlPlane(payload, c.env);
   if (!authentic) {
     log.warn("http.request", {
       trace_id: traceId,

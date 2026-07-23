@@ -26,7 +26,7 @@ function makeEnv(fetchMedia: () => Promise<Response> = async () => mediaResponse
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
-    INTERNAL_CALLBACK_SECRET: "internal-secret",
+    SERVICE_AUTH_SECRET: "internal-secret",
   };
 }
 

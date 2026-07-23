@@ -100,6 +100,7 @@ function makeEnv(): Env {
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
+    SERVICE_AUTH_SECRET: "test-secret",
     LOG_LEVEL: "error",
   };
 }
@@ -1886,7 +1887,7 @@ describe("POST /interactions", () => {
     slackFetch.mockRestore();
   });
 
-  it("forwards identity fields from getUserInfo to session creation", async () => {
+  it("forwards display identity fields from getUserInfo to session creation", async () => {
     const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(JSON.stringify({ ok: true, ts: "123.456" }), {
         status: 200,
@@ -1993,10 +1994,11 @@ describe("POST /interactions", () => {
     expect(sessionCall).toBeTruthy();
     const init = sessionCall?.[1] as RequestInit;
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    expect(body.actorUserId).toBe("U123");
     expect(body.actorDisplayName).toBe("Jane");
     expect(body.actorEmail).toBe("jane@example.com");
-    expect(body.spawnSource).toBe("slack-bot");
+    // Identity travels via the signed actor assertion, never the body.
+    expect(body.actorUserId).toBeUndefined();
+    expect(body.spawnSource).toBeUndefined();
 
     slackFetch.mockRestore();
   });
@@ -2097,10 +2099,11 @@ describe("POST /interactions", () => {
     expect(sessionCall).toBeTruthy();
     const init = sessionCall?.[1] as RequestInit;
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    expect(body.actorUserId).toBe("U123");
     expect(body.actorDisplayName).toBeUndefined();
     expect(body.actorEmail).toBeUndefined();
-    expect(body.spawnSource).toBe("slack-bot");
+    // Identity travels via the signed actor assertion, never the body.
+    expect(body.actorUserId).toBeUndefined();
+    expect(body.spawnSource).toBeUndefined();
 
     slackFetch.mockRestore();
   });

@@ -25,6 +25,7 @@ function makeEnv(fetchResult: Response | Error): Env {
       put: vi.fn().mockResolvedValue(undefined),
     },
     CONTROL_PLANE: { fetch },
+    SERVICE_AUTH_SECRET: "test-secret",
   } as unknown as Env;
 }
 
@@ -75,6 +76,7 @@ describe("getAvailableEnvironments", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);

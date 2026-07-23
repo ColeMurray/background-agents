@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { callbacksRouter } from "./callbacks";
 import { createStartCallbackRouter } from "./callbacks/start-callback";
-import { computeHmacHex } from "./utils/crypto";
+import { computeHmacHex } from "@open-inspect/shared";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
 import type { LinearApiClient } from "./utils/linear-client";
 
@@ -45,7 +45,7 @@ async function postStart(
       headers: { "content-type": "application/json" },
       body: JSON.stringify(await payload),
     }),
-    makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: SECRET }),
+    makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: SECRET }),
     makeExecutionContext()
   );
 }
@@ -77,7 +77,7 @@ describe("POST /start", () => {
 
     const response = await callbacksRouter.fetch(
       new Request("http://localhost/start", { method: "POST", body: "{not-json" }),
-      makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: SECRET }),
+      makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: SECRET }),
       makeExecutionContext()
     );
 

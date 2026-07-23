@@ -1,5 +1,5 @@
 /**
- * The slack-bot's outbound control-plane fetch: sig1-signed as "slack-bot"
+ * The linear-bot's outbound control-plane fetch: sig1-signed as "linear-bot"
  * with this worker's own SERVICE_AUTH_SECRET and sent through the
  * `CONTROL_PLANE` service binding. All signing mechanics live in
  * `@open-inspect/shared`; this module only binds the service name.
@@ -17,5 +17,5 @@ export function signedControlPlaneFetch(
   request: OutboundRequestToSign,
   init?: SignedFetchInit
 ): Promise<Response> {
-  return sharedSignedControlPlaneFetch("slack-bot", env, request, init);
+  return sharedSignedControlPlaneFetch("linear-bot", env, request, init);
 }

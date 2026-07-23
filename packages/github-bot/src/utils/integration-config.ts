@@ -1,6 +1,6 @@
 import type { Env } from "../types";
+import { signedControlPlaneFetch } from "../internal-auth";
 import type { Logger } from "../logger";
-import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import { z } from "zod";
 
 export interface ResolvedGitHubConfig {
@@ -42,14 +42,11 @@ export async function getGitHubConfig(
   log?: Logger
 ): Promise<ResolvedGitHubConfig> {
   const [owner, name] = repo.split("/");
-  const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET);
+  const url = `https://internal/integration-settings/github/resolved/${owner}/${name}`;
 
   let response: Response;
   try {
-    response = await env.CONTROL_PLANE.fetch(
-      `https://internal/integration-settings/github/resolved/${owner}/${name}`,
-      { headers }
-    );
+    response = await signedControlPlaneFetch(env, { method: "GET", url });
   } catch (err) {
     log?.warn("config.fetch_error", {
       repo,

@@ -17,7 +17,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
-    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    SERVICE_AUTH_SECRET: "callback-secret",
     LOG_LEVEL: "error",
     ...overrides,
   };
@@ -149,10 +149,7 @@ describe("POST /callbacks/tool_call", () => {
 
   it("returns 500 when callback signing is not configured", async () => {
     const payload = await makeToolCallPayload();
-    const { response, ctx } = await postToolCall(
-      payload,
-      makeEnv({ INTERNAL_CALLBACK_SECRET: "" })
-    );
+    const { response, ctx } = await postToolCall(payload, makeEnv({ SERVICE_AUTH_SECRET: "" }));
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "not configured" });
@@ -163,6 +160,26 @@ describe("POST /callbacks/tool_call", () => {
     const payload = await makeToolCallPayload({}, "wrong-secret");
     const { response, ctx } = await postToolCall(payload);
 
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("accepts callbacks signed with the bot's per-service secret", async () => {
+    const payload = await makeToolCallPayload({}, "slack-service-secret");
+    const { response } = await postToolCall(
+      payload,
+      makeEnv({ SERVICE_AUTH_SECRET: "slack-service-secret" })
+    );
+    expect(response.status).not.toBe(401);
+  });
+
+  it("rejects callbacks signed with the retired shared secret", async () => {
+    const payload = await makeToolCallPayload();
+    const { response, ctx } = await postToolCall(
+      payload,
+      makeEnv({ SERVICE_AUTH_SECRET: "slack-service-secret" })
+    );
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "unauthorized" });
     expect(ctx.waitUntil).not.toHaveBeenCalled();

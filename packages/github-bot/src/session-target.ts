@@ -13,6 +13,7 @@
 import { resolveAppName } from "@open-inspect/shared";
 import { z } from "zod";
 import type { Env } from "./types";
+import { signedControlPlaneFetch } from "./internal-auth";
 import type { Logger } from "./logger";
 import { checkSenderPermission } from "./github-auth";
 import type { ResolvedGitHubConfig } from "./utils/integration-config";
@@ -38,7 +39,6 @@ const environmentResponseSchema = z.object({
 
 async function fetchDefaultEnvironmentId(
   env: Env,
-  headers: Record<string, string>,
   owner: string,
   repoName: string,
   log: Logger,
@@ -47,10 +47,8 @@ async function fetchDefaultEnvironmentId(
   const repo = `${owner}/${repoName}`.toLowerCase();
   let response: Response;
   try {
-    response = await env.CONTROL_PLANE.fetch(
-      `https://internal/repos/${owner}/${repoName}/metadata`,
-      { headers }
-    );
+    const url = `https://internal/repos/${owner}/${repoName}/metadata`;
+    response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
   } catch (err) {
     log.warn("target.metadata_fetch_failed", {
       trace_id: traceId,
@@ -73,16 +71,14 @@ async function fetchDefaultEnvironmentId(
 
 async function fetchEnvironment(
   env: Env,
-  headers: Record<string, string>,
   environmentId: string,
   log: Logger,
   traceId: string
 ): Promise<z.infer<typeof environmentResponseSchema>["environment"] | null> {
   let response: Response;
   try {
-    response = await env.CONTROL_PLANE.fetch(`https://internal/environments/${environmentId}`, {
-      headers,
-    });
+    const url = `https://internal/environments/${environmentId}`;
+    response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
   } catch (err) {
     log.warn("target.environment_fetch_failed", {
       trace_id: traceId,
@@ -126,8 +122,6 @@ export interface ResolveSessionTargetParams {
   config: ResolvedGitHubConfig;
   /** GitHub App installation token from caller gating. */
   ghToken: string;
-  /** Control-plane auth headers from caller gating. */
-  headers: Record<string, string>;
   traceId: string;
 }
 
@@ -193,20 +187,13 @@ export async function resolveSessionTarget(
   log: Logger,
   params: ResolveSessionTargetParams
 ): Promise<SessionTargetFields> {
-  const { owner, repoName, headers, traceId } = params;
+  const { owner, repoName, traceId } = params;
   const repoFields = { repoOwner: owner, repoName };
 
-  const environmentId = await fetchDefaultEnvironmentId(
-    env,
-    headers,
-    owner,
-    repoName,
-    log,
-    traceId
-  );
+  const environmentId = await fetchDefaultEnvironmentId(env, owner, repoName, log, traceId);
   if (!environmentId) return repoFields;
 
-  const environment = await fetchEnvironment(env, headers, environmentId, log, traceId);
+  const environment = await fetchEnvironment(env, environmentId, log, traceId);
   if (!environment) return repoFields;
 
   const isMember = environment.repositories.some(

@@ -15,13 +15,6 @@ vi.mock("../src/github-auth", () => ({
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
 }));
 
-vi.mock("../src/utils/internal", () => ({
-  generateInternalToken: vi.fn().mockResolvedValue("test-internal-token"),
-  buildInternalAuthHeaders: vi.fn().mockResolvedValue({
-    Authorization: "Bearer test-internal-token",
-  }),
-}));
-
 vi.mock("../src/utils/integration-config", () => ({
   getGitHubConfig: vi.fn().mockResolvedValue({
     model: "anthropic/claude-haiku-4-5",
@@ -95,7 +88,7 @@ function createMockEnv(): Env {
     GITHUB_APP_PRIVATE_KEY: "test-key",
     GITHUB_APP_INSTALLATION_ID: "67890",
     GITHUB_WEBHOOK_SECRET: "test-secret",
-    INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+    SERVICE_AUTH_SECRET: "test-internal-secret",
     LOG_LEVEL: "error",
   } as unknown as Env;
 }
@@ -225,13 +218,14 @@ describe("handlePullRequestOpened", () => {
     expect(sessionBody.repoName).toBe("widgets");
     expect(sessionBody.title).toContain("Review PR #42");
     expect(sessionBody.scmLogin).toBe("alice");
-    expect(sessionBody.scmUserId).toBe("1001");
     expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1001");
-    expect(sessionBody.spawnSource).toBe("github-bot");
+    // Identity travels via the signed actor assertion, never the body.
+    expect(sessionBody).not.toHaveProperty("scmUserId");
+    expect(sessionBody).not.toHaveProperty("spawnSource");
 
     const promptBody = promptSendBody(cpFetch);
     expect(promptBody.source).toBe("github");
-    expect(promptBody.authorId).toBe("github:1001");
+    expect(promptBody).not.toHaveProperty("authorId");
     expect(promptBody.content).toContain("Pull Request #42");
 
     expect(log.info).toHaveBeenCalledWith(
@@ -418,14 +412,15 @@ describe("handleReviewRequested", () => {
     expect(sessionBody.repoName).toBe("widgets");
     expect(sessionBody.title).toContain("Review PR #42");
     expect(sessionBody.scmLogin).toBe("alice");
-    expect(sessionBody.scmUserId).toBe("1001");
     expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1001");
-    expect(sessionBody.spawnSource).toBe("github-bot");
+    // Identity travels via the signed actor assertion, never the body.
+    expect(sessionBody).not.toHaveProperty("scmUserId");
+    expect(sessionBody).not.toHaveProperty("spawnSource");
 
     // Verify prompt sending
     const promptBody = findCallBody(cpFetch, /^https:\/\/internal\/sessions\/session-123\/prompt$/);
     expect(promptBody.source).toBe("github");
-    expect(promptBody.authorId).toBe("github:1001");
+    expect(promptBody).not.toHaveProperty("authorId");
     expect(promptBody.content).toContain("Pull Request #42");
     expect(promptBody.content).toContain("acme/widgets");
     expect(promptBody.content).toContain("gh pr diff 42");
@@ -513,14 +508,15 @@ describe("handleIssueComment", () => {
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.scmLogin).toBe("bob");
-    expect(sessionBody.scmUserId).toBe("1002");
     expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1002");
-    expect(sessionBody.spawnSource).toBe("github-bot");
+    // Identity travels via the signed actor assertion, never the body.
+    expect(sessionBody).not.toHaveProperty("scmUserId");
+    expect(sessionBody).not.toHaveProperty("spawnSource");
 
     const promptBody = promptSendBody(cpFetch);
     expect(promptBody.content).toContain("please fix the error handling");
     expect(promptBody.content).not.toContain("@test-bot[bot]");
-    expect(promptBody.authorId).toBe("github:1002");
+    expect(promptBody).not.toHaveProperty("authorId");
   });
 
   it("returns early if not a PR", async () => {
@@ -611,15 +607,16 @@ describe("handleReviewComment", () => {
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.scmLogin).toBe("carol");
-    expect(sessionBody.scmUserId).toBe("1003");
     expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1003");
-    expect(sessionBody.spawnSource).toBe("github-bot");
+    // Identity travels via the signed actor assertion, never the body.
+    expect(sessionBody).not.toHaveProperty("scmUserId");
+    expect(sessionBody).not.toHaveProperty("spawnSource");
 
     const promptBody = promptSendBody(cpFetch);
     expect(promptBody.content).toContain("src/cache.ts");
     expect(promptBody.content).toContain("const cache = new Map()");
     expect(promptBody.content).toContain("comments/200/replies");
-    expect(promptBody.authorId).toBe("github:1003");
+    expect(promptBody).not.toHaveProperty("authorId");
   });
 
   it("returns early if no @mention", async () => {

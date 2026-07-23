@@ -11,7 +11,7 @@ describe("getLinearConfig", () => {
       })
     );
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
+      SERVICE_AUTH_SECRET: "test-secret",
       CONTROL_PLANE: { fetch },
     } as unknown as Env;
 
