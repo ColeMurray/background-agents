@@ -535,10 +535,10 @@ async def api_build_image(
             raise HTTPException(status_code=400, detail="failure_callback_url is required")
 
         if not callback_token:
-            # Tolerated for one deploy skew window: the build still runs, but
-            # its callbacks will be rejected by a control plane that requires
-            # the token.
-            log.warn("api.build_image_missing_callback_token", build_id=build_id)
+            # A tokenless build could never report success or failure — the
+            # control plane requires the callback bearer — so it would wedge
+            # as 'building' until the stale sweep reaps it. Fail fast instead.
+            raise HTTPException(status_code=400, detail="callback_token is required")
 
         if not isinstance(repositories, list) or not repositories:
             raise HTTPException(status_code=400, detail="repositories must be a non-empty list")
