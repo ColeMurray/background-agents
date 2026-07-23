@@ -201,22 +201,14 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       "sudo chmod 0755 /usr/local/bin/oi-git-credentials",
       "sudo git config --system credential.helper /usr/local/bin/oi-git-credentials",
       "sudo git config --system credential.useHttpPath true",
-      // gh CLI auth wrapper — baked here as root, at build time, rather than
-      // left to the runtime's _install_gh_wrapper(). That runtime install
-      // writes /usr/local/bin/gh as the non-root `sandbox` user, but the dir is
-      // root-owned, so the write fails with a swallowed PermissionError and gh
-      // is left unauthenticated — agents then can't post PR comments. (It works
-      // on Modal only because that runtime is root and can self-install.) Keep
-      // this body byte-identical to GH_WRAPPER_BODY in
-      // sandbox-runtime/src/sandbox_runtime/entrypoint.py so the runtime install
-      // sees a matching file and no-ops instead of failing to overwrite it.
-      "printf '%s\\n' '#!/bin/sh' 'REAL_GH=\"/usr/bin/gh\"' 'token=$(python3 -m sandbox_runtime.credentials.git_credential_helper gh-token || true)' 'if [ -n \"$token\" ]; then' '  export GH_TOKEN=\"$token\"' 'fi' 'exec \"$REAL_GH\" \"$@\"' | sudo tee /usr/local/bin/gh >/dev/null",
-      "sudo chmod 0755 /usr/local/bin/gh",
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates || true`,
       `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo git config --system http.sslCAInfo ${OPENSANDBOX_PROXY_CA} || true`
     );
 
   image = addRuntimeDir(image, runtimeDir);
+  image = image
+    .addLocalFile(join(runtimeDir, "gh-wrapper.sh"), "/usr/local/bin/gh")
+    .runCommands("sudo chmod 0755 /usr/local/bin/gh");
 
   // The npm/bun/agent-browser installs above run as root (sudo) and write under the sandbox
   // user's HOME, and addRuntimeDir copies the runtime in as root too. Re-own HOME last so the

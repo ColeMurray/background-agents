@@ -73,15 +73,6 @@ RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_c
   && git config --system credential.helper /usr/local/bin/oi-git-credentials \
   && git config --system credential.useHttpPath true
 
-# Bake the gh auth wrapper for the same reason as the credential helper above:
-# the non-root runtime cannot create it under /usr/local/bin. Keep this body
-# byte-identical to GH_WRAPPER_BODY in sandbox_runtime/entrypoint.py.
-RUN printf '%s\n' '#!/bin/sh' 'REAL_GH="/usr/bin/gh"' \
-     'token=$(python3 -m sandbox_runtime.credentials.git_credential_helper gh-token || true)' \
-     'if [ -n "$token" ]; then' '  export GH_TOKEN="$token"' 'fi' \
-     'exec "$REAL_GH" "$@"' > /usr/local/bin/gh \
-  && chmod 0755 /usr/local/bin/gh
-
 # Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
 # so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
 # control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.

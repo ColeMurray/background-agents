@@ -85,6 +85,8 @@ template = (
     Template().from_dockerfile(dockerfile)
     # Staged into this dir above; imported via PYTHONPATH=/app as `sandbox_runtime`.
     .copy("sandbox_runtime", "/app/sandbox_runtime")
+    # E2B's non-root runtime cannot install this into /usr/local/bin itself.
+    .copy("sandbox_runtime/gh-wrapper.sh", "/usr/local/bin/gh", mode=0o755)
     # The launcher = the template start command (see oi-launch.py).
     .copy("oi-launch.py", "/usr/local/bin/oi-launch", mode=0o755)
     .set_workdir("/workspace")

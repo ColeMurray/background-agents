@@ -83,18 +83,7 @@ AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 # fresh token is needed (the precedence logic lives there, in Python). If it
 # prints one we export it as GH_TOKEN; otherwise gh runs with its own env.
 GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
-GH_WRAPPER_BODY = (
-    "#!/bin/sh\n"
-    f'REAL_GH="{GH_WRAPPER_REAL_PATH}"\n'
-    # stderr is left attached so the helper's diagnostic surfaces when a
-    # refresh fails — otherwise the user just sees an opaque gh 401.
-    "token=$(python3 -m sandbox_runtime.credentials.git_credential_helper gh-token || true)\n"
-    'if [ -n "$token" ]; then\n'
-    # export (not `env GH_TOKEN=… exec`) so the token never lands in argv.
-    '  export GH_TOKEN="$token"\n'
-    "fi\n"
-    'exec "$REAL_GH" "$@"\n'
-)
+GH_WRAPPER_BODY = Path(__file__).with_name("gh-wrapper.sh").read_text()
 
 
 class SandboxSupervisor:
@@ -336,9 +325,8 @@ class SandboxSupervisor:
     def _install_gh_wrapper(self) -> None:
         """Install the gh CLI wrapper at /usr/local/bin/gh.
 
-        See ``GH_WRAPPER_BODY`` for the wrapper's behaviour. Installed at boot
-        (rather than baked into the image) so it also patches snapshots and
-        repo images built before this migration.
+        The canonical wrapper artifact is also baked into non-root provider
+        images. Installing it at boot patches older snapshots and repo images.
         """
         wrapper_path = Path("/usr/local/bin/gh")
         try:
