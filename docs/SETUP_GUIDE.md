@@ -121,7 +121,8 @@ NEXT_PUBLIC_APP_ICON_URL=
 
 Do not commit `packages/web/.env.local`.
 
-Generate a secret value:
+Generate a secret value for `NEXTAUTH_SECRET` (never for `SERVICE_AUTH_SECRET`, which must be read
+from the deployment as described above):
 
 ```bash
 openssl rand -base64 32
