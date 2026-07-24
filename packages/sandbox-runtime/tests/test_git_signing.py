@@ -366,6 +366,29 @@ async def test_refresh_blocks_on_non_success_or_malformed_broker_results(
 
 
 @pytest.mark.asyncio
+async def test_broker_http_errors_surface_the_status_code(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """The bridge's fatal-error matcher keys on "HTTP 401" etc. — a rejected
+    sandbox must exit instead of reconnect-looping forever."""
+    manifest = create_manifest(tmp_path)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "Unauthorized"})
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "sandbox_runtime.git_signing.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    runtime = create_runtime(tmp_path, manifest)
+
+    with pytest.raises(RuntimeError, match=r"HTTP 401"):
+        await runtime.refresh(None)
+
+
+@pytest.mark.asyncio
 async def test_refresh_blocks_when_the_repository_manifest_is_unavailable(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):

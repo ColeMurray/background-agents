@@ -255,6 +255,12 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     internalPath: SessionInternalPaths.tunnelUrls,
     runtimeMethod: "GET",
   }),
+  simpleProxyRoute({
+    method: "POST",
+    routePath: "/sessions/:id/boot-progress",
+    internalPath: SessionInternalPaths.bootProgress,
+    runtimeMethod: "POST",
+  }),
   sessionRoute({
     method: "PATCH",
     pattern: parsePattern("/sessions/:id/title"),

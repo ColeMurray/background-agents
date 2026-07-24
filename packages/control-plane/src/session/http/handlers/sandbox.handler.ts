@@ -29,7 +29,11 @@ type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 export interface SandboxHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "createParticipant" | "createArtifact" | "createEvent" | "getProcessingMessage"
+    | "createParticipant"
+    | "createArtifact"
+    | "createEvent"
+    | "getProcessingMessage"
+    | "updateSandboxBootProgress"
   >;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
@@ -48,6 +52,8 @@ export interface SandboxHandler {
   createMediaArtifact: (request: Request) => Promise<Response>;
   addParticipant: (request: Request) => Promise<Response>;
   verifySandboxToken: (request: Request, log: Logger) => Promise<Response>;
+  /** Record a boot-progress ping so the connecting watchdog tolerates long boots. */
+  bootProgress: () => Promise<Response>;
   openaiTokenRefresh: (log: Logger) => Promise<Response>;
   scmCredentials: (log: Logger) => Promise<Response>;
   /** Return the sandbox's resolved tunnel URLs as a `{ [port]: url }` map. */
@@ -217,6 +223,16 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
 
       log.info("Sandbox token verified successfully");
       return Response.json({ valid: true }, { status: 200 });
+    },
+
+    async bootProgress(): Promise<Response> {
+      const sandbox = deps.getSandbox();
+      if (!sandbox) {
+        return Response.json({ error: "No sandbox" }, { status: 404 });
+      }
+
+      deps.repository.updateSandboxBootProgress(deps.now());
+      return Response.json({ status: "ok" });
     },
 
     async openaiTokenRefresh(log: Logger): Promise<Response> {

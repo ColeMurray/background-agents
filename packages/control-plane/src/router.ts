@@ -75,6 +75,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
   /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
+  /^\/sessions\/[^/]+\/boot-progress$/, // Boot liveness pings feeding the connecting watchdog
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
   /^\/sessions\/[^/]+\/attachments\/[^/]+$/, // Session attachment download from sandbox bridge
   /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
@@ -161,7 +162,7 @@ function isScmAgnosticRoute(path: string): boolean {
     // Identity upserts are independent of the SCM provider. Only the known auth
     // providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
     /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
-    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path) ||
+    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|boot-progress)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
 }

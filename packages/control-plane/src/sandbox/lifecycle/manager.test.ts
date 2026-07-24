@@ -84,6 +84,7 @@ function createMockSandbox(
     git_sync_status: "completed",
     last_heartbeat: Date.now() - 10000,
     last_activity: Date.now() - 30000,
+    last_boot_progress: null,
     last_spawn_error: null,
     last_spawn_error_at: null,
     code_server_url: null,

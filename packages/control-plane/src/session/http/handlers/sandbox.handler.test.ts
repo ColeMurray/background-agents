@@ -9,6 +9,7 @@ function createHandler() {
     createArtifact: vi.fn(),
     createEvent: vi.fn(),
     getProcessingMessage: vi.fn(),
+    updateSandboxBootProgress: vi.fn(),
   };
   const processSandboxEvent = vi.fn();
   const getSandbox = vi.fn<() => SandboxRow | null>();
@@ -595,6 +596,29 @@ describe("createSandboxHandler", () => {
       password: "ghs_secret",
       expires_at_epoch_ms: expiresAt,
     });
+  });
+
+  it("records a boot-progress timestamp", async () => {
+    const { handler, getSandbox, repository, now } = createHandler();
+    getSandbox.mockReturnValue({ status: "connecting" } as SandboxRow);
+    now.mockReturnValue(56789);
+
+    const response = await handler.bootProgress();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok" });
+    expect(repository.updateSandboxBootProgress).toHaveBeenCalledWith(56789);
+  });
+
+  it("returns 404 for boot progress without a sandbox", async () => {
+    const { handler, getSandbox, repository } = createHandler();
+    getSandbox.mockReturnValue(null);
+
+    const response = await handler.bootProgress();
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "No sandbox" });
+    expect(repository.updateSandboxBootProgress).not.toHaveBeenCalled();
   });
 
   it("returns 404 when tunnel URLs have no sandbox", async () => {
