@@ -11,10 +11,10 @@
  * (the workflow) log and map to the route-facing error taxonomy.
  */
 
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex, type RepositoryShaEntry } from "@open-inspect/shared";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { Env } from "../types";
-import type { ImageBuildProvider } from "./model";
+import type { ImageBuildProvider, MarkImageBuildReadyResult } from "./model";
 
 export const IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 export const IMAGE_BUILD_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
@@ -151,6 +151,46 @@ export async function markImageBuildFailedWithCallbackTokenOrThrow(
     if (updated) return;
   }
   throw new ImageBuildCallbackAuthError("rejected", "Unauthorized");
+}
+
+/**
+ * Token-authenticated ready mark for provider-image builds (Modal): the token
+ * consume and the ready/superseded transition are ONE conditional UPDATE in
+ * the store, so a transient failure can never burn the single-use token while
+ * leaving the build stuck 'building' — the provider's retry stays replayable
+ * until readiness durably commits. Mirrors the failure-path helper above.
+ *
+ * Auth is enforced by the caller's prior verify (require) step; a
+ * non-committing result here is treated as a pepper miss during rotation and
+ * retried against the next candidate hash, falling through to the store's own
+ * `not_accepting_completion` when nothing transitions.
+ */
+export async function markImageBuildReadyWithCallbackTokenOrThrow(
+  store: Pick<ImageBuildStore, "tryMarkImageBuildReady">,
+  env: Env,
+  token: string | null | undefined,
+  params: ImageBuildCallbackTokenParams,
+  ready: {
+    providerImageId: string;
+    repositoryShas: RepositoryShaEntry[];
+    runtimeVersion: string;
+    buildDurationMs: number;
+  }
+): Promise<MarkImageBuildReadyResult> {
+  let result: MarkImageBuildReadyResult = { type: "not_accepting_completion" };
+  for (const tokenHash of await hashRequiredCallbackToken(token, env)) {
+    result = await store.tryMarkImageBuildReady(
+      params.buildId,
+      params.provider,
+      ready.providerImageId,
+      ready.repositoryShas,
+      ready.runtimeVersion,
+      ready.buildDurationMs,
+      { tokenHash, providerSessionId: params.providerSessionId, now: params.now }
+    );
+    if (result.type !== "not_accepting_completion") return result;
+  }
+  return result;
 }
 
 /**

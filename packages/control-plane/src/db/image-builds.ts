@@ -378,7 +378,15 @@ export class ImageBuildStore {
     providerImageId: string,
     repositoryShas: RepositoryShaEntry[],
     runtimeVersion: string,
-    buildDurationMs: number
+    buildDurationMs: number,
+    // When present, the single-use callback token is consumed in the SAME
+    // conditional UPDATE as the ready/superseded transition, so the token can
+    // never be burned without the build reaching a terminal state (a partial
+    // failure leaves the token replayable for the provider's retry). Absent for
+    // provider-session builds, which pre-consume the token before their
+    // deferred snapshot — their SQL is unchanged. Guards mirror
+    // consumeCallbackToken exactly (session binding, hash, expiry, single-use).
+    callbackToken?: { tokenHash: string; providerSessionId: string | null; now: number }
   ): Promise<MarkImageBuildReadyResult> {
     const build = await this.db
       .prepare(
@@ -396,11 +404,16 @@ export class ImageBuildStore {
       return { type: "not_accepting_completion" };
     }
 
+    const tokenSet = callbackToken ? ", callback_token_used_at = ?" : "";
+    const tokenWhere = callbackToken
+      ? " AND provider_session_id IS ? AND callback_token_hash = ? AND callback_token_expires_at >= ? AND callback_token_used_at IS NULL"
+      : "";
+
     const updateResult = await this.db
       .prepare(
         `UPDATE image_builds
-         SET status = 'ready', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?
-         WHERE id = ? AND provider = ? AND status = 'building'
+         SET status = 'ready', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?${tokenSet}
+         WHERE id = ? AND provider = ? AND status = 'building'${tokenWhere}
            AND NOT EXISTS (
              SELECT 1 FROM image_builds newer
              WHERE newer.scope_kind = ?
@@ -418,8 +431,12 @@ export class ImageBuildStore {
         JSON.stringify(repositoryShas),
         runtimeVersion,
         buildDurationMs / MS_PER_SECOND,
+        ...(callbackToken ? [callbackToken.now] : []),
         buildId,
         provider,
+        ...(callbackToken
+          ? [callbackToken.providerSessionId, callbackToken.tokenHash, callbackToken.now]
+          : []),
         build.scope_kind,
         build.scope_id,
         provider,
@@ -442,6 +459,7 @@ export class ImageBuildStore {
           scopeKind: build.scope_kind,
           scopeId: build.scope_id,
           createdAt: build.created_at,
+          callbackToken,
         })) ?? { type: "not_accepting_completion" }
       );
     }
@@ -508,12 +526,21 @@ export class ImageBuildStore {
     scopeKind: ImageBuildScopeKind;
     scopeId: string;
     createdAt: number;
+    // Consumed atomically with the superseded transition, exactly as in the
+    // ready path above. See tryMarkImageBuildReady's callbackToken note.
+    callbackToken?: { tokenHash: string; providerSessionId: string | null; now: number };
   }): Promise<Extract<MarkImageBuildReadyResult, { type: "superseded_by_newer_ready" }> | null> {
+    const { callbackToken } = params;
+    const tokenSet = callbackToken ? ", callback_token_used_at = ?" : "";
+    const tokenWhere = callbackToken
+      ? " AND provider_session_id IS ? AND callback_token_hash = ? AND callback_token_expires_at >= ? AND callback_token_used_at IS NULL"
+      : "";
+
     const result = await this.db
       .prepare(
         `UPDATE image_builds
-         SET status = 'superseded', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?
-         WHERE id = ? AND provider = ? AND status = 'building'
+         SET status = 'superseded', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?${tokenSet}
+         WHERE id = ? AND provider = ? AND status = 'building'${tokenWhere}
            AND EXISTS (
              SELECT 1 FROM image_builds newer
              WHERE newer.scope_kind = ?
@@ -531,8 +558,12 @@ export class ImageBuildStore {
         JSON.stringify(params.repositoryShas),
         params.runtimeVersion,
         params.buildDurationMs / MS_PER_SECOND,
+        ...(callbackToken ? [callbackToken.now] : []),
         params.buildId,
         params.provider,
+        ...(callbackToken
+          ? [callbackToken.providerSessionId, callbackToken.tokenHash, callbackToken.now]
+          : []),
         params.scopeKind,
         params.scopeId,
         params.provider,

@@ -531,7 +531,7 @@ describe("ImageBuildWorkflow", () => {
       );
     });
 
-    it("consumes the single-use token before the ready transition", async () => {
+    it("consumes the token atomically inside the ready transition, not as a separate step", async () => {
       const store = readyBuildStore();
       store.tryMarkImageBuildReady.mockResolvedValue({
         type: "marked_ready",
@@ -545,22 +545,28 @@ describe("ImageBuildWorkflow", () => {
         context: ctx,
       });
 
-      expect(store.consumeCallbackToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          buildId: "imgb-env_1-1-abcd",
-          provider: "modal",
-          providerSessionId: null,
-          tokenHash: expect.any(String),
-        })
+      // The Modal path threads the token into tryMarkImageBuildReady so the
+      // single-use consume and the ready transition are one conditional
+      // UPDATE — never a separate consumeCallbackToken that could burn the
+      // token while the transition fails.
+      expect(store.tryMarkImageBuildReady).toHaveBeenCalledWith(
+        "imgb-env_1-1-abcd",
+        "modal",
+        "im-modal-1",
+        expect.any(Array),
+        expect.any(String),
+        expect.any(Number),
+        { tokenHash: expect.any(String), providerSessionId: null, now: expect.any(Number) }
       );
-      expect(store.consumeCallbackToken.mock.invocationCallOrder[0]).toBeLessThan(
-        store.tryMarkImageBuildReady.mock.invocationCallOrder[0]
-      );
+      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
     });
 
-    it("rejects a replayed completion whose token no longer consumes", async () => {
+    it("records the artifact and rejects when the build no longer accepts the completion", async () => {
       const store = readyBuildStore();
-      store.consumeCallbackToken.mockResolvedValue(null);
+      // Auth (verify) passed, but the atomic transition finds the row
+      // superseded/already-consumed: the already-built Modal image is recorded
+      // on the superseded row for the reaper instead of leaking, then rejected.
+      store.tryMarkImageBuildReady.mockResolvedValue({ type: "not_accepting_completion" });
       const { workflow } = createWorkflow({ store });
 
       await expect(
@@ -569,8 +575,12 @@ describe("ImageBuildWorkflow", () => {
           callbackToken: MODAL_CALLBACK_TOKEN,
           context: ctx,
         })
-      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
-      expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
+      ).rejects.toBeInstanceOf(ImageBuildCompletionNotAcceptedError);
+      expect(store.recordArtifactOnSupersededBuild).toHaveBeenCalledWith(
+        "imgb-env_1-1-abcd",
+        "modal",
+        "im-modal-1"
+      );
     });
 
     it.each([
@@ -617,7 +627,8 @@ describe("ImageBuildWorkflow", () => {
         "im-modal-1",
         [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
         "v53-list-native-runtime",
-        12_500
+        12_500,
+        { tokenHash: expect.any(String), providerSessionId: null, now: expect.any(Number) }
       );
       expect(result.type).toBe("build_ready");
       if (result.type !== "build_ready") throw new Error("unreachable");

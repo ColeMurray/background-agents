@@ -223,6 +223,68 @@ describe("Image builds", () => {
       expect((await getRow("imgb-winner"))?.status).toBe("ready");
     });
 
+    it("consumes the callback token atomically with the ready transition (provider_image path)", async () => {
+      const environmentId = await seedEnvironment();
+      const store = new ImageBuildStore(env.DB);
+      const now = Date.now();
+      await store.registerBuild({
+        id: "imgb-atomic",
+        scope: environmentScope(environmentId),
+        provider: "modal",
+        repositoriesFingerprint: "fp-atomic",
+        callbackTokenHash: "cbhash-atomic",
+        callbackTokenExpiresAt: now + 60_000,
+      });
+
+      // Wrong token: because the consume and the ready transition are ONE
+      // conditional UPDATE, a mismatch commits NEITHER — the build stays
+      // 'building' with its single-use token unconsumed and still replayable.
+      // This is the fix's core guarantee (a failed transition never burns the
+      // token, so the provider's retry can still succeed).
+      const rejected = await store.tryMarkImageBuildReady(
+        "imgb-atomic",
+        "modal",
+        "im-atomic",
+        REPOSITORY_SHAS,
+        RUNTIME_VERSION,
+        5_000,
+        { tokenHash: "cbhash-wrong", providerSessionId: null, now }
+      );
+      expect(rejected.type).toBe("not_accepting_completion");
+      let row = await getRow("imgb-atomic");
+      expect(row?.status).toBe("building");
+      expect(row?.callback_token_used_at).toBeNull();
+      expect(row?.provider_image_id).toBeNull();
+
+      // Correct token: ready and consume land together.
+      const ok = await store.tryMarkImageBuildReady(
+        "imgb-atomic",
+        "modal",
+        "im-atomic",
+        REPOSITORY_SHAS,
+        RUNTIME_VERSION,
+        5_000,
+        { tokenHash: "cbhash-atomic", providerSessionId: null, now }
+      );
+      expect(ok.type).toBe("marked_ready");
+      row = await getRow("imgb-atomic");
+      expect(row?.status).toBe("ready");
+      expect(row?.provider_image_id).toBe("im-atomic");
+      expect(row?.callback_token_used_at).toBe(now);
+
+      // The now-consumed token cannot re-fire the terminal transition.
+      const replay = await store.tryMarkImageBuildReady(
+        "imgb-atomic",
+        "modal",
+        "im-atomic",
+        REPOSITORY_SHAS,
+        RUNTIME_VERSION,
+        5_000,
+        { tokenHash: "cbhash-atomic", providerSessionId: null, now: now + 1 }
+      );
+      expect(replay.type).toBe("not_accepting_completion");
+    });
+
     it("registerBuild admits exactly one in-flight build per scope/provider", async () => {
       const environmentId = await seedEnvironment();
       const store = new ImageBuildStore(env.DB);

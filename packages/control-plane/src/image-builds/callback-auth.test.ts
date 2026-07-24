@@ -6,8 +6,16 @@ import {
   generateImageBuildCallbackToken,
   hashImageBuildCallbackToken,
   ImageBuildCallbackAuthError,
+  markImageBuildReadyWithCallbackTokenOrThrow,
   verifyImageBuildArtifactCallbackTokenOrThrow,
 } from "./callback-auth";
+
+const READY = {
+  providerImageId: "im-1",
+  repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc" }],
+  runtimeVersion: "v53",
+  buildDurationMs: 5_000,
+};
 
 const TOKEN = generateImageBuildCallbackToken();
 
@@ -96,6 +104,69 @@ describe("consumeImageBuildCallbackTokenOrThrow", () => {
       consumeImageBuildCallbackTokenOrThrow(store as never, {} as Env, TOKEN, PARAMS)
     ).rejects.toMatchObject({ failure: "misconfigured" });
     expect(store.consumeCallbackToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("markImageBuildReadyWithCallbackTokenOrThrow", () => {
+  it("marks ready by threading the dedicated-pepper hash into the atomic store call", async () => {
+    const storedHash = await hashUnder(TOKEN, "test-pepper");
+    const store = {
+      tryMarkImageBuildReady: vi.fn(
+        async (
+          _buildId: string,
+          _provider: string,
+          _providerImageId: string,
+          _shas: unknown,
+          _runtime: string,
+          _durationMs: number,
+          callbackToken?: { tokenHash: string; providerSessionId: string | null; now: number }
+        ) =>
+          callbackToken?.tokenHash === storedHash
+            ? { type: "marked_ready", supersededImages: [] }
+            : { type: "not_accepting_completion" }
+      ),
+    };
+
+    const result = await markImageBuildReadyWithCallbackTokenOrThrow(
+      store as never,
+      ENV,
+      TOKEN,
+      PARAMS,
+      READY
+    );
+    expect(result).toEqual({ type: "marked_ready", supersededImages: [] });
+    expect(store.tryMarkImageBuildReady).toHaveBeenCalledTimes(1);
+    expect(store.tryMarkImageBuildReady).toHaveBeenCalledWith(
+      PARAMS.buildId,
+      PARAMS.provider,
+      READY.providerImageId,
+      READY.repositoryShas,
+      READY.runtimeVersion,
+      READY.buildDurationMs,
+      { tokenHash: storedHash, providerSessionId: PARAMS.providerSessionId, now: PARAMS.now }
+    );
+  });
+
+  it("returns the store's not_accepting result when no candidate hash transitions", async () => {
+    const store = {
+      tryMarkImageBuildReady: vi.fn().mockResolvedValue({ type: "not_accepting_completion" }),
+    };
+    const result = await markImageBuildReadyWithCallbackTokenOrThrow(
+      store as never,
+      ENV,
+      TOKEN,
+      PARAMS,
+      READY
+    );
+    expect(result).toEqual({ type: "not_accepting_completion" });
+  });
+
+  it("reports misconfiguration when no pepper is bound", async () => {
+    const store = { tryMarkImageBuildReady: vi.fn() };
+    await expect(
+      markImageBuildReadyWithCallbackTokenOrThrow(store as never, {} as Env, TOKEN, PARAMS, READY)
+    ).rejects.toMatchObject({ failure: "misconfigured" });
+    expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
   });
 });
 

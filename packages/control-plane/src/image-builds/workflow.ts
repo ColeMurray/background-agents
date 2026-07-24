@@ -8,6 +8,7 @@ import {
   verifyImageBuildArtifactCallbackTokenOrThrow,
   ImageBuildCallbackAuthError,
   markImageBuildFailedWithCallbackTokenOrThrow,
+  markImageBuildReadyWithCallbackTokenOrThrow,
   verifyImageBuildCallbackTokenOrThrow,
 } from "./callback-auth";
 import {
@@ -30,6 +31,7 @@ import {
   type ImageBuildProvider,
   type ImageBuildProviderImageRef,
   type ImageBuildScope,
+  type MarkImageBuildReadyResult,
 } from "./model";
 import { ImageBuildPlanner, type PlannedCallbackAuth } from "./planner";
 import { ImageBuildReaper } from "./reaper";
@@ -461,36 +463,24 @@ export class ImageBuildWorkflow {
     }
     const providerImageId = completion.providerImageId;
 
-    // Same transition model as provider_session: consume the single-use token
-    // (CAS on callback_token_used_at) before the terminal state change, so a
-    // replayed callback fails authentication instead of racing the ready
-    // transition.
-    await this.consumeTokenBuildCallbackAuth(command.callbackToken, {
-      buildId: build.id,
-      provider,
-      providerSessionId: null,
-      ctx,
-    });
-
-    let result;
-    try {
-      result = await this.store.tryMarkImageBuildReady(
-        validated.buildId,
-        provider,
+    // Consume the single-use token and commit the ready/superseded transition
+    // in ONE conditional store UPDATE. Unlike a separate consume-then-mark, a
+    // transient failure here cannot burn the token while the build stays
+    // 'building': the provider (Modal) retries with the same token and still
+    // commits, instead of being rejected as a replay while the already-built
+    // image leaks. The provider-session path pre-consumes instead — its token
+    // must be retired before the long deferred snapshot (see finalizeAndCommit).
+    const result = await this.markProviderImageBuildReady(
+      command.callbackToken,
+      { buildId: build.id, provider },
+      {
         providerImageId,
-        validated.repositoryShas,
-        validated.runtimeVersion,
-        validated.buildDurationMs
-      );
-    } catch (e) {
-      logger.error("image_build.build_complete_error", {
-        error: errorMessage(e),
-        build_id: validated.buildId,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      throw new ImageBuildCompleteFailedError("Failed to mark build as ready", e);
-    }
+        repositoryShas: validated.repositoryShas,
+        runtimeVersion: validated.runtimeVersion,
+        buildDurationMs: validated.buildDurationMs,
+      },
+      ctx
+    );
 
     switch (result.type) {
       case "marked_ready": {
@@ -878,6 +868,54 @@ export class ImageBuildWorkflow {
       });
     } catch (e) {
       throw this.loggedCallbackAuthError(e, params);
+    }
+  }
+
+  /**
+   * Atomically consume the callback token and mark a provider-image (Modal)
+   * build ready. Auth failures map to the callback-auth taxonomy; any other
+   * store error becomes a complete-failed error so the route surfaces a retry.
+   */
+  private async markProviderImageBuildReady(
+    callbackToken: string | null | undefined,
+    build: { buildId: string; provider: ImageBuildProvider },
+    ready: {
+      providerImageId: string;
+      repositoryShas: RepositoryShaEntry[];
+      runtimeVersion: string;
+      buildDurationMs: number;
+    },
+    ctx: ImageBuildWorkflowContext
+  ): Promise<MarkImageBuildReadyResult> {
+    try {
+      return await markImageBuildReadyWithCallbackTokenOrThrow(
+        this.store,
+        this.env,
+        callbackToken,
+        {
+          buildId: build.buildId,
+          provider: build.provider,
+          providerSessionId: null,
+          now: Date.now(),
+        },
+        ready
+      );
+    } catch (e) {
+      if (e instanceof ImageBuildCallbackAuthError) {
+        throw this.loggedCallbackAuthError(e, {
+          buildId: build.buildId,
+          provider: build.provider,
+          providerSessionId: null,
+          ctx,
+        });
+      }
+      logger.error("image_build.build_complete_error", {
+        error: errorMessage(e),
+        build_id: build.buildId,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      throw new ImageBuildCompleteFailedError("Failed to mark build as ready", e);
     }
   }
 
