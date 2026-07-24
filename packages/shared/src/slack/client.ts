@@ -9,6 +9,7 @@
  */
 
 import { computeHmacHex, timingSafeEqual } from "../auth";
+import { z } from "zod";
 
 const SLACK_API_BASE = "https://slack.com/api";
 
@@ -22,6 +23,19 @@ const SLACK_API_BASE = "https://slack.com/api";
 export type SlackEnvelope<T = object> =
   | ({ ok: true } & T)
   | { ok: false; error: string; retryAfter?: number };
+
+const slackEnvelopeSchema = z.union([
+  z.object({ ok: z.literal(true) }).passthrough(),
+  z.object({ ok: z.literal(false), error: z.string(), retryAfter: z.number().optional() }),
+]);
+
+function parseSlackEnvelope<T>(value: unknown): SlackEnvelope<T> | null {
+  const parsed = slackEnvelopeSchema.safeParse(value);
+  if (!parsed.success) return null;
+  // SAFETY: The Slack envelope discriminant and failure shape are validated here;
+  // method-specific success fields are declared by each typed client wrapper.
+  return parsed.data as SlackEnvelope<T>;
+}
 
 export interface ExternalUploadUrlOptions {
   filename: string;
@@ -78,7 +92,8 @@ async function slackFetch<T>(
   }
 
   try {
-    return (await response.json()) as SlackEnvelope<T>;
+    const envelope = parseSlackEnvelope<T>(await response.json());
+    return envelope ?? { ok: false, error: "invalid_response" };
   } catch {
     return { ok: false, error: "invalid_response" };
   }

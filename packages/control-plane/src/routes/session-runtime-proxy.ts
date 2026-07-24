@@ -129,9 +129,11 @@ async function handleUpdateSessionTitle(
   let title: string | undefined;
 
   try {
-    const body = (await request.json()) as { userId?: string; title?: string };
-    userId = body.userId;
-    title = body.title;
+    const body = await request.json();
+    if (isObjectBody(body)) {
+      userId = typeof body.userId === "string" ? body.userId : undefined;
+      title = typeof body.title === "string" ? body.title : undefined;
+    }
   } catch {
     userId = undefined;
     title = undefined;
@@ -155,8 +157,8 @@ async function handleArchiveSession(
 
   let userId: string | undefined;
   try {
-    const body = (await request.json()) as { userId?: string };
-    userId = body.userId;
+    const body = await request.json();
+    userId = isObjectBody(body) && typeof body.userId === "string" ? body.userId : undefined;
   } catch {
     // Body parsing failed, continue without userId.
   }
@@ -179,8 +181,8 @@ async function handleUnarchiveSession(
 
   let userId: string | undefined;
   try {
-    const body = (await request.json()) as { userId?: string };
-    userId = body.userId;
+    const body = await request.json();
+    userId = isObjectBody(body) && typeof body.userId === "string" ? body.userId : undefined;
   } catch {
     // Body parsing failed, continue without userId.
   }
