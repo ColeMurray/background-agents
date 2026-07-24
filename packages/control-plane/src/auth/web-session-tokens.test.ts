@@ -224,6 +224,37 @@ describe("redeemRefreshToken", () => {
     expect(latest.refreshTokenExpiresAtEpochMs).toBe(1_000_000 + WEB_SESSION_FAMILY_TTL_MS);
   });
 
+  it("clamps the rotated access token to the family cap, not just the refresh leaf", async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { service } = createService();
+    let latest = await service.mintPair("user-1", SUBJECT);
+    const familyCap = 1_000_000 + WEB_SESSION_FAMILY_TTL_MS;
+    // Keep the family alive up to the last few hours, then rotate 4h before the
+    // 90d cap — inside the 8h access window, so a fresh access leaf would
+    // otherwise outlive the family's absolute deadline by ~4h.
+    const rotations = [
+      1_000_000 + 29 * DAY_MS,
+      1_000_000 + 58 * DAY_MS,
+      1_000_000 + 87 * DAY_MS,
+      familyCap - 4 * 60 * 60 * 1000,
+    ];
+    for (const at of rotations) {
+      vi.setSystemTime(at);
+      const result = await service.redeemRefreshToken(latest.refreshToken);
+      expect(result.ok, `rotation at ${at}`).toBe(true);
+      if (!result.ok) return;
+      latest = result.pair;
+    }
+    // Both leaves stop at the cap — the access token never survives the family.
+    expect(latest.accessTokenExpiresAtEpochMs).toBe(familyCap);
+    expect(latest.refreshTokenExpiresAtEpochMs).toBe(familyCap);
+    // And that cap is sooner than a naive now+8h would have landed.
+    expect(latest.accessTokenExpiresAtEpochMs).toBeLessThan(
+      familyCap - 4 * 60 * 60 * 1000 + WEB_SESSION_TOKEN_TTL_MS
+    );
+  });
+
   it("tolerates replay within the grace window without revoking the family", async () => {
     vi.useFakeTimers({ now: 1_000_000 });
     const { service } = createService();

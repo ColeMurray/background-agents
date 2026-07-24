@@ -119,7 +119,10 @@ export class WebSessionTokenService {
     const now = Date.now();
     const accessToken = `${ACCESS_TOKEN_PREFIX}${randomTokenBody()}`;
     const refreshToken = `${REFRESH_TOKEN_PREFIX}${randomTokenBody()}`;
-    const accessTokenExpiresAtEpochMs = now + WEB_SESSION_TOKEN_TTL_MS;
+    // Both leaves are clamped to the family cap: the family's absolute lifetime
+    // is the ceiling for everything it mints, so a rotation near the deadline
+    // must not hand out an access token that outlives the family it belongs to.
+    const accessTokenExpiresAtEpochMs = Math.min(now + WEB_SESSION_TOKEN_TTL_MS, familyExpiresAt);
     const refreshTokenExpiresAtEpochMs = Math.min(
       now + WEB_SESSION_REFRESH_TTL_MS,
       familyExpiresAt
