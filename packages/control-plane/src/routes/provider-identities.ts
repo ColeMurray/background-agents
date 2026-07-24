@@ -1,5 +1,5 @@
 import { isCanonicalUserId } from "@open-inspect/shared";
-import { enforceProviderIdentityPath } from "../auth/identity-enforcement";
+import { authorizeProviderIdentityRequest } from "../auth/identity-enforcement";
 import { UserStore, type ProviderIdentity } from "../db/user-store";
 import type { Env } from "../types";
 import {
@@ -51,12 +51,6 @@ export async function handleUpsertProviderIdentity(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<UpsertProviderIdentityRequest>(request);
-  if (body instanceof Response) return body;
-  if (!isObjectRecord(body)) {
-    return error("Request body must be an object", 400);
-  }
-
   const provider = match.groups?.provider;
   if (!isAllowedProvider(provider)) {
     return error(`provider must be one of: ${ALLOWED_PROVIDERS.join(", ")}`, 400);
@@ -66,8 +60,19 @@ export async function handleUpsertProviderIdentity(
   if (!providerUserId) {
     return error("providerUserId is required", 400);
   }
-  const mismatch = enforceProviderIdentityPath(ctx, provider, providerUserId);
-  if (mismatch) return mismatch;
+
+  const authz = authorizeProviderIdentityRequest(ctx, provider, providerUserId);
+  if (authz.action === "deny") return authz.response;
+  // A user resolving its own path already has a canonical id fixed by its
+  // token. Return it verbatim — never let the request body mutate identity
+  // linkage. Only the web service reaches the upserting path below.
+  if (authz.action === "resolve") return json({ userId: authz.canonicalUserId });
+
+  const body = await parseJsonBody<UpsertProviderIdentityRequest>(request);
+  if (body instanceof Response) return body;
+  if (!isObjectRecord(body)) {
+    return error("Request body must be an object", 400);
+  }
 
   const identity: ProviderIdentity = {
     provider,

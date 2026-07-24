@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyIdentityEnforcement,
   deriveIdentity,
-  enforceProviderIdentityPath,
+  authorizeProviderIdentityRequest,
   mayAttachCallbackContext,
   requireEventPoster,
   resolveCanonicalUserId,
@@ -346,11 +346,12 @@ describe("requireEventPoster", () => {
   });
 });
 
-describe("enforceProviderIdentityPath", () => {
-  it("logs and 403s a user principal upserting another identity", () => {
+describe("authorizeProviderIdentityRequest", () => {
+  it("logs and denies a user principal upserting another identity", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const rejection = enforceProviderIdentityPath(createCtx(USER_PRINCIPAL), "github", "999999");
-    expect(rejection?.status).toBe(403);
+    const authz = authorizeProviderIdentityRequest(createCtx(USER_PRINCIPAL), "github", "999999");
+    expect(authz.action).toBe("deny");
+    expect(authz.action === "deny" && authz.response.status).toBe(403);
     const mismatch = loggedEvents(warn).find((e) => e.event === "identity.mismatch_rejected");
     expect(mismatch).toMatchObject({
       expected: "github:583231",
@@ -358,30 +359,53 @@ describe("enforceProviderIdentityPath", () => {
     });
   });
 
-  it("passes the matching user and the web service", () => {
+  it("resolves a matching user to its token-fixed canonical id, never an upsert", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    expect(enforceProviderIdentityPath(createCtx(USER_PRINCIPAL), "github", "583231")).toBeNull();
+    // The takeover guard: a matching user resolves to the id its token already
+    // carries — it must NEVER return `upsert`, which would let the request
+    // body's providerEmail re-link the identity to another user.
+    const authz = authorizeProviderIdentityRequest(createCtx(USER_PRINCIPAL), "github", "583231");
+    expect(authz).toEqual({ action: "resolve", canonicalUserId: "canon-1" });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("lets the web service upsert", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     expect(
-      enforceProviderIdentityPath(
+      authorizeProviderIdentityRequest(
         createCtx({ kind: "service", service: "web", actor: null }),
         "github",
         "999999"
       )
-    ).toBeNull();
+    ).toEqual({ action: "upsert" });
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("403s every other service principal", () => {
+  it("fails closed if a user principal ever lacks a canonical id", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    expect(
-      enforceProviderIdentityPath(createCtx(SLACK_BOT_PRINCIPAL), "slack", "UANY")?.status
-    ).toBe(403);
-    expect(
-      enforceProviderIdentityPath(
-        createCtx({ kind: "service", service: "modal", actor: null }),
-        "github",
-        "999999"
-      )?.status
-    ).toBe(403);
+    const principal: Principal = {
+      kind: "user",
+      user: {
+        provider: "github",
+        providerUserId: "583231",
+        canonicalUserId: null,
+        participantUserId: "583231",
+      },
+      tokenId: "token-1",
+    };
+    const authz = authorizeProviderIdentityRequest(createCtx(principal), "github", "583231");
+    expect(authz.action === "deny" && authz.response.status).toBe(500);
+  });
+
+  it("denies every other service principal", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const slack = authorizeProviderIdentityRequest(createCtx(SLACK_BOT_PRINCIPAL), "slack", "UANY");
+    expect(slack.action === "deny" && slack.response.status).toBe(403);
+    const modal = authorizeProviderIdentityRequest(
+      createCtx({ kind: "service", service: "modal", actor: null }),
+      "github",
+      "999999"
+    );
+    expect(modal.action === "deny" && modal.response.status).toBe(403);
   });
 });

@@ -299,21 +299,42 @@ export function requireEventPoster(
 }
 
 /**
- * Guard for `PUT /provider-identities/:provider/:id`: a user principal must
- * match the path identity exactly (403 otherwise) — the route has no
- * identity-creating role for them; exchange owns that. Among services, only
- * web may upsert: its BFF resolves identities during the OAuth sign-in flow,
- * before a user token exists. Everyone else is rejected.
+ * The action a caller is authorized to take on
+ * `PUT /provider-identities/:provider/:id`.
+ *
+ * - `resolve`: a user principal matching the path identity. Its canonical
+ *   user is already fixed by the token it presented, so the route returns
+ *   that id verbatim and never touches identity linkage. Crucially, the
+ *   request body (and any `providerEmail` in it) is IGNORED — otherwise an
+ *   `oi_at_` holder could assert an arbitrary email and have
+ *   `resolveOrCreateUser` re-link its provider identity onto another user's
+ *   canonical account. Linking stays provider-verified, in the exchange flow.
+ * - `upsert`: the web service resolving identities during the OAuth sign-in
+ *   flow, before a user token exists. Only web reaches the mutating path, and
+ *   only with the profile the provider just verified.
+ * - `deny`: everyone else.
  */
-export function enforceProviderIdentityPath(
+export type ProviderIdentityAuthz =
+  | { action: "resolve"; canonicalUserId: string }
+  | { action: "upsert" }
+  | { action: "deny"; response: Response };
+
+export function authorizeProviderIdentityRequest(
   ctx: RequestContext,
   provider: string,
   providerUserId: string
-): Response | null {
+): ProviderIdentityAuthz {
   const principal = ctx.principal;
   if (principal?.kind === "user") {
     if (provider === principal.user.provider && providerUserId === principal.user.providerUserId) {
-      return null;
+      // canonicalUserId is always set for user principals (minted from the
+      // token row); the body is deliberately never consulted here. Fail
+      // closed on the impossible null rather than emitting an invalid id.
+      const canonicalUserId = principal.user.canonicalUserId;
+      if (!canonicalUserId) {
+        return { action: "deny", response: error("User principal has no canonical id", 500) };
+      }
+      return { action: "resolve", canonicalUserId };
     }
     logMismatchRejected(
       "provider-identities",
@@ -322,9 +343,12 @@ export function enforceProviderIdentityPath(
       `${provider}:${providerUserId}`,
       ctx
     );
-    return error("Path identity does not match the authenticated user", 403);
+    return {
+      action: "deny",
+      response: error("Path identity does not match the authenticated user", 403),
+    };
   }
-  if (principal?.kind === "service" && principal.service === "web") return null;
+  if (principal?.kind === "service" && principal.service === "web") return { action: "upsert" };
   logMismatchRejected(
     "provider-identities",
     "principal",
@@ -332,5 +356,11 @@ export function enforceProviderIdentityPath(
     principal?.kind === "service" ? principal.service : (principal?.kind ?? "none"),
     ctx
   );
-  return error("Only the matching user or the web service may upsert provider identities", 403);
+  return {
+    action: "deny",
+    response: error(
+      "Only the matching user or the web service may upsert provider identities",
+      403
+    ),
+  };
 }
