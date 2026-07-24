@@ -10,6 +10,16 @@ function createCtx(): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     db: {} as SqlDatabase,
+    principal: {
+      kind: "user",
+      user: {
+        provider: "github",
+        providerUserId: "583231",
+        canonicalUserId: "user-1",
+        participantUserId: "user-1",
+      },
+      tokenId: "token-1",
+    },
     metrics: {
       d1Queries: [],
       spans: {},
@@ -71,7 +81,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/title", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: "user-1", title: "New title" }),
+        body: JSON.stringify({ title: "New title" }),
       }),
       createEnv(fetch),
       match,
@@ -86,6 +96,28 @@ describe("session runtime proxy routes", () => {
       userId: "user-1",
       title: "New title",
     });
+  });
+
+  it("rejects a caller-asserted title-update userId without forwarding to the runtime", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "updated" }));
+    const { handler, match } = getHandler("PATCH", "/sessions/session-1/title");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/title", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "someone-else", title: "New title" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Field 'userId' is not accepted from verified callers",
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("only rewrites runtime 404 responses to the configured not-found response", async () => {

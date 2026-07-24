@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { generateInternalToken } from "./auth/internal";
 import { handleRequest } from "./router";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 const mockUserStore = {
   resolveOrCreateUser: vi.fn(),
@@ -25,7 +25,7 @@ describe("provider identity router integration", () => {
 
   it("serves provider identity upserts even when the SCM provider is not github", async () => {
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
       DB: {
         prepare: vi.fn(),
@@ -35,14 +35,9 @@ describe("provider identity router integration", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
     const response = await handleRequest(
-      new Request("https://test.local/provider-identities/github/12345", {
+      await signedServiceRequest("https://test.local/provider-identities/github/12345", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({
           providerLogin: "ada",
         }),
@@ -60,7 +55,7 @@ describe("provider identity router integration", () => {
     // Guards the widened isScmAgnosticRoute regex: a typo dropping `google`
     // would make this 501 (SCM not implemented) instead of reaching the handler.
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
       DB: {
         prepare: vi.fn(),
@@ -70,14 +65,9 @@ describe("provider identity router integration", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
     const response = await handleRequest(
-      new Request("https://test.local/provider-identities/google/google-sub-1", {
+      await signedServiceRequest("https://test.local/provider-identities/google/google-sub-1", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({
           providerEmail: "pm@corp.com",
         }),
@@ -96,7 +86,7 @@ describe("provider identity router integration", () => {
 
   it("rejects non-GitHub provider identity paths when the SCM provider is not github", async () => {
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
       DB: {
         prepare: vi.fn(),
@@ -106,14 +96,9 @@ describe("provider identity router integration", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
     const response = await handleRequest(
-      new Request("https://test.local/provider-identities/gitlab/U123", {
+      await signedServiceRequest("https://test.local/provider-identities/gitlab/U123", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({}),
       }),
       env as never

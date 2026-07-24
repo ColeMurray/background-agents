@@ -230,9 +230,6 @@ token_encryption_key = ""
 # Repo secrets encryption key (for encrypting repo secrets in D1)
 repo_secrets_encryption_key = ""
 
-# Internal callback secret (shared between services)
-internal_callback_secret = ""
-
 # Modal API secret (for control plane -> Modal authentication)
 # Only required when sandbox_provider = "modal"
 # Generate with: openssl rand -hex 32

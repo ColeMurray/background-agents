@@ -1,5 +1,5 @@
 /**
- * Environment routes over SELF.fetch: internal-HMAC auth, create-time validation
+ * Environment routes over serviceFetch: service sig1 auth, create-time validation
  * (which short-circuits before SCM resolution), GET/DELETE, the environment
  * secrets routes, and the member-scoped, value-free secret import.
  *
@@ -10,17 +10,12 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
-import { generateInternalToken } from "../../src/auth/internal";
 import { EnvironmentStore } from "../../src/db/environments";
 import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { cleanD1Tables } from "./cleanup";
+import { serviceFetch } from "./helpers";
 
 const BASE = "https://test.local";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
 
 async function seedEnvironment(opts?: {
   id?: string;
@@ -80,18 +75,16 @@ describe("Environments API (routes)", () => {
 
   describe("POST /environments (validation before SCM resolution)", () => {
     it("rejects a missing name (400)", async () => {
-      const res = await SELF.fetch(`${BASE}/environments`, {
+      const res = await serviceFetch(`${BASE}/environments`, {
         method: "POST",
-        headers: await authHeaders(),
         body: JSON.stringify({ repositories: [{ repoOwner: "acme", repoName: "web" }] }),
       });
       expect(res.status).toBe(400);
     });
 
     it("rejects empty repositories (400)", async () => {
-      const res = await SELF.fetch(`${BASE}/environments`, {
+      const res = await serviceFetch(`${BASE}/environments`, {
         method: "POST",
-        headers: await authHeaders(),
         body: JSON.stringify({ name: "X", repositories: [] }),
       });
       expect(res.status).toBe(400);
@@ -99,9 +92,8 @@ describe("Environments API (routes)", () => {
 
     it("rejects a duplicate name before resolving repos (409)", async () => {
       await seedEnvironment({ name: "Taken" });
-      const res = await SELF.fetch(`${BASE}/environments`, {
+      const res = await serviceFetch(`${BASE}/environments`, {
         method: "POST",
-        headers: await authHeaders(),
         body: JSON.stringify({
           name: "taken",
           repositories: [{ repoOwner: "acme", repoName: "api" }],
@@ -120,9 +112,8 @@ describe("Environments API (routes)", () => {
           ["acme", "api", 2, "develop"],
         ],
       });
-      const headers = await authHeaders();
 
-      const listRes = await SELF.fetch(`${BASE}/environments`, { headers });
+      const listRes = await serviceFetch(`${BASE}/environments`);
       expect(listRes.status).toBe(200);
       const list = await listRes.json<{
         environments: { id: string; repositories: unknown[] }[];
@@ -131,7 +122,7 @@ describe("Environments API (routes)", () => {
       expect(list.total).toBe(1);
       expect(list.environments[0].repositories.length).toBe(2);
 
-      const getRes = await SELF.fetch(`${BASE}/environments/${id}`, { headers });
+      const getRes = await serviceFetch(`${BASE}/environments/${id}`);
       expect(getRes.status).toBe(200);
       const got = await getRes.json<{
         environment: { name: string; repositories: { repoName: string }[] };
@@ -141,25 +132,22 @@ describe("Environments API (routes)", () => {
     });
 
     it("returns 404 for an unknown environment", async () => {
-      const headers = await authHeaders();
-      expect((await SELF.fetch(`${BASE}/environments/env_missing`, { headers })).status).toBe(404);
+      expect((await serviceFetch(`${BASE}/environments/env_missing`)).status).toBe(404);
       expect(
-        (await SELF.fetch(`${BASE}/environments/env_missing`, { method: "DELETE", headers })).status
+        (await serviceFetch(`${BASE}/environments/env_missing`, { method: "DELETE" })).status
       ).toBe(404);
     });
 
     it("deletes an environment and cascades its secret rows", async () => {
       const id = await seedEnvironment({ name: "Gone" });
-      const headers = await authHeaders();
-      await SELF.fetch(`${BASE}/environments/${id}/secrets`, {
+      await serviceFetch(`${BASE}/environments/${id}/secrets`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ secrets: { K: "v" } }),
       });
 
-      const delRes = await SELF.fetch(`${BASE}/environments/${id}`, { method: "DELETE", headers });
+      const delRes = await serviceFetch(`${BASE}/environments/${id}`, { method: "DELETE" });
       expect(delRes.status).toBe(200);
-      expect((await SELF.fetch(`${BASE}/environments/${id}`, { headers })).status).toBe(404);
+      expect((await serviceFetch(`${BASE}/environments/${id}`)).status).toBe(404);
       const secretCount = await env.DB.prepare(
         "SELECT COUNT(*) AS c FROM environment_secrets WHERE environment_id = ?"
       )
@@ -172,11 +160,9 @@ describe("Environments API (routes)", () => {
   describe("PUT /environments/:id (channel associations)", () => {
     it("sets, dedupes, and clears channel associations without touching repositories", async () => {
       const id = await seedEnvironment({ name: "Channelled" });
-      const headers = await authHeaders();
 
-      const putRes = await SELF.fetch(`${BASE}/environments/${id}`, {
+      const putRes = await serviceFetch(`${BASE}/environments/${id}`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ channelAssociations: ["C111", "C222", "C111"] }),
       });
       expect(putRes.status).toBe(200);
@@ -187,20 +173,18 @@ describe("Environments API (routes)", () => {
       expect(updated.environment.repositories.length).toBe(1);
 
       // A patch that omits the field leaves the set untouched.
-      await SELF.fetch(`${BASE}/environments/${id}`, {
+      await serviceFetch(`${BASE}/environments/${id}`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ description: "still channelled" }),
       });
       const got = await (
-        await SELF.fetch(`${BASE}/environments/${id}`, { headers })
+        await serviceFetch(`${BASE}/environments/${id}`)
       ).json<{ environment: { channelAssociations?: string[] } }>();
       expect(got.environment.channelAssociations).toEqual(["C111", "C222"]);
 
       // An empty array clears the set (the column collapses to NULL).
-      const clearRes = await SELF.fetch(`${BASE}/environments/${id}`, {
+      const clearRes = await serviceFetch(`${BASE}/environments/${id}`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ channelAssociations: [] }),
       });
       const cleared = await clearRes.json<{ environment: { channelAssociations?: string[] } }>();
@@ -209,20 +193,17 @@ describe("Environments API (routes)", () => {
 
     it("lists seeded channel associations", async () => {
       await seedEnvironment({ name: "Listed", channelAssociations: ["C123"] });
-      const headers = await authHeaders();
       const list = await (
-        await SELF.fetch(`${BASE}/environments`, { headers })
+        await serviceFetch(`${BASE}/environments`)
       ).json<{ environments: { channelAssociations?: string[] }[] }>();
       expect(list.environments[0].channelAssociations).toEqual(["C123"]);
     });
 
     it("rejects malformed channel associations (400)", async () => {
       const id = await seedEnvironment({ name: "Strict" });
-      const headers = await authHeaders();
       for (const channelAssociations of ["C123", [""], [42]]) {
-        const res = await SELF.fetch(`${BASE}/environments/${id}`, {
+        const res = await serviceFetch(`${BASE}/environments/${id}`, {
           method: "PUT",
-          headers,
           body: JSON.stringify({ channelAssociations }),
         });
         expect(res.status, JSON.stringify(channelAssociations)).toBe(400);
@@ -233,22 +214,19 @@ describe("Environments API (routes)", () => {
   describe("environment secrets routes", () => {
     it("sets, lists (with global), and deletes secrets on a seeded environment", async () => {
       const id = await seedEnvironment();
-      const headers = await authHeaders();
 
-      await SELF.fetch(`${BASE}/secrets`, {
+      await serviceFetch(`${BASE}/secrets`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ secrets: { GLOBAL_ONE: "g" } }),
       });
 
-      const putRes = await SELF.fetch(`${BASE}/environments/${id}/secrets`, {
+      const putRes = await serviceFetch(`${BASE}/environments/${id}/secrets`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ secrets: { ENV_ONE: "1", ENV_TWO: "2" } }),
       });
       expect(putRes.status).toBe(200);
 
-      const listRes = await SELF.fetch(`${BASE}/environments/${id}/secrets`, { headers });
+      const listRes = await serviceFetch(`${BASE}/environments/${id}/secrets`);
       expect(listRes.status).toBe(200);
       const list = await listRes.json<{
         environmentId: string;
@@ -259,21 +237,19 @@ describe("Environments API (routes)", () => {
       expect(list.secrets.map((s) => s.key)).toEqual(["ENV_ONE", "ENV_TWO"]);
       expect(list.globalSecrets.map((s) => s.key)).toEqual(["GLOBAL_ONE"]);
 
-      const delRes = await SELF.fetch(`${BASE}/environments/${id}/secrets/ENV_ONE`, {
+      const delRes = await serviceFetch(`${BASE}/environments/${id}/secrets/ENV_ONE`, {
         method: "DELETE",
-        headers,
       });
       expect(delRes.status).toBe(200);
-      const after = await SELF.fetch(`${BASE}/environments/${id}/secrets`, { headers });
+      const after = await serviceFetch(`${BASE}/environments/${id}/secrets`);
       expect(
         (await after.json<{ secrets: { key: string }[] }>()).secrets.map((s) => s.key)
       ).toEqual(["ENV_TWO"]);
     });
 
     it("returns 404 when the environment does not exist", async () => {
-      const res = await SELF.fetch(`${BASE}/environments/env_missing/secrets`, {
+      const res = await serviceFetch(`${BASE}/environments/env_missing/secrets`, {
         method: "PUT",
-        headers: await authHeaders(),
         body: JSON.stringify({ secrets: { K: "v" } }),
       });
       expect(res.status).toBe(404);
@@ -283,7 +259,6 @@ describe("Environments API (routes)", () => {
   describe("POST /environments/:id/secrets/import", () => {
     it("imports from a member repo and returns key names only", async () => {
       const id = await seedEnvironment({ repositories: [["acme", "web", 1, "main"]] });
-      const headers = await authHeaders();
       await new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!).setSecrets(
         1,
         "acme",
@@ -293,9 +268,8 @@ describe("Environments API (routes)", () => {
         }
       );
 
-      const res = await SELF.fetch(`${BASE}/environments/${id}/secrets/import`, {
+      const res = await serviceFetch(`${BASE}/environments/${id}/secrets/import`, {
         method: "POST",
-        headers,
         body: JSON.stringify({ repoOwner: "acme", repoName: "web", keys: ["DEPLOY_KEY"] }),
       });
       expect(res.status).toBe(200);
@@ -307,7 +281,7 @@ describe("Environments API (routes)", () => {
       expect(body.keys).toEqual(["DEPLOY_KEY"]);
       expect(body.created).toBe(1);
 
-      const listRes = await SELF.fetch(`${BASE}/environments/${id}/secrets`, { headers });
+      const listRes = await serviceFetch(`${BASE}/environments/${id}/secrets`);
       expect(
         (await listRes.json<{ secrets: { key: string }[] }>()).secrets.map((s) => s.key)
       ).toEqual(["DEPLOY_KEY"]);
@@ -315,7 +289,6 @@ describe("Environments API (routes)", () => {
 
     it("rejects a non-member source with 403 and imports nothing", async () => {
       const id = await seedEnvironment({ repositories: [["acme", "web", 1, "main"]] });
-      const headers = await authHeaders();
       await new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!).setSecrets(
         2,
         "acme",
@@ -325,15 +298,14 @@ describe("Environments API (routes)", () => {
         }
       );
 
-      const res = await SELF.fetch(`${BASE}/environments/${id}/secrets/import`, {
+      const res = await serviceFetch(`${BASE}/environments/${id}/secrets/import`, {
         method: "POST",
-        headers,
         body: JSON.stringify({ repoOwner: "acme", repoName: "other", keys: ["SECRET"] }),
       });
       expect(res.status).toBe(403);
       expect(await res.text()).not.toContain("leakme");
 
-      const listRes = await SELF.fetch(`${BASE}/environments/${id}/secrets`, { headers });
+      const listRes = await serviceFetch(`${BASE}/environments/${id}/secrets`);
       expect((await listRes.json<{ secrets: unknown[] }>()).secrets).toEqual([]);
     });
   });

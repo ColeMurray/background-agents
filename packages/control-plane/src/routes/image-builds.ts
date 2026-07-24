@@ -281,7 +281,6 @@ async function handleBuildComplete(
   try {
     const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildComplete({
       completion,
-      authorizationHeader: request.headers.get("Authorization"),
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
@@ -310,7 +309,6 @@ async function handleBuildFailed(
   try {
     const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildFailed({
       failure,
-      authorizationHeader: request.headers.get("Authorization"),
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });

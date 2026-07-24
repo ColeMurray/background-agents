@@ -1,9 +1,47 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared";
 import type { SandboxStatus } from "../../src/types";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+
+/**
+ * Fetch a control-plane route as a service principal. Signs per request —
+ * sig1 binds method, URL, and body, so headers can never be reused across
+ * calls. Defaults to the `web` service; secrets follow the
+ * `test-service-secret-<service>` bindings in vitest.integration.config.ts.
+ */
+export async function serviceFetch(
+  url: string,
+  init?: {
+    method?: string;
+    body?: string;
+    headers?: Record<string, string>;
+    service?: ServiceName;
+    actor?: string;
+  }
+): Promise<Response> {
+  const method = init?.method ?? "GET";
+  const service = init?.service ?? "web";
+  const auth = await buildServiceAuthHeaders({
+    service,
+    secret: `test-service-secret-${service}`,
+    method,
+    url,
+    body: init?.body,
+    actor: init?.actor,
+  });
+  return SELF.fetch(url, {
+    method,
+    headers: {
+      ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...init?.headers,
+      ...auth,
+    },
+    body: init?.body,
+  });
+}
 
 /**
  * Create a fresh DO, call /internal/init, return the stub and id.

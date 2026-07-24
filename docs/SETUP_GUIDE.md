@@ -94,8 +94,10 @@ NEXTAUTH_SECRET=your_generated_secret
 CONTROL_PLANE_URL=https://open-inspect-control-plane-<name>.<subdomain>.workers.dev
 NEXT_PUBLIC_WS_URL=wss://open-inspect-control-plane-<name>.<subdomain>.workers.dev
 
-# Must match control-plane INTERNAL_CALLBACK_SECRET
-INTERNAL_CALLBACK_SECRET=your_shared_secret
+# Web's per-service signing secret. Must match the control plane's
+# SERVICE_AUTH_SECRET_WEB binding (Terraform generates it; read it from
+# terraform state or the deployed web app's env).
+SERVICE_AUTH_SECRET=your_web_service_secret
 
 # Optional access control (a user is admitted if they match ANY allowlist)
 ALLOWED_USERS=
@@ -119,14 +121,16 @@ NEXT_PUBLIC_APP_ICON_URL=
 
 Do not commit `packages/web/.env.local`.
 
-Generate a secret value:
+Generate a secret value for `NEXTAUTH_SECRET` (never for `SERVICE_AUTH_SECRET`, which must be read
+from the deployment as described above):
 
 ```bash
 openssl rand -base64 32
 ```
 
-If you are using someone else's deployed backend, do not generate your own
-`INTERNAL_CALLBACK_SECRET`. Use the value configured in that backend deployment.
+If you are using someone else's deployed backend, do not generate your own `SERVICE_AUTH_SECRET`.
+Use the web service secret configured in that backend deployment (the control plane only accepts
+signatures under its own copy).
 
 ### 3. Configure GitHub callback URL
 
@@ -159,7 +163,7 @@ If session actions fail, validate:
 
 - `CONTROL_PLANE_URL`
 - `NEXT_PUBLIC_WS_URL`
-- `INTERNAL_CALLBACK_SECRET`
+- `SERVICE_AUTH_SECRET`
 
 These must align with your deployed backend.
 
@@ -238,7 +242,8 @@ approved for the installation.
 
 ### Web can load, but session APIs return 401
 
-`INTERNAL_CALLBACK_SECRET` in web env does not match the control plane secret.
+`SERVICE_AUTH_SECRET` in web env does not match the control plane's `SERVICE_AUTH_SECRET_WEB`
+binding.
 
 ### WebSocket disconnects immediately
 

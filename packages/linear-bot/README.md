@@ -69,7 +69,7 @@ linear_webhook_secret = "your-webhook-signing-secret"
 The worker also requires these secrets (set via `wrangler secret put` or Terraform):
 
 - **`ANTHROPIC_API_KEY`** — used by the LLM classifier for repo resolution fallback
-- **`INTERNAL_CALLBACK_SECRET`** — HMAC auth for config endpoints and callback verification
+- **`SERVICE_AUTH_SECRET`** — per-service sig1 signing secret; also verifies CP callbacks
 
 Then `terraform apply`.
 
@@ -110,22 +110,19 @@ miss or HTTP 401.
 ### 4. Configure Repo Mapping (Optional)
 
 The agent resolves repos automatically in most cases (see [Repo Resolution](#repo-resolution)).
-Static mappings are optional overrides. All `/config/*` endpoints require an `Authorization` header
-with an HMAC-signed bearer token (from `INTERNAL_CALLBACK_SECRET`).
+Static mappings are optional overrides, stored in the worker's KV namespace and edited directly with
+wrangler (the key shapes are documented in `src/kv-store.ts`):
 
 **Team → target mapping:**
 
 ```bash
-curl -X PUT https://<your-linear-bot-worker>/config/team-repos \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "YOUR_TEAM_ID": [
-      { "owner": "your-org", "name": "frontend", "label": "frontend" },
-      { "environmentId": "env_abc123", "label": "fullstack" },
-      { "owner": "your-org", "name": "main-repo" }
-    ]
-  }'
+npx wrangler kv key put --namespace-id <LINEAR_KV_NAMESPACE_ID> config:team-repos '{
+  "YOUR_TEAM_ID": [
+    { "owner": "your-org", "name": "frontend", "label": "frontend" },
+    { "environmentId": "env_abc123", "label": "fullstack" },
+    { "owner": "your-org", "name": "main-repo" }
+  ]
+}'
 ```
 
 Each team maps to an array of targets — repositories (`owner`/`name`) or saved environments
@@ -137,13 +134,10 @@ stage.
 **Project → target mapping:**
 
 ```bash
-curl -X PUT https://<your-linear-bot-worker>/config/project-repos \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "LINEAR_PROJECT_ID": { "owner": "your-org", "name": "my-repo" },
-    "OTHER_PROJECT_ID": { "environmentId": "env_abc123" }
-  }'
+npx wrangler kv key put --namespace-id <LINEAR_KV_NAMESPACE_ID> config:project-repos '{
+  "LINEAR_PROJECT_ID": { "owner": "your-org", "name": "my-repo" },
+  "OTHER_PROJECT_ID": { "environmentId": "env_abc123" }
+}'
 ```
 
 Project mappings take the highest priority during target resolution.

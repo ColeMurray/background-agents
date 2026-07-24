@@ -4,6 +4,7 @@ import {
   type CallbackContext,
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
+import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -41,7 +42,6 @@ async function handleSessionPrompt(
 
   const body = (await request.json()) as {
     content: string;
-    authorId?: string;
     source?: string;
     model?: string;
     reasoningEffort?: string;
@@ -52,11 +52,25 @@ async function handleSessionPrompt(
   if (!body.content) {
     return error("content is required");
   }
+  const enforcement = applyIdentityEnforcement(ctx, "prompt", body);
+  if (enforcement.rejection) return enforcement.rejection;
 
   const attachments = validateAttachments(body.attachments);
   if (attachments instanceof Response) return attachments;
 
-  const authorId = body.authorId || "anonymous";
+  // The author comes from the verified principal (user → canonical id, bot →
+  // asserted actor); an actorless bot prompt is system-initiated and stays
+  // anonymous. callbackContext is a completion notification channel — only
+  // the bots that own callbacks may attach one.
+  const authorId = enforcement.enforced.participantUserId ?? "anonymous";
+  const callbackContext = mayAttachCallbackContext(ctx) ? body.callbackContext : undefined;
+  if (callbackContext === undefined && body.callbackContext !== undefined) {
+    logger.warn("Dropped callbackContext from unauthorized principal", {
+      event: "identity.callback_context_dropped",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
 
   let enrichment: GitHubEnrichment | undefined;
   const parsed = parseAuthorId(authorId);
@@ -91,7 +105,7 @@ async function handleSessionPrompt(
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       attachments,
-      callbackContext: body.callbackContext,
+      callbackContext,
       scmEnrichment: enrichment
         ? {
             userId: enrichment.scmUserId,

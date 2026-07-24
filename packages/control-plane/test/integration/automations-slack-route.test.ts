@@ -2,14 +2,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
-import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
+import { serviceFetch } from "./helpers";
 import type { TriggerConfig } from "@open-inspect/shared";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
 
 function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -53,10 +48,13 @@ function createBody(overrides: Record<string, unknown>) {
 }
 
 async function postAutomation(body: Record<string, unknown>): Promise<Response> {
-  return SELF.fetch("https://test.local/automations", {
+  // automation-create requires a participant identity: sign as a bot with an
+  // asserted actor (the userless web service credential is rejected, 403).
+  return serviceFetch("https://test.local/automations", {
     method: "POST",
-    headers: await authHeaders(),
     body: JSON.stringify(body),
+    service: "slack-bot",
+    actor: "slack:U0123",
   });
 }
 
@@ -149,9 +147,8 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
   beforeEach(cleanD1Tables);
 
   async function putAutomation(id: string, body: Record<string, unknown>): Promise<Response> {
-    return SELF.fetch(`https://test.local/automations/${id}`, {
+    return serviceFetch(`https://test.local/automations/${id}`, {
       method: "PUT",
-      headers: await authHeaders(),
       body: JSON.stringify(body),
     });
   }
@@ -243,10 +240,7 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
   beforeEach(cleanD1Tables);
 
   async function getWatchedChannels(): Promise<Response> {
-    return SELF.fetch("https://test.local/integration-settings/slack/watched-channels", {
-      method: "GET",
-      headers: await authHeaders(),
-    });
+    return serviceFetch("https://test.local/integration-settings/slack/watched-channels");
   }
 
   it("returns 401 without an internal token", async () => {
@@ -290,10 +284,8 @@ describe("GET /integration-settings/slack/channels (integration)", () => {
   beforeEach(cleanD1Tables);
 
   async function getSlackChannels(auth = true): Promise<Response> {
-    return SELF.fetch("https://test.local/integration-settings/slack/channels", {
-      method: "GET",
-      headers: auth ? await authHeaders() : undefined,
-    });
+    const url = "https://test.local/integration-settings/slack/channels";
+    return auth ? serviceFetch(url) : SELF.fetch(url, { method: "GET" });
   }
 
   it("returns 401 without an internal token", async () => {

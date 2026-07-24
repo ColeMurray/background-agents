@@ -63,9 +63,10 @@ describe("session prompt API route", () => {
       body: expect.any(String),
     });
     const requestBody = vi.mocked(controlPlaneFetch).mock.calls[0][1]?.body;
+    // authorId is forbidden under strict identity enforcement — the control
+    // plane derives the author from the Bearer principal.
     expect(JSON.parse(requestBody as string)).toEqual({
       content: "Look",
-      authorId: "user-1",
       source: "web",
       attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
     });

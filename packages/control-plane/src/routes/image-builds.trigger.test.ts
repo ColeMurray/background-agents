@@ -140,6 +140,8 @@ function createModalEnv(): Env {
     WORKER_URL: "https://cp.test",
     MODAL_API_SECRET: "modal-secret",
     MODAL_WORKSPACE: "modal-ws",
+    // Modal builds mint callback tokens like every provider.
+    IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
   } as Env;
 }
 
@@ -149,7 +151,7 @@ function createVercelEnv(): Env {
     SANDBOX_PROVIDER: "vercel",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
-    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     VERCEL_TOKEN: "vercel-token",
     VERCEL_PROJECT_ID: "project-123",
   } as Env;
@@ -161,7 +163,7 @@ function createOpenComputerEnv(): Env {
     SANDBOX_PROVIDER: "opencomputer",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
-    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     OPENCOMPUTER_API_URL: "https://opencomputer.test",
     OPENCOMPUTER_API_KEY: "oc-token",
     OPENCOMPUTER_TEMPLATE: "openinspect-runtime",

@@ -5,10 +5,6 @@ vi.mock("next-auth", () => ({
   getServerSession: vi.fn(),
 }));
 
-vi.mock("next-auth/jwt", () => ({
-  getToken: vi.fn(),
-}));
-
 vi.mock("@/lib/auth", () => ({
   authOptions: {},
 }));
@@ -20,7 +16,6 @@ vi.mock("@/lib/control-plane", () => ({
 // NOTE: @/lib/build-auth-identity is intentionally NOT mocked — these tests
 // exercise the real chokepoint to prove the route's outgoing body is correct.
 import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
@@ -37,8 +32,7 @@ function controlPlaneBody(callIndex = 0): Record<string, unknown> {
 
 const validBody = {
   name: "Daily sync",
-  repoOwner: "o",
-  repoName: "r",
+  repositories: [{ repoOwner: "o", repoName: "r" }],
   scheduleCron: "0 9 * * *",
   scheduleTz: "UTC",
   instructions: "Run tests",
@@ -58,7 +52,7 @@ describe("automations API route (POST)", () => {
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
-  it("sends auth* and scm* for a GitHub user", async () => {
+  it("sends auth* display and scm* attribution for a GitHub user — never identity or credentials", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: {
         id: "12345",
@@ -68,11 +62,6 @@ describe("automations API route (POST)", () => {
         image: "https://avatars.githubusercontent.com/u/12345",
         provider: "github",
       },
-    } as never);
-    vi.mocked(getToken).mockResolvedValue({
-      accessToken: "gho_abc",
-      refreshToken: "ghr_def",
-      accessTokenExpiresAt: 1_700_000_000_000,
     } as never);
     vi.mocked(controlPlaneFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto1" } }, { status: 201 })
@@ -85,28 +74,31 @@ describe("automations API route (POST)", () => {
       "/automations",
       expect.objectContaining({ method: "POST" })
     );
-    expect(controlPlaneBody()).toMatchObject({
+    const sent = controlPlaneBody();
+    expect(sent).toMatchObject({
       name: "Daily sync",
-      repoOwner: "o",
-      repoName: "r",
-      userId: "12345",
-      authProvider: "github",
-      authUserId: "12345",
+      repositories: [{ repoOwner: "o", repoName: "r" }],
       authEmail: "ada@example.com",
       authName: "Ada Lovelace",
       authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmUserId: "12345",
       scmLogin: "ada",
       scmName: "Ada Lovelace",
       scmEmail: "ada@example.com",
       scmAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmToken: "gho_abc",
-      scmRefreshToken: "ghr_def",
-      scmTokenExpiresAt: 1_700_000_000_000,
     });
+    // Forbidden under strict identity enforcement: the control plane derives
+    // created_by from the Bearer principal.
+    expect(sent.userId).toBeUndefined();
+    expect(sent.spawnSource).toBeUndefined();
+    expect(sent.authProvider).toBeUndefined();
+    expect(sent.authUserId).toBeUndefined();
+    expect(sent.scmUserId).toBeUndefined();
+    expect(sent.scmToken).toBeUndefined();
+    expect(sent.scmRefreshToken).toBeUndefined();
+    expect(sent.scmTokenExpiresAt).toBeUndefined();
   });
 
-  it("sends auth* but no scm* for a Google user (F1/F2: a Google sub must never become a GitHub identity)", async () => {
+  it("sends auth* display but no scm* for a Google user (F1/F2: a Google sub must never become a GitHub identity)", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: {
         id: "google-sub-1",
@@ -116,8 +108,6 @@ describe("automations API route (POST)", () => {
         provider: "google",
       },
     } as never);
-    // A token on the JWT must not bleed into scm* for a Google session.
-    vi.mocked(getToken).mockResolvedValue({ accessToken: "ya29.google" } as never);
     vi.mocked(controlPlaneFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto2" } }, { status: 201 })
     );
@@ -127,11 +117,12 @@ describe("automations API route (POST)", () => {
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent).toMatchObject({
-      authProvider: "google",
-      authUserId: "google-sub-1",
       authEmail: "pm@gmail.com",
-      userId: "google-sub-1",
+      authName: "Pat PM",
     });
+    expect(sent.userId).toBeUndefined();
+    expect(sent.authProvider).toBeUndefined();
+    expect(sent.authUserId).toBeUndefined();
     // Regression guard: the bug sent scmUserId = user.id = the Google sub, which
     // the control plane then stored under provider='github'. After the fix there
     // is no scm* block at all for a Google user.
@@ -141,5 +132,40 @@ describe("automations API route (POST)", () => {
     expect(sent.scmName).toBeUndefined();
     expect(sent.scmEmail).toBeUndefined();
     expect(sent.scmAvatarUrl).toBeUndefined();
+  });
+
+  it("drops non-allowlisted fields (including client-asserted identity) from the forwarded body", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: "12345", login: "ada", provider: "github" },
+    } as never);
+    vi.mocked(controlPlaneFetch).mockResolvedValue(
+      Response.json({ automation: { id: "auto3" } }, { status: 201 })
+    );
+
+    const response = await POST(
+      postRequest({
+        ...validBody,
+        userId: "attacker",
+        spawnSource: "user",
+        authProvider: "github",
+        authUserId: "someone-else",
+        actorUserId: "someone-else",
+        scmUserId: "someone-else",
+        scmToken: "gho_forged",
+        scmRefreshToken: "ghr_forged",
+      })
+    );
+
+    expect(response.status).toBe(201);
+    const sent = controlPlaneBody();
+    expect(sent.name).toBe("Daily sync");
+    expect(sent.userId).toBeUndefined();
+    expect(sent.spawnSource).toBeUndefined();
+    expect(sent.authProvider).toBeUndefined();
+    expect(sent.authUserId).toBeUndefined();
+    expect(sent.actorUserId).toBeUndefined();
+    expect(sent.scmUserId).toBeUndefined();
+    expect(sent.scmToken).toBeUndefined();
+    expect(sent.scmRefreshToken).toBeUndefined();
   });
 });

@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { automationRoutes } from "./automations";
 import { HttpError, resolveRepoOrError, type RequestContext } from "./shared";
+import type { Principal } from "../auth/principal";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 
@@ -114,10 +115,33 @@ function createEnv(): Env {
   } as Env;
 }
 
-function createCtx(): RequestContext {
+const USER_PRINCIPAL: Principal = {
+  kind: "user",
+  user: {
+    provider: "github",
+    providerUserId: "583231",
+    canonicalUserId: "user-1",
+    participantUserId: "user-1",
+  },
+  tokenId: "token-1",
+};
+
+const SLACK_BOT_PRINCIPAL: Principal = {
+  kind: "service",
+  service: "slack-bot",
+  actor: {
+    provider: "slack",
+    providerUserId: "U0123",
+    canonicalUserId: null,
+    participantUserId: "slack:U0123",
+  },
+};
+
+function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
+    principal,
     db: { batch: mockBatch } as unknown as SqlDatabase,
     metrics: {
       d1Queries: [],
@@ -131,7 +155,7 @@ function createCtx(): RequestContext {
 async function callRoute(
   method: string,
   path: string,
-  options?: { body?: unknown; query?: Record<string, string> }
+  options?: { body?: unknown; query?: Record<string, string>; principal?: Principal }
 ): Promise<Response> {
   const { handler, match } = getHandler(method, path);
   const url = new URL(`https://test.local${path}`);
@@ -145,7 +169,7 @@ async function callRoute(
     init.headers = { "Content-Type": "application/json" };
     init.body = JSON.stringify(options.body);
   }
-  return handler(new Request(url, init), createEnv(), match, createCtx());
+  return handler(new Request(url, init), createEnv(), match, createCtx(options?.principal));
 }
 
 // ─── Sample data ────────────────────────────────────────────────────────────
@@ -564,27 +588,7 @@ describe("automation route handlers", () => {
       });
     });
 
-    it("resolves user_id when scmUserId is provided", async () => {
-      mockStore.getById.mockResolvedValue(sampleRow);
-
-      const res = await callRoute("POST", "/automations", {
-        body: { ...validBody, scmUserId: "12345", scmLogin: "alice" },
-      });
-
-      expect(res.status).toBe(201);
-      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "github",
-          providerUserId: "12345",
-          providerLogin: "alice",
-        })
-      );
-      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ user_id: "resolved-user-1" })
-      );
-    });
-
-    it("creates automation with null user_id when scmUserId is missing", async () => {
+    it("stores the user principal's canonical id without consulting the user store", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", { body: validBody });
@@ -592,34 +596,46 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(201);
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
       expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ user_id: null })
+        expect.objectContaining({ created_by: "user-1", user_id: "user-1" })
       );
     });
 
-    it("resolves user_id for a Google automation (auth* fields, no scmUserId)", async () => {
+    it("resolves an unseen bot actor via the user store with body display fields", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", {
         body: {
           ...validBody,
-          authProvider: "google",
-          authUserId: "google-sub-1",
-          authEmail: "pm@corp.com",
-          authName: "PM Person",
+          actorDisplayName: "Alice",
+          actorEmail: "alice@corp.com",
+          actorAvatarUrl: "https://avatars.test/alice.png",
         },
+        principal: SLACK_BOT_PRINCIPAL,
       });
 
       expect(res.status).toBe(201);
-      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "google",
-          providerUserId: "google-sub-1",
-          providerEmail: "pm@corp.com",
-        })
-      );
+      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith({
+        provider: "slack",
+        providerUserId: "U0123",
+        displayName: "Alice",
+        providerEmail: "alice@corp.com",
+        avatarUrl: "https://avatars.test/alice.png",
+      });
       expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ user_id: "resolved-user-1" })
+        expect.objectContaining({ created_by: "slack:U0123", user_id: "resolved-user-1" })
       );
+    });
+
+    it("rejects forbidden body identity fields", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, scmUserId: "12345" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "Field 'scmUserId' is not accepted from verified callers",
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("stores reasoning effort when valid for the selected model", async () => {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
-import { generateInternalToken } from "./auth/internal";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
 
@@ -80,15 +80,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   });
 
   async function makeRequest(env: Record<string, unknown>): Promise<Response> {
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET as string);
-
     return handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({ title: "Child task", prompt: "Do the thing" }),
       }),
       env as never
@@ -116,7 +110,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -173,7 +167,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -205,7 +199,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -214,15 +208,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-
     const response = await handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
@@ -245,7 +233,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     });
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -254,15 +242,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-
     const response = await handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({ title: "Child task" }),
       }),
       env as never
@@ -284,7 +266,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -317,7 +299,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -359,7 +341,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -387,7 +369,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -396,15 +378,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-
     const response = await handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
@@ -432,7 +408,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -472,7 +448,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {

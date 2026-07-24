@@ -5,10 +5,6 @@ vi.mock("next-auth", () => ({
   getServerSession: vi.fn(),
 }));
 
-vi.mock("next-auth/jwt", () => ({
-  getToken: vi.fn(),
-}));
-
 vi.mock("@/lib/auth", () => ({
   authOptions: {},
 }));
@@ -18,7 +14,6 @@ vi.mock("@/lib/control-plane", () => ({
 }));
 
 import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import { clearCurrentUserIdCacheForTests } from "@/lib/current-user";
 import { GET, POST } from "./route";
@@ -242,7 +237,7 @@ describe("sessions API route (POST)", () => {
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
-  it("sends auth* and scm* for a GitHub session", async () => {
+  it("sends auth* display and scm* attribution for a GitHub session — never identity or credentials", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: {
         id: "12345",
@@ -253,11 +248,6 @@ describe("sessions API route (POST)", () => {
         provider: "github",
       },
     } as never);
-    vi.mocked(getToken).mockResolvedValue({
-      accessToken: "gho_abc",
-      refreshToken: "ghr_def",
-      accessTokenExpiresAt: 1_700_000_000_000,
-    } as never);
     vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess1" }, { status: 201 }));
 
     const response = await POST(postRequest({ repoOwner: "o", repoName: "r", model: "m" }));
@@ -267,29 +257,33 @@ describe("sessions API route (POST)", () => {
       "/sessions",
       expect.objectContaining({ method: "POST" })
     );
-    expect(controlPlaneBody()).toMatchObject({
+    const sent = controlPlaneBody();
+    expect(sent).toMatchObject({
       repoOwner: "o",
       repoName: "r",
       model: "m",
-      spawnSource: "user",
-      userId: "12345",
-      authProvider: "github",
-      authUserId: "12345",
       authEmail: "ada@example.com",
       authName: "Ada Lovelace",
       authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmUserId: "12345",
       scmLogin: "ada",
       scmName: "Ada Lovelace",
       scmEmail: "ada@example.com",
       scmAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmToken: "gho_abc",
-      scmRefreshToken: "ghr_def",
-      scmTokenExpiresAt: 1_700_000_000_000,
     });
+    // Forbidden under strict identity enforcement: the control plane derives
+    // these from the Bearer principal, so the web must not send them.
+    expect(sent.userId).toBeUndefined();
+    expect(sent.spawnSource).toBeUndefined();
+    expect(sent.authProvider).toBeUndefined();
+    expect(sent.authUserId).toBeUndefined();
+    expect(sent.actorUserId).toBeUndefined();
+    expect(sent.scmUserId).toBeUndefined();
+    expect(sent.scmToken).toBeUndefined();
+    expect(sent.scmRefreshToken).toBeUndefined();
+    expect(sent.scmTokenExpiresAt).toBeUndefined();
   });
 
-  it("sends auth* but no scm* for a Google session (no token leak)", async () => {
+  it("sends auth* display but no scm* for a Google session", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: {
         id: "google-sub-1",
@@ -299,8 +293,6 @@ describe("sessions API route (POST)", () => {
         provider: "google",
       },
     } as never);
-    // A token on the JWT must not bleed into scm* for a Google session.
-    vi.mocked(getToken).mockResolvedValue({ accessToken: "ya29.google" } as never);
     vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess2" }, { status: 201 }));
 
     const response = await POST(postRequest({ repoOwner: "o", repoName: "r", model: "m" }));
@@ -308,11 +300,12 @@ describe("sessions API route (POST)", () => {
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent).toMatchObject({
-      authProvider: "google",
-      authUserId: "google-sub-1",
       authEmail: "pm@gmail.com",
-      userId: "google-sub-1",
+      authName: "Pat PM",
     });
+    expect(sent.userId).toBeUndefined();
+    expect(sent.authProvider).toBeUndefined();
+    expect(sent.authUserId).toBeUndefined();
     expect(sent.scmUserId).toBeUndefined();
     expect(sent.scmToken).toBeUndefined();
     expect(sent.scmLogin).toBeUndefined();
@@ -323,7 +316,6 @@ describe("sessions API route (POST)", () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "12345", provider: "github" },
     } as never);
-    vi.mocked(getToken).mockResolvedValue(null);
     vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess3" }, { status: 201 }));
 
     const response = await POST(postRequest({ environmentId: "env-1", model: "m" }));
@@ -340,7 +332,6 @@ describe("sessions API route (POST)", () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "12345", provider: "github" },
     } as never);
-    vi.mocked(getToken).mockResolvedValue(null);
     vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess4" }, { status: 201 }));
 
     const repositories = [
@@ -359,7 +350,6 @@ describe("sessions API route (POST)", () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "12345", provider: "github" },
     } as never);
-    vi.mocked(getToken).mockResolvedValue(null);
     vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ id: "sess5" }, { status: 201 }));
 
     const response = await POST(
@@ -375,10 +365,11 @@ describe("sessions API route (POST)", () => {
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent.environmentId).toBe("env-1");
-    // Identity fields stay server-derived.
-    expect(sent.userId).toBe("12345");
-    expect(sent.spawnSource).toBe("user");
+    // Client-asserted identity never reaches the control plane — under strict
+    // enforcement the body carries no identity fields at all.
+    expect(sent.userId).toBeUndefined();
+    expect(sent.spawnSource).toBeUndefined();
     expect(sent.scmToken).toBeUndefined();
-    expect(sent.authUserId).toBe("12345");
+    expect(sent.authUserId).toBeUndefined();
   });
 });

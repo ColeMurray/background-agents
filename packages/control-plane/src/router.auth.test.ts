@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
-
-const secret = "test-internal-secret";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 function createEnv(verifyStatus: number) {
   const fetch = vi
@@ -15,8 +14,7 @@ function createEnv(verifyStatus: number) {
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
 
-  return {
-    INTERNAL_CALLBACK_SECRET: secret,
+  const env = {
     SCM_PROVIDER: "gitlab",
     GITLAB_ACCESS_TOKEN: "glpat-test",
     DB: {
@@ -30,61 +28,79 @@ function createEnv(verifyStatus: number) {
       get: () => ({ fetch }),
     },
   };
+  return { env, doFetch: fetch };
 }
 
-function hasHmacFailure(warn: { mock: { calls: unknown[][] } }): boolean {
-  return warn.mock.calls.some(([message]: unknown[]) => {
-    const entry = JSON.parse(String(message)) as { event?: string };
-    return entry.event === "auth.hmac_failed";
-  });
-}
-
-describe("router authentication telemetry", () => {
+describe("router sandbox-token fallback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("does not log an HMAC failure for a valid sandbox token", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("accepts a valid sandbox token on a sandbox-accepting route", async () => {
+    const { env } = createEnv(204);
 
     const response = await handleRequest(
       new Request("https://test.local/sessions/session-1/scm-credentials", {
         method: "POST",
         headers: { Authorization: "Bearer valid-sandbox-token" },
       }),
-      createEnv(204) as never
+      env as never
     );
 
     expect(response.status).toBe(202);
-    expect(hasHmacFailure(warn)).toBe(false);
   });
 
-  it("logs an HMAC failure when all accepted authentication schemes fail", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("rejects when sandbox verification also fails", async () => {
+    const { env } = createEnv(401);
 
     const response = await handleRequest(
       new Request("https://test.local/sessions/session-1/scm-credentials", {
         method: "POST",
         headers: { Authorization: "Bearer invalid-token" },
       }),
-      createEnv(401) as never
+      env as never
     );
 
     expect(response.status).toBe(401);
-    expect(hasHmacFailure(warn)).toBe(true);
   });
 
-  it("logs an HMAC failure for a non-sandbox route", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("rejects unrecognized credentials on a non-sandbox route without trying sandbox auth", async () => {
+    const { env, doFetch } = createEnv(401);
 
     const response = await handleRequest(
       new Request("https://test.local/analytics/summary", {
         headers: { Authorization: "Bearer invalid-token" },
       }),
-      createEnv(401) as never
+      env as never
     );
 
     expect(response.status).toBe(401);
-    expect(hasHmacFailure(warn)).toBe(true);
+    expect(doFetch).not.toHaveBeenCalled();
   });
+});
+
+describe("auth token routes are SCM-agnostic", () => {
+  // Guards the isScmAgnosticRoute entry for /auth/tokens/*: dropping it would
+  // 501 exchange/refresh on non-GitHub deployments before the handlers run.
+  it.each(["exchange", "refresh"])(
+    "reaches /auth/tokens/%s under a gitlab provider",
+    async (route) => {
+      const env = {
+        ...TEST_SERVICE_SECRETS,
+        SCM_PROVIDER: "gitlab",
+        DB: { prepare: vi.fn(), batch: vi.fn(), exec: vi.fn(), dump: vi.fn() },
+      };
+
+      const response = await handleRequest(
+        await signedServiceRequest(`https://test.local/auth/tokens/${route}`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        }),
+        env as never
+      );
+
+      // 400 = the handler's schema rejection; the SCM gate (501) did not fire.
+      expect(response.status).toBe(400);
+    }
+  );
 });

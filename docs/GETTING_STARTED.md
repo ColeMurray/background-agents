@@ -294,6 +294,14 @@ access.
    > `{deployment_name}` is the unique value you set in `terraform.tfvars` (e.g., your GitHub
    > username or company name).
 
+   > **Keep "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
+   > the default for newly created Apps, but activate it if yours predates that default). Expiring
+   > user tokens are what make GitHub return a **refresh token** at sign-in, and Open-Inspect stores
+   > that per-user credential so sessions clone, commit, and push **as the signed-in user**. With
+   > expiration deactivated — or on an **OAuth App**, which never issues a refresh token — no
+   > per-user credential is captured and sessions fall back to the shared GitHub App **bot**
+   > identity for repository access.
+
 5. Set **Repository permissions**:
    - Contents: **Read & Write**
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
@@ -429,9 +437,6 @@ echo "token_encryption_key: $(openssl rand -base64 32)"
 # Repo secrets encryption key
 echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
 
-# Internal callback secret
-echo "internal_callback_secret: $(openssl rand -base64 32)"
-
 # Modal API secret (use hex for this one)
 echo "modal_api_secret: $(openssl rand -hex 32)"
 
@@ -556,7 +561,6 @@ anthropic_api_key = "sk-ant-..."
 # Security Secrets (from Step 5)
 token_encryption_key          = "your-generated-value"
 repo_secrets_encryption_key   = "your-generated-value"
-internal_callback_secret      = "your-generated-value"
 modal_api_secret         = "your-generated-value"
 nextauth_secret          = "your-generated-value"
 
@@ -950,7 +954,6 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `DEEPSEEK_API_KEY`               | DeepSeek API key (optional, required only for DeepSeek models)                              |
 | `TOKEN_ENCRYPTION_KEY`           | Generated encryption key (OAuth tokens)                                                     |
 | `REPO_SECRETS_ENCRYPTION_KEY`    | Generated encryption key (repo secrets)                                                     |
-| `INTERNAL_CALLBACK_SECRET`       | Generated callback secret                                                                   |
 | `MODAL_API_SECRET`               | Generated Modal API secret                                                                  |
 | `NEXTAUTH_SECRET`                | Generated NextAuth secret                                                                   |
 | `ALLOWED_USERS`                  | Comma-separated GitHub usernames (or empty for all users)                                   |

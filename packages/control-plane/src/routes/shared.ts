@@ -4,6 +4,7 @@
 
 import { decodeRepositoryPathSegments } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
+import type { Principal } from "../auth/principal";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
@@ -29,6 +30,11 @@ export type RequestContext = CorrelationContext & {
   db: SqlDatabase;
   /** Worker ExecutionContext for waitUntil (background tasks). */
   executionCtx?: ExecutionContext;
+  /**
+   * The request's verified principal. Absent only on public routes and CORS
+   * preflights — every authenticated request carries one.
+   */
+  principal?: Principal;
 };
 
 /**

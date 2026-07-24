@@ -1,10 +1,10 @@
 import {
-  buildInternalAuthHeaders,
   createSessionResponseSchema,
   escapeRegExp,
   resolveAppName,
   sendPromptResponseSchema,
 } from "@open-inspect/shared";
+import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -29,16 +29,9 @@ export function isReviewRequestedForBot(payload: unknown, botUsername: string): 
   return parsed.data.requested_reviewer?.login === botUsername;
 }
 
-async function getAuthHeaders(env: Env, traceId: string): Promise<Record<string, string>> {
-  return {
-    "Content-Type": "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-}
-
 async function createSession(
-  controlPlane: Fetcher,
-  headers: Record<string, string>,
+  env: Env,
+  traceId: string,
   params: {
     target: SessionTargetFields;
     title: string;
@@ -54,17 +47,19 @@ async function createSession(
     title: params.title,
     model: params.model,
     scmLogin: params.scmLogin,
-    scmUserId: params.scmUserId,
     scmAvatarUrl: params.scmAvatarUrl,
-    spawnSource: "github-bot",
   };
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
   }
-  const response = await controlPlane.fetch("https://internal/sessions", {
+  const url = "https://internal/sessions";
+  const bodyText = JSON.stringify(body);
+  const response = await signedControlPlaneFetch(env, {
     method: "POST",
-    headers,
-    body: JSON.stringify(body),
+    url,
+    body: bodyText,
+    actor: `github:${params.scmUserId}`,
+    traceId,
   });
   if (!response.ok) {
     const body = await response.text();
@@ -78,15 +73,19 @@ async function createSession(
 }
 
 async function sendPrompt(
-  controlPlane: Fetcher,
-  headers: Record<string, string>,
+  env: Env,
+  traceId: string,
   sessionId: string,
   params: { content: string; authorId: string }
 ): Promise<string> {
-  const response = await controlPlane.fetch(`https://internal/sessions/${sessionId}/prompt`, {
+  const url = `https://internal/sessions/${sessionId}/prompt`;
+  const bodyText = JSON.stringify({ content: params.content, source: "github" });
+  const response = await signedControlPlaneFetch(env, {
     method: "POST",
-    headers,
-    body: JSON.stringify({ ...params, source: "github" }),
+    url,
+    body: bodyText,
+    actor: params.authorId.startsWith("github:") ? params.authorId : undefined,
+    traceId,
   });
   if (!response.ok) {
     const body = await response.text();
@@ -120,7 +119,7 @@ function fireAndForgetReaction(
 }
 
 type CallerGatingResult =
-  | { allowed: true; ghToken: string; headers: Record<string, string> }
+  | { allowed: true; ghToken: string }
   | {
       allowed: false;
       reason: "sender_not_allowed" | "sender_insufficient_permission" | "permission_check_failed";
@@ -144,15 +143,12 @@ async function resolveCallerGating(
   }
 
   const userAgent = resolveAppName(env);
-  const [ghToken, headers] = await Promise.all([
-    generateInstallationToken({
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: env.GITHUB_APP_INSTALLATION_ID,
-      userAgent,
-    }),
-    getAuthHeaders(env, traceId),
-  ]);
+  const ghToken = await generateInstallationToken({
+    appId: env.GITHUB_APP_ID,
+    privateKey: env.GITHUB_APP_PRIVATE_KEY,
+    installationId: env.GITHUB_APP_INSTALLATION_ID,
+    userAgent,
+  });
 
   if (config.allowedTriggerUsers === null) {
     const { hasPermission, error } = await checkSenderPermission(
@@ -176,7 +172,7 @@ async function resolveCallerGating(
     }
   }
 
-  return { allowed: true, ghToken, headers };
+  return { allowed: true, ghToken };
 }
 
 export async function handleReviewRequested(
@@ -216,7 +212,7 @@ export async function handleReviewRequested(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
@@ -233,10 +229,9 @@ export async function handleReviewRequested(
     senderLogin: sender.login,
     config,
     ghToken,
-    headers,
     traceId,
   });
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+  const sessionId = await createSession(env, traceId, {
     target,
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
@@ -260,7 +255,7 @@ export async function handleReviewRequested(
     codeReviewInstructions: config.codeReviewInstructions,
   });
 
-  const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
+  const messageId = await sendPrompt(env, traceId, sessionId, {
     content: prompt,
     authorId: `github:${payload.sender.id}`,
   });
@@ -324,7 +319,7 @@ export async function handlePullRequestOpened(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
@@ -341,10 +336,9 @@ export async function handlePullRequestOpened(
     senderLogin: sender.login,
     config,
     ghToken,
-    headers,
     traceId,
   });
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+  const sessionId = await createSession(env, traceId, {
     target,
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
@@ -368,7 +362,7 @@ export async function handlePullRequestOpened(
     codeReviewInstructions: config.codeReviewInstructions,
   });
 
-  const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
+  const messageId = await sendPrompt(env, traceId, sessionId, {
     content: prompt,
     authorId: `github:${sender.id}`,
   });
@@ -436,7 +430,7 @@ export async function handleIssueComment(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken } = gating;
 
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
@@ -455,10 +449,9 @@ export async function handleIssueComment(
     senderLogin: sender.login,
     config,
     ghToken,
-    headers,
     traceId,
   });
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+  const sessionId = await createSession(env, traceId, {
     target,
     title: `GitHub: PR #${issue.number} comment`,
     model: config.model,
@@ -480,7 +473,7 @@ export async function handleIssueComment(
     commentActionInstructions: config.commentActionInstructions,
   });
 
-  const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
+  const messageId = await sendPrompt(env, traceId, sessionId, {
     content: prompt,
     authorId: `github:${sender.id}`,
   });
@@ -543,7 +536,7 @@ export async function handleReviewComment(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken } = gating;
 
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
@@ -562,10 +555,9 @@ export async function handleReviewComment(
     senderLogin: sender.login,
     config,
     ghToken,
-    headers,
     traceId,
   });
-  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+  const sessionId = await createSession(env, traceId, {
     target,
     title: `GitHub: PR #${pr.number} review comment`,
     model: config.model,
@@ -592,7 +584,7 @@ export async function handleReviewComment(
     commentActionInstructions: config.commentActionInstructions,
   });
 
-  const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
+  const messageId = await sendPrompt(env, traceId, sessionId, {
     content: prompt,
     authorId: `github:${sender.id}`,
   });

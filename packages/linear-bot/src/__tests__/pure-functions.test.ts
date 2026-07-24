@@ -5,7 +5,6 @@ import {
   resolveStaticTarget,
 } from "../model-resolution";
 import { isValidPayload } from "../callbacks";
-import { verifyCallbackSignature } from "../utils/crypto";
 import { buildOAuthSuccessHtml } from "../index";
 import type { CompletionCallback } from "../types";
 
@@ -260,65 +259,5 @@ describe("isValidPayload", () => {
   it("rejects missing signature", () => {
     const { signature: _signature, ...rest } = validPayload;
     expect(isValidPayload(rest)).toBe(false);
-  });
-});
-
-// ─── verifyCallbackSignature ────────────────────────────────────────────────
-
-describe("verifyCallbackSignature", () => {
-  const secret = "test-secret-key";
-
-  async function signPayload(data: Record<string, unknown>): Promise<string> {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    );
-    const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(data)));
-    return Array.from(new Uint8Array(sig))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
-  it("returns true for valid signature", async () => {
-    const data = {
-      sessionId: "sess-1",
-      messageId: "msg-1",
-      success: true,
-      timestamp: 1234567890,
-      context: {
-        source: "linear" as const,
-        issueId: "issue-1",
-        issueIdentifier: "ENG-1",
-        issueUrl: "https://linear.app/issue/ENG-1",
-        repoFullName: "org/repo",
-        model: "claude-sonnet-4-5",
-      },
-    };
-    const signature = await signPayload(data);
-    const payload = { ...data, signature } as CompletionCallback;
-    expect(await verifyCallbackSignature(payload, secret)).toBe(true);
-  });
-
-  it("returns false for invalid signature", async () => {
-    const payload: CompletionCallback = {
-      sessionId: "sess-1",
-      messageId: "msg-1",
-      success: true,
-      timestamp: 1234567890,
-      signature: "invalid-hex-signature",
-      context: {
-        source: "linear",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-1",
-        issueUrl: "https://linear.app/issue/ENG-1",
-        repoFullName: "org/repo",
-        model: "claude-sonnet-4-5",
-      },
-    };
-    expect(await verifyCallbackSignature(payload, secret)).toBe(false);
   });
 });

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAuthDisplay,
   buildAuthIdentity,
-  buildScmCredentials,
+  buildScmAttribution,
   isAuthProvider,
   resolveAuthProvider,
   type AuthIdentityUser,
@@ -22,12 +23,6 @@ const googleUser: AuthIdentityUser = {
   email: "pm@gmail.com",
   image: "https://lh3.googleusercontent.com/a/pat",
   provider: "google",
-};
-
-const tokens = {
-  accessToken: "gho_abc",
-  refreshToken: "ghr_def",
-  accessTokenExpiresAt: 1_700_000_000_000,
 };
 
 describe("resolveAuthProvider", () => {
@@ -89,40 +84,48 @@ describe("buildAuthIdentity", () => {
   });
 });
 
-describe("buildScmCredentials", () => {
-  it("returns the full GitHub SCM block including the OAuth token", () => {
-    expect(buildScmCredentials(githubUser, tokens)).toEqual({
-      scmUserId: "12345",
+describe("buildAuthDisplay", () => {
+  it("returns display fields only — never authProvider/authUserId (forbidden under strict)", () => {
+    expect(buildAuthDisplay(githubUser)).toEqual({
+      authEmail: "ada@example.com",
+      authName: "Ada Lovelace",
+      authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
+    });
+    expect(buildAuthDisplay(googleUser)).toEqual({
+      authEmail: "pm@gmail.com",
+      authName: "Pat PM",
+      authAvatarUrl: "https://lh3.googleusercontent.com/a/pat",
+    });
+  });
+
+  it("normalizes null fields to undefined", () => {
+    expect(buildAuthDisplay({ id: "12345", name: null, email: null, image: null })).toEqual({
+      authEmail: undefined,
+      authName: undefined,
+      authAvatarUrl: undefined,
+    });
+  });
+});
+
+describe("buildScmAttribution", () => {
+  it("returns the GitHub attribution block — never credentials (forbidden under strict)", () => {
+    expect(buildScmAttribution(githubUser)).toEqual({
       scmLogin: "ada",
       scmName: "Ada Lovelace",
       scmEmail: "ada@example.com",
       scmAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmToken: "gho_abc",
-      scmRefreshToken: "ghr_def",
-      scmTokenExpiresAt: 1_700_000_000_000,
     });
   });
 
-  it("returns an empty object for Google — no scm* fields, and no token leak even if one is passed", () => {
-    // The credential-leak gate (F1/F2): a Google session must never carry an
-    // SCM token, regardless of what the JWT holds.
-    expect(buildScmCredentials(googleUser, { accessToken: "ya29.google-token" })).toEqual({});
+  it("returns an empty object for Google — no scm* fields at all", () => {
+    // The provider gate (F1/F2): a Google session must never carry scm*
+    // attribution, which the control plane would store as GitHub identity.
+    expect(buildScmAttribution(googleUser)).toEqual({});
   });
 
   it("treats a missing provider as GitHub (legacy session back-compat)", () => {
-    expect(buildScmCredentials({ id: "12345", login: "ada" }, tokens)).toMatchObject({
-      scmUserId: "12345",
+    expect(buildScmAttribution({ id: "12345", login: "ada" })).toMatchObject({
       scmLogin: "ada",
-      scmToken: "gho_abc",
-    });
-  });
-
-  it("tolerates absent tokens", () => {
-    expect(buildScmCredentials(githubUser, null)).toMatchObject({
-      scmUserId: "12345",
-      scmToken: undefined,
-      scmRefreshToken: undefined,
-      scmTokenExpiresAt: undefined,
     });
   });
 });

@@ -53,7 +53,7 @@ module "github_bot_worker" {
     { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
     { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     { name = "GITHUB_WEBHOOK_SECRET", value = var.github_webhook_secret },
-    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_github_bot.result },
   ]
 
   compatibility_date  = "2024-09-23"

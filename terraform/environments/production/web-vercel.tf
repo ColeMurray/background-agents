@@ -81,8 +81,8 @@ module "web_app" {
     },
     # Internal
     {
-      key       = "INTERNAL_CALLBACK_SECRET"
-      value     = var.internal_callback_secret
+      key       = "SERVICE_AUTH_SECRET"
+      value     = random_password.service_auth_secret_web.result
       targets   = ["production", "preview"]
       sensitive = true
     },

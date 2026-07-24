@@ -7,7 +7,7 @@ import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 function makeEnv(fetch: ReturnType<typeof vi.fn>): Env {
   return {
     CONTROL_PLANE: { fetch } as unknown as Fetcher,
-    INTERNAL_CALLBACK_SECRET: "test-secret",
+    SERVICE_AUTH_SECRET: "test-secret",
     LOG_LEVEL: "error",
   } as Env;
 }
@@ -122,7 +122,7 @@ describe("control plane client request payloads", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates repository sessions with target, model, branch, and Slack actor identity", async () => {
+  it("creates repository sessions with target, model, and branch — identity stays out of the body", async () => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       okJson({ sessionId: "session-1", status: "created" })
     );
@@ -143,14 +143,15 @@ describe("control plane client request payloads", () => {
     const [url, init] = fetch.mock.calls[0] as [RequestInfo | URL, RequestInit];
     expect(url).toBe("https://internal/sessions");
     expect(init.method).toBe("POST");
+    // The Slack actor rides the signed X-OpenInspect-Actor header, never the
+    // body — the control plane rejects body identity fields from verified
+    // callers. Only display fields stay body-carried.
     expect(parseRequestBody(fetch)).toEqual({
       repoOwner: "acme",
       repoName: "app",
       branch: "feature/slack-images",
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
-      spawnSource: "slack-bot",
-      actorUserId: "U123",
       actorDisplayName: "Ada Lovelace",
       actorEmail: "ada@example.com",
     });
@@ -170,7 +171,6 @@ describe("control plane client request payloads", () => {
     expect(parseRequestBody(fetch)).toEqual({
       environmentId: "env-1",
       model: "anthropic/claude-sonnet-4-6",
-      spawnSource: "slack-bot",
     });
   });
 
@@ -194,14 +194,72 @@ describe("control plane client request payloads", () => {
 
     expect(parseRequestBody(fetch, 0)).toEqual({
       content: "Use the screenshot",
-      authorId: "slack:U123",
       source: "slack",
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
     });
     expect(parseRequestBody(fetch, 1)).toEqual({
       content: "No attachments",
-      authorId: "slack:U123",
       source: "slack",
     });
+  });
+});
+
+describe("service credential headers", () => {
+  function makeServiceEnv(fetch: ReturnType<typeof vi.fn>): Env {
+    return {
+      ...makeEnv(fetch),
+      SERVICE_AUTH_SECRET: "slack-service-secret",
+    } as Env;
+  }
+
+  function sentHeaders(fetch: ReturnType<typeof vi.fn>): Record<string, string> {
+    return (fetch.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>;
+  }
+
+  it("signs session creation with sig1 and asserts the Slack actor", async () => {
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ sessionId: "s1", status: "created" }))
+    );
+    await createSession(makeServiceEnv(fetch), {
+      target,
+      model: "openai/gpt-5.4",
+      slackUserId: "U0123",
+    });
+
+    const headers = sentHeaders(fetch);
+    expect(headers["X-OpenInspect-Service"]).toBe("slack-bot");
+    expect(headers["X-OpenInspect-Service-Signature"]).toMatch(/^sig1\./);
+    expect(headers["X-OpenInspect-Actor"]).toBe("slack:U0123");
+    expect(headers["Authorization"]).toBeUndefined();
+  });
+
+  it("signs prompts with the author as the asserted actor", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ messageId: "m1" })));
+    await sendPrompt(makeServiceEnv(fetch), {
+      sessionId: "session-1",
+      content: "Fix it",
+      authorId: "slack:U456",
+    });
+
+    const headers = sentHeaders(fetch);
+    expect(headers["X-OpenInspect-Service-Signature"]).toMatch(/^sig1\./);
+    expect(headers["X-OpenInspect-Actor"]).toBe("slack:U456");
+  });
+
+  it("sends no request at all when SERVICE_AUTH_SECRET is unset", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ messageId: "m1" })));
+    const env = {
+      CONTROL_PLANE: { fetch } as unknown as Fetcher,
+      LOG_LEVEL: "error",
+    } as Env;
+
+    const result = await sendPrompt(env, {
+      sessionId: "session-1",
+      content: "Fix it",
+      authorId: "slack:U456",
+    });
+
+    expect(result).toEqual({ ok: false, reason: "transient" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

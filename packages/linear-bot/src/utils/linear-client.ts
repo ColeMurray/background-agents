@@ -10,7 +10,7 @@ import {
   type LinearIssueDetails,
 } from "../types";
 import { timingSafeEqual } from "@open-inspect/shared";
-import { computeHmacHex } from "./crypto";
+import { computeHmacHex } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import {
   getClientCredentialsTokenOrThrow,

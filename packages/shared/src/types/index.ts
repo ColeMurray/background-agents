@@ -151,7 +151,6 @@ export type {
 } from "./session-diffs";
 
 export {
-  userPreferencesRequestSchema,
   linearCallbackContextSchema,
   linearStartCallbackSchema,
   createSessionRequestSchema,
@@ -165,7 +164,6 @@ export {
 } from "./session-api";
 export type {
   UserPreferences,
-  UserPreferencesRequest,
   SlackCallbackContext,
   LinearCallbackContext,
   LinearStartCallback,

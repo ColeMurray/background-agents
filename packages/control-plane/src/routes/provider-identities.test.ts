@@ -25,6 +25,9 @@ function createCtx(): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     db: {} as SqlDatabase,
+    // The real upsert caller: web's BFF during the OAuth sign-in flow. Only
+    // it (or the matching user) passes enforceProviderIdentityPath.
+    principal: { kind: "service", service: "web", actor: null },
     metrics: {
       d1Queries: [],
       spans: {},
@@ -62,6 +65,43 @@ async function callProviderIdentityRouteWithoutBody(path: string): Promise<Respo
     match,
     createCtx()
   );
+}
+
+async function callProviderIdentityRouteAs(
+  ctx: RequestContext,
+  path: string,
+  body: unknown
+): Promise<Response> {
+  const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
+  const match = path.match(route.pattern);
+  if (!match) throw new Error(`No route match for ${path}`);
+
+  return route.handler(
+    new Request(`https://test.local${path}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    createEnv(),
+    match,
+    ctx
+  );
+}
+
+function userCtx(canonicalUserId: string): RequestContext {
+  return {
+    ...createCtx(),
+    principal: {
+      kind: "user",
+      user: {
+        provider: "github",
+        providerUserId: "12345",
+        canonicalUserId,
+        participantUserId: canonicalUserId,
+      },
+      tokenId: "tok-1",
+    },
+  };
 }
 
 describe("provider identity routes", () => {
@@ -171,6 +211,35 @@ describe("provider identity routes", () => {
 
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "providerUserId is required" });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+    });
+
+    it("returns a matching user's token-fixed canonical id without mutating identity", async () => {
+      // Identity-takeover guard: even with a foreign providerEmail in the body,
+      // a matching user resolves to the id its token carries and
+      // resolveOrCreateUser is never invoked (no email-based re-link).
+      const response = await callProviderIdentityRouteAs(
+        userCtx("0123456789abcdef0123456789abcdef"),
+        "/provider-identities/github/12345",
+        { providerEmail: "victim@example.com" }
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        userId: "0123456789abcdef0123456789abcdef",
+      });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+    });
+
+    it("403s a user principal targeting a different identity path", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const response = await callProviderIdentityRouteAs(
+        userCtx("0123456789abcdef0123456789abcdef"),
+        "/provider-identities/github/999999",
+        { providerEmail: "victim@example.com" }
+      );
+
+      expect(response.status).toBe(403);
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
     });
 

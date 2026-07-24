@@ -16,6 +16,8 @@ import {
 } from "@open-inspect/shared";
 import { z } from "zod";
 
+import { base64UrlEncode } from "./encoding";
+
 /** Timeout for individual GitHub API requests (ms). */
 export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
 
@@ -130,16 +132,6 @@ const listInstallationReposResponseSchema = z.object({
 type ListInstallationReposResponse = z.infer<typeof listInstallationReposResponseSchema>;
 
 const repositoryBranchesResponseSchema = z.array(z.object({ name: z.string() }));
-
-/**
- * Base64URL encode a Uint8Array or string.
- */
-function base64UrlEncode(input: Uint8Array | string): string {
-  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
-
-  const base64 = btoa(String.fromCharCode(...bytes));
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
 
 /**
  * Parse PEM-encoded private key to raw bytes.

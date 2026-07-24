@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { generateInternalToken } from "./auth/internal";
 import { handleRequest } from "./router";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 const mockStore = {
   getSummary: vi.fn(),
@@ -41,7 +41,7 @@ describe("analytics router integration", () => {
     });
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
       DB: {
         prepare: vi.fn(),
@@ -51,13 +51,8 @@ describe("analytics router integration", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
     const response = await handleRequest(
-      new Request("https://test.local/analytics/summary", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }),
+      await signedServiceRequest("https://test.local/analytics/summary"),
       env as never
     );
 

@@ -2,13 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
 
-vi.mock("../src/utils/internal", () => ({
-  generateInternalToken: vi.fn().mockResolvedValue("test-internal-token"),
-  buildInternalAuthHeaders: vi.fn().mockResolvedValue({
-    Authorization: "Bearer test-internal-token",
-  }),
-}));
-
 import { getGitHubConfig } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
@@ -26,7 +19,7 @@ function createMockEnv(fetchImpl: (url: string, init?: RequestInit) => Promise<R
     GITHUB_KV: { get: vi.fn(), put: vi.fn() },
     CONTROL_PLANE: { fetch: vi.fn(fetchImpl) },
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
-    INTERNAL_CALLBACK_SECRET: "test-secret",
+    SERVICE_AUTH_SECRET: "test-secret",
   } as unknown as Env;
 }
 

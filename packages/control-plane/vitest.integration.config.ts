@@ -46,8 +46,16 @@ export default defineConfig({
         },
         miniflare: {
           bindings: {
-            INTERNAL_CALLBACK_SECRET: "test-hmac-secret-for-integration-tests",
-            TOKEN_ENCRYPTION_KEY: "test-encryption-key-32chars-long!",
+            IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
+            SERVICE_AUTH_SECRET_WEB: "test-service-secret-web",
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-service-secret-slack-bot",
+            SERVICE_AUTH_SECRET_GITHUB_BOT: "test-service-secret-github-bot",
+            SERVICE_AUTH_SECRET_LINEAR_BOT: "test-service-secret-linear-bot",
+            SERVICE_AUTH_SECRET_MODAL: "test-service-secret-modal",
+            // Must be valid base64 for 32 bytes — the exchange route's SCM
+            // capture encrypts with it inline (fail-closed) rather than
+            // inside a swallowed waitUntil.
+            TOKEN_ENCRYPTION_KEY: generateTestEncryptionKey(),
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             DEPLOYMENT_NAME: "integration-test",
             MODAL_API_SECRET: "test-modal-api-secret",

@@ -41,7 +41,8 @@ function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
   const sleep = vi.fn(async () => {});
 
   const env: CallbackServiceEnv = {
-    INTERNAL_CALLBACK_SECRET: "test-secret",
+    SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+    SERVICE_AUTH_SECRET_LINEAR_BOT: "test-secret",
     SLACK_BOT: slackBot,
     LINEAR_BOT: linearBot,
     ...overrides?.env,
@@ -109,8 +110,13 @@ describe("CallbackNotificationService", () => {
       ).not.toHaveBeenCalled();
     });
 
-    it("skips when no INTERNAL_CALLBACK_SECRET", async () => {
-      const h = createTestHarness({ env: { INTERNAL_CALLBACK_SECRET: undefined } });
+    it("skips when the destination bot's signing secret is unbound", async () => {
+      const h = createTestHarness({
+        env: {
+          SERVICE_AUTH_SECRET_SLACK_BOT: undefined,
+          SERVICE_AUTH_SECRET_LINEAR_BOT: undefined,
+        },
+      });
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ channel: "C123" }),
         source: "slack",
@@ -534,7 +540,12 @@ describe("CallbackNotificationService", () => {
     });
 
     it("skips when no secret configured", async () => {
-      const h = createTestHarness({ env: { INTERNAL_CALLBACK_SECRET: undefined } });
+      const h = createTestHarness({
+        env: {
+          SERVICE_AUTH_SECRET_SLACK_BOT: undefined,
+          SERVICE_AUTH_SECRET_LINEAR_BOT: undefined,
+        },
+      });
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ channel: "C123" }),
         source: "slack",

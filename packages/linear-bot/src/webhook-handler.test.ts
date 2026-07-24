@@ -297,7 +297,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       }),
       "config:project-repos": JSON.stringify({ "project-1": { environmentId: "env_abc" } }),
     });
-    const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
+    const env = makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: "service-auth-secret" });
     const fetchMock = stubControlPlane(env);
 
     await handleAgentSessionEvent(makeWebhook(), env, "trace-env-1");
@@ -306,9 +306,10 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(body).toMatchObject({
       environmentId: "env_abc",
       title: "ENG-42: Wire the fullstack flow",
-      spawnSource: "linear-bot",
-      actorUserId: "human-user-1",
     });
+    // Identity travels via the signed actor assertion, never the body.
+    expect(body).not.toHaveProperty("spawnSource");
+    expect(body).not.toHaveProperty("actorUserId");
     expect(body).not.toHaveProperty("repoOwner");
     expect(body).not.toHaveProperty("repoName");
 
@@ -468,6 +469,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
       throw new Error(`Unexpected control-plane fetch to ${url}`);
@@ -485,8 +487,9 @@ describe("handleAgentSessionEvent environment targets", () => {
       String(input).endsWith("/prompt")
     );
     const body = JSON.parse(String(promptCall?.[1]?.body)) as Record<string, unknown>;
+    // Identity travels via the signed actor assertion, never the body.
+    expect(body).not.toHaveProperty("authorId");
     expect(body).toMatchObject({
-      authorId: "linear:follow-up-human-user",
       callbackContext: {
         source: "linear",
         issueId: "issue-1",
@@ -573,7 +576,7 @@ describe("handleAgentSessionEvent environment targets", () => {
         createdAt: Date.now(),
       }),
     });
-    const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
+    const env = makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: "service-auth-secret" });
     const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
@@ -634,6 +637,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
       throw new Error(`Unexpected control-plane fetch to ${url}`);

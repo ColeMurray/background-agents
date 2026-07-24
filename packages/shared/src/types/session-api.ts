@@ -3,12 +3,7 @@ import { recordSchema, type AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import type { Session } from "./sessions";
-import {
-  sessionStatusSchema,
-  spawnSourceSchema,
-  type SandboxStatus,
-  type SessionStatus,
-} from "./statuses";
+import { sessionStatusSchema, type SandboxStatus, type SessionStatus } from "./statuses";
 
 export interface UserPreferences {
   userId: string;
@@ -17,13 +12,6 @@ export interface UserPreferences {
   branch?: string;
   updatedAt: number;
 }
-
-export const userPreferencesRequestSchema = z.object({
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-});
-
-export type UserPreferencesRequest = z.infer<typeof userPreferencesRequestSchema>;
 
 export interface SlackCallbackContext {
   source: "slack";
@@ -172,25 +160,15 @@ export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
 export const createSessionInputSchema = createSessionRequestBaseSchema
   .extend({
-    userId: z.string().optional(),
-    spawnSource: spawnSourceSchema.optional(),
-    authProvider: z.enum(["github", "google"]).optional(),
-    authUserId: z.string().optional(),
-    authEmail: z.string().optional(),
-    authName: z.string().optional(),
-    authAvatarUrl: z.string().optional(),
-    scmUserId: z.string().optional(),
+    // Display-only identity fields. Callers may not assert identity or SCM
+    // credentials in the body — identity derives from the verified principal
+    // and the control plane rejects forbidden identity fields.
     scmLogin: z.string().optional(),
     scmName: z.string().optional(),
     scmEmail: z.string().optional(),
-    scmAvatarUrl: z.string().optional(),
-    actorUserId: z.string().optional(),
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
-    scmToken: z.string().optional(),
-    scmRefreshToken: z.string().optional(),
-    scmTokenExpiresAt: z.number().optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",
