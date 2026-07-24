@@ -245,12 +245,23 @@ export async function renewOiSessionTokens(token: JWT): Promise<{ changed: boole
       // Transient failure: keep the fields and retry on a later ping.
       return { changed: false };
     case "refresh_superseded":
-      // A concurrent renewal won (CP grace window): the cookie jar already
-      // holds the winner's fresh pair — never persist over it. The CP makes
-      // this call from row state; it must NOT be inferred here from access-
-      // token freshness (at wake-from-idle the access token is always
-      // expired, and clearing on a lost race wiped a live identity — the
-      // 2026-07-24 prod incident).
+      // A concurrent renewal won (CP grace window). In the common case the
+      // cookie jar holds the winner's fresh pair — never persist over it.
+      // The CP makes this call from row state; it must NOT be inferred here
+      // from access-token freshness (at wake-from-idle the access token is
+      // always expired, and clearing on a lost race wiped a live identity —
+      // the 2026-07-24 prod incident).
+      //
+      // KNOWN GAP: the jar holding the winner is not guaranteed. NextAuth's
+      // session route re-encodes the decoded JWT on every session read, so a
+      // stale in-flight response can restore the consumed token over the
+      // winner's cookie; the next renewal of that restored token outside the
+      // grace window then reads as reuse and revokes the family. Not fixable
+      // here: the winner's pair is unrecoverable (hash-at-rest), the doomed
+      // jar state is unobservable in this request, and clearing is strictly
+      // worse (wipes a live identity in the common case). The fix is moving
+      // the pair out of the NextAuth JWT into a single-writer store —
+      // session-auth roadmap Phase B.
       return { changed: false };
     case "invalid_refresh_token":
       // The grant is genuinely dead (unknown, revoked, or expired) — clear
