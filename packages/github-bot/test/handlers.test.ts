@@ -521,6 +521,10 @@ describe("handleIssueComment", () => {
     expect(promptBody.content).toContain("please fix the error handling");
     expect(promptBody.content).not.toContain("@test-bot[bot]");
     expect(promptBody.authorId).toBe("github:1002");
+    // env.GITHUB_BOT_USERNAME must reach buildCommentActionPrompt — without it
+    // the baseline-review jq filter would match no reviews and the
+    // CHANGES_REQUESTED supersede logic would silently break.
+    expect(promptBody.content).toContain('select(.author.login=="test-bot[bot]")');
   });
 
   it("returns early if not a PR", async () => {
@@ -620,6 +624,9 @@ describe("handleReviewComment", () => {
     expect(promptBody.content).toContain("const cache = new Map()");
     expect(promptBody.content).toContain("comments/200/replies");
     expect(promptBody.authorId).toBe("github:1003");
+    // See handleIssueComment counterpart: env.GITHUB_BOT_USERNAME must reach
+    // buildCommentActionPrompt for the baseline-review jq filter to work.
+    expect(promptBody.content).toContain('select(.author.login=="test-bot[bot]")');
   });
 
   it("returns early if no @mention", async () => {
