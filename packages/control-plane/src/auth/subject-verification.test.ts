@@ -19,14 +19,47 @@ function mockFetchResponse(status: number, body: unknown): void {
   );
 }
 
+const OCTOCAT = {
+  id: 583231,
+  login: "octocat",
+  name: "The Octocat",
+  email: null,
+  avatar_url: "https://avatars.example/octocat",
+};
+
+/** URL-aware GitHub mock: /user and /user/emails answer independently. */
+function mockGitHubFetch(opts: {
+  user?: { status?: number; body?: unknown };
+  emails?: { status?: number; body?: unknown; reject?: boolean };
+}): void {
+  vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "https://api.github.com/user") {
+      return new Response(JSON.stringify(opts.user?.body ?? OCTOCAT), {
+        status: opts.user?.status ?? 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url === "https://api.github.com/user/emails") {
+      if (opts.emails?.reject) throw new TypeError("network down");
+      return new Response(JSON.stringify(opts.emails?.body ?? []), {
+        status: opts.emails?.status ?? 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected url ${url}`);
+  });
+}
+
 describe("github-access-token", () => {
-  it("returns the provider-verified identity", async () => {
-    mockFetchResponse(200, {
-      id: 583231,
-      login: "octocat",
-      name: "The Octocat",
-      email: null,
-      avatar_url: "https://avatars.example/octocat",
+  it("resolves the verified primary email even when the public profile email is null", async () => {
+    mockGitHubFetch({
+      emails: {
+        body: [
+          { email: "secondary@example.com", primary: false, verified: true },
+          { email: "primary@example.com", primary: true, verified: true },
+        ],
+      },
     });
     const result = await verifySubjectToken("github-access-token", "gho_token");
     expect(result).toEqual({
@@ -35,12 +68,46 @@ describe("github-access-token", () => {
         provider: "github",
         providerUserId: "583231",
         providerLogin: "octocat",
-        providerEmail: undefined,
+        // The verified primary from /user/emails, NOT /user.email (null) — so
+        // email-based cross-provider linking mints the family on the right user.
+        providerEmail: "primary@example.com",
         displayName: "The Octocat",
         avatarUrl: "https://avatars.example/octocat",
       },
     });
-    expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toBe("https://api.github.com/user");
+    const urls = vi.mocked(globalThis.fetch).mock.calls.map((c) => String(c[0]));
+    expect(urls).toEqual(["https://api.github.com/user", "https://api.github.com/user/emails"]);
+  });
+
+  it("falls back to no email when /user/emails is forbidden (best-effort, exchange not failed)", async () => {
+    mockGitHubFetch({ emails: { status: 403, body: { message: "forbidden" } } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toMatchObject({
+      ok: true,
+      subject: { providerUserId: "583231", providerEmail: undefined },
+    });
+  });
+
+  it("falls back to no email when the /user/emails request errors", async () => {
+    mockGitHubFetch({ emails: { reject: true } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toMatchObject({
+      ok: true,
+      subject: { providerEmail: undefined },
+    });
+  });
+
+  it("never treats an unverified or non-primary email as the verified identity", async () => {
+    mockGitHubFetch({
+      emails: {
+        body: [
+          { email: "unverified-primary@example.com", primary: true, verified: false },
+          { email: "verified-secondary@example.com", primary: false, verified: true },
+        ],
+      },
+    });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toMatchObject({
+      ok: true,
+      subject: { providerEmail: undefined },
+    });
   });
 
   it("maps provider 401 to subject_rejected", async () => {

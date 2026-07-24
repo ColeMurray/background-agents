@@ -32,10 +32,18 @@ function installProviderFetchMock(): void {
         return Response.json({
           id: 583231,
           login: "octocat",
+          // No public profile email — the exchange must resolve the verified
+          // primary from /user/emails, matching the web sign-in flow.
+          email: null,
           name: "The Octocat",
-          email: "octocat@example.com",
           avatar_url: "https://avatars.example/octocat",
         });
+      }
+      if (url === "https://api.github.com/user/emails") {
+        if (providerMock.githubStatus !== 200) {
+          return Response.json({ message: "nope" }, { status: providerMock.githubStatus });
+        }
+        return Response.json([{ email: "octocat@example.com", primary: true, verified: true }]);
       }
       if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
         if (providerMock.googleStatus !== 200) {
@@ -155,6 +163,32 @@ describe("token exchange and refresh grant", () => {
     await exchangeGitHub();
     const users = await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
     expect(users?.n).toBe(1);
+  });
+
+  it("links a GitHub exchange with no public email to the email owner and mints the family there", async () => {
+    // A canonical user already owns the email (e.g. a prior Google sign-in).
+    const existing = await new UserStore(env.DB).createUser({
+      displayName: "Octo",
+      email: "octocat@example.com",
+      avatarUrl: null,
+    });
+
+    // GitHub /user.email is null; the verified primary resolved from
+    // /user/emails must link this exchange to `existing` instead of forking a
+    // second canonical user and stranding the 90-day family on the orphan.
+    await exchangeGitHub();
+
+    const users = await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
+    expect(users?.n).toBe(1);
+
+    const identity = await new UserStore(env.DB).getIdentity("github", "583231");
+    expect(identity?.userId).toBe(existing.id);
+
+    // The minted token family is attached to the existing user, not an orphan.
+    const familyRow = await env.DB.prepare(
+      "SELECT DISTINCT user_id FROM api_tokens WHERE kind = 'web_session'"
+    ).all<{ user_id: string }>();
+    expect(familyRow.results.map((r) => r.user_id)).toEqual([existing.id]);
   });
 
   it("rotates via the refresh grant; immediate replay is rejected without revoking the family", async () => {

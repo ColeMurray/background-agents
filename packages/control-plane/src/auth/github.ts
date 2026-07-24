@@ -129,10 +129,15 @@ export async function getGitHubUser(
 
 /**
  * Get user's email addresses from GitHub.
+ *
+ * @throws {GitHubUserApiError} on non-2xx responses, with `status` set — most
+ * often 403 when the token lacks the email scope or the GitHub App is missing
+ * the "Email addresses" permission.
  */
 export async function getGitHubUserEmails(
   accessToken: string,
-  userAgent: string = DEFAULT_APP_NAME
+  userAgent: string = DEFAULT_APP_NAME,
+  signal?: AbortSignal
 ): Promise<Array<{ email: string; primary: boolean; verified: boolean }>> {
   const response = await fetch("https://api.github.com/user/emails", {
     headers: {
@@ -140,10 +145,11 @@ export async function getGitHubUserEmails(
       Accept: "application/vnd.github.v3+json",
       "User-Agent": userAgent,
     },
+    signal,
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub API error: ${response.status}`);
+    throw new GitHubUserApiError(response.status);
   }
 
   return response.json() as Promise<Array<{ email: string; primary: boolean; verified: boolean }>>;

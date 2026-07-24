@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 
-import { getGitHubUser, GitHubUserApiError } from "./github";
+import { getGitHubUser, getGitHubUserEmails, GitHubUserApiError } from "./github";
 import { createLogger } from "../logger";
 
 const logger = createLogger("subject-verification");
@@ -100,11 +100,38 @@ function verifyGitHubSubject(accessToken: string): Promise<SubjectVerificationRe
       provider: "github",
       providerUserId: String(user.id),
       providerLogin: user.login,
-      providerEmail: user.email ?? undefined,
+      // Resolve the VERIFIED PRIMARY email, exactly as the web sign-in flow
+      // does — NOT the public profile email. `/user.email` is null when the
+      // user has no public email, which would skip email-based cross-provider
+      // linking in resolveOrCreateUser and mint the 90-day token family on a
+      // fresh, orphaned canonical user instead of the existing one. Using the
+      // same source as sign-in keeps the exchange and the provider-identity
+      // upsert resolving to the same canonical user.
+      providerEmail: await resolveVerifiedGitHubEmail(accessToken, signal),
       displayName: user.name ?? user.login,
       avatarUrl: user.avatar_url,
     };
   });
+}
+
+/**
+ * The verified primary email GitHub reports for the token's user, or
+ * undefined. Best-effort: when `/user/emails` is unavailable (the token lacks
+ * the email scope, or the GitHub App is missing the "Email addresses"
+ * permission), fall back to no email — the same null the web session carries
+ * in that deployment — so account linking degrades to id-based resolution
+ * rather than failing the exchange.
+ */
+async function resolveVerifiedGitHubEmail(
+  accessToken: string,
+  signal: AbortSignal
+): Promise<string | undefined> {
+  try {
+    const emails = await getGitHubUserEmails(accessToken, undefined, signal);
+    return emails.find((entry) => entry.primary && entry.verified)?.email;
+  } catch {
+    return undefined;
+  }
 }
 
 function verifyGoogleSubject(accessToken: string): Promise<SubjectVerificationResult> {
