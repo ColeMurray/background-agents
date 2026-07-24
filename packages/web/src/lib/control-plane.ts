@@ -61,6 +61,15 @@ async function getControlPlaneHeaders(request: {
     console.error("[control-plane] SERVICE_AUTH_SECRET not configured");
     throw new Error("Control plane credentials not configured");
   }
+  // Transitional: pre-exchange/dead-token sessions degrade to web's userless
+  // service credential. Slated for removal (tri-state re-auth follow-up) —
+  // this log is how the remaining population is measured before the flip.
+  log.warn("auth.userless_fallback", {
+    event: "auth.userless_fallback",
+    http_path: new URL(request.url).pathname,
+    http_method: request.method,
+    trace_id: request.traceId,
+  });
   return {
     "Content-Type": "application/json",
     ...(await buildServiceAuthHeaders({
