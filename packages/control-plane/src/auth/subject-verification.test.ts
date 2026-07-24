@@ -110,6 +110,26 @@ describe("github-access-token", () => {
     });
   });
 
+  it("resolves an identity from id+login even when the display fields are absent", async () => {
+    // Validation is fail-closed on the identity keys only; a valid-but-partial
+    // body (no name/avatar) must still resolve, not be rejected.
+    mockGitHubFetch({ user: { body: { id: 583231, login: "octocat" } } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toMatchObject({
+      ok: true,
+      subject: { providerUserId: "583231", providerLogin: "octocat", displayName: "octocat" },
+    });
+  });
+
+  it("fails closed on a malformed 200 /user body instead of minting a 'undefined' subject", async () => {
+    // A 200 whose body is missing `id` must not collapse to providerUserId
+    // "undefined" — treat it as the provider failing, fail closed, retryable.
+    mockGitHubFetch({ user: { body: { login: "octocat", avatar_url: "https://a/x" } } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toEqual({
+      ok: false,
+      failure: "provider_unavailable",
+    });
+  });
+
   it("maps provider 401 to subject_rejected", async () => {
     mockFetchResponse(401, { message: "Bad credentials" });
     expect(await verifySubjectToken("github-access-token", "bad")).toEqual({

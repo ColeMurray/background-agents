@@ -12,6 +12,30 @@ const githubOAuthErrorSchema = z.object({
   error_description: z.string().optional(),
 });
 
+/**
+ * The `/user` fields this service depends on. `id` and `login` are the identity
+ * keys and are validated strictly — a malformed 200 (e.g. no `id`) must fail
+ * closed rather than mint a subject on the literal string "undefined". Display
+ * fields are lenient (absent → null) so a valid-but-partial response still
+ * resolves an identity.
+ */
+const githubUserSchema = z.object({
+  id: z.number(),
+  login: z.string().min(1),
+  name: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
+  email: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
+  avatar_url: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? ""),
+});
+
 async function parseGitHubTokenResponse(response: Response): Promise<GitHubTokenResponse> {
   const data: unknown = await response.json();
   const errorResult = githubOAuthErrorSchema.safeParse(data);
@@ -105,6 +129,8 @@ export class GitHubUserApiError extends Error {
  * Get current user info from GitHub.
  *
  * @throws {GitHubUserApiError} on non-2xx responses, with `status` set.
+ * @throws {Error} on a 2xx response whose body is not a valid user — fail
+ * closed rather than let a malformed identity through.
  */
 export async function getGitHubUser(
   accessToken: string,
@@ -124,7 +150,11 @@ export async function getGitHubUser(
     throw new GitHubUserApiError(response.status);
   }
 
-  return response.json() as Promise<GitHubUser>;
+  const parsed = githubUserSchema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) {
+    throw new Error("Malformed GitHub user response");
+  }
+  return parsed.data;
 }
 
 /**
