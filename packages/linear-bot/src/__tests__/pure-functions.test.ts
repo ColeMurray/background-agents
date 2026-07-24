@@ -63,6 +63,10 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:opus-4-7" }])).toBe("anthropic/claude-opus-4-7");
   });
 
+  it("returns Opus 5 for model:opus-5 label", () => {
+    expect(extractModelFromLabels([{ name: "model:opus-5" }])).toBe("anthropic/claude-opus-5");
+  });
+
   it("returns null for unknown model label", () => {
     expect(extractModelFromLabels([{ name: "model:unknown-model" }])).toBeNull();
   });

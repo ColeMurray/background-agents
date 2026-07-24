@@ -2,6 +2,11 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## July 24, 2026
+
+**Claude Opus 5.** Adds `claude-opus-5` to the model picker and integrations, with adaptive thinking
+and reasoning efforts from low through max.
+
 ## July 23, 2026
 
 **Slack image attachments.** Attach PNG, JPEG, WebP, and GIF images to Slack direct messages, app
