@@ -141,15 +141,17 @@ function buildQueue() {
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
 
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn(),
+  };
+
   const queue = new SessionMessageQueue(
     { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
-    {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      child: vi.fn(),
-    },
+    log,
     repository as unknown as SessionRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,
     wsManager as unknown as SessionWebSocketManager,
@@ -176,6 +178,7 @@ function buildQueue() {
     getAlarm,
     setAlarm,
     callbackService,
+    log,
   };
 }
 
@@ -591,6 +594,20 @@ describe("SessionMessageQueue", () => {
     await h.queue.failStuckProcessingMessage();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+  });
+
+  it("notifies completion via waitUntil on the stuck-timeout path", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
+
+    await h.queue.failStuckProcessingMessage();
+
+    expect(h.waitUntil).toHaveBeenCalledOnce();
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-timeout",
+      false,
+      expect.any(String)
+    );
   });
 
   describe("enqueuePromptFromApi", () => {

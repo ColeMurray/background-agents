@@ -152,6 +152,11 @@ export class CallbackNotificationService {
   /**
    * Notify the originating client of completion with retry.
    * Routes to the correct service binding based on the message source.
+   *
+   * Never rejects: delivery is best-effort background work, so every failure —
+   * including unexpected internal errors — is recorded via the
+   * `callback.complete_delivery` log and swallowed. Callers may hand the
+   * returned promise straight to `waitUntil` without a catch.
    */
   async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
     const sessionId = this.getSessionId();
@@ -226,7 +231,6 @@ export class CallbackNotificationService {
       );
     } catch (caught) {
       thrownError = caught;
-      throw caught;
     } finally {
       const outcome =
         thrownError !== undefined

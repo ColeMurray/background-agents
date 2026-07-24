@@ -225,9 +225,15 @@ async function handleSpawnChild(
     return error("Failed to enqueue child session prompt", 500);
   }
 
-  ctx.executionCtx?.waitUntil(
-    ctx.sessionRuntime
-      .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
+  // Awaited on purpose: this is the only signal the parent gets about its new
+  // child, and nothing reconciles a missed notification later. A failure is
+  // logged but does not fail the spawn — the child already exists and has its
+  // prompt enqueued.
+  try {
+    const notifyResponse = await ctx.sessionRuntime.fetch(
+      parentId,
+      SessionInternalPaths.childSessionUpdate,
+      {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -235,11 +241,24 @@ async function handleSpawnChild(
           status: "created",
           title: body.title,
         }),
-      })
-      .catch((err: unknown) => {
-        logger.error("session.notify_parent_spawn.failed", { error: err });
-      })
-  );
+      }
+    );
+    if (!notifyResponse.ok) {
+      logger.error("session.notify_parent_spawn.failed", {
+        parent_id: parentId,
+        child_id: childId,
+        http_status: notifyResponse.status,
+        trace_id: ctx.trace_id,
+      });
+    }
+  } catch (err) {
+    logger.error("session.notify_parent_spawn.failed", {
+      parent_id: parentId,
+      child_id: childId,
+      trace_id: ctx.trace_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return json({ sessionId: childId, status: "created" }, 201);
 }

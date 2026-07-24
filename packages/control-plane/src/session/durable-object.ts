@@ -1033,7 +1033,13 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.processMessageQueue();
+        this.ctx.waitUntil(
+          this.processMessageQueue().catch((error) => {
+            log.error("message_queue.process.background_error", {
+              error: error instanceof Error ? error : String(error),
+            });
+          })
+        );
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);

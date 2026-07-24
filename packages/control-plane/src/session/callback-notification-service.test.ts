@@ -287,6 +287,20 @@ describe("CallbackNotificationService", () => {
       const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(slackFetch).not.toHaveBeenCalled();
     });
+
+    it("resolves instead of rejecting when an unexpected internal error occurs", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: "not-valid-json{{",
+        source: "slack",
+      });
+
+      await expect(harness.service.notifyComplete("msg-1", true)).resolves.toBeUndefined();
+
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({ message_id: "msg-1", outcome: "error" })
+      );
+    });
   });
 
   describe("notifyStarted", () => {
