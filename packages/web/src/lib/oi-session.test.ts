@@ -163,13 +163,29 @@ describe("renewOiSessionTokens", () => {
     expect(result.changed).toBe(false);
   });
 
-  it("keeps a still-valid access token when a concurrent renewal won the race", async () => {
-    serviceFetch.mockResolvedValue(errorResponse(401, "invalid_refresh_token"));
+  it("keeps the fields when a concurrent renewal won the race (refresh_superseded)", async () => {
+    serviceFetch.mockResolvedValue(errorResponse(401, "refresh_superseded"));
     const token = nearExpiryToken();
     const result = await renewOiSessionTokens(token);
     expect(result.changed).toBe(false);
     expect(token.oiAccessToken).toBe("oi_at_old");
     expect(token.oiRefreshToken).toBe("oi_rt_old");
+  });
+
+  it("keeps the fields on refresh_superseded even when the access token has expired", async () => {
+    // The 2026-07-24 prod incident: a wake-from-idle race loser carries a
+    // long-expired access token — it must NOT wipe the identity the race
+    // winner just persisted. The dead-vs-superseded call is the CP's alone.
+    serviceFetch.mockResolvedValue(errorResponse(401, "refresh_superseded"));
+    const token = {
+      oiAccessToken: "oi_at_idle",
+      oiAccessTokenExpiresAt: Date.now() - 4 * 60 * 60 * 1000,
+      oiRefreshToken: "oi_rt_idle",
+    } as JWT;
+    const result = await renewOiSessionTokens(token);
+    expect(result.changed).toBe(false);
+    expect(token.oiAccessToken).toBe("oi_at_idle");
+    expect(token.oiRefreshToken).toBe("oi_rt_idle");
   });
 
   it("clears the fields on refresh reuse detection and reports the change for persistence", async () => {
@@ -181,16 +197,13 @@ describe("renewOiSessionTokens", () => {
     expect(token.oiRefreshToken).toBeUndefined();
   });
 
-  it("clears the fields when the token is invalid and the access token has expired", async () => {
+  it("clears the fields when the grant is genuinely dead (invalid_refresh_token)", async () => {
     serviceFetch.mockResolvedValue(errorResponse(401, "invalid_refresh_token"));
-    const token = {
-      oiAccessToken: "oi_at_dead",
-      oiAccessTokenExpiresAt: Date.now() - 1000,
-      oiRefreshToken: "oi_rt_dead",
-    } as JWT;
+    const token = nearExpiryToken();
     const result = await renewOiSessionTokens(token);
     expect(result.changed).toBe(true);
     expect(token.oiAccessToken).toBeUndefined();
+    expect(token.oiRefreshToken).toBeUndefined();
   });
 
   it("keeps the fields on transient request failures", async () => {

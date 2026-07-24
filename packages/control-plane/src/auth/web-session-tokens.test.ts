@@ -233,10 +233,14 @@ describe("redeemRefreshToken", () => {
     if (!rotated.ok) return;
 
     // A concurrent renewal that lost the race replays the consumed token
-    // almost immediately: rejected, but the rotated pair stays live.
+    // almost immediately: superseded (NOT a dead grant), rotated pair live.
     vi.setSystemTime(1_000_000 + 5_000);
     const replay = await service.redeemRefreshToken(first.refreshToken);
-    expect(replay).toEqual({ ok: false, failure: "invalid_refresh_token" });
+    expect(replay).toEqual({
+      ok: false,
+      failure: "refresh_superseded",
+      familyId: expect.any(String),
+    });
     expect((await service.verifyAccessToken(rotated.pair.accessToken)).ok).toBe(true);
   });
 
@@ -250,7 +254,11 @@ describe("redeemRefreshToken", () => {
 
     vi.setSystemTime(1_000_000 + REFRESH_REUSE_GRACE_MS + 1000);
     const replay = await service.redeemRefreshToken(first.refreshToken);
-    expect(replay).toEqual({ ok: false, failure: "refresh_reuse_detected" });
+    expect(replay).toEqual({
+      ok: false,
+      failure: "refresh_reuse_detected",
+      familyId: expect.any(String),
+    });
 
     // Family revocation kills the live pair minted by the legitimate rotation.
     expect(await service.verifyAccessToken(rotated.pair.accessToken)).toEqual({
@@ -260,6 +268,7 @@ describe("redeemRefreshToken", () => {
     expect(await service.redeemRefreshToken(rotated.pair.refreshToken)).toEqual({
       ok: false,
       failure: "invalid_refresh_token",
+      familyId: expect.any(String),
     });
   });
 
@@ -270,7 +279,11 @@ describe("redeemRefreshToken", () => {
     store.consumeRefreshToken = async () => false;
     const result = await service.redeemRefreshToken(first.refreshToken);
     store.consumeRefreshToken = originalConsume;
-    expect(result).toEqual({ ok: false, failure: "invalid_refresh_token" });
+    expect(result).toEqual({
+      ok: false,
+      failure: "refresh_superseded",
+      familyId: expect.any(String),
+    });
 
     // Only the loser's freshly minted pair is revoked; the original refresh
     // token row (the presumed race winner's input) is untouched.
@@ -288,16 +301,19 @@ describe("redeemRefreshToken", () => {
     expect(await service.redeemRefreshToken("oi_rt_nonexistent")).toEqual({
       ok: false,
       failure: "invalid_refresh_token",
+      familyId: null,
     });
     expect(await service.redeemRefreshToken(pair.accessToken)).toEqual({
       ok: false,
       failure: "invalid_refresh_token",
+      familyId: null,
     });
     const refreshRow = [...store.rows.values()].find((r) => r.kind === "web_session_refresh")!;
     await store.revokeToken(refreshRow.id);
     expect(await service.redeemRefreshToken(pair.refreshToken)).toEqual({
       ok: false,
       failure: "invalid_refresh_token",
+      familyId: expect.any(String),
     });
   });
 
@@ -309,6 +325,7 @@ describe("redeemRefreshToken", () => {
     expect(await service.redeemRefreshToken(pair.refreshToken)).toEqual({
       ok: false,
       failure: "invalid_refresh_token",
+      familyId: null,
     });
   });
 
@@ -320,6 +337,7 @@ describe("redeemRefreshToken", () => {
     expect(await service.redeemRefreshToken(pair.refreshToken)).toEqual({
       ok: false,
       failure: "invalid_refresh_token",
+      familyId: expect.any(String),
     });
   });
 });

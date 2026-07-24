@@ -109,20 +109,34 @@ async function handleTokenRefresh(
 
   const redemption = await createTokenService(ctx).redeemRefreshToken(parsed.data.refreshToken);
   if (!redemption.ok) {
-    logger.warn("Refresh grant rejected", {
-      event:
-        redemption.failure === "refresh_reuse_detected"
-          ? "auth.token.refresh_reuse_detected"
-          : "auth.token.refresh_rejected",
-      failure: redemption.failure,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
+    if (redemption.failure === "refresh_superseded") {
+      // Benign concurrent renewal — the winner's pair is live. Info, not
+      // warn: this is expected multi-tab/wake concurrency, not a fault.
+      logger.info("Refresh grant superseded by a concurrent renewal", {
+        event: "auth.token.refresh_superseded",
+        family_id: redemption.familyId,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+    } else {
+      logger.warn("Refresh grant rejected", {
+        event:
+          redemption.failure === "refresh_reuse_detected"
+            ? "auth.token.refresh_reuse_detected"
+            : "auth.token.refresh_rejected",
+        failure: redemption.failure,
+        family_id: redemption.familyId,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+    }
     return error(redemption.failure, 401);
   }
 
   logger.info("Web session token pair refreshed", {
     event: "auth.token.refreshed",
+    user_id: redemption.userId,
+    family_id: redemption.familyId,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   });

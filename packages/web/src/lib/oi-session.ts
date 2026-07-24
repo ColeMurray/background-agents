@@ -100,7 +100,14 @@ async function exchangeForWebSessionTokens(params: {
 
 type RefreshOutcome =
   | { ok: true; pair: WebSessionTokenPair }
-  | { ok: false; reason: "invalid_refresh_token" | "refresh_reuse_detected" | "request_failed" };
+  | {
+      ok: false;
+      reason:
+        | "invalid_refresh_token"
+        | "refresh_superseded"
+        | "refresh_reuse_detected"
+        | "request_failed";
+    };
 
 /** Redeem the rotating refresh grant for a new pair. */
 async function redeemWebSessionRefresh(refreshToken: string): Promise<RefreshOutcome> {
@@ -112,7 +119,9 @@ async function redeemWebSessionRefresh(refreshToken: string): Promise<RefreshOut
     return {
       ok: false,
       reason:
-        result.error === "invalid_refresh_token" || result.error === "refresh_reuse_detected"
+        result.error === "invalid_refresh_token" ||
+        result.error === "refresh_superseded" ||
+        result.error === "refresh_reuse_detected"
           ? result.error
           : "request_failed",
     };
@@ -235,15 +244,18 @@ export async function renewOiSessionTokens(token: JWT): Promise<{ changed: boole
     case "request_failed":
       // Transient failure: keep the fields and retry on a later ping.
       return { changed: false };
+    case "refresh_superseded":
+      // A concurrent renewal won (CP grace window): the cookie jar already
+      // holds the winner's fresh pair — never persist over it. The CP makes
+      // this call from row state; it must NOT be inferred here from access-
+      // token freshness (at wake-from-idle the access token is always
+      // expired, and clearing on a lost race wiped a live identity — the
+      // 2026-07-24 prod incident).
+      return { changed: false };
     case "invalid_refresh_token":
-      if (oiAccessTokenExpiresAt > Date.now()) {
-        // Benign concurrent renewal lost the race (CP grace window): keep the
-        // still-valid access token; the winning renewal persists on its own path.
-        return { changed: false };
-      }
-      // The refresh token is dead (revoked or expired) — clear the fields, and
-      // persist the cleared state so later pings stop replaying a dead grant
-      // (re-login required).
+      // The grant is genuinely dead (unknown, revoked, or expired) — clear
+      // the fields, and persist the cleared state so later pings stop
+      // replaying a dead grant (re-login required).
       setOiFields(token, null);
       return { changed: true };
     case "refresh_reuse_detected":

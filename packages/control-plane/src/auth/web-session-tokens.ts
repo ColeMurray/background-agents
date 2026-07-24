@@ -49,8 +49,23 @@ export type AccessTokenVerification =
   | { ok: false; failure: "unknown" | "expired" | "revoked" };
 
 export type RefreshRedemption =
-  | { ok: true; pair: WebSessionTokenPair }
-  | { ok: false; failure: "invalid_refresh_token" | "refresh_reuse_detected" };
+  | { ok: true; pair: WebSessionTokenPair; userId: string; familyId: string }
+  | {
+      ok: false;
+      /**
+       * `refresh_superseded`: a benign concurrent renewal already rotated
+       * this token (grace-window replay or a lost consume race) — the
+       * winner's pair is live and the caller must NOT treat the grant as
+       * dead. `invalid_refresh_token`: the grant is genuinely dead (unknown,
+       * revoked, expired, or family-expired). `refresh_reuse_detected`:
+       * replay outside the grace window — the theft signal; the family has
+       * been revoked. The distinction is made HERE, where the row state is
+       * known — callers must never infer it from access-token freshness.
+       */
+      failure: "invalid_refresh_token" | "refresh_superseded" | "refresh_reuse_detected";
+      /** The rotation family when the presented token resolved to a row. */
+      familyId: string | null;
+    };
 
 /** 32 random bytes as unpadded base64url — the opaque token body. */
 function randomTokenBody(): string {
@@ -179,10 +194,10 @@ export class WebSessionTokenService {
   async redeemRefreshToken(token: string): Promise<RefreshRedemption> {
     const row = await this.store.getByHash(await hashToken(token));
     if (!row || row.kind !== "web_session_refresh") {
-      return { ok: false, failure: "invalid_refresh_token" };
+      return { ok: false, failure: "invalid_refresh_token", familyId: null };
     }
     if (!isWebSessionRow(row)) {
-      return { ok: false, failure: "invalid_refresh_token" };
+      return { ok: false, failure: "invalid_refresh_token", familyId: null };
     }
     // Ordering is load-bearing: the replay (rotatedTo) check runs BEFORE the
     // revoked/expired checks so that reuse of a consumed-and-since-expired
@@ -193,10 +208,10 @@ export class WebSessionTokenService {
       // the family alive. Beyond it, assume the family is compromised.
       const successor = await this.store.getById(row.rotatedTo);
       if (successor !== null && Date.now() - successor.createdAt <= REFRESH_REUSE_GRACE_MS) {
-        return { ok: false, failure: "invalid_refresh_token" };
+        return { ok: false, failure: "refresh_superseded", familyId: row.familyId };
       }
       await this.store.revokeFamily(row.familyId);
-      return { ok: false, failure: "refresh_reuse_detected" };
+      return { ok: false, failure: "refresh_reuse_detected", familyId: row.familyId };
     }
     const now = Date.now();
     // A null familyExpiresAt is rejected fail-closed: this service always
@@ -208,7 +223,7 @@ export class WebSessionTokenService {
       row.familyExpiresAt === null ||
       row.familyExpiresAt <= now
     ) {
-      return { ok: false, failure: "invalid_refresh_token" };
+      return { ok: false, failure: "invalid_refresh_token", familyId: row.familyId };
     }
 
     const minted = await this.mintPairInFamily(
@@ -227,9 +242,9 @@ export class WebSessionTokenService {
         this.store.revokeToken(minted.accessTokenId),
         this.store.revokeToken(minted.refreshTokenId),
       ]);
-      return { ok: false, failure: "invalid_refresh_token" };
+      return { ok: false, failure: "refresh_superseded", familyId: row.familyId };
     }
 
-    return { ok: true, pair: minted.pair };
+    return { ok: true, pair: minted.pair, userId: row.userId, familyId: row.familyId };
   }
 }

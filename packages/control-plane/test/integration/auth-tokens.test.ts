@@ -175,14 +175,15 @@ describe("token exchange and refresh grant", () => {
     expect(ok.status).toBe(200);
 
     // Immediate replay of the consumed token = benign concurrent renewal:
-    // rejected without a pair, family left alive (grace window). Post-grace
-    // replay revokes the family — covered by the service unit tests.
+    // superseded (NOT a dead grant), family left alive (grace window).
+    // Post-grace replay revokes the family — covered by the service unit
+    // tests.
     const replay = await serviceFetch({
       path: "/auth/tokens/refresh",
       body: { refreshToken: first.refreshToken },
     });
     expect(replay.status).toBe(401);
-    expect(await replay.json()).toMatchObject({ error: "invalid_refresh_token" });
+    expect(await replay.json()).toMatchObject({ error: "refresh_superseded" });
 
     const stillValid = await SELF.fetch("https://test.local/sessions", {
       headers: { Authorization: `Bearer ${second.accessToken}` },
