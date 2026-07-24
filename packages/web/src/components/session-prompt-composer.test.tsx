@@ -22,10 +22,19 @@ vi.mock("@/components/ui/combobox", () => ({
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
-function ComposerHarness() {
-  const [value, setValue] = useState("");
+function ComposerHarness({
+  initialValue = "",
+  isProcessing = false,
+  isUploading = false,
+}: {
+  initialValue?: string;
+  isProcessing?: boolean;
+  isUploading?: boolean;
+}) {
+  const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   return (
@@ -39,8 +48,8 @@ function ComposerHarness() {
       }}
       prompt={{
         value,
-        isProcessing: false,
-        draftLocked: false,
+        isProcessing,
+        draftLocked: isUploading,
         inputRef,
         onSubmit: vi.fn(),
         onChange: (event) => setValue(event.target.value),
@@ -50,7 +59,7 @@ function ComposerHarness() {
       attachments={{
         items: [],
         error: null,
-        isUploading: false,
+        isUploading,
         onAdd: vi.fn(),
         onRemove: vi.fn(),
       }}
@@ -67,27 +76,40 @@ function ComposerHarness() {
 
 describe("SessionPromptComposer", () => {
   it("starts with one row and grows and shrinks with its content", () => {
+    const scrollHeight = vi
+      .spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(48);
     render(<ComposerHarness />);
 
     const input = screen.getByPlaceholderText<HTMLTextAreaElement>("Ask or build anything");
     expect(input).toHaveAttribute("rows", "1");
+    expect(input).toHaveStyle({ height: "48px" });
 
-    let scrollHeight = 48;
-    Object.defineProperty(input, "scrollHeight", {
-      configurable: true,
-      get: () => scrollHeight,
-    });
-
-    scrollHeight = 112;
+    scrollHeight.mockReturnValue(112);
     fireEvent.change(input, { target: { value: "A prompt that wraps onto multiple lines" } });
     expect(input).toHaveStyle({ height: "112px" });
 
-    scrollHeight = 48;
+    scrollHeight.mockReturnValue(48);
     fireEvent.change(input, { target: { value: "" } });
     expect(input).toHaveStyle({ height: "48px" });
 
-    scrollHeight = 72;
+    scrollHeight.mockReturnValue(72);
     fireEvent(window, new Event("resize"));
     expect(input).toHaveStyle({ height: "72px" });
+  });
+
+  it("keeps processing and uploading controls in the mobile layout flow", () => {
+    render(<ComposerHarness initialValue="Queued prompt" isProcessing isUploading />);
+
+    const input = screen.getByPlaceholderText("Type your next message...");
+    const actions = screen.getByTestId("prompt-actions");
+
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
+    expect(screen.getByText("Waiting...")).toBeInTheDocument();
+    expect(screen.getByTitle("Stop")).toBeInTheDocument();
+    expect(input).toHaveClass("min-w-48", "flex-1");
+    expect(input).not.toHaveClass("pr-24");
+    expect(input.parentElement).toHaveClass("flex-wrap", "justify-end");
+    expect(actions).toHaveClass("shrink-0", "sm:absolute");
   });
 });

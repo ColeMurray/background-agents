@@ -113,7 +113,7 @@ export function SessionPromptComposer({
           />
 
           {/* Text input area with floating send button */}
-          <div className="relative">
+          <div className="relative flex flex-wrap items-end justify-end sm:block">
             <textarea
               ref={prompt.inputRef}
               value={prompt.value}
@@ -124,11 +124,14 @@ export function SessionPromptComposer({
               placeholder={
                 prompt.isProcessing ? "Type your next message..." : "Ask or build anything"
               }
-              className="min-h-12 max-h-40 w-full resize-none overflow-y-auto bg-transparent py-3 pl-4 pr-24 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:min-h-[7.75rem] sm:px-4 sm:pt-4 sm:pb-12"
+              className="min-h-12 max-h-40 w-0 min-w-48 flex-1 resize-none overflow-y-auto bg-transparent px-4 py-3 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:block sm:min-h-[7.75rem] sm:w-full sm:px-4 sm:pt-4 sm:pb-12"
               rows={1}
             />
             {/* Floating action buttons */}
-            <div className="absolute bottom-3 right-3 flex items-center gap-2">
+            <div
+              data-testid="prompt-actions"
+              className="flex shrink-0 items-center gap-1 pb-1.5 pr-2 sm:absolute sm:bottom-3 sm:right-3 sm:gap-2 sm:p-0"
+            >
               {attachments.isUploading && (
                 <span className="whitespace-nowrap text-xs text-muted-foreground">Uploading…</span>
               )}
