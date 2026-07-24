@@ -7,6 +7,7 @@ import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
 import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { ModelApiKeysSettings } from "./model-api-keys-settings";
 
 export function ModelsSettings() {
   const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
@@ -78,15 +79,6 @@ export function ModelsSettings() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-        Loading model preferences...
-      </div>
-    );
-  }
-
   return (
     <div>
       <h2 className="text-xl font-semibold text-foreground mb-1">Enabled Models</h2>
@@ -94,60 +86,73 @@ export function ModelsSettings() {
         Choose which models appear in the model selector across the web UI and Slack bot.
       </p>
 
-      <div className="space-y-6">
-        {MODEL_OPTIONS.map((group) => {
-          const allEnabled = group.models.every((m) => enabledModels.has(m.id));
+      {loading ? (
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          Loading model preferences...
+        </div>
+      ) : (
+        <>
+          <div className="space-y-6">
+            {MODEL_OPTIONS.map((group) => {
+              const allEnabled = group.models.every((m) => enabledModels.has(m.id));
 
-          return (
-            <div key={group.category}>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-foreground uppercase tracking-wider">
-                  {group.category}
-                </h3>
-                <Button
-                  type="button"
-                  variant="subtle"
-                  size="xs"
-                  onClick={() => toggleCategory(group, !allEnabled)}
-                  className="text-accent hover:text-accent/80"
-                >
-                  {allEnabled ? "Disable all" : "Enable all"}
-                </Button>
-              </div>
-              <div className="space-y-2">
-                {group.models.map((model) => {
-                  const isEnabled = enabledModels.has(model.id);
-                  return (
-                    <label
-                      key={model.id}
-                      htmlFor={`model-toggle-${model.id}`}
-                      className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer"
+              return (
+                <div key={group.category}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-foreground uppercase tracking-wider">
+                      {group.category}
+                    </h3>
+                    <Button
+                      type="button"
+                      variant="subtle"
+                      size="xs"
+                      onClick={() => toggleCategory(group, !allEnabled)}
+                      className="text-accent hover:text-accent/80"
                     >
-                      <div>
-                        <span className="text-sm font-medium text-foreground">{model.name}</span>
-                        <span className="text-sm text-muted-foreground ml-2">
-                          {model.description}
-                        </span>
-                      </div>
-                      <Switch
-                        id={`model-toggle-${model.id}`}
-                        checked={isEnabled}
-                        onCheckedChange={() => toggleModel(model.id)}
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+                      {allEnabled ? "Disable all" : "Enable all"}
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {group.models.map((model) => {
+                      const isEnabled = enabledModels.has(model.id);
+                      return (
+                        <label
+                          key={model.id}
+                          htmlFor={`model-toggle-${model.id}`}
+                          className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer"
+                        >
+                          <div>
+                            <span className="text-sm font-medium text-foreground">
+                              {model.name}
+                            </span>
+                            <span className="text-sm text-muted-foreground ml-2">
+                              {model.description}
+                            </span>
+                          </div>
+                          <Switch
+                            id={`model-toggle-${model.id}`}
+                            checked={isEnabled}
+                            onCheckedChange={() => toggleModel(model.id)}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
-      <div className="mt-6">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
-          {saving ? "Saving..." : "Save"}
-        </Button>
-      </div>
+          <div className="mt-6">
+            <Button onClick={handleSave} disabled={saving || !dirty}>
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </>
+      )}
+
+      <ModelApiKeysSettings />
     </div>
   );
 }
