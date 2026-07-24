@@ -171,7 +171,7 @@ export interface SpawnConfig {
 export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
   cooldownMs: 30000, // 30 seconds
   readyWaitMs: 60000, // 60 seconds
-  spawningTimeoutMs: 120000, // 2 minutes — matches the connecting-timeout watchdog
+  spawningTimeoutMs: 300000, // 5 minutes — matches the connecting-timeout watchdog (cold monorepo boots run npm install in setup.sh)
 };
 
 /**
@@ -487,12 +487,14 @@ export interface ConnectingTimeoutConfig {
 }
 
 /**
- * Default connecting timeout: 2 minutes.
- * Boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically
- * takes 30–90 seconds. Two minutes provides margin without leaving users waiting too long.
+ * Default connecting timeout: 5 minutes.
+ * Boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) is usually
+ * 30–90s from a prebuilt image, but a COLD boot on a repo whose setup.sh runs a full
+ * dependency install (e.g. a large monorepo, ~60–90s) plus starting several dev servers can
+ * approach a few minutes. Five minutes gives cold boots margin without stranding users.
  */
 export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
-  timeoutMs: 120_000,
+  timeoutMs: 300_000,
 };
 
 /**
