@@ -1,22 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
-import { buildServiceAuthHeaders, generateInternalToken } from "@open-inspect/shared";
+import {
+  buildServiceAuthHeaders,
+  generateInternalToken,
+  type ServiceName,
+} from "@open-inspect/shared";
 import {
   ApiTokenStore,
   EXPIRED_TOKEN_RETENTION_MS,
   type NewApiToken,
 } from "../../src/db/api-tokens";
+import { REFRESH_REUSE_GRACE_MS } from "../../src/auth/web-session-tokens";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 
 const originalFetch = globalThis.fetch;
 
 interface ProviderMockState {
-  githubStatus: number;
+  githubUserStatus: number;
+  githubEmailsStatus: number;
+  githubEmailsBody: unknown;
   googleStatus: number;
 }
 
-const providerMock: ProviderMockState = { githubStatus: 200, googleStatus: 200 };
+const providerMock: ProviderMockState = {
+  githubUserStatus: 200,
+  githubEmailsStatus: 200,
+  githubEmailsBody: [{ email: "octocat@example.com", primary: true, verified: true }],
+  googleStatus: 200,
+};
 
 function installProviderFetchMock(): void {
   vi.stubGlobal(
@@ -26,8 +38,8 @@ function installProviderFetchMock(): void {
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
       if (url === "https://api.github.com/user") {
-        if (providerMock.githubStatus !== 200) {
-          return Response.json({ message: "nope" }, { status: providerMock.githubStatus });
+        if (providerMock.githubUserStatus !== 200) {
+          return Response.json({ message: "nope" }, { status: providerMock.githubUserStatus });
         }
         return Response.json({
           id: 583231,
@@ -40,10 +52,10 @@ function installProviderFetchMock(): void {
         });
       }
       if (url === "https://api.github.com/user/emails") {
-        if (providerMock.githubStatus !== 200) {
-          return Response.json({ message: "nope" }, { status: providerMock.githubStatus });
+        if (providerMock.githubEmailsStatus !== 200) {
+          return Response.json({ message: "nope" }, { status: providerMock.githubEmailsStatus });
         }
-        return Response.json([{ email: "octocat@example.com", primary: true, verified: true }]);
+        return Response.json(providerMock.githubEmailsBody);
       }
       if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
         if (providerMock.googleStatus !== 200) {
@@ -62,7 +74,7 @@ function installProviderFetchMock(): void {
 }
 
 async function serviceFetch(p: {
-  service?: "web" | "slack-bot";
+  service?: ServiceName;
   path: string;
   body: unknown;
 }): Promise<Response> {
@@ -104,10 +116,23 @@ async function exchangeGitHub(): Promise<TokenPair> {
   return response.json<TokenPair>();
 }
 
+async function expectNoDurableAuthState(): Promise<void> {
+  for (const table of ["users", "user_identities", "user_scm_tokens", "api_tokens"]) {
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{
+      n: number;
+    }>();
+    expect(count?.n, table).toBe(0);
+  }
+}
+
 describe("token exchange and refresh grant", () => {
   beforeEach(async () => {
     await cleanD1Tables();
-    providerMock.githubStatus = 200;
+    providerMock.githubUserStatus = 200;
+    providerMock.githubEmailsStatus = 200;
+    providerMock.githubEmailsBody = [
+      { email: "octocat@example.com", primary: true, verified: true },
+    ];
     providerMock.googleStatus = 200;
     installProviderFetchMock();
   });
@@ -142,6 +167,103 @@ describe("token exchange and refresh grant", () => {
       headers: { Authorization: `Bearer ${pair.accessToken}` },
     });
     expect(response.status).toBe(200);
+  });
+
+  it("never re-links a user principal from providerEmail supplied to the identity route", async () => {
+    const victim = await new UserStore(env.DB).createUser({
+      displayName: "Victim",
+      email: "victim@example.com",
+      avatarUrl: null,
+    });
+    const pair = await exchangeGitHub();
+    const before = await new UserStore(env.DB).getIdentity("github", "583231");
+    expect(before).not.toBeNull();
+    expect(before!.userId).not.toBe(victim.id);
+
+    const response = await SELF.fetch("https://test.local/provider-identities/github/583231", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${pair.accessToken}`,
+      },
+      body: JSON.stringify({ providerEmail: "victim@example.com" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ userId: before!.userId });
+    const after = await new UserStore(env.DB).getIdentity("github", "583231");
+    expect(after?.userId).toBe(before!.userId);
+  });
+
+  it("forbids a user token from resolving a different provider identity", async () => {
+    const pair = await exchangeGitHub();
+
+    const response = await SELF.fetch("https://test.local/provider-identities/github/999999", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${pair.accessToken}` },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: "Path identity does not match the authenticated user",
+    });
+  });
+
+  it("persists session ownership from the user token rather than the request body", async () => {
+    const pair = await exchangeGitHub();
+    const identity = await new UserStore(env.DB).getIdentity("github", "583231");
+    expect(identity).not.toBeNull();
+
+    const created = await SELF.fetch("https://test.local/sessions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${pair.accessToken}`,
+      },
+      body: JSON.stringify({
+        title: "Token-owned session",
+        model: "anthropic/claude-haiku-4-5",
+      }),
+    });
+    expect(created.status).toBe(201);
+
+    const listed = await SELF.fetch("https://test.local/sessions", {
+      headers: { Authorization: `Bearer ${pair.accessToken}` },
+    });
+    expect(listed.status).toBe(200);
+    const body = await listed.json<{ sessions: Array<{ title: string; userId: string }> }>();
+    expect(body.sessions).toContainEqual(
+      expect.objectContaining({
+        title: "Token-owned session",
+        userId: identity!.userId,
+      })
+    );
+  });
+
+  it("rejects caller-supplied session identity before creating durable state", async () => {
+    const pair = await exchangeGitHub();
+
+    const created = await SELF.fetch("https://test.local/sessions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${pair.accessToken}`,
+      },
+      body: JSON.stringify({
+        title: "Forged owner",
+        model: "anthropic/claude-haiku-4-5",
+        userId: "victim-user-id",
+      }),
+    });
+
+    expect(created.status).toBe(400);
+    expect(await created.json()).toEqual({
+      error: "Field 'userId' is not accepted from verified callers",
+    });
+    const sessionCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM sessions").first<{
+      n: number;
+    }>();
+    expect(sessionCount?.n).toBe(0);
   });
 
   it("exchanges a Google subject without SCM capture", async () => {
@@ -191,6 +313,40 @@ describe("token exchange and refresh grant", () => {
     expect(familyRow.results.map((r) => r.user_id)).toEqual([existing.id]);
   });
 
+  it("fails closed without durable identity state when GitHub email evidence is transiently unavailable", async () => {
+    providerMock.githubEmailsStatus = 500;
+
+    const response = await serviceFetch({
+      path: "/auth/tokens/exchange",
+      body: {
+        subjectTokenType: "github-access-token",
+        subjectToken: "gho_valid",
+        scmRefreshToken: "ghr_refresh",
+      },
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "provider_unavailable" });
+    await expectNoDurableAuthState();
+  });
+
+  it("fails closed without durable identity state on malformed GitHub email evidence", async () => {
+    providerMock.githubEmailsBody = { email: "octocat@example.com" };
+
+    const response = await serviceFetch({
+      path: "/auth/tokens/exchange",
+      body: {
+        subjectTokenType: "github-access-token",
+        subjectToken: "gho_valid",
+        scmRefreshToken: "ghr_refresh",
+      },
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "provider_unavailable" });
+    await expectNoDurableAuthState();
+  });
+
   it("rotates via the refresh grant; immediate replay is rejected without revoking the family", async () => {
     const first = await exchangeGitHub();
 
@@ -225,6 +381,73 @@ describe("token exchange and refresh grant", () => {
     expect(stillValid.status).toBe(200);
   });
 
+  it("returns one winner when two refresh requests overlap", async () => {
+    const first = await exchangeGitHub();
+    const requests = await Promise.all([
+      serviceFetch({
+        path: "/auth/tokens/refresh",
+        body: { refreshToken: first.refreshToken },
+      }),
+      serviceFetch({
+        path: "/auth/tokens/refresh",
+        body: { refreshToken: first.refreshToken },
+      }),
+    ]);
+
+    expect(requests.map((response) => response.status).sort()).toEqual([200, 401]);
+    const winnerResponse = requests.find((response) => response.status === 200)!;
+    const loserResponse = requests.find((response) => response.status === 401)!;
+    const winner = await winnerResponse.json<TokenPair>();
+    expect(await loserResponse.json()).toEqual({ error: "refresh_superseded" });
+
+    const winnerAccess = await SELF.fetch("https://test.local/sessions", {
+      headers: { Authorization: `Bearer ${winner.accessToken}` },
+    });
+    expect(winnerAccess.status).toBe(200);
+
+    const liveRefreshLeaves = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM api_tokens
+       WHERE kind = 'web_session_refresh' AND rotated_to IS NULL AND revoked_at IS NULL`
+    ).first<{ n: number }>();
+    expect(liveRefreshLeaves?.n).toBe(1);
+  });
+
+  it("revokes the real D1 family when a consumed refresh token is replayed after grace", async () => {
+    const first = await exchangeGitHub();
+    const rotated = await serviceFetch({
+      path: "/auth/tokens/refresh",
+      body: { refreshToken: first.refreshToken },
+    });
+    expect(rotated.status).toBe(200);
+    const second = await rotated.json<TokenPair>();
+
+    const ancestor = await env.DB.prepare(
+      "SELECT family_id, rotated_to FROM api_tokens WHERE kind = 'web_session_refresh' AND rotated_to IS NOT NULL"
+    ).first<{ family_id: string; rotated_to: string }>();
+    expect(ancestor).not.toBeNull();
+    await env.DB.prepare("UPDATE api_tokens SET created_at = ? WHERE id = ?")
+      .bind(Date.now() - REFRESH_REUSE_GRACE_MS - 1000, ancestor!.rotated_to)
+      .run();
+
+    const replay = await serviceFetch({
+      path: "/auth/tokens/refresh",
+      body: { refreshToken: first.refreshToken },
+    });
+    expect(replay.status).toBe(401);
+    expect(await replay.json()).toEqual({ error: "refresh_reuse_detected" });
+
+    const winnerAccess = await SELF.fetch("https://test.local/sessions", {
+      headers: { Authorization: `Bearer ${second.accessToken}` },
+    });
+    expect(winnerAccess.status).toBe(401);
+
+    const familyRows = await env.DB.prepare("SELECT revoked_at FROM api_tokens WHERE family_id = ?")
+      .bind(ancestor!.family_id)
+      .all<{ revoked_at: number | null }>();
+    expect(familyRows.results.length).toBeGreaterThan(0);
+    expect(familyRows.results.every((row) => row.revoked_at !== null)).toBe(true);
+  });
+
   it("rejects invalid refresh tokens", async () => {
     const response = await serviceFetch({
       path: "/auth/tokens/refresh",
@@ -234,8 +457,56 @@ describe("token exchange and refresh grant", () => {
     expect(await response.json()).toMatchObject({ error: "invalid_refresh_token" });
   });
 
+  it("forbids refresh to every principal except the web service", async () => {
+    const pair = await exchangeGitHub();
+    const body = { refreshToken: pair.refreshToken };
+
+    for (const service of ["slack-bot", "github-bot", "linear-bot", "modal"] as const) {
+      const response = await serviceFetch({
+        service,
+        path: "/auth/tokens/refresh",
+        body,
+      });
+      expect(response.status, service).toBe(403);
+    }
+
+    const asUser = await SELF.fetch("https://test.local/auth/tokens/refresh", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${pair.accessToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+    expect(asUser.status).toBe(403);
+
+    const unauthenticated = await SELF.fetch("https://test.local/auth/tokens/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(unauthenticated.status).toBe(401);
+
+    const sharedToken = await generateInternalToken("test-hmac-secret-for-integration-tests");
+    const asSharedBearer = await SELF.fetch("https://test.local/auth/tokens/refresh", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sharedToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+    expect(asSharedBearer.status).toBe(401);
+
+    const asWeb = await serviceFetch({
+      path: "/auth/tokens/refresh",
+      body,
+    });
+    expect(asWeb.status).toBe(200);
+  });
+
   it("maps provider rejection to subject_rejected and provider outage to provider_unavailable", async () => {
-    providerMock.githubStatus = 401;
+    providerMock.githubUserStatus = 401;
     const rejected = await serviceFetch({
       path: "/auth/tokens/exchange",
       body: { subjectTokenType: "github-access-token", subjectToken: "gho_bad" },
@@ -243,7 +514,7 @@ describe("token exchange and refresh grant", () => {
     expect(rejected.status).toBe(401);
     expect(await rejected.json()).toMatchObject({ error: "subject_rejected" });
 
-    providerMock.githubStatus = 500;
+    providerMock.githubUserStatus = 500;
     const unavailable = await serviceFetch({
       path: "/auth/tokens/exchange",
       body: { subjectTokenType: "github-access-token", subjectToken: "gho_any" },
@@ -370,5 +641,29 @@ describe("api_tokens retention sweep", () => {
       token_hash: string;
     }>();
     expect(remaining.results.map((r) => r.token_hash)).toEqual(["hash-live-family"]);
+  });
+
+  it("admits exactly one successor when refresh consumers race in D1", async () => {
+    const store = new ApiTokenStore(env.DB);
+    const now = Date.now();
+    const [, refreshId] = await store.createPair([
+      newToken("race-access", now + 60_000),
+      {
+        ...newToken("race-refresh", now + 60_000),
+        kind: "web_session_refresh",
+        familyId: "family-race",
+        familyExpiresAt: now + 120_000,
+      },
+    ]);
+
+    const outcomes = await Promise.all([
+      store.consumeRefreshToken(refreshId, "successor-a"),
+      store.consumeRefreshToken(refreshId, "successor-b"),
+    ]);
+
+    expect(outcomes.filter(Boolean)).toHaveLength(1);
+    expect((await store.getById(refreshId))?.rotatedTo).toBe(
+      outcomes[0] ? "successor-a" : "successor-b"
+    );
   });
 });
