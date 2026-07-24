@@ -29,7 +29,8 @@ export interface ParticipantRepository {
     data: {
       scmAccessTokenEncrypted: string;
       scmRefreshTokenEncrypted?: string | null;
-      scmTokenExpiresAt: number;
+      /** Null when the token does not expire (no-refresh-token deployments). */
+      scmTokenExpiresAt: number | null;
     }
   ): void;
 }
@@ -216,6 +217,15 @@ export class ParticipantService {
       }
 
       // D1 token expired — refresh via OAuth API
+      if (d1Tokens.refreshToken === null) {
+        // An expired credential with no refresh token cannot be renewed, and
+        // the local mirror has no refresh token either — nothing to fall back
+        // to. The caller degrades to the App token.
+        this.log.warn("Cannot refresh: stored SCM credential has no refresh token", {
+          user_id: participant.user_id,
+        });
+        return null;
+      }
       if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
         this.log.warn("Cannot refresh: OAuth credentials not configured");
         return null;
@@ -285,11 +295,13 @@ export class ParticipantService {
    */
   private async updateLocalTokensFromD1(
     participantId: string,
-    d1Tokens: { accessToken: string; refreshToken: string; expiresAt: number }
+    d1Tokens: { accessToken: string; refreshToken: string | null; expiresAt: number | null }
   ): Promise<void> {
     const [accessEnc, refreshEnc] = await Promise.all([
       encryptToken(d1Tokens.accessToken, this.env.TOKEN_ENCRYPTION_KEY),
-      encryptToken(d1Tokens.refreshToken, this.env.TOKEN_ENCRYPTION_KEY),
+      d1Tokens.refreshToken === null
+        ? null
+        : encryptToken(d1Tokens.refreshToken, this.env.TOKEN_ENCRYPTION_KEY),
     ]);
     this.repository.updateParticipantTokens(participantId, {
       scmAccessTokenEncrypted: accessEnc,

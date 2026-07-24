@@ -5,12 +5,16 @@ import { generateEncryptionKey } from "../auth/crypto";
 type ScmTokenRow = {
   provider_user_id: string;
   access_token_encrypted: string;
-  refresh_token_encrypted: string;
-  token_expires_at: number;
+  refresh_token_encrypted: string | null;
+  token_expires_at: number | null;
   user_id: string | null;
   created_at: number;
   updated_at: number;
 };
+
+/** Mirrors the SQL freshness guard: NULL expiry ranks as "never expires". */
+const NEVER_EXPIRES_RANK = 9007199254740991;
+const expiryRank = (expiresAt: number | null): number => expiresAt ?? NEVER_EXPIRES_RANK;
 
 const QUERY_PATTERNS = {
   SELECT_TOKENS:
@@ -52,11 +56,12 @@ class FakeD1Database {
 
     if (QUERY_PATTERNS.UPSERT_TOKENS.test(normalized)) {
       const [providerUserId, accessEnc, refreshEnc, expiresAt, userId, createdAt, updatedAt] =
-        args as [string, string, string, number, string | null, number, number];
+        args as [string, string, string | null, number | null, string | null, number, number];
       const existing = this.rows.get(providerUserId);
 
-      // Freshness guard: ON CONFLICT ... WHERE excluded.token_expires_at > user_scm_tokens.token_expires_at
-      if (existing && expiresAt <= existing.token_expires_at) {
+      // Freshness guard: ON CONFLICT ... WHERE COALESCE(excluded.token_expires_at, max)
+      //   >= COALESCE(user_scm_tokens.token_expires_at, max)
+      if (existing && expiryRank(expiresAt) < expiryRank(existing.token_expires_at)) {
         return { meta: { changes: 0 } };
       }
 
@@ -173,15 +178,52 @@ describe("UserScmTokenStore", () => {
     expect(result!.expiresAt).toBe(newerExpiresAt);
   });
 
-  it("upsertTokens does not overwrite when equal expiry", async () => {
+  it("upsertTokens overwrites on equal expiry (re-authorized credential of equal rank)", async () => {
     const expiresAt = Date.now() + 3600_000;
 
     await store.upsertTokens("user-123", "first-access", "first-refresh", expiresAt);
     await store.upsertTokens("user-123", "second-access", "second-refresh", expiresAt);
 
     const result = await store.getTokens("user-123");
-    expect(result!.accessToken).toBe("first-access");
-    expect(result!.refreshToken).toBe("first-refresh");
+    expect(result!.accessToken).toBe("second-access");
+    expect(result!.refreshToken).toBe("second-refresh");
+  });
+
+  it("captures a non-refreshable, non-expiring credential and round-trips it", async () => {
+    await store.upsertTokens("user-norefresh", "access-abc", null, null, "canonical-user-1");
+
+    const result = await store.getTokens("user-norefresh");
+    expect(result).toEqual({
+      accessToken: "access-abc",
+      refreshToken: null,
+      refreshTokenEncrypted: null,
+      expiresAt: null,
+    });
+
+    const encrypted = await store.getEncryptedTokens("user-norefresh");
+    expect(encrypted!.refreshTokenEncrypted).toBeNull();
+    expect(encrypted!.expiresAt).toBeNull();
+    expect(db.getRow("user-norefresh")!.user_id).toBe("canonical-user-1");
+  });
+
+  it("ranks a non-expiring capture above any finite expiry", async () => {
+    await store.upsertTokens("user-transition", "expiring-access", "r1", Date.now() + 3600_000);
+    await store.upsertTokens("user-transition", "eternal-access", null, null);
+
+    const afterUpgrade = await store.getTokens("user-transition");
+    expect(afterUpgrade!.accessToken).toBe("eternal-access");
+    expect(afterUpgrade!.refreshToken).toBeNull();
+
+    // A finite-expiry capture never clobbers a stored non-expiring credential.
+    await store.upsertTokens("user-transition", "expiring-again", "r2", Date.now() + 3600_000);
+    expect((await store.getTokens("user-transition"))!.accessToken).toBe("eternal-access");
+  });
+
+  it("a newer non-expiring capture replaces an older one", async () => {
+    await store.upsertTokens("user-relogin", "old-eternal", null, null);
+    await store.upsertTokens("user-relogin", "new-eternal", null, null);
+
+    expect((await store.getTokens("user-relogin"))!.accessToken).toBe("new-eternal");
   });
 
   it("casUpdateTokens succeeds when refresh token matches", async () => {
@@ -191,7 +233,7 @@ describe("UserScmTokenStore", () => {
     const tokens = await store.getTokens("user-123");
     const casResult = await store.casUpdateTokens(
       "user-123",
-      tokens!.refreshTokenEncrypted,
+      tokens!.refreshTokenEncrypted!,
       "access-new",
       "refresh-new",
       expiresAt + 3600_000
@@ -312,6 +354,10 @@ describe("UserScmTokenStore", () => {
       const expiresAt = Date.now() + 30_000;
       expect(store.isTokenFresh(expiresAt, 10_000)).toBe(true);
       expect(store.isTokenFresh(expiresAt, 60_000)).toBe(false);
+    });
+
+    it("treats a null expiry as always fresh (non-expiring token)", () => {
+      expect(store.isTokenFresh(null)).toBe(true);
     });
   });
 });

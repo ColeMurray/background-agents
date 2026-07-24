@@ -102,7 +102,9 @@ export async function resolveGitHubEnrichment(
     displayName: user?.displayName ?? githubIdentity.providerLogin ?? undefined,
     email: authorIdentity?.email ?? undefined,
     accessTokenEncrypted: tokens?.accessTokenEncrypted,
-    refreshTokenEncrypted: tokens?.refreshTokenEncrypted,
-    tokenExpiresAt: tokens?.expiresAt,
+    // Null store values (non-refreshable / non-expiring credential) map to
+    // the enrichment's absent form.
+    refreshTokenEncrypted: tokens?.refreshTokenEncrypted ?? undefined,
+    tokenExpiresAt: tokens?.expiresAt ?? undefined,
   };
 }

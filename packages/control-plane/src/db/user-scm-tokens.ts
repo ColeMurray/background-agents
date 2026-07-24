@@ -4,18 +4,30 @@ import type { SqlDatabase } from "./sql-database";
 /** Fallback token lifetime when GitHub doesn't provide expires_in (8 hours). */
 export const DEFAULT_TOKEN_LIFETIME_MS = 8 * 60 * 60 * 1000;
 
-export interface ScmTokenRecord {
+/**
+ * A stored SCM credential. Refresh token and expiry travel together: GitHub
+ * issues a refresh token exactly when the access token expires (GitHub App
+ * with user-token expiration on). OAuth Apps — and GitHub Apps with
+ * expiration off — issue a non-expiring access token with no refresh token,
+ * stored as the `null` arm.
+ */
+export type ScmTokenRecord = {
   accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-  /** Raw ciphertext of the refresh token — used as the CAS comparand. */
-  refreshTokenEncrypted: string;
-}
+  /** Epoch ms expiry, or null for a non-expiring token. */
+  expiresAt: number | null;
+} & (
+  | {
+      refreshToken: string;
+      /** Raw ciphertext of the refresh token — used as the CAS comparand. */
+      refreshTokenEncrypted: string;
+    }
+  | { refreshToken: null; refreshTokenEncrypted: null }
+);
 
 export interface EncryptedScmTokenRecord {
   accessTokenEncrypted: string;
-  refreshTokenEncrypted: string;
-  expiresAt: number;
+  refreshTokenEncrypted: string | null;
+  expiresAt: number | null;
 }
 
 export type CasResult = { ok: true } | { ok: false; reason: "cas_conflict" };
@@ -34,8 +46,8 @@ export class UserScmTokenStore {
       .bind(providerUserId)
       .first<{
         access_token_encrypted: string;
-        refresh_token_encrypted: string;
-        token_expires_at: number;
+        refresh_token_encrypted: string | null;
+        token_expires_at: number | null;
       }>();
 
     if (!row) return null;
@@ -55,20 +67,26 @@ export class UserScmTokenStore {
       .bind(providerUserId)
       .first<{
         access_token_encrypted: string;
-        refresh_token_encrypted: string;
-        token_expires_at: number;
+        refresh_token_encrypted: string | null;
+        token_expires_at: number | null;
       }>();
 
     if (!row) return null;
 
-    const [accessToken, refreshToken] = await Promise.all([
-      decryptToken(row.access_token_encrypted, this.encryptionKey),
-      decryptToken(row.refresh_token_encrypted, this.encryptionKey),
-    ]);
+    const accessToken = await decryptToken(row.access_token_encrypted, this.encryptionKey);
+
+    if (row.refresh_token_encrypted === null) {
+      return {
+        accessToken,
+        refreshToken: null,
+        expiresAt: row.token_expires_at,
+        refreshTokenEncrypted: null,
+      };
+    }
 
     return {
       accessToken,
-      refreshToken,
+      refreshToken: await decryptToken(row.refresh_token_encrypted, this.encryptionKey),
       expiresAt: row.token_expires_at,
       refreshTokenEncrypted: row.refresh_token_encrypted,
     };
@@ -77,16 +95,21 @@ export class UserScmTokenStore {
   async upsertTokens(
     providerUserId: string,
     accessToken: string,
-    refreshToken: string,
-    expiresAt: number,
+    refreshToken: string | null,
+    expiresAt: number | null,
     userId?: string | null
   ): Promise<void> {
     const now = Date.now();
     const [accessTokenEncrypted, refreshTokenEncrypted] = await Promise.all([
       encryptToken(accessToken, this.encryptionKey),
-      encryptToken(refreshToken, this.encryptionKey),
+      refreshToken === null ? null : encryptToken(refreshToken, this.encryptionKey),
     ]);
 
+    // The conflict guard keeps a stale capture from clobbering a fresher one,
+    // comparing expiries with NULL ranked as "never expires" (furthest
+    // future). >= rather than > so a re-authorized credential of equal rank
+    // still lands — in particular, two non-expiring captures compare equal,
+    // and the newer token must replace a possibly-revoked older one.
     await this.db
       .prepare(
         `INSERT INTO user_scm_tokens
@@ -98,7 +121,8 @@ export class UserScmTokenStore {
            token_expires_at = excluded.token_expires_at,
            user_id = COALESCE(user_scm_tokens.user_id, excluded.user_id),
            updated_at = excluded.updated_at
-         WHERE excluded.token_expires_at > user_scm_tokens.token_expires_at`
+         WHERE COALESCE(excluded.token_expires_at, 9007199254740991)
+            >= COALESCE(user_scm_tokens.token_expires_at, 9007199254740991)`
       )
       .bind(
         providerUserId,
@@ -148,7 +172,8 @@ export class UserScmTokenStore {
     return changes > 0 ? { ok: true } : { ok: false, reason: "cas_conflict" };
   }
 
-  isTokenFresh(expiresAt: number, bufferMs = 60_000): boolean {
+  isTokenFresh(expiresAt: number | null, bufferMs = 60_000): boolean {
+    if (expiresAt === null) return true;
     return Date.now() + bufferMs < expiresAt;
   }
 }

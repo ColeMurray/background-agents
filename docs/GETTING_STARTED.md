@@ -294,13 +294,13 @@ access.
    > `{deployment_name}` is the unique value you set in `terraform.tfvars` (e.g., your GitHub
    > username or company name).
 
-   > **Keep "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
-   > the default for newly created Apps, but activate it if yours predates that default). Expiring
-   > user tokens are what make GitHub return a **refresh token** at sign-in, and Open-Inspect stores
-   > that per-user credential so sessions clone, commit, and push **as the signed-in user**. With
-   > expiration deactivated — or on an **OAuth App**, which never issues a refresh token — no
-   > per-user credential is captured and sessions fall back to the shared GitHub App **bot**
-   > identity for repository access.
+   > **Prefer "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
+   > the default for newly created Apps). Expiring user tokens come with a **refresh token**,
+   > letting Open-Inspect renew the stored per-user credential indefinitely so sessions clone,
+   > commit, and push **as the signed-in user**. With expiration deactivated — or on an **OAuth
+   > App** — GitHub issues a non-expiring access token with no refresh token; Open-Inspect still
+   > captures and uses it, but if GitHub ever invalidates it (revocation, password reset), sessions
+   > fall back to the shared GitHub App **bot** identity until the user signs in again.
 
 5. Set **Repository permissions**:
    - Contents: **Read & Write**

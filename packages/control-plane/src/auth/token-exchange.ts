@@ -56,13 +56,20 @@ export async function performExchange(
   });
 
   // Capture SCM credentials once, keyed by the provider-verified id — the
-  // same store session-create feeds today, now from a verified source.
-  if (subject.provider === "github" && request.scmRefreshToken && tokenEncryptionKey) {
+  // same store session-create feeds today, now from a verified source. A
+  // refresh token is not required: OAuth Apps and GitHub Apps with
+  // user-token expiration off issue a non-expiring access token alone, and
+  // dropping it would silently downgrade every push/PR to the App bot.
+  if (subject.provider === "github" && tokenEncryptionKey) {
+    const scmRefreshToken = request.scmRefreshToken ?? null;
+    const scmTokenExpiresAt =
+      request.scmTokenExpiresAt ??
+      (scmRefreshToken === null ? null : Date.now() + DEFAULT_TOKEN_LIFETIME_MS);
     await new UserScmTokenStore(db, tokenEncryptionKey).upsertTokens(
       subject.providerUserId,
       request.subjectToken,
-      request.scmRefreshToken,
-      request.scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS,
+      scmRefreshToken,
+      scmTokenExpiresAt,
       user.id
     );
   }

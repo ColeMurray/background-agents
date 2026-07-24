@@ -266,6 +266,31 @@ describe("token exchange and refresh grant", () => {
     expect(sessionCount?.n).toBe(0);
   });
 
+  it("captures the access token alone when the exchange carries no refresh token", async () => {
+    // OAuth Apps — and GitHub Apps with user-token expiration off — issue a
+    // non-expiring access token with no refresh token. The capture must not
+    // be skipped, or the deployment silently loses per-user SCM credentials.
+    const response = await serviceFetch({
+      path: "/auth/tokens/exchange",
+      body: { subjectTokenType: "github-access-token", subjectToken: "gho_valid" },
+    });
+    expect(response.status).toBe(200);
+
+    const scmRow = await env.DB.prepare(
+      "SELECT access_token_encrypted, refresh_token_encrypted, token_expires_at FROM user_scm_tokens WHERE provider_user_id = ?"
+    )
+      .bind("583231")
+      .first<{
+        access_token_encrypted: string;
+        refresh_token_encrypted: string | null;
+        token_expires_at: number | null;
+      }>();
+    expect(scmRow).not.toBeNull();
+    expect(scmRow!.access_token_encrypted).toBeTypeOf("string");
+    expect(scmRow!.refresh_token_encrypted).toBeNull();
+    expect(scmRow!.token_expires_at).toBeNull();
+  });
+
   it("exchanges a Google subject without SCM capture", async () => {
     const response = await serviceFetch({
       path: "/auth/tokens/exchange",

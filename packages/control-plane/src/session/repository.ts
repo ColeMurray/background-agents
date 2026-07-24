@@ -711,7 +711,8 @@ export class SessionRepository {
     data: {
       scmAccessTokenEncrypted: string;
       scmRefreshTokenEncrypted?: string | null;
-      scmTokenExpiresAt: number;
+      /** Null when the token does not expire (no-refresh-token deployments). */
+      scmTokenExpiresAt: number | null;
     }
   ): void {
     this.sql.exec(

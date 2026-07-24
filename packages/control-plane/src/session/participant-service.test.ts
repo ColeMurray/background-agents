@@ -394,6 +394,54 @@ describe("ParticipantService", () => {
       });
     });
 
+    it("uses a non-expiring D1 credential that has no refresh token", async () => {
+      const h = createCentralizedHarness();
+
+      mockStore.getTokens.mockResolvedValue({
+        accessToken: "eternal-access",
+        refreshToken: null,
+        expiresAt: null,
+        refreshTokenEncrypted: null,
+      });
+      mockStore.isTokenFresh.mockReturnValue(true);
+
+      const updatedParticipant = createParticipant({
+        scm_user_id: "gh-123",
+        scm_access_token_encrypted: "enc:eternal-access",
+      });
+      vi.mocked(h.repository.getParticipantById).mockReturnValue(updatedParticipant);
+
+      const participant = createParticipant({ scm_user_id: "gh-123" });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBe(updatedParticipant);
+      expect(refreshAccessToken).not.toHaveBeenCalled();
+      expect(h.repository.updateParticipantTokens).toHaveBeenCalledWith("part-1", {
+        scmAccessTokenEncrypted: "enc:eternal-access",
+        scmRefreshTokenEncrypted: null,
+        scmTokenExpiresAt: null,
+      });
+    });
+
+    it("returns null when the D1 token is expired and carries no refresh token", async () => {
+      const h = createCentralizedHarness();
+
+      mockStore.getTokens.mockResolvedValue({
+        accessToken: "expired-access",
+        refreshToken: null,
+        expiresAt: Date.now() - 1000,
+        refreshTokenEncrypted: null,
+      });
+      mockStore.isTokenFresh.mockReturnValue(false);
+
+      const participant = createParticipant({ scm_user_id: "gh-123" });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBeNull();
+      expect(refreshAccessToken).not.toHaveBeenCalled();
+      expect(h.repository.updateParticipantTokens).not.toHaveBeenCalled();
+    });
+
     it("refreshes expired D1 token via GitHub API and CAS-writes", async () => {
       const h = createCentralizedHarness();
 
