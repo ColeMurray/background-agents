@@ -79,19 +79,45 @@ describe("github-access-token", () => {
     expect(urls).toEqual(["https://api.github.com/user", "https://api.github.com/user/emails"]);
   });
 
-  it("falls back to no email when /user/emails is forbidden (best-effort, exchange not failed)", async () => {
-    mockGitHubFetch({ emails: { status: 403, body: { message: "forbidden" } } });
-    expect(await verifySubjectToken("github-access-token", "gho_token")).toMatchObject({
-      ok: true,
-      subject: { providerUserId: "583231", providerEmail: undefined },
+  it("degrades to no email when /user/emails access is deterministically unsupported", async () => {
+    // 403 = GitHub App missing the "Email addresses" permission; 404 = OAuth
+    // token without the email scope. Retrying cannot produce an email in
+    // these deployments, so the exchange proceeds with id-based resolution.
+    for (const status of [403, 404]) {
+      mockGitHubFetch({ emails: { status, body: { message: "nope" } } });
+      expect(await verifySubjectToken("github-access-token", "gho_token")).toMatchObject({
+        ok: true,
+        subject: { providerUserId: "583231", providerEmail: undefined },
+      });
+    }
+  });
+
+  it("fails closed when the /user/emails request fails transiently", async () => {
+    // A transient failure must NOT read as "no email": on a first exchange it
+    // would mint the family on a fresh duplicate canonical user and fix the
+    // provider identity to it permanently. Fail retryable instead.
+    mockGitHubFetch({ emails: { reject: true } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toEqual({
+      ok: false,
+      failure: "provider_unavailable",
+    });
+    mockGitHubFetch({ emails: { status: 500, body: { message: "boom" } } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toEqual({
+      ok: false,
+      failure: "provider_unavailable",
+    });
+    mockGitHubFetch({ emails: { status: 429, body: { message: "rate limited" } } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toEqual({
+      ok: false,
+      failure: "provider_unavailable",
     });
   });
 
-  it("falls back to no email when the /user/emails request errors", async () => {
-    mockGitHubFetch({ emails: { reject: true } });
-    expect(await verifySubjectToken("github-access-token", "gho_token")).toMatchObject({
-      ok: true,
-      subject: { providerEmail: undefined },
+  it("fails closed on a malformed /user/emails body instead of reading it as no email", async () => {
+    mockGitHubFetch({ emails: { body: [{ email: "x@example.com" }] } });
+    expect(await verifySubjectToken("github-access-token", "gho_token")).toEqual({
+      ok: false,
+      failure: "provider_unavailable",
     });
   });
 

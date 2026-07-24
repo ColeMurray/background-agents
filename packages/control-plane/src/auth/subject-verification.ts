@@ -115,12 +115,23 @@ function verifyGitHubSubject(accessToken: string): Promise<SubjectVerificationRe
 }
 
 /**
+ * `/user/emails` statuses that deterministically mean the deployment cannot
+ * grant email access: 403 (GitHub App missing the "Email addresses"
+ * permission) and 404 (OAuth token without the email scope). Retrying cannot
+ * produce an email in these deployments — the web session carries no email
+ * there either — so account linking correctly degrades to id-based
+ * resolution.
+ */
+const GITHUB_EMAILS_UNSUPPORTED_STATUSES = new Set([403, 404]);
+
+/**
  * The verified primary email GitHub reports for the token's user, or
- * undefined. Best-effort: when `/user/emails` is unavailable (the token lacks
- * the email scope, or the GitHub App is missing the "Email addresses"
- * permission), fall back to no email — the same null the web session carries
- * in that deployment — so account linking degrades to id-based resolution
- * rather than failing the exchange.
+ * undefined ONLY when the deployment deterministically has no email access.
+ * Every other failure — 5xx, throttling, network/timeout, malformed body —
+ * propagates and fails the exchange closed (`provider_unavailable`,
+ * retryable): the email is an identity-linking key, and treating a transient
+ * failure as "no email" would mint the token family on a fresh duplicate
+ * canonical user, permanently fixing the provider identity to it.
  */
 async function resolveVerifiedGitHubEmail(
   accessToken: string,
@@ -129,8 +140,14 @@ async function resolveVerifiedGitHubEmail(
   try {
     const emails = await getGitHubUserEmails(accessToken, undefined, signal);
     return emails.find((entry) => entry.primary && entry.verified)?.email;
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (
+      error instanceof GitHubUserApiError &&
+      GITHUB_EMAILS_UNSUPPORTED_STATUSES.has(error.status)
+    ) {
+      return undefined;
+    }
+    throw error;
   }
 }
 

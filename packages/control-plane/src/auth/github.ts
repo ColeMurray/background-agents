@@ -157,12 +157,23 @@ export async function getGitHubUser(
   return parsed.data;
 }
 
+const githubUserEmailsSchema = z.array(
+  z.object({
+    email: z.string().min(1),
+    primary: z.boolean(),
+    verified: z.boolean(),
+  })
+);
+
 /**
  * Get user's email addresses from GitHub.
  *
  * @throws {GitHubUserApiError} on non-2xx responses, with `status` set — most
- * often 403 when the token lacks the email scope or the GitHub App is missing
- * the "Email addresses" permission.
+ * often 403 when the GitHub App is missing the "Email addresses" permission,
+ * or 404 when an OAuth token lacks the email scope.
+ * @throws {Error} on a 2xx response whose body is not a valid email list —
+ * email evidence is an identity-linking key, so a malformed body must fail
+ * closed, never read as "no email".
  */
 export async function getGitHubUserEmails(
   accessToken: string,
@@ -182,7 +193,11 @@ export async function getGitHubUserEmails(
     throw new GitHubUserApiError(response.status);
   }
 
-  return response.json() as Promise<Array<{ email: string; primary: boolean; verified: boolean }>>;
+  const parsed = githubUserEmailsSchema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) {
+    throw new Error("Malformed GitHub user emails response");
+  }
+  return parsed.data;
 }
 
 /**
