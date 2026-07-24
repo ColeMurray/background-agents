@@ -21,9 +21,6 @@ const log = createLogger("oi-session");
 /** Renew when the access token expires within this window. */
 export const OI_ACCESS_TOKEN_RENEW_WINDOW_MS = 15 * 60 * 1000;
 
-/** Don't attach an access token that is about to expire mid-request. */
-const OI_ACCESS_TOKEN_ATTACH_SLACK_MS = 60 * 1000;
-
 const tokenPairSchema = z.object({
   accessToken: z.string().min(1),
   accessTokenExpiresAtEpochMs: z.number().int().positive(),
@@ -59,9 +56,8 @@ async function postTokenEndpoint(
 /**
  * Exchange the provider credential captured at sign-in for a web session
  * token pair. Returns null on any failure (`auth.exchange_fallback`) — the
- * caller leaves the `oi*` JWT fields unset, so requests carry web's userless
- * service credential and identity-minting routes fail closed (403) until the
- * user signs in again.
+ * caller leaves the `oi*` JWT fields unset, so the session supervisor requires
+ * a new sign-in before any user-facing control-plane request is dispatched.
  */
 async function exchangeForWebSessionTokens(params: {
   provider: "github" | "google";
@@ -132,9 +128,9 @@ async function redeemWebSessionRefresh(refreshToken: string): Promise<RefreshOut
 
 /**
  * Read the current request's NextAuth JWT and return a live web session
- * token, or null when none is attached (userless calls, pre-exchange
- * sessions, non-request contexts). Read-only — renewal happens in the jwt
- * callback, never here.
+ * token, or null when the pair is absent/expired or there is no request
+ * context. Read-only — renewal happens in the persistable oi-refresh route,
+ * never here.
  */
 export async function getOiAccessTokenFromCookies(): Promise<string | null> {
   let cookiePairs: Record<string, string>;
@@ -174,12 +170,10 @@ export async function readOiAccessTokenFromCookiePairs(
   }
 }
 
-/** The JWT's access token when present and not about to expire, else null. */
+/** The JWT's access token while it remains unexpired, else null. */
 export function getLiveOiAccessToken(token: JWT | null): string | null {
   if (!token?.oiAccessToken || !token.oiAccessTokenExpiresAt) return null;
-  if (token.oiAccessTokenExpiresAt - Date.now() <= OI_ACCESS_TOKEN_ATTACH_SLACK_MS) {
-    return null;
-  }
+  if (token.oiAccessTokenExpiresAt <= Date.now()) return null;
   return token.oiAccessToken;
 }
 
@@ -217,24 +211,28 @@ export async function applyOiSessionTokens(
 
 /**
  * Renew the `oi*` fields on a decoded JWT via the rotating refresh grant,
- * mutating the token in place. Returns whether the token changed — a change
- * (rotated pair, or fields cleared because the grant is dead) MUST be
- * persisted by the caller, so this is only called from contexts that can
- * write the session cookie (the oi-refresh route handler).
+ * mutating the token in place. The result describes whether the complete web
+ * session remains usable, separately from whether the cookie changed. A change
+ * (rotated pair, or fields cleared because the grant is dead) MUST be persisted
+ * by the caller, so this is only called from contexts that can write the
+ * session cookie (the oi-refresh route handler).
  */
-export async function renewOiSessionTokens(token: JWT): Promise<{ changed: boolean }> {
+export async function renewOiSessionTokens(token: JWT): Promise<{
+  status: "authenticated" | "unauthenticated" | "temporarily_unavailable";
+  changed: boolean;
+}> {
   const { oiAccessToken, oiAccessTokenExpiresAt, oiRefreshToken } = token;
   if (!oiAccessToken || !oiAccessTokenExpiresAt || !oiRefreshToken) {
-    return { changed: false };
+    return { status: "unauthenticated", changed: false };
   }
   if (oiAccessTokenExpiresAt - Date.now() > OI_ACCESS_TOKEN_RENEW_WINDOW_MS) {
-    return { changed: false };
+    return { status: "authenticated", changed: false };
   }
 
   const outcome = await redeemWebSessionRefresh(oiRefreshToken);
   if (outcome.ok) {
     setOiFields(token, outcome.pair);
-    return { changed: true };
+    return { status: "authenticated", changed: true };
   }
   log.warn("oi_session.refresh_failed", {
     event: "auth.refresh_failed",
@@ -242,8 +240,13 @@ export async function renewOiSessionTokens(token: JWT): Promise<{ changed: boole
   });
   switch (outcome.reason) {
     case "request_failed":
-      // Transient failure: keep the fields and retry on a later ping.
-      return { changed: false };
+      // A transient refresh failure is harmless while the current access token
+      // is still valid. Once it expires, report temporary unavailability so the
+      // client can retry without conflating an outage with terminal auth loss.
+      return {
+        status: oiAccessTokenExpiresAt > Date.now() ? "authenticated" : "temporarily_unavailable",
+        changed: false,
+      };
     case "refresh_superseded":
       // A concurrent renewal won (CP grace window). In the common case the
       // cookie jar holds the winner's fresh pair — never persist over it.
@@ -262,18 +265,18 @@ export async function renewOiSessionTokens(token: JWT): Promise<{ changed: boole
       // worse (wipes a live identity in the common case). The fix is moving
       // the pair out of the NextAuth JWT into a single-writer store —
       // session-auth roadmap Phase B.
-      return { changed: false };
+      return { status: "authenticated", changed: false };
     case "invalid_refresh_token":
       // The grant is genuinely dead (unknown, revoked, or expired) — clear
       // the fields, and persist the cleared state so later pings stop
       // replaying a dead grant (re-login required).
       setOiFields(token, null);
-      return { changed: true };
+      return { status: "unauthenticated", changed: true };
     case "refresh_reuse_detected":
       // Rotation reuse is the token-theft signal — always clear the fields
       // (re-login required).
       setOiFields(token, null);
-      return { changed: true };
+      return { status: "unauthenticated", changed: true };
     default: {
       const exhaustive: never = outcome.reason;
       throw new Error(`Unhandled refresh outcome: ${String(exhaustive)}`);

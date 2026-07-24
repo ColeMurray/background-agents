@@ -1,24 +1,8 @@
-import { isCanonicalUserId } from "@open-inspect/shared";
 import { authorizeProviderIdentityRequest } from "../auth/identity-enforcement";
-import { UserStore, type ProviderIdentity } from "../db/user-store";
 import type { Env } from "../types";
-import {
-  type RequestContext,
-  type Route,
-  error,
-  json,
-  parseJsonBody,
-  parsePattern,
-} from "./shared";
+import { type RequestContext, type Route, error, json, parsePattern } from "./shared";
 
-type UpsertProviderIdentityRequest = {
-  providerLogin?: unknown;
-  providerEmail?: unknown;
-  displayName?: unknown;
-  avatarUrl?: unknown;
-};
-
-/** Providers that may be upserted through this internal route. */
+/** Providers that may be resolved through this authenticated route. */
 const ALLOWED_PROVIDERS = ["github", "slack", "linear", "google"] as const;
 type AllowedProvider = (typeof ALLOWED_PROVIDERS)[number];
 
@@ -26,27 +10,18 @@ function isAllowedProvider(value: string | undefined): value is AllowedProvider 
   return value !== undefined && (ALLOWED_PROVIDERS as readonly string[]).includes(value);
 }
 
-function optionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function pathSegment(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
-    return optionalString(decodeURIComponent(value));
+    const decoded = decodeURIComponent(value).trim();
+    return decoded.length > 0 ? decoded : undefined;
   } catch {
     return undefined;
   }
 }
 
-function isObjectRecord(value: unknown): value is UpsertProviderIdentityRequest {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export async function handleUpsertProviderIdentity(
-  request: Request,
+export async function handleResolveProviderIdentity(
+  _request: Request,
   _env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
@@ -63,38 +38,15 @@ export async function handleUpsertProviderIdentity(
 
   const authz = authorizeProviderIdentityRequest(ctx, provider, providerUserId);
   if (authz.action === "deny") return authz.response;
-  // A user resolving its own path already has a canonical id fixed by its
-  // token. Return it verbatim — never let the request body mutate identity
-  // linkage. Only the web service reaches the upserting path below.
-  if (authz.action === "resolve") return json({ userId: authz.canonicalUserId });
-
-  const body = await parseJsonBody<UpsertProviderIdentityRequest>(request);
-  if (body instanceof Response) return body;
-  if (!isObjectRecord(body)) {
-    return error("Request body must be an object", 400);
-  }
-
-  const identity: ProviderIdentity = {
-    provider,
-    providerUserId,
-    providerLogin: optionalString(body.providerLogin),
-    providerEmail: optionalString(body.providerEmail),
-    displayName: optionalString(body.displayName),
-    avatarUrl: optionalString(body.avatarUrl),
-  };
-
-  const resolvedUser = await new UserStore(ctx.db).resolveOrCreateUser(identity);
-  if (!isCanonicalUserId(resolvedUser.id)) {
-    return error("Resolved user ID is invalid", 500);
-  }
-
-  return json({ userId: resolvedUser.id });
+  // The matching user token already fixes the canonical id. The request body
+  // is deliberately ignored so this route cannot mutate identity linkage.
+  return json({ userId: authz.canonicalUserId });
 }
 
 export const providerIdentityRoutes: Route[] = [
   {
     method: "PUT",
     pattern: parsePattern("/provider-identities/:provider/:providerUserId"),
-    handler: handleUpsertProviderIdentity,
+    handler: handleResolveProviderIdentity,
   },
 ];

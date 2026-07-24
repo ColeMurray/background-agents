@@ -9,7 +9,6 @@ vi.mock("next-auth/jwt", () => ({
   getToken: vi.fn(),
 }));
 
-import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared";
 import { headers, cookies } from "next/headers";
 import { getToken } from "next-auth/jwt";
 import { controlPlaneFetch } from "./control-plane";
@@ -28,6 +27,13 @@ describe("controlPlaneFetch correlation", () => {
     };
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockResolvedValue(Response.json({ ok: true }));
+    vi.mocked(cookies).mockResolvedValue({
+      getAll: () => [{ name: "next-auth.session-token", value: "cookie-value" }],
+    } as never);
+    vi.mocked(getToken).mockResolvedValue({
+      oiAccessToken: "oi_at_live_token",
+      oiAccessTokenExpiresAt: Date.now() + 60 * 60 * 1000,
+    } as never);
   });
 
   afterEach(() => {
@@ -58,8 +64,8 @@ describe("controlPlaneFetch correlation", () => {
     expect(forwardedHeaders.get("x-trace-id")).toBe("trace-123");
     expect(forwardedHeaders.get("x-request-id")).toBeNull();
     expect(forwardedHeaders.get("Range")).toBe("bytes=0-5");
-    expect(forwardedHeaders.get("Authorization")).toBeNull();
-    expect(forwardedHeaders.get("X-OpenInspect-Service")).toBe("web");
+    expect(forwardedHeaders.get("Authorization")).toBe("Bearer oi_at_live_token");
+    expect(forwardedHeaders.get("X-OpenInspect-Service")).toBeNull();
   });
 
   it("merges tuple and Headers option headers without dropping values", async () => {
@@ -135,7 +141,7 @@ describe("controlPlaneFetch correlation", () => {
     expect(forwardedHeaders.get("Authorization")).toBe("Bearer oi_at_live_token");
   });
 
-  it("signs with the sig1 service credential when the web session token is expired", async () => {
+  it("returns 401 without dispatching when the web session token is expired", async () => {
     vi.mocked(headers).mockResolvedValue(new Headers({}));
     vi.mocked(cookies).mockResolvedValue({
       getAll: () => [{ name: "next-auth.session-token", value: "cookie-value" }],
@@ -145,53 +151,39 @@ describe("controlPlaneFetch correlation", () => {
       oiAccessTokenExpiresAt: Date.now() - 1000,
     } as never);
 
-    await controlPlaneFetch("/sessions");
+    const response = await controlPlaneFetch("/sessions");
 
-    const [, init] = fetchMock.mock.calls[0] ?? [];
-    const forwardedHeaders = new Headers(init?.headers);
-    expect(forwardedHeaders.get("Authorization")).toBeNull();
-    expect(forwardedHeaders.get("X-OpenInspect-Service")).toBe("web");
-  });
-
-  it("throws when SERVICE_AUTH_SECRET is not configured and no token is live", async () => {
-    delete process.env.SERVICE_AUTH_SECRET;
-    vi.mocked(headers).mockResolvedValue(new Headers({}));
-    vi.mocked(cookies).mockResolvedValue({ getAll: () => [] } as never);
-
-    await expect(controlPlaneFetch("/sessions")).rejects.toThrow(
-      /Control plane credentials not configured/
-    );
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("signs with web's sig1 service credential when no web session token is live", async () => {
-    process.env.SERVICE_AUTH_SECRET = "web-sig1-secret";
+  it("does not require the web service credential for user-facing calls", async () => {
+    delete process.env.SERVICE_AUTH_SECRET;
     vi.mocked(headers).mockResolvedValue(new Headers({}));
-    vi.mocked(cookies).mockResolvedValue({ getAll: () => [] } as never);
 
-    const body = JSON.stringify({ title: "t" });
-    await controlPlaneFetch("/sessions/abc/title", { method: "POST", body });
+    const response = await controlPlaneFetch("/sessions");
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    const forwardedHeaders = new Headers(init?.headers);
-    expect(forwardedHeaders.get("Authorization")).toBeNull();
-    expect(forwardedHeaders.get("X-OpenInspect-Service")).toBe("web");
-    const verified = await verifyServiceSignature({
-      signatureHeader: forwardedHeaders.get("X-OpenInspect-Service-Signature")!,
-      service: "web",
-      secret: "web-sig1-secret",
-      method: "POST",
-      url: String(url),
-      bodySha256Hex: await sha256Hex(body),
-      actor: "",
-    });
-    expect(verified).toMatchObject({ ok: true });
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer oi_at_live_token");
   });
 
-  it("signs the exact bytes of a buffered binary body and keeps the caller Content-Type", async () => {
+  it("never falls back to web's sig1 service credential when no web session token is live", async () => {
     process.env.SERVICE_AUTH_SECRET = "web-sig1-secret";
     vi.mocked(headers).mockResolvedValue(new Headers({}));
     vi.mocked(cookies).mockResolvedValue({ getAll: () => [] } as never);
+    vi.mocked(getToken).mockResolvedValue(null);
+
+    const body = JSON.stringify({ title: "t" });
+    const response = await controlPlaneFetch("/sessions/abc/title", { method: "POST", body });
+
+    expect(response.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards the exact bytes of a buffered binary body and keeps the caller Content-Type", async () => {
+    vi.mocked(headers).mockResolvedValue(new Headers({}));
 
     const body = new TextEncoder().encode("--boundary\r\nfake multipart\r\n--boundary--").buffer;
     await controlPlaneFetch("/sessions/abc/attachments", {
@@ -200,31 +192,10 @@ describe("controlPlaneFetch correlation", () => {
       headers: { "Content-Type": "multipart/form-data; boundary=boundary" },
     });
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     const forwardedHeaders = new Headers(init?.headers);
     expect(forwardedHeaders.get("Content-Type")).toBe("multipart/form-data; boundary=boundary");
-    const verified = await verifyServiceSignature({
-      signatureHeader: forwardedHeaders.get("X-OpenInspect-Service-Signature")!,
-      service: "web",
-      secret: "web-sig1-secret",
-      method: "POST",
-      url: String(url),
-      bodySha256Hex: await sha256Hex(body),
-      actor: "",
-    });
-    expect(verified).toMatchObject({ ok: true });
-  });
-
-  it("rejects bodies whose exact bytes cannot be signed", async () => {
-    process.env.SERVICE_AUTH_SECRET = "web-sig1-secret";
-    vi.mocked(headers).mockResolvedValue(new Headers({}));
-    vi.mocked(cookies).mockResolvedValue({ getAll: () => [] } as never);
-
-    const formData = new FormData();
-    formData.append("file", new Blob(["x"]));
-    await expect(
-      controlPlaneFetch("/sessions", { method: "POST", body: formData })
-    ).rejects.toThrow(/string or buffered binary body/);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(forwardedHeaders.get("Authorization")).toBe("Bearer oi_at_live_token");
+    expect(init?.body).toBe(body);
   });
 });

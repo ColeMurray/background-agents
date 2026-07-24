@@ -61,11 +61,9 @@ export async function resolveCurrentUserId(
     return pending;
   }
 
-  const resolution = resolveCurrentUserIdUncached(identity, authUserId, user, cacheKey).finally(
-    () => {
-      pendingCurrentUserIdResolutions.delete(cacheKey);
-    }
-  );
+  const resolution = resolveCurrentUserIdUncached(identity, authUserId, cacheKey).finally(() => {
+    pendingCurrentUserIdResolutions.delete(cacheKey);
+  });
   pendingCurrentUserIdResolutions.set(cacheKey, resolution);
   return resolution;
 }
@@ -73,20 +71,11 @@ export async function resolveCurrentUserId(
 async function resolveCurrentUserIdUncached(
   identity: AuthIdentity,
   authUserId: string,
-  user: CurrentUserIdentityInput | null | undefined,
   cacheKey: string
 ): Promise<ResolveCurrentUserResult> {
   const response = await controlPlaneFetch(
     `/provider-identities/${identity.authProvider}/${encodeURIComponent(authUserId)}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        providerLogin: user?.login ?? undefined,
-        providerEmail: identity.authEmail,
-        displayName: identity.authName || user?.login || undefined,
-        avatarUrl: identity.authAvatarUrl,
-      }),
-    }
+    { method: "PUT" }
   );
 
   const data = await response.json();

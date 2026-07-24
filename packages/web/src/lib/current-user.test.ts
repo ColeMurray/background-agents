@@ -30,16 +30,12 @@ describe("resolveCurrentUserId — provider-scoped cache", () => {
 
     expect(gh).toEqual({ ok: true, userId: githubUserId });
     expect(google).toEqual({ ok: true, userId: googleUserId });
-    expect(controlPlaneFetch).toHaveBeenNthCalledWith(
-      1,
-      "/provider-identities/github/123",
-      expect.anything()
-    );
-    expect(controlPlaneFetch).toHaveBeenNthCalledWith(
-      2,
-      "/provider-identities/google/123",
-      expect.anything()
-    );
+    expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/123", {
+      method: "PUT",
+    });
+    expect(controlPlaneFetch).toHaveBeenNthCalledWith(2, "/provider-identities/google/123", {
+      method: "PUT",
+    });
 
     // A second GitHub resolution must come from the GitHub-scoped cache entry,
     // not the Google one, and without a third control-plane call.

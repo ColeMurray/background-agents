@@ -57,9 +57,6 @@ describe("buildAuthIdentity", () => {
     expect(buildAuthIdentity(githubUser)).toEqual({
       authProvider: "github",
       authUserId: "12345",
-      authEmail: "ada@example.com",
-      authName: "Ada Lovelace",
-      authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
     });
   });
 
@@ -67,19 +64,13 @@ describe("buildAuthIdentity", () => {
     expect(buildAuthIdentity(googleUser)).toEqual({
       authProvider: "google",
       authUserId: "google-sub-1",
-      authEmail: "pm@gmail.com",
-      authName: "Pat PM",
-      authAvatarUrl: "https://lh3.googleusercontent.com/a/pat",
     });
   });
 
-  it("normalizes null fields to undefined and defaults the provider", () => {
+  it("defaults the provider", () => {
     expect(buildAuthIdentity({ id: "12345", name: null, email: null, image: null })).toEqual({
       authProvider: "github",
       authUserId: "12345",
-      authEmail: undefined,
-      authName: undefined,
-      authAvatarUrl: undefined,
     });
   });
 });

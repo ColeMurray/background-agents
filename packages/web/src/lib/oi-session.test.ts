@@ -140,7 +140,7 @@ describe("renewOiSessionTokens", () => {
       method: "POST",
       body: JSON.stringify({ refreshToken: "oi_rt_old" }),
     });
-    expect(result.changed).toBe(true);
+    expect(result).toEqual({ status: "authenticated", changed: true });
     expect(token.oiAccessToken).toBe("oi_at_fresh");
     expect(token.oiRefreshToken).toBe("oi_rt_fresh");
   });
@@ -153,21 +153,21 @@ describe("renewOiSessionTokens", () => {
     } as JWT;
     const result = await renewOiSessionTokens(token);
     expect(serviceFetch).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
+    expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_live");
   });
 
   it("does nothing when the token carries no oi fields", async () => {
     const result = await renewOiSessionTokens({} as JWT);
     expect(serviceFetch).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
+    expect(result).toEqual({ status: "unauthenticated", changed: false });
   });
 
   it("keeps the fields when a concurrent renewal won the race (refresh_superseded)", async () => {
     serviceFetch.mockResolvedValue(errorResponse(401, "refresh_superseded"));
     const token = nearExpiryToken();
     const result = await renewOiSessionTokens(token);
-    expect(result.changed).toBe(false);
+    expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_old");
     expect(token.oiRefreshToken).toBe("oi_rt_old");
   });
@@ -183,7 +183,7 @@ describe("renewOiSessionTokens", () => {
       oiRefreshToken: "oi_rt_idle",
     } as JWT;
     const result = await renewOiSessionTokens(token);
-    expect(result.changed).toBe(false);
+    expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_idle");
     expect(token.oiRefreshToken).toBe("oi_rt_idle");
   });
@@ -192,7 +192,7 @@ describe("renewOiSessionTokens", () => {
     serviceFetch.mockResolvedValue(errorResponse(401, "refresh_reuse_detected"));
     const token = nearExpiryToken();
     const result = await renewOiSessionTokens(token);
-    expect(result.changed).toBe(true);
+    expect(result).toEqual({ status: "unauthenticated", changed: true });
     expect(token.oiAccessToken).toBeUndefined();
     expect(token.oiRefreshToken).toBeUndefined();
   });
@@ -201,7 +201,7 @@ describe("renewOiSessionTokens", () => {
     serviceFetch.mockResolvedValue(errorResponse(401, "invalid_refresh_token"));
     const token = nearExpiryToken();
     const result = await renewOiSessionTokens(token);
-    expect(result.changed).toBe(true);
+    expect(result).toEqual({ status: "unauthenticated", changed: true });
     expect(token.oiAccessToken).toBeUndefined();
     expect(token.oiRefreshToken).toBeUndefined();
   });
@@ -210,14 +210,29 @@ describe("renewOiSessionTokens", () => {
     serviceFetch.mockRejectedValue(new Error("network down"));
     const token = nearExpiryToken();
     const result = await renewOiSessionTokens(token);
-    expect(result.changed).toBe(false);
+    expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_old");
     expect(token.oiRefreshToken).toBe("oi_rt_old");
+  });
+
+  it("reports temporary unavailability when a transient failure outlasts the access token", async () => {
+    serviceFetch.mockRejectedValue(new Error("network down"));
+    const token = {
+      oiAccessToken: "oi_at_expired",
+      oiAccessTokenExpiresAt: Date.now() - 1,
+      oiRefreshToken: "oi_rt_retryable",
+    } as JWT;
+
+    const result = await renewOiSessionTokens(token);
+
+    expect(result).toEqual({ status: "temporarily_unavailable", changed: false });
+    expect(token.oiAccessToken).toBe("oi_at_expired");
+    expect(token.oiRefreshToken).toBe("oi_rt_retryable");
   });
 });
 
 describe("getLiveOiAccessToken", () => {
-  it("returns the token only while comfortably unexpired", () => {
+  it("returns every unexpired token and rejects only missing or expired tokens", () => {
     expect(
       getLiveOiAccessToken({
         oiAccessToken: "oi_at_x",
@@ -228,6 +243,12 @@ describe("getLiveOiAccessToken", () => {
       getLiveOiAccessToken({
         oiAccessToken: "oi_at_x",
         oiAccessTokenExpiresAt: Date.now() + 30_000,
+      } as JWT)
+    ).toBe("oi_at_x");
+    expect(
+      getLiveOiAccessToken({
+        oiAccessToken: "oi_at_x",
+        oiAccessTokenExpiresAt: Date.now() - 1,
       } as JWT)
     ).toBeNull();
     expect(getLiveOiAccessToken({} as JWT)).toBeNull();

@@ -162,8 +162,8 @@ function isScmAgnosticRoute(path: string): boolean {
     // Token issuance is identity work, independent of the SCM provider.
     /^\/auth\/tokens\/(exchange|refresh)$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    // Identity upserts are independent of the SCM provider. Only the known auth
-    // providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
+    // Identity resolution is independent of the SCM provider. Only the known
+    // auth providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
     /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)

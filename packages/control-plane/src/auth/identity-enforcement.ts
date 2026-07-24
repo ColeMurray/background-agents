@@ -309,14 +309,10 @@ export function requireEventPoster(
  *   `oi_at_` holder could assert an arbitrary email and have
  *   `resolveOrCreateUser` re-link its provider identity onto another user's
  *   canonical account. Linking stays provider-verified, in the exchange flow.
- * - `upsert`: the web service resolving identities during the OAuth sign-in
- *   flow, before a user token exists. Only web reaches the mutating path, and
- *   only with the profile the provider just verified.
  * - `deny`: everyone else.
  */
 export type ProviderIdentityAuthz =
   | { action: "resolve"; canonicalUserId: string }
-  | { action: "upsert" }
   | { action: "deny"; response: Response };
 
 export function authorizeProviderIdentityRequest(
@@ -348,19 +344,15 @@ export function authorizeProviderIdentityRequest(
       response: error("Path identity does not match the authenticated user", 403),
     };
   }
-  if (principal?.kind === "service" && principal.service === "web") return { action: "upsert" };
   logMismatchRejected(
     "provider-identities",
     "principal",
-    "matching user or web service",
+    "matching user",
     principal?.kind === "service" ? principal.service : (principal?.kind ?? "none"),
     ctx
   );
   return {
     action: "deny",
-    response: error(
-      "Only the matching user or the web service may upsert provider identities",
-      403
-    ),
+    response: error("Only the matching user may resolve a provider identity", 403),
   };
 }

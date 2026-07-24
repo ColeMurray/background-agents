@@ -1,18 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { providerIdentityRoutes } from "./provider-identities";
-import type { RequestContext } from "./shared";
+import { describe, expect, it, vi } from "vitest";
+
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
-
-const mockUserStore = {
-  resolveOrCreateUser: vi.fn(),
-};
-
-vi.mock("../db/user-store", () => ({
-  UserStore: vi.fn().mockImplementation(function () {
-    return mockUserStore;
-  }),
-}));
+import { providerIdentityRoutes } from "./provider-identities";
+import type { RequestContext } from "./shared";
 
 function createEnv(): Env {
   return {
@@ -25,8 +16,6 @@ function createCtx(): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     db: {} as SqlDatabase,
-    // The real upsert caller: web's BFF during the OAuth sign-in flow. Only
-    // it (or the matching user) passes enforceProviderIdentityPath.
     principal: { kind: "service", service: "web", actor: null },
     metrics: {
       d1Queries: [],
@@ -37,65 +26,18 @@ function createCtx(): RequestContext {
   };
 }
 
-async function callProviderIdentityRoute(path: string, body: unknown): Promise<Response> {
-  const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
-  const match = path.match(route.pattern);
-  if (!match) throw new Error(`No route match for ${path}`);
-
-  return route.handler(
-    new Request(`https://test.local${path}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    createEnv(),
-    match,
-    createCtx()
-  );
-}
-
-async function callProviderIdentityRouteWithoutBody(path: string): Promise<Response> {
-  const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
-  const match = path.match(route.pattern);
-  if (!match) throw new Error(`No route match for ${path}`);
-
-  return route.handler(
-    new Request(`https://test.local${path}`, { method: "PUT" }),
-    createEnv(),
-    match,
-    createCtx()
-  );
-}
-
-async function callProviderIdentityRouteAs(
-  ctx: RequestContext,
-  path: string,
-  body: unknown
-): Promise<Response> {
-  const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
-  const match = path.match(route.pattern);
-  if (!match) throw new Error(`No route match for ${path}`);
-
-  return route.handler(
-    new Request(`https://test.local${path}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    createEnv(),
-    match,
-    ctx
-  );
-}
-
-function userCtx(canonicalUserId: string): RequestContext {
+function userCtx(
+  canonicalUserId: string,
+  provider: "github" | "google" | "slack" | "linear" = "github",
+  providerUserId = "12345"
+): RequestContext {
   return {
     ...createCtx(),
     principal: {
       kind: "user",
       user: {
-        provider: "github",
-        providerUserId: "12345",
+        provider,
+        providerUserId,
         canonicalUserId,
         participantUserId: canonicalUserId,
       },
@@ -104,157 +46,115 @@ function userCtx(canonicalUserId: string): RequestContext {
   };
 }
 
-describe("provider identity routes", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockUserStore.resolveOrCreateUser.mockResolvedValue({
-      id: "0123456789abcdef0123456789abcdef",
-      displayName: "Ada",
-      email: "ada@example.com",
-      isNew: false,
+async function callProviderIdentityRoute(
+  path: string,
+  ctx: RequestContext = createCtx(),
+  body?: unknown
+): Promise<Response> {
+  const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
+  const match = path.match(route.pattern);
+  if (!match) throw new Error(`No route match for ${path}`);
+
+  return route.handler(
+    new Request(`https://test.local${path}`, {
+      method: "PUT",
+      ...(body === undefined
+        ? {}
+        : {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+    }),
+    createEnv(),
+    match,
+    ctx
+  );
+}
+
+describe("PUT /provider-identities/:provider/:providerUserId", () => {
+  it("denies the web service now that identity creation happens only during token exchange", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const response = await callProviderIdentityRoute(
+      "/provider-identities/github/12345",
+      createCtx(),
+      {
+        providerEmail: "victim@example.com",
+      }
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("matches every supported provider identity path and captures the provider", () => {
+    const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
+
+    for (const [path, provider, providerUserId] of [
+      ["/provider-identities/github/12345", "github", "12345"],
+      ["/provider-identities/slack/U123", "slack", "U123"],
+      ["/provider-identities/linear/abc", "linear", "abc"],
+      ["/provider-identities/google/google-sub-1", "google", "google-sub-1"],
+    ] as const) {
+      const match = path.match(route.pattern);
+      expect(match?.groups).toMatchObject({ provider, providerUserId });
+    }
+  });
+
+  it("rejects unsupported providers before authorization", async () => {
+    const response = await callProviderIdentityRoute("/provider-identities/gitlab/U123");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "provider must be one of: github, slack, linear, google",
     });
   });
 
-  describe("PUT /provider-identities/:provider/:providerUserId", () => {
-    it("upserts a GitHub identity and returns its canonical user ID", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/github/12345", {
-        providerLogin: "ada",
-        providerEmail: "ada@example.com",
-        displayName: "Ada Lovelace",
-        avatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      });
+  it("rejects blank provider user IDs", async () => {
+    const response = await callProviderIdentityRoute("/provider-identities/github/%20%20%20");
 
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({
-        userId: "0123456789abcdef0123456789abcdef",
-      });
-      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith({
-        provider: "github",
-        providerUserId: "12345",
-        providerLogin: "ada",
-        providerEmail: "ada@example.com",
-        displayName: "Ada Lovelace",
-        avatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "providerUserId is required" });
+  });
+
+  it("rejects invalid path encoding for provider user IDs", async () => {
+    const response = await callProviderIdentityRoute("/provider-identities/github/%E0%A4%A");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "providerUserId is required" });
+  });
+
+  it("returns a matching user's token-fixed canonical id without requiring a body", async () => {
+    const response = await callProviderIdentityRoute(
+      "/provider-identities/github/12345",
+      userCtx("0123456789abcdef0123456789abcdef")
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      userId: "0123456789abcdef0123456789abcdef",
     });
+  });
 
-    it("matches every supported provider identity path and captures the provider", () => {
-      const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
+  it("ignores body identity fields when resolving the matching user", async () => {
+    const response = await callProviderIdentityRoute(
+      "/provider-identities/github/12345",
+      userCtx("0123456789abcdef0123456789abcdef"),
+      { providerEmail: "victim@example.com" }
+    );
 
-      for (const [path, provider, providerUserId] of [
-        ["/provider-identities/github/12345", "github", "12345"],
-        ["/provider-identities/slack/U123", "slack", "U123"],
-        ["/provider-identities/linear/abc", "linear", "abc"],
-        ["/provider-identities/google/google-sub-1", "google", "google-sub-1"],
-      ] as const) {
-        const match = path.match(route.pattern);
-        expect(match?.groups).toMatchObject({ provider, providerUserId });
-      }
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      userId: "0123456789abcdef0123456789abcdef",
     });
+  });
 
-    it("upserts a non-GitHub (Google) identity using the provider from the path", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/google/google-sub-1", {
-        providerEmail: "pm@corp.com",
-        displayName: "PM Person",
-        avatarUrl: "https://lh3.googleusercontent.com/pic",
-      });
+  it("403s a user principal targeting a different identity path", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const response = await callProviderIdentityRoute(
+      "/provider-identities/github/999999",
+      userCtx("0123456789abcdef0123456789abcdef")
+    );
 
-      expect(response.status).toBe(200);
-      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith({
-        provider: "google",
-        providerUserId: "google-sub-1",
-        providerLogin: undefined,
-        providerEmail: "pm@corp.com",
-        displayName: "PM Person",
-        avatarUrl: "https://lh3.googleusercontent.com/pic",
-      });
-    });
-
-    it("rejects unsupported providers with 400 without resolving a user", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/gitlab/U123", {});
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "provider must be one of: github, slack, linear, google",
-      });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("rejects requests with no request body", async () => {
-      const response = await callProviderIdentityRouteWithoutBody(
-        "/provider-identities/github/12345"
-      );
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("rejects non-object JSON bodies", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/github/12345", null);
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "Request body must be an object" });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("rejects blank provider user IDs", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/github/%20%20%20", {});
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "providerUserId is required" });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("rejects invalid path encoding for provider user IDs", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/github/%E0%A4%A", {});
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "providerUserId is required" });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("returns a matching user's token-fixed canonical id without mutating identity", async () => {
-      // Identity-takeover guard: even with a foreign providerEmail in the body,
-      // a matching user resolves to the id its token carries and
-      // resolveOrCreateUser is never invoked (no email-based re-link).
-      const response = await callProviderIdentityRouteAs(
-        userCtx("0123456789abcdef0123456789abcdef"),
-        "/provider-identities/github/12345",
-        { providerEmail: "victim@example.com" }
-      );
-
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({
-        userId: "0123456789abcdef0123456789abcdef",
-      });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("403s a user principal targeting a different identity path", async () => {
-      vi.spyOn(console, "warn").mockImplementation(() => undefined);
-      const response = await callProviderIdentityRouteAs(
-        userCtx("0123456789abcdef0123456789abcdef"),
-        "/provider-identities/github/999999",
-        { providerEmail: "victim@example.com" }
-      );
-
-      expect(response.status).toBe(403);
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("rejects unexpected non-canonical resolved IDs", async () => {
-      mockUserStore.resolveOrCreateUser.mockResolvedValue({
-        id: "user-1",
-        displayName: null,
-        email: null,
-        isNew: false,
-      });
-
-      const response = await callProviderIdentityRoute("/provider-identities/github/12345", {});
-
-      expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({ error: "Resolved user ID is invalid" });
-    });
+    expect(response.status).toBe(403);
   });
 });

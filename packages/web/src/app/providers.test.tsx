@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { SessionProvider } from "next-auth/react";
 
+import { WebSessionSupervisor } from "@/components/web-session-supervisor";
 import { Providers } from "./providers";
 
 function findByType(node: ReactNode, type: unknown): ReactElement | undefined {
@@ -27,5 +28,13 @@ describe("Providers", () => {
     expect(
       (sessionProvider as ReactElement<{ refetchOnWindowFocus?: boolean }>).props
     ).toMatchObject({ refetchOnWindowFocus: false });
+  });
+
+  it("places application children behind the web-session supervisor", () => {
+    const child = <div>Protected application</div>;
+    const supervisor = findByType(Providers({ children: child }), WebSessionSupervisor);
+
+    expect(supervisor).toBeDefined();
+    expect((supervisor as ReactElement<{ children?: ReactNode }>).props.children).toBe(child);
   });
 });

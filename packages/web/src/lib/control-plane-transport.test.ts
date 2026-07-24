@@ -50,4 +50,11 @@ describe("controlPlaneServiceFetch", () => {
     ).rejects.toThrow("SERVICE_AUTH_SECRET not configured");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("rejects service-authenticated requests outside token issuance", async () => {
+    await expect(controlPlaneServiceFetch("/sessions", { method: "GET" })).rejects.toThrow(
+      "Service authentication is restricted to token endpoints"
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

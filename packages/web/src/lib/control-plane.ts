@@ -5,7 +5,6 @@
  * vs. URL-based fetch) to `control-plane-transport.ts`.
  */
 
-import { buildServiceAuthHeaders } from "@open-inspect/shared";
 import { dispatchControlPlaneFetch, getControlPlaneUrl } from "@/lib/control-plane-transport";
 import { createLogger } from "@/lib/logger";
 import { getOiAccessTokenFromCookies } from "@/lib/oi-session";
@@ -14,40 +13,19 @@ import { getRequestCorrelation } from "@/lib/request-context";
 
 const log = createLogger("control-plane-client");
 
-/** A body sig1 can hash: exact bytes or a string. Streams cannot be signed. */
-type SignableBody = string | ArrayBuffer | Uint8Array | undefined;
-
-/**
- * Narrow a fetch body to the shapes whose exact bytes can be signed. Every
- * route serializes before calling `controlPlaneFetch` (JSON strings, buffered
- * multipart bytes); a streaming or structured body here is a programming
- * error, surfaced loudly rather than sent unsigned.
- */
-function toSignableBody(body: RequestInit["body"]): SignableBody {
-  if (body === null || body === undefined) return undefined;
-  if (typeof body === "string" || body instanceof ArrayBuffer || body instanceof Uint8Array) {
-    return body;
-  }
-  throw new Error(
-    "controlPlaneFetch requires a string or buffered binary body so it can be signed"
-  );
-}
-
 /**
  * Create authenticated headers for a control plane request.
  *
- * Prefers the signed-in user's web session token (`Authorization: Bearer
+ * Returns the signed-in user's web session token (`Authorization: Bearer
  * oi_at_…`), which resolves to a verified user principal at the control
- * plane. Without a live token (userless calls, pre-exchange sessions,
- * expired tokens), the request is signed with web's own sig1 service
- * credential — a verified `web` service principal with no participant.
+ * plane. User-facing calls never fall back to web's broad service credential:
+ * without a live token the caller receives a local 401 and must reauthenticate.
  */
 async function getControlPlaneHeaders(request: {
   method: string;
   url: string;
-  body: SignableBody;
   traceId: string;
-}): Promise<HeadersInit> {
+}): Promise<HeadersInit | null> {
   const oiAccessToken = await getOiAccessTokenFromCookies();
   if (oiAccessToken) {
     return {
@@ -56,31 +34,13 @@ async function getControlPlaneHeaders(request: {
       "x-trace-id": request.traceId,
     };
   }
-  const serviceSecret = process.env.SERVICE_AUTH_SECRET;
-  if (!serviceSecret) {
-    console.error("[control-plane] SERVICE_AUTH_SECRET not configured");
-    throw new Error("Control plane credentials not configured");
-  }
-  // Transitional: pre-exchange/dead-token sessions degrade to web's userless
-  // service credential. Slated for removal (tri-state re-auth follow-up) —
-  // this log is how the remaining population is measured before the flip.
-  log.warn("auth.userless_fallback", {
-    event: "auth.userless_fallback",
+  log.warn("auth.user_session_missing", {
+    event: "auth.user_session_missing",
     http_path: new URL(request.url).pathname,
     http_method: request.method,
     trace_id: request.traceId,
   });
-  return {
-    "Content-Type": "application/json",
-    ...(await buildServiceAuthHeaders({
-      service: "web",
-      secret: serviceSecret,
-      method: request.method,
-      url: request.url,
-      body: request.body,
-      traceId: request.traceId,
-    })),
-  };
+  return null;
 }
 
 /**
@@ -103,19 +63,25 @@ export async function controlPlaneFetch(
   const correlationFields = getCorrelationLogFields(correlation);
 
   try {
-    // The URL and body are fixed before header construction: sig1 signatures
-    // bind method, URL, and exact body bytes, so what is signed here is what
-    // `dispatchControlPlaneFetch` sends.
     const url = `${getControlPlaneUrl()}${normalizedPath}`;
-    const body = toSignableBody(options.body);
-    const credentialHeaders = new Headers(
-      await getControlPlaneHeaders({
-        method: options.method ?? "GET",
-        url,
-        body,
-        traceId: correlation.traceId,
-      })
-    );
+    const credentialHeaderValues = await getControlPlaneHeaders({
+      method: options.method ?? "GET",
+      url,
+      traceId: correlation.traceId,
+    });
+    if (!credentialHeaderValues) {
+      return Response.json(
+        { error: "Unauthorized" },
+        {
+          status: 401,
+          headers: {
+            "x-request-id": correlation.requestId,
+            "x-trace-id": correlation.traceId,
+          },
+        }
+      );
+    }
+    const credentialHeaders = new Headers(credentialHeaderValues);
 
     // Caller headers first, credential headers on top: the credential wins
     // over any caller-supplied Authorization or signature header. Content-Type

@@ -90,12 +90,6 @@ describe("sessions API route", () => {
 
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
       method: "PUT",
-      body: JSON.stringify({
-        providerLogin: "ada",
-        providerEmail: "ada@example.com",
-        displayName: "Ada Lovelace",
-        avatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      }),
     });
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(
       2,
@@ -135,12 +129,6 @@ describe("sessions API route", () => {
       "/provider-identities/google/google-sub-1",
       {
         method: "PUT",
-        body: JSON.stringify({
-          providerLogin: undefined,
-          providerEmail: "pm@gmail.com",
-          displayName: "Pat PM",
-          avatarUrl: "https://lh3.googleusercontent.com/a/pat",
-        }),
       }
     );
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(
@@ -170,12 +158,6 @@ describe("sessions API route", () => {
 
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
       method: "PUT",
-      body: JSON.stringify({
-        providerLogin: "ada",
-        providerEmail: "ada@example.com",
-        displayName: "Ada Lovelace",
-        avatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      }),
     });
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(
       2,
@@ -205,12 +187,6 @@ describe("sessions API route", () => {
     expect(controlPlaneFetch).toHaveBeenCalledTimes(3);
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
       method: "PUT",
-      body: JSON.stringify({
-        providerLogin: "ada",
-        providerEmail: "ada@example.com",
-        displayName: "Ada Lovelace",
-        avatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      }),
     });
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(
       2,

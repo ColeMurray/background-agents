@@ -12,9 +12,9 @@
  *   login/name/email/avatar for git-commit attribution; a Google session
  *   carries no `scm*` at all.
  *
- * `buildAuthIdentity` (with `authProvider`/`authUserId`) remains for the
- * provider-identity resolution path (`/provider-identities/:provider/:id`),
- * which is not an identity-enforced route.
+ * `buildAuthIdentity` normalizes the provider/id pair used in the
+ * provider-identity resolution path. The pair is carried in the URL only; the
+ * control plane authorizes it against the Bearer principal.
  *
  * Keeping the `provider === "github"` decision in this one module is the whole
  * point of the 4B split — otherwise the branch sprawls across every route and
@@ -46,9 +46,6 @@ export interface AuthIdentityUser {
 export interface AuthIdentity {
   authProvider: AuthProvider;
   authUserId?: string;
-  authEmail?: string;
-  authName?: string;
-  authAvatarUrl?: string;
 }
 
 export interface AuthDisplay {
@@ -75,18 +72,14 @@ export function resolveAuthProvider(user: AuthIdentityUser | null | undefined): 
 }
 
 /**
- * Provider-agnostic identity block, used to resolve the canonical user via
- * `/provider-identities/:provider/:id`. NOT for identity-route bodies:
- * `authProvider`/`authUserId` are forbidden there under strict enforcement —
- * send `buildAuthDisplay` instead.
+ * Provider-scoped identity reference used to resolve the canonical user via
+ * `/provider-identities/:provider/:id`. The values select the URL; no request
+ * body is sent, and the control plane requires an exactly matching user token.
  */
 export function buildAuthIdentity(user: AuthIdentityUser | null | undefined): AuthIdentity {
   return {
     authProvider: resolveAuthProvider(user),
     authUserId: user?.id ?? undefined,
-    authEmail: user?.email ?? undefined,
-    authName: user?.name ?? undefined,
-    authAvatarUrl: user?.image ?? undefined,
   };
 }
 

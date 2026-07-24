@@ -8,7 +8,7 @@ import {
   SERVICE_SIGNATURE_HEADER,
   type ServiceName,
 } from "@open-inspect/shared";
-import { UserStore } from "../../src/db/user-store";
+import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { cleanD1Tables } from "./cleanup";
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -72,13 +72,27 @@ describe("sig1 service-credential authentication", () => {
     const response = await signedFetch({
       service: "web",
       method: "PUT",
-      url: "https://test.local/provider-identities/github/424242",
-      body: JSON.stringify({ providerLogin: "octocat", displayName: "Octo Cat" }),
+      url: "https://test.local/secrets",
+      body: JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } }),
     });
     expect(response.status).toBe(200);
 
-    const identity = await new UserStore(env.DB).getIdentity("github", "424242");
-    expect(identity?.providerLogin).toBe("octocat");
+    const secrets = await new GlobalSecretsStore(
+      env.DB,
+      env.REPO_SECRETS_ENCRYPTION_KEY!
+    ).getDecryptedSecrets();
+    expect(secrets.SIGNED_BODY_TEST).toBe("intact");
+  });
+
+  it("does not let the web service credential mutate provider identities", async () => {
+    const response = await signedFetch({
+      service: "web",
+      method: "PUT",
+      url: "https://test.local/provider-identities/github/424242",
+      body: JSON.stringify({ providerEmail: "victim@example.com" }),
+    });
+
+    expect(response.status).toBe(403);
   });
 
   it("rejects a body tampered after signing", async () => {

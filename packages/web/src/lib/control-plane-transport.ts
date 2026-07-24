@@ -121,6 +121,12 @@ export async function controlPlaneServiceFetch(
   path: string,
   init: { method: string; body?: string }
 ): Promise<Response> {
+  if (
+    init.method !== "POST" ||
+    (path !== "/auth/tokens/exchange" && path !== "/auth/tokens/refresh")
+  ) {
+    throw new Error("Service authentication is restricted to token endpoints");
+  }
   const secret = process.env.SERVICE_AUTH_SECRET;
   if (!secret) {
     throw new Error("SERVICE_AUTH_SECRET not configured");

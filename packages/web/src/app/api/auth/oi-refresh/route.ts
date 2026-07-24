@@ -8,10 +8,10 @@
  * and writes it back (chunk-aware) in the same response.
  *
  * The client pings this route on mount, on window focus, and on an interval
- * comfortably inside the renew window (see `OiSessionRefresh`). Concurrent
- * pings from multiple tabs are safe: the control plane's refresh-reuse grace
- * window makes the losing redeem benign, and `renewOiSessionTokens` keeps a
- * still-valid access token in that case.
+ * comfortably inside the renew window (see `WebSessionSupervisor`).
+ * Concurrent pings from multiple tabs are safe within the control plane's
+ * refresh-reuse grace window; the remaining stale-writer race is documented
+ * in `renewOiSessionTokens` and requires the Phase B cookie redesign.
  */
 
 import { NextResponse } from "next/server";
@@ -42,15 +42,24 @@ export async function POST(): Promise<NextResponse> {
   if (!token) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  if (!token.oiAccessToken || !token.oiAccessTokenExpiresAt || !token.oiRefreshToken) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-  const { changed } = await renewOiSessionTokens(token);
-  if (changed) {
+  const renewal = await renewOiSessionTokens(token);
+  if (renewal.changed) {
     const encoded = await encode({ token, secret, maxAge: SESSION_COOKIE_MAX_AGE_SECONDS });
     writeSessionCookie(cookieStore, encoded);
   }
+  if (renewal.status === "unauthenticated") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (renewal.status === "temporarily_unavailable") {
+    return NextResponse.json({ error: "Authentication temporarily unavailable" }, { status: 503 });
+  }
 
   return NextResponse.json({
-    renewed: changed,
+    renewed: renewal.changed,
     accessTokenExpiresAt: token.oiAccessTokenExpiresAt ?? null,
   });
 }

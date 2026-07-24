@@ -369,16 +369,14 @@ describe("authorizeProviderIdentityRequest", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("lets the web service upsert", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    expect(
-      authorizeProviderIdentityRequest(
-        createCtx({ kind: "service", service: "web", actor: null }),
-        "github",
-        "999999"
-      )
-    ).toEqual({ action: "upsert" });
-    expect(warn).not.toHaveBeenCalled();
+  it("denies the web service now that provider identity linking requires a user token", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const authz = authorizeProviderIdentityRequest(
+      createCtx({ kind: "service", service: "web", actor: null }),
+      "github",
+      "999999"
+    );
+    expect(authz.action === "deny" && authz.response.status).toBe(403);
   });
 
   it("fails closed if a user principal ever lacks a canonical id", () => {

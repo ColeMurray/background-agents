@@ -109,7 +109,18 @@ describe("POST /api/auth/oi-refresh", () => {
     expect(store.sets).toHaveLength(0);
   });
 
-  it("persists cleared fields when the refresh grant is dead", async () => {
+  it("requires reauthentication when the NextAuth session predates OI token exchange", async () => {
+    const jwt = await encodeSession({});
+    const store = fakeCookieStore({ [SECURE_COOKIE]: jwt });
+
+    const response = await POST();
+
+    expect(response.status).toBe(401);
+    expect(serviceFetch).not.toHaveBeenCalled();
+    expect(store.sets).toHaveLength(0);
+  });
+
+  it("persists cleared fields and requires reauthentication when the refresh grant is dead", async () => {
     serviceFetch.mockResolvedValue(
       new Response(JSON.stringify({ error: "refresh_reuse_detected" }), { status: 401 })
     );
@@ -121,14 +132,31 @@ describe("POST /api/auth/oi-refresh", () => {
     const store = fakeCookieStore({ [SECURE_COOKIE]: jwt });
 
     const response = await POST();
-    const body = (await response.json()) as { renewed: boolean };
 
-    expect(body.renewed).toBe(true);
     const written = store.sets.find((s) => s.name === SECURE_COOKIE && s.options.maxAge > 0);
     const decoded = await decode({ token: written!.value, secret: SECRET });
     expect(decoded?.oiAccessToken).toBeUndefined();
     expect(decoded?.oiRefreshToken).toBeUndefined();
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(401);
+  });
+
+  it("returns a retryable failure without clearing the cookie when refresh is temporarily unavailable", async () => {
+    serviceFetch.mockRejectedValue(new Error("control plane unavailable"));
+    const jwt = await encodeSession({
+      oiAccessToken: "oi_at_expired",
+      oiAccessTokenExpiresAt: Date.now() - 60_000,
+      oiRefreshToken: "oi_rt_retryable",
+    });
+    const store = fakeCookieStore({ [SECURE_COOKIE]: jwt });
+
+    const response = await POST();
+
+    expect(response.status).toBe(503);
+    expect(serviceFetch).toHaveBeenCalledWith("/auth/tokens/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refreshToken: "oi_rt_retryable" }),
+    });
+    expect(store.sets).toHaveLength(0);
   });
 
   it("401s when there is no decodable session", async () => {
