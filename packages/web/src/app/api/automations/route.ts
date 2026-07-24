@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { buildAuthDisplay, buildScmAttribution } from "@/lib/build-auth-identity";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   const path = buildControlPlanePath("/automations", request.nextUrl.searchParams);
 
   try {
-    const response = await controlPlaneFetch(path);
+    const response = await controlPlaneUserFetch(path);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
       ...buildScmAttribution(user),
     };
 
-    const response = await controlPlaneFetch("/automations", {
+    const response = await controlPlaneUserFetch("/automations", {
       method: "POST",
       body: JSON.stringify(automationBody),
     });

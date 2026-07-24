@@ -3,20 +3,20 @@ import type { JWT } from "next-auth/jwt";
 import type { Account } from "next-auth";
 
 vi.mock("@/lib/control-plane-transport", () => ({
-  controlPlaneServiceFetch: vi.fn(),
+  controlPlaneTokenFetch: vi.fn(),
 }));
 
-import { controlPlaneServiceFetch } from "@/lib/control-plane-transport";
+import { controlPlaneTokenFetch } from "@/lib/control-plane-transport";
 import { encode } from "next-auth/jwt";
 import {
   applyOiSessionTokens,
   getLiveOiAccessToken,
   readOiAccessTokenFromCookiePairs,
-  renewOiSessionTokens,
+  renewWebSessionTokens,
   OI_ACCESS_TOKEN_RENEW_WINDOW_MS,
 } from "@/lib/oi-session";
 
-const serviceFetch = vi.mocked(controlPlaneServiceFetch);
+const tokenFetch = vi.mocked(controlPlaneTokenFetch);
 
 const PAIR = {
   accessToken: "oi_at_fresh",
@@ -46,19 +46,19 @@ function errorResponse(status: number, error: string): Response {
 }
 
 beforeEach(() => {
-  serviceFetch.mockReset();
+  tokenFetch.mockReset();
 });
 
 describe("applyOiSessionTokens — sign-in exchange", () => {
   it("exchanges a GitHub subject with SCM capture fields", async () => {
-    serviceFetch.mockResolvedValue(pairResponse());
+    tokenFetch.mockResolvedValue(pairResponse());
     const token = await applyOiSessionTokens({} as JWT, githubAccount());
 
-    expect(serviceFetch).toHaveBeenCalledWith("/auth/tokens/exchange", {
+    expect(tokenFetch).toHaveBeenCalledWith("/auth/tokens/exchange", {
       method: "POST",
       body: expect.any(String),
     });
-    const body = JSON.parse(serviceFetch.mock.calls[0][1].body!) as Record<string, unknown>;
+    const body = JSON.parse(tokenFetch.mock.calls[0][1].body!) as Record<string, unknown>;
     expect(body).toMatchObject({
       subjectTokenType: "github-access-token",
       subjectToken: "gho_subject",
@@ -72,18 +72,18 @@ describe("applyOiSessionTokens — sign-in exchange", () => {
   });
 
   it("exchanges a Google subject without SCM fields", async () => {
-    serviceFetch.mockResolvedValue(pairResponse());
+    tokenFetch.mockResolvedValue(pairResponse());
     await applyOiSessionTokens(
       {} as JWT,
       githubAccount({ provider: "google", refresh_token: "google-refresh" })
     );
-    const body = JSON.parse(serviceFetch.mock.calls[0][1].body!) as Record<string, unknown>;
+    const body = JSON.parse(tokenFetch.mock.calls[0][1].body!) as Record<string, unknown>;
     expect(body.subjectTokenType).toBe("google-access-token");
     expect(body.scmRefreshToken).toBeUndefined();
   });
 
   it("falls back with unset fields when the exchange fails", async () => {
-    serviceFetch.mockResolvedValue(errorResponse(401, "subject_rejected"));
+    tokenFetch.mockResolvedValue(errorResponse(401, "subject_rejected"));
     const token = await applyOiSessionTokens(
       { oiAccessToken: "oi_at_stale" } as JWT,
       githubAccount()
@@ -93,7 +93,7 @@ describe("applyOiSessionTokens — sign-in exchange", () => {
   });
 
   it("falls back when the service credential is unavailable", async () => {
-    serviceFetch.mockRejectedValue(new Error("SERVICE_AUTH_SECRET not configured"));
+    tokenFetch.mockRejectedValue(new Error("SERVICE_AUTH_SECRET not configured"));
     const token = await applyOiSessionTokens({} as JWT, githubAccount());
     expect(token.oiAccessToken).toBeUndefined();
   });
@@ -103,7 +103,7 @@ describe("applyOiSessionTokens — sign-in exchange", () => {
       { oiAccessToken: "oi_at_stale" } as JWT,
       githubAccount({ provider: "gitlab" })
     );
-    expect(serviceFetch).not.toHaveBeenCalled();
+    expect(tokenFetch).not.toHaveBeenCalled();
     expect(token.oiAccessToken).toBeUndefined();
   });
 });
@@ -116,13 +116,13 @@ describe("applyOiSessionTokens — jwt callback never renews", () => {
       oiRefreshToken: "oi_rt_old",
     } as JWT;
     const result = await applyOiSessionTokens(token, null);
-    expect(serviceFetch).not.toHaveBeenCalled();
+    expect(tokenFetch).not.toHaveBeenCalled();
     expect(result.oiAccessToken).toBe("oi_at_old");
     expect(result.oiRefreshToken).toBe("oi_rt_old");
   });
 });
 
-describe("renewOiSessionTokens", () => {
+describe("renewWebSessionTokens", () => {
   function nearExpiryToken(): JWT {
     return {
       oiAccessToken: "oi_at_old",
@@ -132,11 +132,11 @@ describe("renewOiSessionTokens", () => {
   }
 
   it("redeems the refresh grant when the access token nears expiry", async () => {
-    serviceFetch.mockResolvedValue(pairResponse());
+    tokenFetch.mockResolvedValue(pairResponse());
     const token = nearExpiryToken();
-    const result = await renewOiSessionTokens(token);
+    const result = await renewWebSessionTokens(token);
 
-    expect(serviceFetch).toHaveBeenCalledWith("/auth/tokens/refresh", {
+    expect(tokenFetch).toHaveBeenCalledWith("/auth/tokens/refresh", {
       method: "POST",
       body: JSON.stringify({ refreshToken: "oi_rt_old" }),
     });
@@ -151,22 +151,22 @@ describe("renewOiSessionTokens", () => {
       oiAccessTokenExpiresAt: Date.now() + OI_ACCESS_TOKEN_RENEW_WINDOW_MS + 60_000,
       oiRefreshToken: "oi_rt_live",
     } as JWT;
-    const result = await renewOiSessionTokens(token);
-    expect(serviceFetch).not.toHaveBeenCalled();
+    const result = await renewWebSessionTokens(token);
+    expect(tokenFetch).not.toHaveBeenCalled();
     expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_live");
   });
 
   it("does nothing when the token carries no oi fields", async () => {
-    const result = await renewOiSessionTokens({} as JWT);
-    expect(serviceFetch).not.toHaveBeenCalled();
+    const result = await renewWebSessionTokens({} as JWT);
+    expect(tokenFetch).not.toHaveBeenCalled();
     expect(result).toEqual({ status: "unauthenticated", changed: false });
   });
 
   it("keeps the fields when a concurrent renewal won the race (refresh_superseded)", async () => {
-    serviceFetch.mockResolvedValue(errorResponse(401, "refresh_superseded"));
+    tokenFetch.mockResolvedValue(errorResponse(401, "refresh_superseded"));
     const token = nearExpiryToken();
-    const result = await renewOiSessionTokens(token);
+    const result = await renewWebSessionTokens(token);
     expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_old");
     expect(token.oiRefreshToken).toBe("oi_rt_old");
@@ -176,54 +176,54 @@ describe("renewOiSessionTokens", () => {
     // The 2026-07-24 prod incident: a wake-from-idle race loser carries a
     // long-expired access token — it must NOT wipe the identity the race
     // winner just persisted. The dead-vs-superseded call is the CP's alone.
-    serviceFetch.mockResolvedValue(errorResponse(401, "refresh_superseded"));
+    tokenFetch.mockResolvedValue(errorResponse(401, "refresh_superseded"));
     const token = {
       oiAccessToken: "oi_at_idle",
       oiAccessTokenExpiresAt: Date.now() - 4 * 60 * 60 * 1000,
       oiRefreshToken: "oi_rt_idle",
     } as JWT;
-    const result = await renewOiSessionTokens(token);
+    const result = await renewWebSessionTokens(token);
     expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_idle");
     expect(token.oiRefreshToken).toBe("oi_rt_idle");
   });
 
   it("clears the fields on refresh reuse detection and reports the change for persistence", async () => {
-    serviceFetch.mockResolvedValue(errorResponse(401, "refresh_reuse_detected"));
+    tokenFetch.mockResolvedValue(errorResponse(401, "refresh_reuse_detected"));
     const token = nearExpiryToken();
-    const result = await renewOiSessionTokens(token);
+    const result = await renewWebSessionTokens(token);
     expect(result).toEqual({ status: "unauthenticated", changed: true });
     expect(token.oiAccessToken).toBeUndefined();
     expect(token.oiRefreshToken).toBeUndefined();
   });
 
   it("clears the fields when the grant is genuinely dead (invalid_refresh_token)", async () => {
-    serviceFetch.mockResolvedValue(errorResponse(401, "invalid_refresh_token"));
+    tokenFetch.mockResolvedValue(errorResponse(401, "invalid_refresh_token"));
     const token = nearExpiryToken();
-    const result = await renewOiSessionTokens(token);
+    const result = await renewWebSessionTokens(token);
     expect(result).toEqual({ status: "unauthenticated", changed: true });
     expect(token.oiAccessToken).toBeUndefined();
     expect(token.oiRefreshToken).toBeUndefined();
   });
 
   it("keeps the fields on transient request failures", async () => {
-    serviceFetch.mockRejectedValue(new Error("network down"));
+    tokenFetch.mockRejectedValue(new Error("network down"));
     const token = nearExpiryToken();
-    const result = await renewOiSessionTokens(token);
+    const result = await renewWebSessionTokens(token);
     expect(result).toEqual({ status: "authenticated", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_old");
     expect(token.oiRefreshToken).toBe("oi_rt_old");
   });
 
   it("reports temporary unavailability when a transient failure outlasts the access token", async () => {
-    serviceFetch.mockRejectedValue(new Error("network down"));
+    tokenFetch.mockRejectedValue(new Error("network down"));
     const token = {
       oiAccessToken: "oi_at_expired",
       oiAccessTokenExpiresAt: Date.now() - 1,
       oiRefreshToken: "oi_rt_retryable",
     } as JWT;
 
-    const result = await renewOiSessionTokens(token);
+    const result = await renewWebSessionTokens(token);
 
     expect(result).toEqual({ status: "temporarily_unavailable", changed: false });
     expect(token.oiAccessToken).toBe("oi_at_expired");

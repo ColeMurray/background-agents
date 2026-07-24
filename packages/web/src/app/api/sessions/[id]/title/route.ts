@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export function parseSessionTitlePatchBody(body: unknown): { title?: string } | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
@@ -32,7 +32,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
 
   try {
-    const response = await controlPlaneFetch(`/sessions/${id}/title`, {
+    const response = await controlPlaneUserFetch(`/sessions/${id}/title`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       // userId is derived by the control plane from the Bearer principal and

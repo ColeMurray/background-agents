@@ -11,9 +11,9 @@ vi.mock("next-auth/jwt", () => ({
 
 import { headers, cookies } from "next/headers";
 import { getToken } from "next-auth/jwt";
-import { controlPlaneFetch } from "./control-plane";
+import { controlPlaneUserFetch } from "./control-plane";
 
-describe("controlPlaneFetch correlation", () => {
+describe("controlPlaneUserFetch correlation", () => {
   const originalEnv = { ...process.env };
   const fetchMock = vi.fn<typeof fetch>();
 
@@ -50,7 +50,7 @@ describe("controlPlaneFetch correlation", () => {
       })
     );
 
-    await controlPlaneFetch("/sessions", {
+    await controlPlaneUserFetch("/sessions", {
       method: "POST",
       headers: { Range: "bytes=0-5" },
       body: JSON.stringify({ ok: true }),
@@ -76,7 +76,7 @@ describe("controlPlaneFetch correlation", () => {
       })
     );
 
-    await controlPlaneFetch("/sessions", {
+    await controlPlaneUserFetch("/sessions", {
       headers: new Headers({ Accept: "application/json" }),
     });
 
@@ -96,7 +96,7 @@ describe("controlPlaneFetch correlation", () => {
       })
     );
 
-    await controlPlaneFetch("/sessions");
+    await controlPlaneUserFetch("/sessions");
 
     const [, init] = fetchMock.mock.calls[0] ?? [];
     const traceId = new Headers(init?.headers).get("x-trace-id");
@@ -115,7 +115,7 @@ describe("controlPlaneFetch correlation", () => {
       oiAccessTokenExpiresAt: Date.now() + 60 * 60 * 1000,
     } as never);
 
-    await controlPlaneFetch("/sessions");
+    await controlPlaneUserFetch("/sessions");
 
     const [, init] = fetchMock.mock.calls[0] ?? [];
     const forwardedHeaders = new Headers(init?.headers);
@@ -132,7 +132,7 @@ describe("controlPlaneFetch correlation", () => {
       oiAccessTokenExpiresAt: Date.now() + 60 * 60 * 1000,
     } as never);
 
-    await controlPlaneFetch("/sessions", {
+    await controlPlaneUserFetch("/sessions", {
       headers: { Authorization: "Bearer caller-supplied" },
     });
 
@@ -151,7 +151,7 @@ describe("controlPlaneFetch correlation", () => {
       oiAccessTokenExpiresAt: Date.now() - 1000,
     } as never);
 
-    const response = await controlPlaneFetch("/sessions");
+    const response = await controlPlaneUserFetch("/sessions");
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
@@ -162,7 +162,7 @@ describe("controlPlaneFetch correlation", () => {
     delete process.env.SERVICE_AUTH_SECRET;
     vi.mocked(headers).mockResolvedValue(new Headers({}));
 
-    const response = await controlPlaneFetch("/sessions");
+    const response = await controlPlaneUserFetch("/sessions");
 
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[0] ?? [];
@@ -176,7 +176,7 @@ describe("controlPlaneFetch correlation", () => {
     vi.mocked(getToken).mockResolvedValue(null);
 
     const body = JSON.stringify({ title: "t" });
-    const response = await controlPlaneFetch("/sessions/abc/title", { method: "POST", body });
+    const response = await controlPlaneUserFetch("/sessions/abc/title", { method: "POST", body });
 
     expect(response.status).toBe(401);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -186,7 +186,7 @@ describe("controlPlaneFetch correlation", () => {
     vi.mocked(headers).mockResolvedValue(new Headers({}));
 
     const body = new TextEncoder().encode("--boundary\r\nfake multipart\r\n--boundary--").buffer;
-    await controlPlaneFetch("/sessions/abc/attachments", {
+    await controlPlaneUserFetch("/sessions/abc/attachments", {
       method: "POST",
       body,
       headers: { "Content-Type": "multipart/form-data; boundary=boundary" },

@@ -14,7 +14,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 vi.mock("@/lib/sandbox-provider", () => ({
@@ -22,7 +22,7 @@ vi.mock("@/lib/sandbox-provider", () => ({
 }));
 
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET as getFeed } from "./route";
 import { POST as triggerBuild } from "./repo/[owner]/[name]/trigger/route";
 import { PUT as toggleBuild } from "./repo/[owner]/[name]/toggle/route";
@@ -54,7 +54,7 @@ describe.each(routes)("$name", ({ call }) => {
     const response = await call();
 
     expect(response.status).toBe(401);
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("returns 501 for authenticated users on a provider without image support", async () => {
@@ -64,20 +64,20 @@ describe.each(routes)("$name", ({ call }) => {
     const response = await call();
 
     expect(response.status).toBe(501);
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("proxies to the control plane for authenticated users", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
     // Fresh Response per call — the feed route consumes three bodies.
-    vi.mocked(controlPlaneFetch).mockImplementation(async () =>
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async () =>
       Response.json({ units: [], repos: [], images: [] })
     );
 
     const response = await call();
 
     expect(response.status).toBe(200);
-    expect(controlPlaneFetch).toHaveBeenCalled();
+    expect(controlPlaneUserFetch).toHaveBeenCalled();
   });
 });
 
@@ -115,7 +115,7 @@ describe("GET /api/image-builds feed", () => {
       error_message: "boom",
       created_at: 1700000000001,
     };
-    vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
       if (path === "/image-builds/enabled") {
         return Response.json({
           units: [
@@ -158,7 +158,7 @@ describe("GET /api/image-builds feed", () => {
   });
 
   it("serves persisted repo flags even when unit resolution dropped the repo", async () => {
-    vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
       // The repo is enabled but transiently unresolvable, so the units feed
       // omits it — the persisted flag must still come through.
       if (path === "/image-builds/enabled") return Response.json({ units: [] });
@@ -179,7 +179,7 @@ describe("GET /api/image-builds feed", () => {
   });
 
   it("filters superseded rows at the fetch boundary", async () => {
-    vi.mocked(controlPlaneFetch).mockImplementation(async (path: string) => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
       if (path === "/image-builds/enabled") return Response.json({ units: [] });
       if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
       return Response.json({
@@ -213,13 +213,13 @@ describe("proxied control-plane paths", () => {
     vi.resetAllMocks();
     mocks.supportsRepoImagesValue = true;
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
-    vi.mocked(controlPlaneFetch).mockImplementation(async () => Response.json({ ok: true }));
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async () => Response.json({ ok: true }));
   });
 
   it("trigger posts to the unified repo trigger route", async () => {
     await triggerBuild({} as NextRequest, params);
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/image-builds/trigger/repo/acme/web", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/image-builds/trigger/repo/acme/web", {
       method: "POST",
     });
   });
@@ -227,7 +227,7 @@ describe("proxied control-plane paths", () => {
   it("toggle puts to the unified repo toggle route", async () => {
     await toggleBuild({ json: async () => ({ enabled: true }) } as NextRequest, params);
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/image-builds/toggle/repo/acme/web", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/image-builds/toggle/repo/acme/web", {
       method: "PUT",
       body: JSON.stringify({ enabled: true }),
     });

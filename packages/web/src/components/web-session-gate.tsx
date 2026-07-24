@@ -4,20 +4,20 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { signOut, useSession } from "next-auth/react";
 
 /**
- * Ping interval for web session token renewal. Must sit comfortably inside
+ * Check interval for web session token renewal. Must sit comfortably inside
  * OI_ACCESS_TOKEN_RENEW_WINDOW_MS (15 min) so a token entering the renew
  * window is rotated well before it expires.
  */
-const OI_REFRESH_PING_INTERVAL_MS = 5 * 60 * 1000;
+const WEB_SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * Confirms that NextAuth and the control-plane token pair form a usable web
  * session before rendering authenticated children, then keeps that pair fresh.
  * Renewal cannot live in the NextAuth jwt callback (getServerSession cannot
- * persist rotated cookies), so this client-side supervisor drives rotation on
+ * persist rotated cookies), so this client-side gate drives rotation on
  * mount, focus/visibility, and an interval.
  */
-export function WebSessionSupervisor({ children }: { children?: ReactNode }) {
+export function WebSessionGate({ children }: { children?: ReactNode }) {
   const { status } = useSession();
   const signingOutRef = useRef(false);
   const [webSessionStatus, setWebSessionStatus] = useState<
@@ -34,11 +34,11 @@ export function WebSessionSupervisor({ children }: { children?: ReactNode }) {
   useEffect(() => {
     if (status !== "authenticated") return;
     let cancelled = false;
-    let pinging = false;
+    let checkInFlight = false;
 
-    const ping = async () => {
-      if (pinging) return;
-      pinging = true;
+    const checkWebSession = async () => {
+      if (checkInFlight) return;
+      checkInFlight = true;
       try {
         const response = await fetch("/api/auth/oi-refresh", { method: "POST" });
         if (cancelled) return;
@@ -64,22 +64,22 @@ export function WebSessionSupervisor({ children }: { children?: ReactNode }) {
           setWebSessionStatus("temporarily_unavailable");
         }
       } finally {
-        pinging = false;
+        checkInFlight = false;
       }
     };
 
-    void ping();
-    const interval = setInterval(() => void ping(), OI_REFRESH_PING_INTERVAL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void ping();
+    void checkWebSession();
+    const checkInterval = setInterval(() => void checkWebSession(), WEB_SESSION_CHECK_INTERVAL_MS);
+    const checkWhenVisible = () => {
+      if (document.visibilityState === "visible") void checkWebSession();
     };
-    window.addEventListener("focus", onVisible);
-    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", checkWhenVisible);
+    document.addEventListener("visibilitychange", checkWhenVisible);
     return () => {
       cancelled = true;
-      clearInterval(interval);
-      window.removeEventListener("focus", onVisible);
-      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(checkInterval);
+      window.removeEventListener("focus", checkWhenVisible);
+      document.removeEventListener("visibilitychange", checkWhenVisible);
     };
   }, [retryGeneration, status]);
 

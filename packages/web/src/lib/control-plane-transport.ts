@@ -110,14 +110,14 @@ export async function dispatchControlPlaneFetch(
  * failure.
  */
 /**
- * Token calls sit on the sign-in path and the background refresh ping — an
+ * Token calls sit on the sign-in path and the background refresh check — an
  * unresponsive control plane must fail fast into the callers' existing
  * exchange_fallback/request_failed paths, not hang until the platform's own
  * timeout.
  */
 const SERVICE_FETCH_TIMEOUT_MS = 10_000;
 
-export async function controlPlaneServiceFetch(
+export async function controlPlaneTokenFetch(
   path: string,
   init: { method: string; body?: string }
 ): Promise<Response> {

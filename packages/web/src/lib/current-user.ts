@@ -4,7 +4,7 @@ import {
   type AuthIdentity,
   type AuthIdentityUser,
 } from "@/lib/build-auth-identity";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export type CurrentUserIdentityInput = AuthIdentityUser;
 
@@ -73,7 +73,7 @@ async function resolveCurrentUserIdUncached(
   authUserId: string,
   cacheKey: string
 ): Promise<ResolveCurrentUserResult> {
-  const response = await controlPlaneFetch(
+  const response = await controlPlaneUserFetch(
     `/provider-identities/${identity.authProvider}/${encodeURIComponent(authUserId)}`,
     { method: "PUT" }
   );

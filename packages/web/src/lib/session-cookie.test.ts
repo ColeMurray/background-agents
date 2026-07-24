@@ -4,7 +4,7 @@ import { readOiAccessTokenFromCookiePairs } from "@/lib/oi-session";
 import { sessionCookieName, writeSessionCookie } from "@/lib/session-cookie";
 
 vi.mock("@/lib/control-plane-transport", () => ({
-  controlPlaneServiceFetch: vi.fn(),
+  controlPlaneTokenFetch: vi.fn(),
 }));
 
 const SECRET = "test-nextauth-secret-for-round-trip";

@@ -5,9 +5,9 @@ vi.mock("next/headers", () => ({
 }));
 
 import { headers } from "next/headers";
-import { controlPlaneServiceFetch } from "./control-plane-transport";
+import { controlPlaneTokenFetch } from "./control-plane-transport";
 
-describe("controlPlaneServiceFetch", () => {
+describe("controlPlaneTokenFetch", () => {
   const originalEnv = { ...process.env };
   const fetchMock = vi.fn<typeof fetch>();
 
@@ -30,7 +30,7 @@ describe("controlPlaneServiceFetch", () => {
   });
 
   it("signs with web's sig1 credential and never the legacy bearer", async () => {
-    await controlPlaneServiceFetch("/auth/tokens/exchange", {
+    await controlPlaneTokenFetch("/auth/tokens/exchange", {
       method: "POST",
       body: JSON.stringify({ subjectTokenType: "github-access-token", subjectToken: "t" }),
     });
@@ -46,13 +46,13 @@ describe("controlPlaneServiceFetch", () => {
   it("throws when SERVICE_AUTH_SECRET is not configured", async () => {
     delete process.env.SERVICE_AUTH_SECRET;
     await expect(
-      controlPlaneServiceFetch("/auth/tokens/refresh", { method: "POST", body: "{}" })
+      controlPlaneTokenFetch("/auth/tokens/refresh", { method: "POST", body: "{}" })
     ).rejects.toThrow("SERVICE_AUTH_SECRET not configured");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects service-authenticated requests outside token issuance", async () => {
-    await expect(controlPlaneServiceFetch("/sessions", { method: "GET" })).rejects.toThrow(
+    await expect(controlPlaneTokenFetch("/sessions", { method: "GET" })).rejects.toThrow(
       "Service authentication is restricted to token endpoints"
     );
     expect(fetchMock).not.toHaveBeenCalled();

@@ -311,7 +311,7 @@ export function requireEventPoster(
  *   canonical account. Linking stays provider-verified, in the exchange flow.
  * - `deny`: everyone else.
  */
-export type ProviderIdentityAuthz =
+type ProviderIdentityAuthorization =
   | { action: "resolve"; canonicalUserId: string }
   | { action: "deny"; response: Response };
 
@@ -319,7 +319,7 @@ export function authorizeProviderIdentityRequest(
   ctx: RequestContext,
   provider: string,
   providerUserId: string
-): ProviderIdentityAuthz {
+): ProviderIdentityAuthorization {
   const principal = ctx.principal;
   if (principal?.kind === "user") {
     if (provider === principal.user.provider && providerUserId === principal.user.providerUserId) {

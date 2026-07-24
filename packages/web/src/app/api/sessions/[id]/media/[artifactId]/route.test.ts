@@ -9,11 +9,11 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
 describe("session media API route", () => {
@@ -33,7 +33,7 @@ describe("session media API route", () => {
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("rejects invalid artifact IDs before proxying to the control plane", async () => {
@@ -50,7 +50,7 @@ describe("session media API route", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid artifact ID" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("rejects invalid session IDs before proxying to the control plane", async () => {
@@ -67,7 +67,7 @@ describe("session media API route", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid session ID" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("proxies successful media streams with private no-store caching", async () => {
@@ -75,7 +75,7 @@ describe("session media API route", () => {
       user: { id: "user-1" },
     } as never);
     const upstreamBody = Uint8Array.from([0x89, 0x50, 0x4e, 0x47]);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response(upstreamBody, {
         headers: {
           "Content-Type": "image/png",
@@ -92,7 +92,7 @@ describe("session media API route", () => {
       }),
     });
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/media/artifact-1");
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/sessions/session-1/media/artifact-1");
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(response.headers.get("Vary")).toBe("Cookie");
@@ -109,7 +109,7 @@ describe("session media API route", () => {
       user: { id: "user-1" },
     } as never);
     const upstreamBody = Uint8Array.from([0x66, 0x74, 0x79, 0x70]);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response(upstreamBody, {
         status: 206,
         headers: {
@@ -134,7 +134,7 @@ describe("session media API route", () => {
       }
     );
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/media/artifact-1", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/sessions/session-1/media/artifact-1", {
       headers: { Range: "bytes=4-7" },
     });
     expect(response.status).toBe(206);
@@ -152,7 +152,7 @@ describe("session media API route", () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "user-1" },
     } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response("not found", {
         status: 404,
       })
@@ -173,7 +173,7 @@ describe("session media API route", () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "user-1" },
     } as never);
-    vi.mocked(controlPlaneFetch).mockRejectedValue(new Error("boom"));
+    vi.mocked(controlPlaneUserFetch).mockRejectedValue(new Error("boom"));
 
     const response = await GET(new Request("http://localhost/api/sessions/session-1/media/a1"), {
       params: Promise.resolve({

@@ -13,7 +13,7 @@ import { getToken, type JWT } from "next-auth/jwt";
 import { z } from "zod";
 import type { Account } from "next-auth";
 
-import { controlPlaneServiceFetch } from "@/lib/control-plane-transport";
+import { controlPlaneTokenFetch } from "@/lib/control-plane-transport";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("oi-session");
@@ -34,7 +34,7 @@ async function postTokenEndpoint(
   path: "/auth/tokens/exchange" | "/auth/tokens/refresh",
   body: Record<string, unknown>
 ): Promise<{ ok: true; pair: WebSessionTokenPair } | { ok: false; status: number; error: string }> {
-  const response = await controlPlaneServiceFetch(path, {
+  const response = await controlPlaneTokenFetch(path, {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -56,7 +56,7 @@ async function postTokenEndpoint(
 /**
  * Exchange the provider credential captured at sign-in for a web session
  * token pair. Returns null on any failure (`auth.exchange_fallback`) — the
- * caller leaves the `oi*` JWT fields unset, so the session supervisor requires
+ * caller leaves the `oi*` JWT fields unset, so the session gate requires
  * a new sign-in before any user-facing control-plane request is dispatched.
  */
 async function exchangeForWebSessionTokens(params: {
@@ -186,7 +186,7 @@ export function getLiveOiAccessToken(token: JWT | null): string | null {
  * under `getServerSession`, which cannot persist a rotated cookie — a
  * renewal there would consume the rotating refresh grant and orphan the
  * cookie's copy. Renewal lives in the `/api/auth/oi-refresh` route handler
- * (`renewOiSessionTokens`), which the client invokes and which CAN persist.
+ * (`renewWebSessionTokens`), which the client invokes and which CAN persist.
  */
 export async function applyOiSessionTokens(
   token: JWT,
@@ -217,7 +217,7 @@ export async function applyOiSessionTokens(
  * by the caller, so this is only called from contexts that can write the
  * session cookie (the oi-refresh route handler).
  */
-export async function renewOiSessionTokens(token: JWT): Promise<{
+export async function renewWebSessionTokens(token: JWT): Promise<{
   status: "authenticated" | "unauthenticated" | "temporarily_unavailable";
   changed: boolean;
 }> {
@@ -268,7 +268,7 @@ export async function renewOiSessionTokens(token: JWT): Promise<{
       return { status: "authenticated", changed: false };
     case "invalid_refresh_token":
       // The grant is genuinely dead (unknown, revoked, or expired) — clear
-      // the fields, and persist the cleared state so later pings stop
+      // the fields, and persist the cleared state so later checks stop
       // replaying a dead grant (re-login required).
       setOiFields(token, null);
       return { status: "unauthenticated", changed: true };

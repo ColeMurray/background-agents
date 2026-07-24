@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
@@ -27,8 +27,8 @@ export async function GET(
     const range = request.headers.get("Range");
     const attachmentPath = `/sessions/${sessionId}/attachments/${attachmentId}`;
     const response = range
-      ? await controlPlaneFetch(attachmentPath, { headers: { Range: range } })
-      : await controlPlaneFetch(attachmentPath);
+      ? await controlPlaneUserFetch(attachmentPath, { headers: { Range: range } })
+      : await controlPlaneUserFetch(attachmentPath);
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Failed to fetch attachment: ${errorText}`);

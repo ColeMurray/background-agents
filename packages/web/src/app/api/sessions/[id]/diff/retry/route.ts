@@ -2,7 +2,7 @@ import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 /** Request a best-effort diff refresh after verifying the browser's NextAuth session. */
 export async function POST(
@@ -16,7 +16,7 @@ export async function POST(
     return NextResponse.json({ error: "Invalid session ID" }, { status: 400 });
   }
   try {
-    const upstream = await controlPlaneFetch(`/sessions/${id}/diff/retry`, { method: "POST" });
+    const upstream = await controlPlaneUserFetch(`/sessions/${id}/diff/retry`, { method: "POST" });
     return new Response(upstream.body, {
       status: upstream.status,
       headers: {

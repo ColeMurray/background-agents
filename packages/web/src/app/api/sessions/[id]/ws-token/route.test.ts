@@ -10,11 +10,11 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
 function request() {
@@ -26,7 +26,7 @@ function params(id: string) {
 }
 
 function sentBody(): Record<string, unknown> {
-  const options = vi.mocked(controlPlaneFetch).mock.calls[0]?.[1];
+  const options = vi.mocked(controlPlaneUserFetch).mock.calls[0]?.[1];
   return JSON.parse(String(options?.body)) as Record<string, unknown>;
 }
 
@@ -41,7 +41,7 @@ describe("ws-token API route", () => {
     const response = await POST(request(), params("sess1"));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("sends scm* attribution for a GitHub user — never userId or credentials (forbidden under strict)", async () => {
@@ -55,14 +55,14 @@ describe("ws-token API route", () => {
         provider: "github",
       },
     } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ token: "ws-tok" }, { status: 200 })
     );
 
     const response = await POST(request(), params("sess1"));
 
     expect(response.status).toBe(200);
-    expect(controlPlaneFetch).toHaveBeenCalledWith(
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/sessions/sess1/ws-token",
       expect.objectContaining({ method: "POST" })
     );
@@ -85,7 +85,7 @@ describe("ws-token API route", () => {
         provider: "google",
       },
     } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ token: "ws-tok" }, { status: 200 })
     );
 

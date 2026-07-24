@@ -2,7 +2,7 @@ import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 /**
  * Return the latest patch-free diff manifest for an authenticated browser session.
@@ -19,7 +19,7 @@ export async function GET(
     return NextResponse.json({ error: "Invalid session ID" }, { status: 400 });
   }
   try {
-    const upstream = await controlPlaneFetch(`/sessions/${id}/diff`);
+    const upstream = await controlPlaneUserFetch(`/sessions/${id}/diff`);
     const headers = new Headers({
       "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
       "Cache-Control": "private, no-store",

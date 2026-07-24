@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared";
 import { z } from "zod";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const promptRequestSchema = z
   .object({
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     // authorId is derived by the control plane from the Bearer principal and
     // is rejected in the body under strict enforcement.
-    const response = await controlPlaneFetch(`/sessions/${sessionId}/prompt`, {
+    const response = await controlPlaneUserFetch(`/sessions/${sessionId}/prompt`, {
       method: "POST",
       body: JSON.stringify({
         content,

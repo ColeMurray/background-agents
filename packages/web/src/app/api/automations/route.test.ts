@@ -10,13 +10,13 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 // NOTE: @/lib/build-auth-identity is intentionally NOT mocked — these tests
 // exercise the real chokepoint to prove the route's outgoing body is correct.
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
 function postRequest(body: unknown) {
@@ -26,7 +26,7 @@ function postRequest(body: unknown) {
 }
 
 function controlPlaneBody(callIndex = 0): Record<string, unknown> {
-  const options = vi.mocked(controlPlaneFetch).mock.calls[callIndex]?.[1];
+  const options = vi.mocked(controlPlaneUserFetch).mock.calls[callIndex]?.[1];
   return JSON.parse(String(options?.body)) as Record<string, unknown>;
 }
 
@@ -49,7 +49,7 @@ describe("automations API route (POST)", () => {
     const response = await POST(postRequest(validBody));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("sends auth* display and scm* attribution for a GitHub user — never identity or credentials", async () => {
@@ -63,14 +63,14 @@ describe("automations API route (POST)", () => {
         provider: "github",
       },
     } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto1" } }, { status: 201 })
     );
 
     const response = await POST(postRequest(validBody));
 
     expect(response.status).toBe(201);
-    expect(controlPlaneFetch).toHaveBeenCalledWith(
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/automations",
       expect.objectContaining({ method: "POST" })
     );
@@ -108,7 +108,7 @@ describe("automations API route (POST)", () => {
         provider: "google",
       },
     } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto2" } }, { status: 201 })
     );
 
@@ -138,7 +138,7 @@ describe("automations API route (POST)", () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "12345", login: "ada", provider: "github" },
     } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto3" } }, { status: 201 })
     );
 

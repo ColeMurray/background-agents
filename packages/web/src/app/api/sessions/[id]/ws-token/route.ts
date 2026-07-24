@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { buildAuthDisplay, buildScmAttribution } from "@/lib/build-auth-identity";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 /**
  * Generate a WebSocket authentication token for the current user.
@@ -35,7 +35,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     const { authName } = buildAuthDisplay(user);
 
     const fetchStart = Date.now();
-    const response = await controlPlaneFetch(`/sessions/${sessionId}/ws-token`, {
+    const response = await controlPlaneUserFetch(`/sessions/${sessionId}/ws-token`, {
       method: "POST",
       body: JSON.stringify({
         authName,

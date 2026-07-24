@@ -7,18 +7,19 @@
  * so renewal lives in this route handler, which re-encodes the session JWT
  * and writes it back (chunk-aware) in the same response.
  *
- * The client pings this route on mount, on window focus, and on an interval
- * comfortably inside the renew window (see `WebSessionSupervisor`).
- * Concurrent pings from multiple tabs are safe within the control plane's
- * refresh-reuse grace window; the remaining stale-writer race is documented
- * in `renewOiSessionTokens` and requires the Phase B cookie redesign.
+ * The client calls this route on mount, on window focus, and on an interval
+ * comfortably inside the renew window (see `WebSessionGate`).
+ * Concurrent refresh requests from multiple tabs are safe within the control
+ * plane's refresh-reuse grace window; the remaining stale-writer race is
+ * documented in `renewWebSessionTokens` and requires the Phase B cookie
+ * redesign.
  */
 
 import { NextResponse } from "next/server";
 import { getToken, encode } from "next-auth/jwt";
 import { cookies } from "next/headers";
 import { createLogger } from "@/lib/logger";
-import { renewOiSessionTokens } from "@/lib/oi-session";
+import { renewWebSessionTokens } from "@/lib/oi-session";
 import { SESSION_COOKIE_MAX_AGE_SECONDS, writeSessionCookie } from "@/lib/session-cookie";
 
 const log = createLogger("oi-refresh");
@@ -46,7 +47,7 @@ export async function POST(): Promise<NextResponse> {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const renewal = await renewOiSessionTokens(token);
+  const renewal = await renewWebSessionTokens(token);
   if (renewal.changed) {
     const encoded = await encode({ token, secret, maxAge: SESSION_COOKIE_MAX_AGE_SECONDS });
     writeSessionCookie(cookieStore, encoded);

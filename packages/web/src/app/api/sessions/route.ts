@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { buildAuthDisplay, buildScmAttribution } from "@/lib/build-auth-identity";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   buildControlPlanePath,
   SESSION_CONTROL_PLANE_QUERY_PARAMS,
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
     );
 
     const fetchStart = Date.now();
-    const response = await controlPlaneFetch(path);
+    const response = await controlPlaneUserFetch(path);
     const fetchMs = Date.now() - fetchStart;
     const data = await response.json();
     const totalMs = Date.now() - routeStart;
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
       ...buildScmAttribution(user),
     };
 
-    const response = await controlPlaneFetch("/sessions", {
+    const response = await controlPlaneUserFetch("/sessions", {
       method: "POST",
       body: JSON.stringify(sessionBody),
     });

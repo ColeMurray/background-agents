@@ -2,7 +2,7 @@ import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 /**
  * Stream one revision-pinned patch to an authenticated browser.
@@ -23,7 +23,9 @@ export async function GET(
     return NextResponse.json({ error: "Invalid diff file identity" }, { status: 400 });
   }
   try {
-    const upstream = await controlPlaneFetch(`/sessions/${id}/diff/${revisionId}/files/${fileId}`);
+    const upstream = await controlPlaneUserFetch(
+      `/sessions/${id}/diff/${revisionId}/files/${fileId}`
+    );
     const headers = new Headers({
       "Content-Type":
         upstream.headers.get("Content-Type") ??

@@ -6,15 +6,15 @@ vi.mock("next/headers", () => ({
 }));
 
 vi.mock("@/lib/control-plane-transport", () => ({
-  controlPlaneServiceFetch: vi.fn(),
+  controlPlaneTokenFetch: vi.fn(),
 }));
 
 import { cookies } from "next/headers";
-import { controlPlaneServiceFetch } from "@/lib/control-plane-transport";
+import { controlPlaneTokenFetch } from "@/lib/control-plane-transport";
 import { OI_ACCESS_TOKEN_RENEW_WINDOW_MS } from "@/lib/oi-session";
 import { POST } from "./route";
 
-const serviceFetch = vi.mocked(controlPlaneServiceFetch);
+const tokenFetch = vi.mocked(controlPlaneTokenFetch);
 
 const SECRET = "test-nextauth-secret-for-oi-refresh";
 const SECURE_COOKIE = "__Secure-next-auth.session-token";
@@ -53,7 +53,7 @@ async function encodeSession(oiFields: Record<string, unknown>): Promise<string>
 }
 
 beforeEach(() => {
-  serviceFetch.mockReset();
+  tokenFetch.mockReset();
   vi.mocked(cookies).mockReset();
   vi.stubEnv("NEXTAUTH_SECRET", SECRET);
   vi.stubEnv("NEXTAUTH_URL", "https://open-inspect.example");
@@ -61,7 +61,7 @@ beforeEach(() => {
 
 describe("POST /api/auth/oi-refresh", () => {
   it("rotates a near-expiry pair and persists the re-encoded session cookie", async () => {
-    serviceFetch.mockResolvedValue(new Response(JSON.stringify(FRESH_PAIR), { status: 200 }));
+    tokenFetch.mockResolvedValue(new Response(JSON.stringify(FRESH_PAIR), { status: 200 }));
     const jwt = await encodeSession({
       oiAccessToken: "oi_at_near_expiry",
       oiAccessTokenExpiresAt: Date.now() + OI_ACCESS_TOKEN_RENEW_WINDOW_MS - 60_000,
@@ -74,7 +74,7 @@ describe("POST /api/auth/oi-refresh", () => {
 
     expect(response.status).toBe(200);
     expect(body.renewed).toBe(true);
-    expect(serviceFetch).toHaveBeenCalledWith("/auth/tokens/refresh", {
+    expect(tokenFetch).toHaveBeenCalledWith("/auth/tokens/refresh", {
       method: "POST",
       body: JSON.stringify({ refreshToken: "oi_rt_current" }),
     });
@@ -105,7 +105,7 @@ describe("POST /api/auth/oi-refresh", () => {
 
     expect(response.status).toBe(200);
     expect(body.renewed).toBe(false);
-    expect(serviceFetch).not.toHaveBeenCalled();
+    expect(tokenFetch).not.toHaveBeenCalled();
     expect(store.sets).toHaveLength(0);
   });
 
@@ -116,12 +116,12 @@ describe("POST /api/auth/oi-refresh", () => {
     const response = await POST();
 
     expect(response.status).toBe(401);
-    expect(serviceFetch).not.toHaveBeenCalled();
+    expect(tokenFetch).not.toHaveBeenCalled();
     expect(store.sets).toHaveLength(0);
   });
 
   it("persists cleared fields and requires reauthentication when the refresh grant is dead", async () => {
-    serviceFetch.mockResolvedValue(
+    tokenFetch.mockResolvedValue(
       new Response(JSON.stringify({ error: "refresh_reuse_detected" }), { status: 401 })
     );
     const jwt = await encodeSession({
@@ -141,7 +141,7 @@ describe("POST /api/auth/oi-refresh", () => {
   });
 
   it("returns a retryable failure without clearing the cookie when refresh is temporarily unavailable", async () => {
-    serviceFetch.mockRejectedValue(new Error("control plane unavailable"));
+    tokenFetch.mockRejectedValue(new Error("control plane unavailable"));
     const jwt = await encodeSession({
       oiAccessToken: "oi_at_expired",
       oiAccessTokenExpiresAt: Date.now() - 60_000,
@@ -152,7 +152,7 @@ describe("POST /api/auth/oi-refresh", () => {
     const response = await POST();
 
     expect(response.status).toBe(503);
-    expect(serviceFetch).toHaveBeenCalledWith("/auth/tokens/refresh", {
+    expect(tokenFetch).toHaveBeenCalledWith("/auth/tokens/refresh", {
       method: "POST",
       body: JSON.stringify({ refreshToken: "oi_rt_retryable" }),
     });

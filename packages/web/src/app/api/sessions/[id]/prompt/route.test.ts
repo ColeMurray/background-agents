@@ -9,11 +9,11 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
 describe("session prompt API route", () => {
@@ -37,11 +37,11 @@ describe("session prompt API route", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid prompt request" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("proxies validated attachment references", async () => {
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ messageId: "message-1", status: "queued" })
     );
 
@@ -58,11 +58,11 @@ describe("session prompt API route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/prompt", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/sessions/session-1/prompt", {
       method: "POST",
       body: expect.any(String),
     });
-    const requestBody = vi.mocked(controlPlaneFetch).mock.calls[0][1]?.body;
+    const requestBody = vi.mocked(controlPlaneUserFetch).mock.calls[0][1]?.body;
     // authorId is forbidden under strict identity enforcement — the control
     // plane derives the author from the Bearer principal.
     expect(JSON.parse(requestBody as string)).toEqual({

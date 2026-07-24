@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   // Verify user is authenticated
@@ -16,7 +16,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     // userId is derived by the control plane from the Bearer principal and
     // is rejected in the body under strict enforcement.
-    const response = await controlPlaneFetch(`/sessions/${id}/unarchive`, {
+    const response = await controlPlaneUserFetch(`/sessions/${id}/unarchive`, {
       method: "POST",
       body: JSON.stringify({}),
     });

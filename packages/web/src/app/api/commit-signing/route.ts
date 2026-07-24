@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { commitSigningMetadataSchema } from "@open-inspect/shared";
 
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
 
@@ -33,7 +33,7 @@ async function proxy(
   }
 
   try {
-    const controlPlaneResponse = await controlPlaneFetch(
+    const controlPlaneResponse = await controlPlaneUserFetch(
       "/commit-signing",
       method === "GET"
         ? undefined

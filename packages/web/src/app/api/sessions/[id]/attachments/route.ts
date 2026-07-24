@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "@/lib/session-attachment-limits";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
@@ -60,7 +60,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "Attachment is too large" }, { status: 413 });
     }
 
-    const response = await controlPlaneFetch(`/sessions/${sessionId}/attachments`, {
+    const response = await controlPlaneUserFetch(`/sessions/${sessionId}/attachments`, {
       method: "POST",
       body,
       headers: { "Content-Type": contentType },

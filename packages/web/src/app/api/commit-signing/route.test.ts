@@ -10,11 +10,11 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { DELETE, GET, PUT } from "./route";
 
 describe("commit signing BFF", () => {
@@ -42,16 +42,16 @@ describe("commit signing BFF", () => {
 
     expect(response.status).toBe(401);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("forwards authenticated reads with no-store", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ enabled: false }));
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ enabled: false }));
 
     const response = await GET();
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/commit-signing", undefined);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/commit-signing", undefined);
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(await response.json()).toEqual({ enabled: false });
@@ -59,7 +59,7 @@ describe("commit signing BFF", () => {
 
   it("forwards authenticated writes without persisting or reshaping the key", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "Invalid commit signing configuration" }, { status: 400 })
     );
     const body = {
@@ -75,7 +75,7 @@ describe("commit signing BFF", () => {
       }) as NextRequest
     );
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/commit-signing", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/commit-signing", {
       method: "PUT",
       body: JSON.stringify(body),
     });
@@ -86,17 +86,17 @@ describe("commit signing BFF", () => {
 
   it("forwards authenticated disables with no-store", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ enabled: false }));
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ enabled: false }));
 
     const response = await DELETE();
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/commit-signing", { method: "DELETE" });
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/commit-signing", { method: "DELETE" });
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("rejects malformed successful metadata from the control plane", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ enabled: true }));
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ enabled: true }));
 
     const response = await GET();
 
@@ -106,7 +106,7 @@ describe("commit signing BFF", () => {
 
   it("does not relay unexpected control-plane error bodies", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "PRIVATE-KEY-BYTES leaked" }, { status: 500 })
     );
 

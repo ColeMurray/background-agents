@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { WebSessionSupervisor } from "./web-session-supervisor";
+import { WebSessionGate } from "./web-session-gate";
 
 const mocks = vi.hoisted(() => ({
   status: "loading",
@@ -33,16 +33,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("WebSessionSupervisor", () => {
-  it("does not ping before the SessionProvider's own session fetch resolves", () => {
+describe("WebSessionGate", () => {
+  it("waits for the SessionProvider's own session fetch before checking", () => {
     // Mount-time sequencing: the one /api/auth/session cookie write must land
     // before the first rotation write, or the two could interleave stale over
     // fresh. Waiting for "authenticated" is what orders them.
-    const { rerender } = render(<WebSessionSupervisor />);
+    const { rerender } = render(<WebSessionGate />);
     expect(fetchSpy).not.toHaveBeenCalled();
 
     mocks.status = "authenticated";
-    rerender(<WebSessionSupervisor />);
+    rerender(<WebSessionGate />);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith("/api/auth/oi-refresh", { method: "POST" });
   });
@@ -51,7 +51,7 @@ describe("WebSessionSupervisor", () => {
     mocks.status = "authenticated";
     fetchSpy.mockResolvedValue(Response.json({ error: "Unauthorized" }, { status: 401 }));
 
-    render(<WebSessionSupervisor />);
+    render(<WebSessionGate />);
 
     await waitFor(() => expect(mocks.signOut).toHaveBeenCalledTimes(1));
   });
@@ -63,7 +63,7 @@ describe("WebSessionSupervisor", () => {
       .mockRejectedValueOnce(new Error("sign-out request failed"))
       .mockResolvedValueOnce(undefined);
 
-    render(<WebSessionSupervisor />);
+    render(<WebSessionGate />);
 
     expect(await screen.findByText("Authentication temporarily unavailable")).toBeTruthy();
     expect(mocks.signOut).toHaveBeenCalledTimes(1);
@@ -75,22 +75,22 @@ describe("WebSessionSupervisor", () => {
 
   it("holds authenticated children until web-session validity is confirmed", async () => {
     mocks.status = "authenticated";
-    let resolvePing: ((response: Response) => void) | undefined;
+    let resolveCheck: ((response: Response) => void) | undefined;
     fetchSpy.mockImplementation(
       () =>
         new Promise<Response>((resolve) => {
-          resolvePing = resolve;
+          resolveCheck = resolve;
         })
     );
 
     render(
-      <WebSessionSupervisor>
+      <WebSessionGate>
         <div>Protected application</div>
-      </WebSessionSupervisor>
+      </WebSessionGate>
     );
 
     expect(screen.queryByText("Protected application")).toBeNull();
-    resolvePing?.(new Response(null, { status: 204 }));
+    resolveCheck?.(new Response(null, { status: 204 }));
     expect(await screen.findByText("Protected application")).toBeTruthy();
   });
 
@@ -103,9 +103,9 @@ describe("WebSessionSupervisor", () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
 
     render(
-      <WebSessionSupervisor>
+      <WebSessionGate>
         <div>Protected application</div>
-      </WebSessionSupervisor>
+      </WebSessionGate>
     );
 
     expect(await screen.findByText("Authentication temporarily unavailable")).toBeTruthy();
@@ -122,18 +122,18 @@ describe("WebSessionSupervisor", () => {
     mocks.status = "authenticated";
     fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
     const { rerender } = render(
-      <WebSessionSupervisor>
+      <WebSessionGate>
         <div>Protected application</div>
-      </WebSessionSupervisor>
+      </WebSessionGate>
     );
 
     expect(await screen.findByText("Protected application")).toBeTruthy();
 
     mocks.status = "unauthenticated";
     rerender(
-      <WebSessionSupervisor>
+      <WebSessionGate>
         <div>Protected application</div>
-      </WebSessionSupervisor>
+      </WebSessionGate>
     );
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
 
@@ -146,9 +146,9 @@ describe("WebSessionSupervisor", () => {
     );
     mocks.status = "authenticated";
     rerender(
-      <WebSessionSupervisor>
+      <WebSessionGate>
         <div>Protected application</div>
-      </WebSessionSupervisor>
+      </WebSessionGate>
     );
 
     expect(screen.queryByText("Protected application")).toBeNull();
@@ -156,22 +156,22 @@ describe("WebSessionSupervisor", () => {
     expect(await screen.findByText("Protected application")).toBeTruthy();
   });
 
-  it("does not start an overlapping ping when focus returns during renewal", () => {
+  it("does not start an overlapping check when focus returns during renewal", () => {
     mocks.status = "authenticated";
     fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
-    render(<WebSessionSupervisor />);
+    render(<WebSessionGate />);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     window.dispatchEvent(new Event("focus"));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("pings again when the tab becomes visible, not while hidden", async () => {
+  it("checks again when the tab becomes visible, not while hidden", async () => {
     mocks.status = "authenticated";
     render(
-      <WebSessionSupervisor>
+      <WebSessionGate>
         <div>Protected application</div>
-      </WebSessionSupervisor>
+      </WebSessionGate>
     );
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("Protected application")).toBeTruthy();
@@ -187,9 +187,9 @@ describe("WebSessionSupervisor", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("stops pinging after unmount", () => {
+  it("stops checking after unmount", () => {
     mocks.status = "authenticated";
-    const { unmount } = render(<WebSessionSupervisor />);
+    const { unmount } = render(<WebSessionGate />);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     unmount();

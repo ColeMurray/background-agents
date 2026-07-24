@@ -9,11 +9,11 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
 describe("analytics summary API route", () => {
@@ -30,12 +30,12 @@ describe("analytics summary API route", () => {
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("forwards only the allowed summary query params", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ totalSessions: 5 }, { status: 200 })
     );
 
@@ -43,14 +43,14 @@ describe("analytics summary API route", () => {
       new Request("http://localhost/api/analytics/summary?debug=true&days=14") as never
     );
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/analytics/summary?days=14");
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/summary?days=14");
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ totalSessions: 5 });
   });
 
   it("returns 500 when the control plane request throws", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockRejectedValue(new Error("boom"));
+    vi.mocked(controlPlaneUserFetch).mockRejectedValue(new Error("boom"));
 
     const response = await GET(new Request("http://localhost/api/analytics/summary") as never);
 

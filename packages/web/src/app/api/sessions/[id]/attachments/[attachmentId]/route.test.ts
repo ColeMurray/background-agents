@@ -9,11 +9,11 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
 const PARAMS = {
@@ -36,11 +36,11 @@ describe("session attachment download API route", () => {
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("forwards byte ranges and preserves storage response headers", async () => {
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response("bytes", {
         status: 206,
         headers: {
@@ -60,9 +60,12 @@ describe("session attachment download API route", () => {
       PARAMS
     );
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/attachments/attachment-1", {
-      headers: { Range: "bytes=0-4" },
-    });
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions/session-1/attachments/attachment-1",
+      {
+        headers: { Range: "bytes=0-4" },
+      }
+    );
     expect(response.status).toBe(206);
     expect(response.headers.get("Content-Range")).toBe("bytes 0-4/10");
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");

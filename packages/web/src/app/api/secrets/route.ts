@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -11,7 +11,7 @@ export async function GET() {
   }
 
   try {
-    const response = await controlPlaneFetch("/secrets");
+    const response = await controlPlaneUserFetch("/secrets");
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -29,7 +29,7 @@ export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const response = await controlPlaneFetch("/secrets", {
+    const response = await controlPlaneUserFetch("/secrets", {
       method: "PUT",
       body: JSON.stringify(body),
     });

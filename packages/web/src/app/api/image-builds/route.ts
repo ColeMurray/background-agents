@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import type { ImageBuildRecordView } from "@open-inspect/shared";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   excludeSupersededBuilds,
   type ImageBuildEnabledRepoView,
@@ -33,9 +33,9 @@ export async function GET() {
 
   try {
     const [enabledResponse, enabledReposResponse, statusResponse] = await Promise.all([
-      controlPlaneFetch("/image-builds/enabled"),
-      controlPlaneFetch("/image-builds/enabled-repos"),
-      controlPlaneFetch("/image-builds/status"),
+      controlPlaneUserFetch("/image-builds/enabled"),
+      controlPlaneUserFetch("/image-builds/enabled-repos"),
+      controlPlaneUserFetch("/image-builds/status"),
     ]);
 
     if (!enabledResponse.ok || !enabledReposResponse.ok || !statusResponse.ok) {

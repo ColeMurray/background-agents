@@ -44,7 +44,7 @@ async function getControlPlaneHeaders(request: {
 }
 
 /**
- * Make an authenticated request to the control plane.
+ * Make a user-authenticated request to the control plane.
  *
  * The credential is applied after caller-supplied headers, so an
  * `Authorization` header in `options` can never override the identity
@@ -54,7 +54,7 @@ async function getControlPlaneHeaders(request: {
  * @param options - Fetch options (method, body, etc.)
  * @returns Fetch Response
  */
-export async function controlPlaneFetch(
+export async function controlPlaneUserFetch(
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {

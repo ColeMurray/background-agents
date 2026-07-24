@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export async function GET(
   _request: NextRequest,
@@ -16,7 +16,7 @@ export async function GET(
   const { owner, name } = await params;
 
   try {
-    const response = await controlPlaneFetch(
+    const response = await controlPlaneUserFetch(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches`
     );
     const data = await response.json();

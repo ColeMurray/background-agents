@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import type { EnrichedRepository } from "@open-inspect/shared";
 
 interface ControlPlaneReposResponse {
@@ -19,7 +19,7 @@ export async function GET() {
   try {
     // Fetch repositories from control plane using GitHub App installation token.
     // This ensures we only show repos the App has access to, not all repos the user can see.
-    const response = await controlPlaneFetch("/repos");
+    const response = await controlPlaneUserFetch("/repos");
 
     if (!response.ok) {
       const error = await response.text();

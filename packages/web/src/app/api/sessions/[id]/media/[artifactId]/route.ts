@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
@@ -27,8 +27,8 @@ export async function GET(
     const range = request.headers.get("Range");
     const mediaPath = `/sessions/${sessionId}/media/${artifactId}`;
     const response = range
-      ? await controlPlaneFetch(mediaPath, { headers: { Range: range } })
-      : await controlPlaneFetch(mediaPath);
+      ? await controlPlaneUserFetch(mediaPath, { headers: { Range: range } })
+      : await controlPlaneUserFetch(mediaPath);
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Failed to fetch media: ${errorText}`);

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import type { SlackChannelListing } from "@open-inspect/shared";
 
 interface ControlPlaneChannelsResponse {
@@ -21,7 +21,7 @@ export async function GET() {
   }
 
   try {
-    const response = await controlPlaneFetch("/integration-settings/slack/channels");
+    const response = await controlPlaneUserFetch("/integration-settings/slack/channels");
     if (!response.ok) {
       const error = await response.text();
       console.error("Control plane slack channels error:", error);
