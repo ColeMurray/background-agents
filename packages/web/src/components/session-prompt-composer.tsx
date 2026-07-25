@@ -20,7 +20,6 @@ type SessionPromptComposerProps = {
     primaryRepo?: { repoOwner: string; repoName: string } | null;
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
-    onOpenDetails: () => void;
   };
   prompt: {
     value: string;
@@ -95,7 +94,6 @@ export function SessionPromptComposer({
             primaryRepo={session.primaryRepo}
             onArchive={session.onArchive}
             onUnarchive={session.onUnarchive}
-            onOpenDetails={session.onOpenDetails}
           />
         </div>
 

@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, type RefObject } from "react";
-import { toast } from "sonner";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
-import type { Artifact } from "@/types/session";
+import {
+  resolveSessionActions,
+  useSessionActionControls,
+  type SessionActionProps,
+} from "@/components/session-actions";
 import {
   GlobeIcon,
   GitPrIcon,
@@ -11,37 +13,16 @@ import {
   MoreIcon,
   LinkIcon,
   GitHubIcon,
-  FolderIcon,
-  SidebarIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { getSafeExternalUrl } from "@/lib/urls";
-import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 
-export interface ActionBarProps {
-  sessionId: string;
-  sessionStatus: string;
-  artifacts: Artifact[];
-  /**
-   * The session's primary repository. When present, "View PR" is selected
-   * repository-aware (the primary's PR) instead of taking the first PR
-   * artifact — in a multi-repo session those can differ.
-   */
-  primaryRepo?: { repoOwner: string; repoName: string } | null;
-  onArchive?: () => void | Promise<void>;
-  onUnarchive?: () => void | Promise<void>;
-  onOpenDetails: () => void;
-  onOpenMedia?: () => void;
-  variant?: "composer" | "mobile-header";
-  triggerRef?: RefObject<HTMLButtonElement | null>;
-}
+export type ActionBarProps = SessionActionProps;
 
 export function ActionBar({
   sessionId,
@@ -50,62 +31,23 @@ export function ActionBar({
   primaryRepo,
   onArchive,
   onUnarchive,
-  onOpenDetails,
-  onOpenMedia = onOpenDetails,
-  variant = "composer",
-  triggerRef,
 }: ActionBarProps) {
-  const [isArchiving, setIsArchiving] = useState(false);
-  const [showArchiveDialog, setShowArchiveDialog] = useState(false);
-
-  const prArtifact = primaryRepo
-    ? findPrArtifactForRepo(artifacts, primaryRepo, true)
-    : artifacts.find((a) => a.type === "pr");
-  const previewArtifact = artifacts.find((a) => a.type === "preview");
-  const mediaCount = artifacts.filter(
-    (artifact) => artifact.type === "screenshot" || artifact.type === "video"
-  ).length;
-  const previewUrl = getSafeExternalUrl(previewArtifact?.url);
-  const prUrl = getSafeExternalUrl(prArtifact?.url);
-
-  const isArchived = sessionStatus === "archived";
-  const isMobileHeader = variant === "mobile-header";
-
-  const handleArchiveToggle = async () => {
-    if (!isArchived) {
-      setShowArchiveDialog(true);
-      return;
-    }
-
-    setIsArchiving(true);
-    try {
-      if (onUnarchive) await onUnarchive();
-    } finally {
-      setIsArchiving(false);
-    }
-  };
-
-  const handleConfirmArchive = async () => {
-    setShowArchiveDialog(false);
-    setIsArchiving(true);
-    try {
-      if (onArchive) await onArchive();
-    } finally {
-      setIsArchiving(false);
-    }
-  };
-
-  const handleCopyLink = async () => {
-    const url = `${window.location.origin}/session/${sessionId}`;
-    await navigator.clipboard.writeText(url);
-    toast.success("Link copied to clipboard");
-  };
+  const { previewArtifact, previewUrl, prUrl, mediaCount } = resolveSessionActions(
+    artifacts,
+    primaryRepo
+  );
+  const controls = useSessionActionControls({
+    sessionId,
+    sessionStatus,
+    onArchive,
+    onUnarchive,
+  });
 
   return (
     <>
-      <div className={isMobileHeader ? "md:hidden" : "flex flex-wrap items-stretch gap-2"}>
+      <div className="flex flex-wrap items-stretch gap-2">
         {/* View Preview */}
-        {!isMobileHeader && previewUrl && (
+        {previewUrl && (
           <Button variant="outline" size="sm" className="hidden gap-1.5 md:inline-flex" asChild>
             <a href={previewUrl} target="_blank" rel="noopener noreferrer">
               <GlobeIcon className="w-4 h-4" />
@@ -118,7 +60,7 @@ export function ActionBar({
         )}
 
         {/* View PR */}
-        {!isMobileHeader && prUrl && (
+        {prUrl && (
           <Button variant="outline" size="sm" className="hidden gap-1.5 md:inline-flex" asChild>
             <a href={prUrl} target="_blank" rel="noopener noreferrer">
               <GitPrIcon className="w-4 h-4" />
@@ -128,20 +70,18 @@ export function ActionBar({
         )}
 
         {/* Archive/Unarchive */}
-        {!isMobileHeader && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleArchiveToggle}
-            disabled={isArchiving}
-            className="hidden gap-1.5 md:inline-flex"
-          >
-            <ArchiveIcon className="w-4 h-4" />
-            <span>{isArchived ? "Unarchive" : "Archive"}</span>
-          </Button>
-        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={controls.handleArchiveToggle}
+          disabled={controls.isArchiving}
+          className="hidden gap-1.5 md:inline-flex"
+        >
+          <ArchiveIcon className="w-4 h-4" />
+          <span>{controls.isArchived ? "Unarchive" : "Archive"}</span>
+        </Button>
 
-        {!isMobileHeader && mediaCount > 0 && (
+        {mediaCount > 0 && (
           <div className="hidden items-center rounded-md border border-border-muted px-3 text-sm text-muted-foreground md:inline-flex">
             Media ({mediaCount})
           </div>
@@ -150,54 +90,16 @@ export function ActionBar({
         {/* More menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              ref={triggerRef}
-              variant="outline"
-              size="sm"
-              className="!px-2"
-              aria-label={isMobileHeader ? "Session actions" : "More session actions"}
-            >
+            <Button variant="outline" size="sm" className="!px-2" aria-label="More session actions">
               <MoreIcon className="w-4 h-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" side={isMobileHeader ? "bottom" : "top"}>
-            {isMobileHeader && (
-              <DropdownMenuItem onClick={onOpenDetails}>
-                <SidebarIcon className="w-4 h-4" />
-                Details
-              </DropdownMenuItem>
-            )}
-            {previewUrl && (
-              <DropdownMenuItem className={isMobileHeader ? undefined : "md:hidden"} asChild>
-                <a href={previewUrl} target="_blank" rel="noopener noreferrer">
-                  <GlobeIcon className="w-4 h-4" />
-                  View preview
-                  {previewArtifact?.metadata?.previewStatus === "outdated" && " (outdated)"}
-                </a>
-              </DropdownMenuItem>
-            )}
-            {prUrl && (
-              <DropdownMenuItem className={isMobileHeader ? undefined : "md:hidden"} asChild>
-                <a href={prUrl} target="_blank" rel="noopener noreferrer">
-                  <GitPrIcon className="w-4 h-4" />
-                  View PR
-                </a>
-              </DropdownMenuItem>
-            )}
-            {mediaCount > 0 && (
-              <DropdownMenuItem
-                className={isMobileHeader ? undefined : "md:hidden"}
-                onClick={onOpenMedia}
-              >
-                <FolderIcon className="w-4 h-4" />
-                Media ({mediaCount})
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onClick={handleCopyLink}>
+          <DropdownMenuContent align="end" side="top">
+            <DropdownMenuItem onClick={controls.handleCopyLink}>
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
-            {!isMobileHeader && prUrl && (
+            {prUrl && (
               <DropdownMenuItem className="hidden md:flex" asChild>
                 <a href={prUrl} target="_blank" rel="noopener noreferrer">
                   <GitHubIcon className="w-4 h-4" />
@@ -205,23 +107,14 @@ export function ActionBar({
                 </a>
               </DropdownMenuItem>
             )}
-            {isMobileHeader && <DropdownMenuSeparator />}
-            <DropdownMenuItem
-              className={isMobileHeader ? undefined : "md:hidden"}
-              onClick={handleArchiveToggle}
-              disabled={isArchiving}
-            >
-              <ArchiveIcon className="w-4 h-4" />
-              {isArchived ? "Unarchive" : "Archive"}
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
       <ArchiveSessionDialog
-        open={showArchiveDialog}
-        onOpenChange={setShowArchiveDialog}
-        onConfirm={handleConfirmArchive}
+        open={controls.showArchiveDialog}
+        onOpenChange={controls.setShowArchiveDialog}
+        onConfirm={controls.handleConfirmArchive}
       />
     </>
   );

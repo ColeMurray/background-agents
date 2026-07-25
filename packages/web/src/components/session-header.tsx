@@ -2,7 +2,8 @@
 
 import { useEffect, useState, type RefObject } from "react";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
-import { ActionBar, type ActionBarProps } from "@/components/action-bar";
+import { MobileSessionActions } from "@/components/mobile-session-actions";
+import type { SessionActionProps } from "@/components/session-actions";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
 
@@ -34,7 +35,7 @@ export type SessionHeaderProps = {
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
   onOpenMobileDetails: () => void;
-  actions: Omit<ActionBarProps, "onOpenDetails" | "onOpenMedia" | "variant" | "triggerRef">;
+  actions: SessionActionProps;
   renameSession: (title: string) => Promise<boolean | undefined>;
 };
 
@@ -168,9 +169,8 @@ export function SessionHeader({
           >
             Details
           </button>
-          <ActionBar
+          <MobileSessionActions
             {...actions}
-            variant="mobile-header"
             triggerRef={actionsButtonRef}
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}

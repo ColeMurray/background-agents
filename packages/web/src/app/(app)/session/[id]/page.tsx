@@ -48,6 +48,7 @@ import {
 } from "@/components/session-desktop-layout";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
+import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -131,7 +132,6 @@ function SessionPageContent() {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
-  const detailsReturnFocusRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state
   const [terminalOpen, setTerminalOpen] = useState(() => {
@@ -152,13 +152,15 @@ function SessionPageContent() {
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
 
   const toggleDetails = useCallback(() => {
-    detailsReturnFocusRef.current = detailsButtonRef.current;
     setIsDetailsOpen((prev) => !prev);
   }, []);
   const openMobileDetails = useCallback(() => {
-    detailsReturnFocusRef.current = actionsButtonRef.current;
     setIsDetailsOpen(true);
   }, []);
+  const focusDetailsTrigger = useCallback(
+    () => focusSessionDetailsTrigger(isPhone, actionsButtonRef.current, detailsButtonRef.current),
+    [isPhone]
+  );
 
   useEffect(() => {
     if (isBelowLg) return;
@@ -221,9 +223,9 @@ function SessionPageContent() {
           return;
         }
       }
-      detailsButtonRef.current?.focus();
+      focusDetailsTrigger();
     });
-  }, [isBelowLg]);
+  }, [focusDetailsTrigger, isBelowLg]);
 
   const sessionWorkspace = (
     <div className="flex h-full flex-1 flex-col overflow-hidden">
@@ -350,7 +352,7 @@ function SessionPageContent() {
           open={isDetailsOpen}
           onOpenChange={setIsDetailsOpen}
           isPhone={isPhone}
-          returnFocusRef={detailsReturnFocusRef}
+          onReturnFocus={focusDetailsTrigger}
           sessionId={sessionId}
           sessionState={sessionState}
           participants={participants}
@@ -406,7 +408,6 @@ function SessionPageContent() {
           primaryRepo,
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
-          onOpenDetails: () => setIsDetailsOpen(true),
         }}
         prompt={{
           value: prompt,

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { ActionBar } from "./action-bar";
+import { MobileSessionActions } from "./mobile-session-actions";
 
 expect.extend(matchers);
 
@@ -32,7 +33,6 @@ describe("ActionBar", () => {
             createdAt: 1234,
           },
         ]}
-        onOpenDetails={() => undefined}
       />
     );
 
@@ -80,7 +80,6 @@ describe("ActionBar", () => {
             createdAt: 1236,
           },
         ]}
-        onOpenDetails={() => undefined}
       />
     );
 
@@ -88,14 +87,7 @@ describe("ActionBar", () => {
   });
 
   it("does not render a media count indicator when no media artifacts exist", () => {
-    render(
-      <ActionBar
-        sessionId="session-1"
-        sessionStatus="active"
-        artifacts={[]}
-        onOpenDetails={() => undefined}
-      />
-    );
+    render(<ActionBar sessionId="session-1" sessionStatus="active" artifacts={[]} />);
 
     expect(screen.queryByText(/Media/)).not.toBeInTheDocument();
   });
@@ -104,7 +96,7 @@ describe("ActionBar", () => {
     const onOpenDetails = vi.fn();
     const onOpenMedia = vi.fn();
     render(
-      <ActionBar
+      <MobileSessionActions
         sessionId="session-1"
         sessionStatus="active"
         artifacts={[
@@ -132,7 +124,7 @@ describe("ActionBar", () => {
         ]}
         onOpenDetails={onOpenDetails}
         onOpenMedia={onOpenMedia}
-        variant="mobile-header"
+        triggerRef={{ current: null }}
       />
     );
 
@@ -172,13 +164,14 @@ describe("ActionBar", () => {
         })
     );
     render(
-      <ActionBar
+      <MobileSessionActions
         sessionId="session-1"
         sessionStatus="active"
         artifacts={[]}
         onArchive={onArchive}
         onOpenDetails={vi.fn()}
-        variant="mobile-header"
+        onOpenMedia={vi.fn()}
+        triggerRef={{ current: null }}
       />
     );
 
@@ -223,7 +216,6 @@ describe("repository-aware PR selection", () => {
         sessionStatus="active"
         artifacts={[backendPr, webPr]}
         primaryRepo={{ repoOwner: "acme", repoName: "web" }}
-        onOpenDetails={() => undefined}
       />
     );
 
@@ -233,12 +225,7 @@ describe("repository-aware PR selection", () => {
 
   it("falls back to the first PR artifact without repo context", () => {
     render(
-      <ActionBar
-        sessionId="session-1"
-        sessionStatus="active"
-        artifacts={[backendPr, webPr]}
-        onOpenDetails={() => undefined}
-      />
+      <ActionBar sessionId="session-1" sessionStatus="active" artifacts={[backendPr, webPr]} />
     );
 
     const link = screen.getByRole("link", { name: /view pr/i });
