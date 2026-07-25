@@ -17,13 +17,19 @@ export interface AuthSession {
   user?: AuthSessionUser | null;
 }
 
-export type AuthSessionStatus = "loading" | "authenticated" | "unauthenticated";
 export type SignInProvider = "github" | "google";
 
-export interface AuthSessionState {
-  data: AuthSession | null;
-  status: AuthSessionStatus;
-}
+export type AuthSessionState =
+  | {
+      data: AuthSession;
+      status: "authenticated";
+    }
+  | {
+      data: null;
+      status: "loading" | "unauthenticated";
+    };
+
+export type AuthSessionStatus = AuthSessionState["status"];
 
 export function AuthSessionProvider({ children }: { children: ReactNode }) {
   return <SessionProvider refetchOnWindowFocus={false}>{children}</SessionProvider>;
@@ -44,6 +50,9 @@ export async function signOut(): Promise<void> {
  * replace this module without another repository-wide consumer migration.
  */
 export function useAuthSession(): AuthSessionState {
-  const { data, status } = useSession();
-  return { data, status };
+  const state = useSession();
+  if (state.status === "authenticated") {
+    return { data: state.data, status: state.status };
+  }
+  return { data: null, status: state.status };
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 vi.mock("next-auth/react", () => ({
   SessionProvider: vi.fn(({ children }: { children?: React.ReactNode }) => children),
@@ -16,7 +16,14 @@ import {
   signOut as nextAuthSignOut,
   useSession,
 } from "next-auth/react";
-import { AuthSessionProvider, signIn, signOut, useAuthSession } from "./auth-session";
+import {
+  AuthSessionProvider,
+  signIn,
+  signOut,
+  useAuthSession,
+  type AuthSession,
+  type AuthSessionState,
+} from "./auth-session";
 
 afterEach(() => {
   cleanup();
@@ -24,6 +31,19 @@ afterEach(() => {
 });
 
 describe("useAuthSession", () => {
+  it("keeps session data correlated with authentication status", () => {
+    function assertState(state: AuthSessionState) {
+      if (state.status === "authenticated") {
+        expectTypeOf(state.data).toEqualTypeOf<AuthSession>();
+        return;
+      }
+
+      expectTypeOf(state.data).toEqualTypeOf<null>();
+    }
+
+    assertState({ status: "loading", data: null });
+  });
+
   it("exposes the current NextAuth session through the app-owned hook", () => {
     const data = {
       user: {
@@ -45,6 +65,21 @@ describe("useAuthSession", () => {
     expect(result.current).toEqual({
       data,
       status: "authenticated",
+    });
+  });
+
+  it("exposes no session data while NextAuth is loading", () => {
+    vi.mocked(useSession).mockReturnValue({
+      data: null,
+      status: "loading",
+      update: vi.fn(),
+    });
+
+    const { result } = renderHook(() => useAuthSession());
+
+    expect(result.current).toEqual({
+      data: null,
+      status: "loading",
     });
   });
 });
