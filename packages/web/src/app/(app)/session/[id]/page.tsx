@@ -268,7 +268,7 @@ function SessionPageContent() {
         onOpenMobileDetails={openMobileDetails}
         actions={{
           sessionId,
-          sessionStatus: sessionState?.status || "",
+          sessionStatus: sessionState?.status ?? "created",
           artifacts,
           primaryRepo,
           onArchive: handleArchive,
@@ -403,7 +403,7 @@ function SessionPageContent() {
       <SessionPromptComposer
         session={{
           id: sessionId,
-          status: sessionState?.status || "",
+          status: sessionState?.status ?? "created",
           artifacts,
           primaryRepo,
           onArchive: handleArchive,

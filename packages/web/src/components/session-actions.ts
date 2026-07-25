@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { SessionStatus } from "@open-inspect/shared";
 import { toast } from "sonner";
 import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 import { getSafeExternalUrl } from "@/lib/urls";
@@ -8,7 +9,7 @@ import type { Artifact } from "@/types/session";
 
 export interface SessionActionProps {
   sessionId: string;
-  sessionStatus: string;
+  sessionStatus: SessionStatus;
   artifacts: Artifact[];
   /** Select the repository's PR instead of the first PR in multi-repo sessions. */
   primaryRepo?: { repoOwner: string; repoName: string } | null;
@@ -54,6 +55,8 @@ export function useSessionActionControls({
     setIsArchiving(true);
     try {
       if (onUnarchive) await onUnarchive();
+    } catch {
+      toast.error("Failed to unarchive session");
     } finally {
       setIsArchiving(false);
     }
@@ -64,6 +67,8 @@ export function useSessionActionControls({
     setIsArchiving(true);
     try {
       if (onArchive) await onArchive();
+    } catch {
+      toast.error("Failed to archive session");
     } finally {
       setIsArchiving(false);
     }
@@ -71,8 +76,12 @@ export function useSessionActionControls({
 
   const handleCopyLink = async () => {
     const url = `${window.location.origin}/session/${sessionId}`;
-    await navigator.clipboard.writeText(url);
-    toast.success("Link copied to clipboard");
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied to clipboard");
+    } catch {
+      toast.error("Failed to copy link");
+    }
   };
 
   return {

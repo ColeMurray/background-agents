@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionHeader } from "./session-header";
+import type { SessionActionProps } from "./session-actions";
 
 expect.extend(matchers);
 
@@ -18,7 +19,7 @@ vi.mock("@/components/sidebar-layout", () => ({
 
 afterEach(cleanup);
 
-const actions = {
+const actions: SessionActionProps = {
   sessionId: "session-1",
   sessionStatus: "active",
   artifacts: [],

@@ -6,9 +6,7 @@ export function focusSessionDetailsTrigger(
   const preferred = isPhone ? actionsButton : detailsButton;
   const fallback = isPhone ? detailsButton : actionsButton;
   const isVisible = (button: HTMLButtonElement | null) =>
-    button !== null &&
-    getComputedStyle(button).display !== "none" &&
-    getComputedStyle(button).visibility !== "hidden";
+    button !== null && button.offsetParent !== null;
 
   const target = [preferred, fallback].find(isVisible);
   target?.focus();

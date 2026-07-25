@@ -13,21 +13,31 @@ afterEach(() => {
 
 describe("focusSessionDetailsTrigger", () => {
   it("follows the visible trigger across a phone-to-tablet breakpoint change", () => {
+    const actionsWrapper = document.createElement("div");
+    const detailsWrapper = document.createElement("div");
     const actionsButton = document.createElement("button");
     const detailsButton = document.createElement("button");
-    detailsButton.style.display = "none";
-    document.body.append(actionsButton, detailsButton);
+    actionsWrapper.append(actionsButton);
+    detailsWrapper.append(detailsButton);
+    document.body.append(actionsWrapper, detailsWrapper);
+    Object.defineProperty(actionsButton, "offsetParent", {
+      get: () => (actionsWrapper.style.display === "none" ? null : actionsWrapper),
+    });
+    Object.defineProperty(detailsButton, "offsetParent", {
+      get: () => (detailsWrapper.style.display === "none" ? null : detailsWrapper),
+    });
+    detailsWrapper.style.display = "none";
 
     focusSessionDetailsTrigger(true, actionsButton, detailsButton);
     expect(actionsButton).toHaveFocus();
 
-    actionsButton.style.display = "none";
-    detailsButton.style.display = "block";
+    actionsWrapper.style.display = "none";
+    detailsWrapper.style.display = "block";
     focusSessionDetailsTrigger(true, actionsButton, detailsButton);
     expect(detailsButton).toHaveFocus();
 
-    actionsButton.style.display = "block";
-    detailsButton.style.display = "none";
+    actionsWrapper.style.display = "block";
+    detailsWrapper.style.display = "none";
     focusSessionDetailsTrigger(false, actionsButton, detailsButton);
     expect(actionsButton).toHaveFocus();
   });
