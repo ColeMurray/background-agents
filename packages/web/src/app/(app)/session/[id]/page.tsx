@@ -388,6 +388,7 @@ function SessionPageContent() {
               : null),
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
+          onOpenDetails: () => setIsDetailsOpen(true),
         }}
         prompt={{
           value: prompt,

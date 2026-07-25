@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { ActionBar } from "./action-bar";
 
@@ -89,6 +89,62 @@ describe("ActionBar", () => {
     render(<ActionBar sessionId="session-1" sessionStatus="active" artifacts={[]} />);
 
     expect(screen.queryByText(/Media/)).not.toBeInTheDocument();
+  });
+
+  it("consolidates all session actions into the menu on mobile", () => {
+    const onOpenDetails = vi.fn();
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[
+          {
+            id: "artifact-preview-1",
+            type: "preview",
+            url: "https://preview.example.com",
+            metadata: { previewStatus: "active" },
+            createdAt: 1234,
+          },
+          {
+            id: "artifact-pr-1",
+            type: "pr",
+            url: "https://github.com/acme/web-app/pull/42",
+            metadata: { prNumber: 42 },
+            createdAt: 1235,
+          },
+          {
+            id: "artifact-shot-1",
+            type: "screenshot",
+            url: "sessions/session-1/media/artifact-shot-1.png",
+            metadata: { mimeType: "image/png" },
+            createdAt: 1236,
+          },
+        ]}
+        onOpenDetails={onOpenDetails}
+      />
+    );
+
+    expect(screen.getByRole("link", { name: "View preview" })).toHaveClass(
+      "hidden",
+      "md:inline-flex"
+    );
+    expect(screen.getByRole("link", { name: "View PR" })).toHaveClass("hidden", "md:inline-flex");
+    expect(screen.getByRole("button", { name: "Archive" })).toHaveClass("hidden", "md:inline-flex");
+    expect(screen.getByText("Media (1)")).toHaveClass("hidden", "md:inline-flex");
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(screen.getAllByText("View preview")[1]).toHaveClass("md:hidden");
+    expect(screen.getAllByText("View PR")[1]).toHaveClass("md:hidden");
+    expect(screen.getAllByText("Archive")[1]).toHaveClass("md:hidden");
+    const mediaMenuItem = screen.getAllByText("Media (1)")[1];
+    expect(mediaMenuItem).toHaveClass("md:hidden");
+
+    fireEvent.click(mediaMenuItem);
+    expect(onOpenDetails).toHaveBeenCalledOnce();
   });
 });
 

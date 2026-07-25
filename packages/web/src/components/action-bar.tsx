@@ -11,6 +11,7 @@ import {
   MoreIcon,
   LinkIcon,
   GitHubIcon,
+  FolderIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +35,7 @@ interface ActionBarProps {
   primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
+  onOpenDetails?: () => void;
 }
 
 export function ActionBar({
@@ -43,6 +45,7 @@ export function ActionBar({
   primaryRepo,
   onArchive,
   onUnarchive,
+  onOpenDetails,
 }: ActionBarProps) {
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
@@ -94,7 +97,7 @@ export function ActionBar({
       <div className="flex flex-wrap items-stretch gap-2">
         {/* View Preview */}
         {previewUrl && (
-          <Button variant="outline" size="sm" className="gap-1.5" asChild>
+          <Button variant="outline" size="sm" className="hidden gap-1.5 md:inline-flex" asChild>
             <a href={previewUrl} target="_blank" rel="noopener noreferrer">
               <GlobeIcon className="w-4 h-4" />
               <span>View preview</span>
@@ -107,7 +110,7 @@ export function ActionBar({
 
         {/* View PR */}
         {prUrl && (
-          <Button variant="outline" size="sm" className="gap-1.5" asChild>
+          <Button variant="outline" size="sm" className="hidden gap-1.5 md:inline-flex" asChild>
             <a href={prUrl} target="_blank" rel="noopener noreferrer">
               <GitPrIcon className="w-4 h-4" />
               <span>View PR</span>
@@ -121,14 +124,14 @@ export function ActionBar({
           size="sm"
           onClick={handleArchiveToggle}
           disabled={isArchiving}
-          className="gap-1.5"
+          className="hidden gap-1.5 md:inline-flex"
         >
           <ArchiveIcon className="w-4 h-4" />
           <span>{isArchived ? "Unarchive" : "Archive"}</span>
         </Button>
 
         {mediaCount > 0 && (
-          <div className="inline-flex items-center rounded-md border border-border-muted px-3 text-sm text-muted-foreground">
+          <div className="hidden items-center rounded-md border border-border-muted px-3 text-sm text-muted-foreground md:inline-flex">
             Media ({mediaCount})
           </div>
         )}
@@ -136,17 +139,48 @@ export function ActionBar({
         {/* More menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="!px-2">
+            <Button variant="outline" size="sm" className="!px-2" aria-label="More session actions">
               <MoreIcon className="w-4 h-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="top">
+            {previewUrl && (
+              <DropdownMenuItem className="md:hidden" asChild>
+                <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                  <GlobeIcon className="w-4 h-4" />
+                  View preview
+                  {previewArtifact?.metadata?.previewStatus === "outdated" && " (outdated)"}
+                </a>
+              </DropdownMenuItem>
+            )}
+            {prUrl && (
+              <DropdownMenuItem className="md:hidden" asChild>
+                <a href={prUrl} target="_blank" rel="noopener noreferrer">
+                  <GitPrIcon className="w-4 h-4" />
+                  View PR
+                </a>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem
+              className="md:hidden"
+              onClick={handleArchiveToggle}
+              disabled={isArchiving}
+            >
+              <ArchiveIcon className="w-4 h-4" />
+              {isArchived ? "Unarchive" : "Archive"}
+            </DropdownMenuItem>
+            {mediaCount > 0 && onOpenDetails && (
+              <DropdownMenuItem className="md:hidden" onClick={onOpenDetails}>
+                <FolderIcon className="w-4 h-4" />
+                Media ({mediaCount})
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={handleCopyLink}>
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
             {prUrl && (
-              <DropdownMenuItem asChild>
+              <DropdownMenuItem className="hidden md:flex" asChild>
                 <a href={prUrl} target="_blank" rel="noopener noreferrer">
                   <GitHubIcon className="w-4 h-4" />
                   View in GitHub

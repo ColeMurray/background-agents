@@ -45,6 +45,7 @@ function ComposerHarness({
         artifacts: [],
         onArchive: vi.fn(),
         onUnarchive: vi.fn(),
+        onOpenDetails: vi.fn(),
       }}
       prompt={{
         value,
