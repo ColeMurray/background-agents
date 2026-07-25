@@ -143,7 +143,7 @@ export default tseslint.config(
     },
   },
 
-  // Client code depends on app-owned auth and request seams so the terminal
+  // Web code depends on app-owned auth and request seams so the terminal
   // browser-auth implementation can replace NextAuth and add its request
   // contract without another consumer migration.
   {
@@ -168,20 +168,21 @@ export default tseslint.config(
     },
   },
   {
-    files: [
-      "packages/web/src/app/(app)/**/*.{ts,tsx}",
-      "packages/web/src/app/providers.tsx",
-      "packages/web/src/components/**/*.{ts,tsx}",
-      "packages/web/src/hooks/**/*.{ts,tsx}",
-      "packages/web/src/lib/archive-session.ts",
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    ignores: [
+      "**/*.test.{ts,tsx}",
+      "**/*.spec.{ts,tsx}",
+      "packages/web/src/lib/auth.ts",
+      "packages/web/src/lib/browser-api-fetch.ts",
+      "packages/web/src/lib/control-plane-transport.ts",
+      "packages/web/src/lib/github-org-membership.ts",
     ],
-    ignores: ["**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
     rules: {
       "no-restricted-globals": [
         "error",
         {
           name: "fetch",
-          message: "Use browserApiFetch from @/lib/browser-api-fetch.",
+          message: "Use an app-owned HTTP transport instead of raw fetch.",
         },
       ],
     },

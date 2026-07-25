@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const componentPath = "packages/web/src/components/example.tsx";
 const hookPath = "packages/web/src/hooks/example.ts";
+const clientLibraryPath = "packages/web/src/lib/example-client.ts";
 const authSessionPath = "packages/web/src/lib/auth-session.tsx";
 const browserApiFetchPath = "packages/web/src/lib/browser-api-fetch.ts";
+const controlPlaneTransportPath = "packages/web/src/lib/control-plane-transport.ts";
 
 const eslint = new ESLint({ cwd: repositoryRoot });
 
@@ -28,6 +30,12 @@ describe("client authentication boundaries", () => {
 
   it("rejects raw browser fetch calls", async () => {
     await expect(boundaryMessages('fetch("/api/sessions");', hookPath)).resolves.toHaveLength(1);
+  });
+
+  it("rejects raw fetch calls from an ordinary client library", async () => {
+    await expect(
+      boundaryMessages('fetch("/api/sessions");', clientLibraryPath)
+    ).resolves.toHaveLength(1);
   });
 
   it("allows consumers to use the app-owned boundaries", async () => {
@@ -51,6 +59,12 @@ describe("client authentication boundaries", () => {
   it("allows the browser request seam to own fetch", async () => {
     await expect(
       boundaryMessages('fetch("/api/sessions");', browserApiFetchPath)
+    ).resolves.toHaveLength(0);
+  });
+
+  it("allows the server request seam to own fetch", async () => {
+    await expect(
+      boundaryMessages('fetch("https://control-plane.example");', controlPlaneTransportPath)
     ).resolves.toHaveLength(0);
   });
 });
