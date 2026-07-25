@@ -113,6 +113,36 @@ export default tseslint.config(
     },
   },
 
+  // Web BFF routes depend on the server-auth seam, not directly on the
+  // current authentication framework. The auth endpoints own the framework
+  // integration and are intentionally excluded.
+  {
+    files: [
+      "packages/web/src/app/api/**/*.{ts,tsx}",
+      "packages/web/src/lib/integration-settings-proxy.ts",
+    ],
+    ignores: ["packages/web/src/app/api/auth/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "next-auth",
+              importNames: ["getServerSession"],
+              message: "Use getServerAuthSession from @/lib/server-auth-session.",
+            },
+            {
+              name: "@/lib/auth",
+              importNames: ["authOptions"],
+              message: "Use getServerAuthSession from @/lib/server-auth-session.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Cloudflare Workers specific config
   {
     files: ["packages/control-plane/**/*.ts"],

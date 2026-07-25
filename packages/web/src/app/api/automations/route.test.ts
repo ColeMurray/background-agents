@@ -1,12 +1,8 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
@@ -15,7 +11,7 @@ vi.mock("@/lib/control-plane", () => ({
 
 // NOTE: @/lib/build-auth-identity is intentionally NOT mocked — these tests
 // exercise the real chokepoint to prove the route's outgoing body is correct.
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
@@ -44,7 +40,7 @@ describe("automations API route (POST)", () => {
   });
 
   it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await POST(postRequest(validBody));
 
@@ -53,7 +49,7 @@ describe("automations API route (POST)", () => {
   });
 
   it("sends auth* display and scm* attribution for a GitHub user — never identity or credentials", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "12345",
         login: "ada",
@@ -99,7 +95,7 @@ describe("automations API route (POST)", () => {
   });
 
   it("sends auth* display but no scm* for a Google user (F1/F2: a Google sub must never become a GitHub identity)", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "google-sub-1",
         name: "Pat PM",
@@ -135,7 +131,7 @@ describe("automations API route (POST)", () => {
   });
 
   it("drops non-allowlisted fields (including client-asserted identity) from the forwarded body", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "12345", login: "ada", provider: "github" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(

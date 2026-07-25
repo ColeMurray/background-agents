@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({ getServerSession: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ authOptions: {} }));
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
+}));
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
@@ -16,9 +17,9 @@ describe("session diff file API route", () => {
   beforeEach(() => vi.resetAllMocks());
 
   it("requires authentication and validates every route identity", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
     expect((await GET(new Request("http://local/patch"), context)).status).toBe(401);
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     const invalid = {
       params: Promise.resolve({ id: "../session", revisionId: "capture-1", fileId: "file-1" }),
     };
@@ -27,7 +28,7 @@ describe("session diff file API route", () => {
   });
 
   it("streams patch text from the revision-pinned control-plane route", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response("diff --git a/a b/a\n", {
         headers: { "Content-Type": "text/x-diff", ETag: '"patch-1"' },
@@ -45,7 +46,7 @@ describe("session diff file API route", () => {
   });
 
   it("preserves the stale-revision payload and status", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json(
         { code: "diff_revision_stale", currentRevisionId: "capture-2" },
@@ -62,7 +63,7 @@ describe("session diff file API route", () => {
   });
 
   it("returns a bounded error when the control plane is unavailable", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockRejectedValue(new Error("offline"));
 
     const response = await GET(new Request("http://local/patch"), context);

@@ -1,19 +1,15 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { clearCurrentUserIdCacheForTests } from "@/lib/current-user";
 import { GET, POST } from "./route";
@@ -42,7 +38,7 @@ describe("sessions API route", () => {
   });
 
   it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await GET(request("/api/sessions?limit=50"));
 
@@ -52,7 +48,7 @@ describe("sessions API route", () => {
   });
 
   it("forwards allowed session query params", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ sessions: [], hasMore: false }, { status: 200 })
     );
@@ -71,7 +67,7 @@ describe("sessions API route", () => {
   });
 
   it("resolves createdBy=me before forwarding sessions to the control plane", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "12345",
         login: "ada",
@@ -99,7 +95,9 @@ describe("sessions API route", () => {
   });
 
   it("returns 409 when createdBy=me cannot resolve a user id", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { email: "ada@example.com" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { email: "ada@example.com" },
+    } as never);
 
     const response = await GET(request("/api/sessions?createdBy=me"));
 
@@ -109,7 +107,7 @@ describe("sessions API route", () => {
   });
 
   it("resolves createdBy=me for a Google user via the google provider route", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "google-sub-1",
         name: "Pat PM",
@@ -139,7 +137,7 @@ describe("sessions API route", () => {
   });
 
   it("resolves createdBy=me alongside explicit creator filters", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "12345",
         login: "ada",
@@ -167,7 +165,7 @@ describe("sessions API route", () => {
   });
 
   it("reuses the resolved current user across createdBy=me pagination requests", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "12345",
         login: "ada",
@@ -205,7 +203,7 @@ describe("sessions API route (POST)", () => {
   });
 
   it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await POST(postRequest({ repoOwner: "o", repoName: "r" }));
 
@@ -214,7 +212,7 @@ describe("sessions API route (POST)", () => {
   });
 
   it("sends auth* display and scm* attribution for a GitHub session — never identity or credentials", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "12345",
         login: "ada",
@@ -262,7 +260,7 @@ describe("sessions API route (POST)", () => {
   });
 
   it("sends auth* display but no scm* for a Google session", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "google-sub-1",
         name: "Pat PM",
@@ -293,7 +291,7 @@ describe("sessions API route (POST)", () => {
   });
 
   it("forwards environmentId for environment launches", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "12345", provider: "github" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -311,7 +309,7 @@ describe("sessions API route (POST)", () => {
   });
 
   it("forwards the repositories list for ad-hoc multi-repo launches", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "12345", provider: "github" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -331,7 +329,7 @@ describe("sessions API route (POST)", () => {
   });
 
   it("still strips fields outside the allowlist", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "12345", provider: "github" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(

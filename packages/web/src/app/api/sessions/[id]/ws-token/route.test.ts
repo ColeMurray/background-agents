@@ -1,19 +1,15 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
@@ -36,7 +32,7 @@ describe("ws-token API route", () => {
   });
 
   it("returns 401 when the session is missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await POST(request(), params("sess1"));
 
@@ -45,7 +41,7 @@ describe("ws-token API route", () => {
   });
 
   it("sends scm* attribution for a GitHub user — never userId or credentials (forbidden under strict)", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "12345",
         login: "ada",
@@ -76,7 +72,7 @@ describe("ws-token API route", () => {
   });
 
   it("omits scm* entirely for a Google user — identity comes from the Bearer principal", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
+    vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "google-sub-1",
         name: "Pat PM",
