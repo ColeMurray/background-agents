@@ -130,6 +130,7 @@ function SessionPageContent() {
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileActionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state
   const [terminalOpen, setTerminalOpen] = useState(() => {
@@ -167,6 +168,11 @@ function SessionPageContent() {
     () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
     [mediaArtifacts, selectedMediaArtifactId]
   );
+  const primaryRepo =
+    sessionState?.repositories?.[0] ??
+    (sessionState?.repoOwner && sessionState?.repoName
+      ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
+      : null);
 
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
   const resolvedDiff = useMemo(
@@ -243,13 +249,22 @@ function SessionPageContent() {
   return (
     <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
       <SessionHeader
+        sessionId={sessionId}
+        sessionStatus={sessionState?.status || ""}
+        artifacts={artifacts}
+        primaryRepo={primaryRepo}
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected}
         connecting={connecting}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
+        mobileActionsButtonRef={mobileActionsButtonRef}
         onToggleDetails={toggleDetails}
+        onOpenDetails={() => setIsDetailsOpen(true)}
+        onOpenMedia={() => setIsDetailsOpen(true)}
+        onArchive={handleArchive}
+        onUnarchive={handleUnarchive}
         renameSession={renameSession}
       />
 
@@ -328,7 +343,7 @@ function SessionPageContent() {
           open={isDetailsOpen}
           onOpenChange={setIsDetailsOpen}
           isPhone={isPhone}
-          returnFocusRef={detailsButtonRef}
+          returnFocusRef={isPhone ? mobileActionsButtonRef : detailsButtonRef}
           sessionId={sessionId}
           sessionState={sessionState}
           participants={participants}
@@ -377,15 +392,12 @@ function SessionPageContent() {
       />
 
       <SessionPromptComposer
+        showActionBar={!isPhone}
         session={{
           id: sessionId,
           status: sessionState?.status || "",
           artifacts,
-          primaryRepo:
-            sessionState?.repositories?.[0] ??
-            (sessionState?.repoOwner && sessionState?.repoName
-              ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
-              : null),
+          primaryRepo,
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
           onOpenDetails: () => setIsDetailsOpen(true),

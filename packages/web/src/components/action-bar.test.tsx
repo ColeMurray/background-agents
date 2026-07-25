@@ -100,7 +100,7 @@ describe("ActionBar", () => {
     expect(screen.queryByText(/Media/)).not.toBeInTheDocument();
   });
 
-  it("consolidates all session actions into the menu on mobile", () => {
+  it("keeps the inline controls hidden until md and leaves the menu trigger available", () => {
     const onOpenDetails = vi.fn();
     render(
       <ActionBar
@@ -140,6 +140,8 @@ describe("ActionBar", () => {
     expect(screen.getByRole("link", { name: "View PR" })).toHaveClass("hidden", "md:inline-flex");
     expect(screen.getByRole("button", { name: "Archive" })).toHaveClass("hidden", "md:inline-flex");
     expect(screen.getByText("Media (1)")).toHaveClass("hidden", "md:inline-flex");
+
+    expect(screen.getByRole("button", { name: "More session actions" })).toBeInTheDocument();
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "More session actions" }), {
       button: 0,

@@ -13,6 +13,7 @@ import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-a
 import type { Artifact } from "@/types/session";
 
 type SessionPromptComposerProps = {
+  showActionBar?: boolean;
   session: {
     id: string;
     status: string;
@@ -49,6 +50,7 @@ type SessionPromptComposerProps = {
 };
 
 export function SessionPromptComposer({
+  showActionBar = true,
   session,
   prompt,
   attachments,
@@ -86,18 +88,19 @@ export function SessionPromptComposer({
   return (
     <footer className="min-w-0 border-t border-border-muted flex-shrink-0">
       <form onSubmit={prompt.onSubmit} className="w-full min-w-0 max-w-4xl mx-auto p-4 pb-6">
-        {/* Action bar above input */}
-        <div className="mb-3">
-          <ActionBar
-            sessionId={session.id}
-            sessionStatus={session.status}
-            artifacts={session.artifacts}
-            primaryRepo={session.primaryRepo}
-            onArchive={session.onArchive}
-            onUnarchive={session.onUnarchive}
-            onOpenDetails={session.onOpenDetails}
-          />
-        </div>
+        {showActionBar && (
+          <div className="mb-3 hidden md:block">
+            <ActionBar
+              sessionId={session.id}
+              sessionStatus={session.status}
+              artifacts={session.artifacts}
+              primaryRepo={session.primaryRepo}
+              onArchive={session.onArchive}
+              onUnarchive={session.onUnarchive}
+              onOpenDetails={session.onOpenDetails}
+            />
+          </div>
+        )}
 
         {/* Input container */}
         <div

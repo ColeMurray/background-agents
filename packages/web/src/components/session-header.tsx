@@ -2,8 +2,29 @@
 
 import { useEffect, useState, type RefObject } from "react";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
+import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  ArchiveIcon,
+  FolderIcon,
+  GitPrIcon,
+  GlobeIcon,
+  LinkIcon,
+  MoreIcon,
+  SettingsIcon,
+} from "@/components/ui/icons";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { getSessionActionState } from "@/lib/session-actions";
+import { toast } from "sonner";
+import type { Artifact } from "@/types/session";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
@@ -20,6 +41,10 @@ const SANDBOX_STATUS_COLORS: Record<string, string> = {
 };
 
 export type SessionHeaderProps = {
+  sessionId: string;
+  sessionStatus: string;
+  artifacts: Artifact[];
+  primaryRepo?: { repoOwner: string; repoName: string } | null;
   sessionState: SessionSocketState["sessionState"];
   fallbackSessionInfo: {
     repoOwner: string | null;
@@ -30,21 +55,37 @@ export type SessionHeaderProps = {
   connecting: boolean;
   isDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
+  mobileActionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
+  onOpenDetails: () => void;
+  onOpenMedia: () => void;
+  onArchive?: () => void | Promise<void>;
+  onUnarchive?: () => void | Promise<void>;
   renameSession: (title: string) => Promise<boolean | undefined>;
 };
 
 export function SessionHeader({
+  sessionId,
+  sessionStatus,
+  artifacts,
+  primaryRepo,
   sessionState,
   fallbackSessionInfo,
   connected,
   connecting,
   isDetailsOpen,
   detailsButtonRef,
+  mobileActionsButtonRef,
   onToggleDetails,
+  onOpenDetails,
+  onOpenMedia,
+  onArchive,
+  onUnarchive,
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const hasFallbackSessionInfo =
     fallbackSessionInfo.repoOwner !== null ||
     fallbackSessionInfo.repoName !== null ||
@@ -62,6 +103,11 @@ export function SessionHeader({
 
   const resolvedTitle =
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
+  const { prUrl, previewArtifact, previewUrl, mediaCount } = getSessionActionState(
+    artifacts,
+    primaryRepo
+  );
+  const isArchived = sessionStatus === "archived";
 
   const handleStartRename = () => {
     setTitle(resolvedTitle);
@@ -104,80 +150,169 @@ export function SessionHeader({
     if (!isRenaming) setTitle(sessionState?.title ?? fallbackSessionInfo.title ?? "");
   }, [fallbackSessionInfo.title, sessionState?.title, isRenaming]);
 
+  const handleArchiveToggle = async () => {
+    if (!isArchived) {
+      setShowArchiveDialog(true);
+      return;
+    }
+
+    setIsArchiving(true);
+    try {
+      if (onUnarchive) await onUnarchive();
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  const handleConfirmArchive = async () => {
+    setShowArchiveDialog(false);
+    setIsArchiving(true);
+    try {
+      if (onArchive) await onArchive();
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    const url = `${window.location.origin}/session/${sessionId}`;
+    await navigator.clipboard.writeText(url);
+    toast.success("Link copied to clipboard");
+  };
+
   return (
-    <header className="border-b border-border-muted flex-shrink-0">
-      <div className="px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {!isOpen && <CollapsedSidebarControls />}
-          <div>
-            {isRenaming ? (
-              <input
-                autoFocus
-                aria-label="Session title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onFocus={(e) => e.currentTarget.select()}
-                onBlur={handleRenameSubmit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    e.currentTarget.blur();
-                  }
-                  if (e.key === "Escape") {
-                    setIsRenaming(false);
-                  }
-                }}
-                className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
+    <>
+      <header className="border-b border-border-muted flex-shrink-0">
+        <div className="px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {!isOpen && <CollapsedSidebarControls />}
+            <div>
+              {isRenaming ? (
+                <input
+                  autoFocus
+                  aria-label="Session title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onBlur={handleRenameSubmit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      e.currentTarget.blur();
+                    }
+                    if (e.key === "Escape") {
+                      setIsRenaming(false);
+                    }
+                  }}
+                  className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
+                />
+              ) : (
+                <h1
+                  className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
+                  onClick={handleStartRename}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleStartRename();
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  title="Click to rename"
+                >
+                  {resolvedTitle}
+                </h1>
+              )}
+              <p className="text-sm text-muted-foreground">{repoLabel}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              ref={detailsButtonRef}
+              type="button"
+              onClick={onToggleDetails}
+              className="hidden md:inline-flex lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
+              aria-label="Toggle session details"
+              aria-controls="session-details-dialog"
+              aria-expanded={isDetailsOpen}
+            >
+              Details
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  ref={mobileActionsButtonRef}
+                  variant="outline"
+                  size="sm"
+                  className="!px-2 md:hidden"
+                  aria-label="Session actions"
+                >
+                  <MoreIcon className="w-4 h-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={onOpenDetails}>
+                  <SettingsIcon className="w-4 h-4" />
+                  Details
+                </DropdownMenuItem>
+                {previewUrl && (
+                  <DropdownMenuItem asChild>
+                    <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                      <GlobeIcon className="w-4 h-4" />
+                      View preview
+                      {previewArtifact?.metadata?.previewStatus === "outdated" && " (outdated)"}
+                    </a>
+                  </DropdownMenuItem>
+                )}
+                {prUrl && (
+                  <DropdownMenuItem asChild>
+                    <a href={prUrl} target="_blank" rel="noopener noreferrer">
+                      <GitPrIcon className="w-4 h-4" />
+                      View PR
+                    </a>
+                  </DropdownMenuItem>
+                )}
+                {mediaCount > 0 && (
+                  <DropdownMenuItem onClick={onOpenMedia}>
+                    <FolderIcon className="w-4 h-4" />
+                    Media ({mediaCount})
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={handleCopyLink}>
+                  <LinkIcon className="w-4 h-4" />
+                  Copy link
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleArchiveToggle} disabled={isArchiving}>
+                  <ArchiveIcon className="w-4 h-4" />
+                  {isArchived ? "Unarchive" : "Archive"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <div className="md:hidden">
+              <CombinedStatusDot
+                connected={connected}
+                connecting={connecting}
+                sandboxStatus={sessionState?.sandboxStatus}
               />
-            ) : (
-              <h1
-                className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
-                onClick={handleStartRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleStartRename();
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                title="Click to rename"
-              >
-                {resolvedTitle}
-              </h1>
-            )}
-            <p className="text-sm text-muted-foreground">{repoLabel}</p>
+            </div>
+            <div className="hidden md:contents">
+              <ConnectionStatus connected={connected} connecting={connecting} />
+              <SandboxStatus
+                status={sessionState?.sandboxStatus}
+                dashboardUrl={sessionState?.sandboxDashboardUrl}
+              />
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          <button
-            ref={detailsButtonRef}
-            type="button"
-            onClick={onToggleDetails}
-            className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
-            aria-label="Toggle session details"
-            aria-controls="session-details-dialog"
-            aria-expanded={isDetailsOpen}
-          >
-            Details
-          </button>
-          <div className="md:hidden">
-            <CombinedStatusDot
-              connected={connected}
-              connecting={connecting}
-              sandboxStatus={sessionState?.sandboxStatus}
-            />
-          </div>
-          <div className="hidden md:contents">
-            <ConnectionStatus connected={connected} connecting={connecting} />
-            <SandboxStatus
-              status={sessionState?.sandboxStatus}
-              dashboardUrl={sessionState?.sandboxDashboardUrl}
-            />
-          </div>
-        </div>
-      </div>
-    </header>
+      </header>
+
+      <ArchiveSessionDialog
+        open={showArchiveDialog}
+        onOpenChange={setShowArchiveDialog}
+        onConfirm={handleConfirmArchive}
+      />
+    </>
   );
 }
 

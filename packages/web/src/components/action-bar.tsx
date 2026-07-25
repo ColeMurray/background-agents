@@ -20,8 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { getSafeExternalUrl } from "@/lib/urls";
-import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
+import { getSessionActionState } from "@/lib/session-actions";
 
 interface ActionBarProps {
   sessionId: string;
@@ -50,15 +49,10 @@ export function ActionBar({
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
 
-  const prArtifact = primaryRepo
-    ? findPrArtifactForRepo(artifacts, primaryRepo, true)
-    : artifacts.find((a) => a.type === "pr");
-  const previewArtifact = artifacts.find((a) => a.type === "preview");
-  const mediaCount = artifacts.filter(
-    (artifact) => artifact.type === "screenshot" || artifact.type === "video"
-  ).length;
-  const previewUrl = getSafeExternalUrl(previewArtifact?.url);
-  const prUrl = getSafeExternalUrl(prArtifact?.url);
+  const { prUrl, previewArtifact, previewUrl, mediaCount } = getSessionActionState(
+    artifacts,
+    primaryRepo
+  );
 
   const isArchived = sessionStatus === "archived";
 

@@ -9,7 +9,9 @@ import { SessionPromptComposer } from "./session-prompt-composer";
 
 expect.extend(matchers);
 
-vi.mock("@/components/action-bar", () => ({ ActionBar: () => null }));
+vi.mock("@/components/action-bar", () => ({
+  ActionBar: () => <div data-testid="action-bar">actions</div>,
+}));
 vi.mock("@/components/attachment-preview-strip", () => ({
   AttachmentPreviewStrip: () => null,
 }));
@@ -112,5 +114,63 @@ describe("SessionPromptComposer", () => {
     expect(input).not.toHaveClass("pr-24");
     expect(input.parentElement).toHaveClass("flex-wrap", "justify-end");
     expect(actions).toHaveClass("shrink-0", "sm:absolute");
+  });
+
+  it("hides the action bar row below md without leaving spacing", () => {
+    render(<ComposerHarness />);
+
+    expect(screen.getByTestId("action-bar").parentElement).toHaveClass(
+      "mb-3",
+      "hidden",
+      "md:block"
+    );
+  });
+
+  it("can omit the action bar entirely for phone layouts", () => {
+    function HiddenActionBarHarness() {
+      const inputRef = useRef<HTMLTextAreaElement>(null);
+
+      return (
+        <SessionPromptComposer
+          showActionBar={false}
+          session={{
+            id: "session-1",
+            status: "active",
+            artifacts: [],
+            onArchive: vi.fn(),
+            onUnarchive: vi.fn(),
+            onOpenDetails: vi.fn(),
+          }}
+          prompt={{
+            value: "",
+            isProcessing: false,
+            draftLocked: false,
+            inputRef,
+            onSubmit: vi.fn(),
+            onChange: vi.fn(),
+            onKeyDown: vi.fn(),
+            onStopExecution: vi.fn(),
+          }}
+          attachments={{
+            items: [],
+            error: null,
+            isUploading: false,
+            onAdd: vi.fn(),
+            onRemove: vi.fn(),
+          }}
+          model={{
+            selectedModel: "model-1",
+            reasoningEffort: undefined,
+            items: [],
+            onModelChange: vi.fn(),
+            onReasoningEffortChange: vi.fn(),
+          }}
+        />
+      );
+    }
+
+    render(<HiddenActionBarHarness />);
+
+    expect(screen.queryByTestId("action-bar")).not.toBeInTheDocument();
   });
 });
