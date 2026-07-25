@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 vi.mock("next-auth/react", () => ({
-  SessionProvider: vi.fn(({ children }: { children?: React.ReactNode }) => children),
+  SessionProvider: vi.fn(({ children }: { children?: ReactNode }) => children),
   signIn: vi.fn(),
   signOut: vi.fn(),
   useSession: vi.fn(),
