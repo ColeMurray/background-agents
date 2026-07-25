@@ -19,13 +19,16 @@ function findByType(node: ReactNode, type: unknown): ReactElement | undefined {
 }
 
 describe("Providers", () => {
-  it("places the application behind the client authentication provider", () => {
-    expect(findByType(Providers({ children: null }), AuthSessionProvider)).toBeDefined();
-  });
-
-  it("places application children behind the web-session gate", () => {
+  it("nests the application gate and children inside the authentication provider", () => {
     const child = <div>Protected application</div>;
-    const gate = findByType(Providers({ children: child }), WebSessionGate);
+    const authProvider = findByType(Providers({ children: child }), AuthSessionProvider);
+
+    expect(authProvider).toBeDefined();
+
+    const gate = findByType(
+      (authProvider as ReactElement<{ children?: ReactNode }>).props.children,
+      WebSessionGate
+    );
 
     expect(gate).toBeDefined();
     expect((gate as ReactElement<{ children?: ReactNode }>).props.children).toBe(child);
