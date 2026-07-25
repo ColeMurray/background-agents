@@ -10,6 +10,26 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const VOCABULARY_PROMPT =
   "Open-Inspect, useSessionSocket, requestId, TypeScript, Vitest, Daytona, Cloudflare, Next.js, npm";
 const transcriptionResponseSchema = z.object({ text: z.string() });
+const openAiErrorResponseSchema = z.object({
+  error: z.object({
+    code: z.string().nullable().optional(),
+    type: z.string().optional(),
+  }),
+});
+
+type TranscriptionErrorCode =
+  | "openai_quota_exhausted"
+  | "openai_rate_limited"
+  | "openai_authentication_failed"
+  | "transcription_provider_failed";
+
+type ClassifiedTranscriptionError = {
+  code: TranscriptionErrorCode;
+  message: string;
+  status: number;
+  providerCode: string | null;
+  providerType: string | null;
+};
 
 export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -47,8 +67,17 @@ export async function POST(request: NextRequest) {
       signal: request.signal,
     });
     if (!response.ok) {
-      console.error(`OpenAI transcription failed with status ${response.status}`);
-      return NextResponse.json({ error: "Failed to transcribe recording" }, { status: 502 });
+      const failure = await classifyOpenAiTranscriptionError(response);
+      console.error("OpenAI transcription failed", {
+        status: response.status,
+        code: failure.providerCode,
+        type: failure.providerType,
+        classification: failure.code,
+      });
+      return NextResponse.json(
+        { error: failure.message, code: failure.code },
+        { status: failure.status }
+      );
     }
 
     const parsed = transcriptionResponseSchema.safeParse(await response.json());
@@ -64,5 +93,60 @@ export async function POST(request: NextRequest) {
     }
     console.error("Failed to transcribe recording:", error);
     return NextResponse.json({ error: "Failed to transcribe recording" }, { status: 500 });
+  }
+}
+
+async function classifyOpenAiTranscriptionError(
+  response: Response
+): Promise<ClassifiedTranscriptionError> {
+  const parsed = openAiErrorResponseSchema.safeParse(await readJson(response));
+  const providerCode = parsed.success ? (parsed.data.error.code ?? null) : null;
+  const providerType = parsed.success ? (parsed.data.error.type ?? null) : null;
+
+  if (providerCode === "insufficient_quota") {
+    return {
+      code: "openai_quota_exhausted",
+      message:
+        "OpenAI voice transcription has no available API credit. Add billing or increase the project budget, then try again.",
+      status: 503,
+      providerCode,
+      providerType,
+    };
+  }
+
+  if (providerCode === "invalid_api_key" || response.status === 401 || response.status === 403) {
+    return {
+      code: "openai_authentication_failed",
+      message: "Voice input credentials need administrator attention.",
+      status: 503,
+      providerCode,
+      providerType,
+    };
+  }
+
+  if (response.status === 429) {
+    return {
+      code: "openai_rate_limited",
+      message: "OpenAI is rate-limiting voice transcription. Wait a moment and try again.",
+      status: 429,
+      providerCode,
+      providerType,
+    };
+  }
+
+  return {
+    code: "transcription_provider_failed",
+    message: "Failed to transcribe recording",
+    status: 502,
+    providerCode,
+    providerType,
+  };
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
   }
 }
