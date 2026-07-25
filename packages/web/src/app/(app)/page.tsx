@@ -190,6 +190,10 @@ export default function Home() {
     setPrompt(value);
   };
 
+  const handleTranscript = (text: string) => {
+    setPrompt((draft) => appendTranscript(draft, text));
+  };
+
   const handleSchedule = async (instant: Date, timeZone: string): Promise<boolean> => {
     if (!prompt.trim() || loadingEnabledModels || !isLaunchable) return false;
     const target = buildRequestFields();
@@ -290,6 +294,7 @@ export default function Home() {
       setReasoningEffort={handleReasoningEffortChange}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
+      handleTranscript={handleTranscript}
       creating={creating}
       isCreatingSession={isCreatingSession}
       error={error}
@@ -310,6 +315,7 @@ function HomeContent({
   setReasoningEffort,
   prompt,
   handlePromptChange,
+  handleTranscript,
   creating,
   isCreatingSession,
   error,
@@ -326,6 +332,7 @@ function HomeContent({
   setReasoningEffort: (value: string | undefined) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
+  handleTranscript: (text: string) => void;
   creating: boolean;
   isCreatingSession: boolean;
   error: string;
@@ -406,10 +413,7 @@ function HomeContent({
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && <span className="text-xs text-accent">Starting...</span>}
-                    <VoiceInputButton
-                      onTranscript={(text) => handlePromptChange(appendTranscript(prompt, text))}
-                      disabled={creating}
-                    />
+                    <VoiceInputButton onTranscript={handleTranscript} disabled={creating} />
                     <SchedulePromptPopover
                       disabled={!prompt.trim() || creating || !isLaunchable}
                       onSchedule={handleSchedule}

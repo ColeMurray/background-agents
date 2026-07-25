@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared";
@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   }>,
   loadingReposValue: false,
   environmentsLoadingValue: false,
+  initialVoiceTranscript: undefined as undefined | ((text: string) => void),
   environmentsValue: [] as Array<{
     id: string;
     name: string;
@@ -98,11 +99,14 @@ vi.mock("@/hooks/use-enabled-models", () => ({
 }));
 
 vi.mock("@/components/voice-input-button", () => ({
-  VoiceInputButton: ({ onTranscript }: { onTranscript: (text: string) => void }) => (
-    <button type="button" onClick={() => onTranscript("Draft from the microphone.")}>
-      Voice input
-    </button>
-  ),
+  VoiceInputButton: ({ onTranscript }: { onTranscript: (text: string) => void }) => {
+    mocks.initialVoiceTranscript ??= onTranscript;
+    return (
+      <button type="button" onClick={() => onTranscript("Draft from the microphone.")}>
+        Voice input
+      </button>
+    );
+  },
 }));
 
 beforeAll(() => {
@@ -114,6 +118,7 @@ beforeEach(() => {
   mocks.loadingReposValue = false;
   mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
+  mocks.initialVoiceTranscript = undefined;
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -155,6 +160,17 @@ describe("Home", () => {
       "Draft from the microphone."
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps edits made while a voice transcript is pending", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+    const input = await screen.findByPlaceholderText("What do you want to build?");
+
+    await user.type(input, "Inspect the route first.");
+    act(() => mocks.initialVoiceTranscript?.("Then run the tests."));
+
+    expect(input).toHaveValue("Inspect the route first. Then run the tests.");
   });
 
   it("does not create or warm a session while composing", async () => {
