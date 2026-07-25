@@ -19,7 +19,7 @@ import {
 } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { browserApiFetch, toBrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   isArchivedSessionListKey,
   isUnarchivedSessionListKey,
@@ -449,7 +449,7 @@ function useSessionListActions(sessionId: string) {
   const { trigger: triggerRename } = useSWRMutation(
     `/api/sessions/${sessionId}/title`,
     (url: string, { arg }: { arg: { title: string } }) =>
-      browserApiFetch(url, {
+      browserApiFetch(toBrowserApiPath(url), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: arg.title }),
@@ -515,7 +515,7 @@ function useSessionListActions(sessionId: string) {
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,
     (url: string) =>
-      browserApiFetch(url, { method: "POST" }).then(async (r) => {
+      browserApiFetch(toBrowserApiPath(url), { method: "POST" }).then(async (r) => {
         if (r.ok) {
           await mutate<SessionListResponse>(
             isArchivedSessionListKey,

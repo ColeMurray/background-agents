@@ -7,7 +7,7 @@ import { encodeRepositoryPathSegments } from "@open-inspect/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
 import { normalizeKey, parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
 
@@ -89,7 +89,7 @@ type SecretsScope = "repo" | "global" | "environment";
  * case here, not another conditional in the component body.
  */
 interface SecretsScopePolicy {
-  apiBase: string;
+  apiBase: BrowserApiPath;
   ready: boolean;
   description: string;
   emptyStateText: string;
