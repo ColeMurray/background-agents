@@ -130,6 +130,8 @@ function SessionPageContent() {
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
+  const actionsButtonRef = useRef<HTMLButtonElement>(null);
+  const detailsReturnFocusRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state
   const [terminalOpen, setTerminalOpen] = useState(() => {
@@ -150,7 +152,12 @@ function SessionPageContent() {
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
 
   const toggleDetails = useCallback(() => {
+    detailsReturnFocusRef.current = detailsButtonRef.current;
     setIsDetailsOpen((prev) => !prev);
+  }, []);
+  const openMobileDetails = useCallback(() => {
+    detailsReturnFocusRef.current = actionsButtonRef.current;
+    setIsDetailsOpen(true);
   }, []);
 
   useEffect(() => {
@@ -167,6 +174,11 @@ function SessionPageContent() {
     () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
     [mediaArtifacts, selectedMediaArtifactId]
   );
+  const primaryRepo =
+    sessionState?.repositories?.[0] ??
+    (sessionState?.repoOwner && sessionState?.repoName
+      ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
+      : null);
 
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
   const resolvedDiff = useMemo(
@@ -249,7 +261,17 @@ function SessionPageContent() {
         connecting={connecting}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
+        actionsButtonRef={actionsButtonRef}
         onToggleDetails={toggleDetails}
+        onOpenMobileDetails={openMobileDetails}
+        actions={{
+          sessionId,
+          sessionStatus: sessionState?.status || "",
+          artifacts,
+          primaryRepo,
+          onArchive: handleArchive,
+          onUnarchive: handleUnarchive,
+        }}
         renameSession={renameSession}
       />
 
@@ -328,7 +350,7 @@ function SessionPageContent() {
           open={isDetailsOpen}
           onOpenChange={setIsDetailsOpen}
           isPhone={isPhone}
-          returnFocusRef={detailsButtonRef}
+          returnFocusRef={detailsReturnFocusRef}
           sessionId={sessionId}
           sessionState={sessionState}
           participants={participants}
@@ -381,11 +403,7 @@ function SessionPageContent() {
           id: sessionId,
           status: sessionState?.status || "",
           artifacts,
-          primaryRepo:
-            sessionState?.repositories?.[0] ??
-            (sessionState?.repoOwner && sessionState?.repoName
-              ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
-              : null),
+          primaryRepo,
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
           onOpenDetails: () => setIsDetailsOpen(true),

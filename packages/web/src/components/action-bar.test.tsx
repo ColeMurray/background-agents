@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { ActionBar } from "./action-bar";
 
@@ -102,6 +102,7 @@ describe("ActionBar", () => {
 
   it("consolidates all session actions into the menu on mobile", () => {
     const onOpenDetails = vi.fn();
+    const onOpenMedia = vi.fn();
     render(
       <ActionBar
         sessionId="session-1"
@@ -130,30 +131,72 @@ describe("ActionBar", () => {
           },
         ]}
         onOpenDetails={onOpenDetails}
+        onOpenMedia={onOpenMedia}
+        variant="mobile-header"
       />
     );
 
-    expect(screen.getByRole("link", { name: "View preview" })).toHaveClass(
-      "hidden",
-      "md:inline-flex"
-    );
-    expect(screen.getByRole("link", { name: "View PR" })).toHaveClass("hidden", "md:inline-flex");
-    expect(screen.getByRole("button", { name: "Archive" })).toHaveClass("hidden", "md:inline-flex");
-    expect(screen.getByText("Media (1)")).toHaveClass("hidden", "md:inline-flex");
+    const trigger = screen.getByRole("button", { name: "Session actions" });
+    expect(trigger.parentElement).toHaveClass("md:hidden");
+    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "More session actions" }), {
+    fireEvent.pointerDown(trigger, {
       button: 0,
       ctrlKey: false,
     });
 
-    expect(screen.getAllByText("View preview")[1]).toHaveClass("md:hidden");
-    expect(screen.getAllByText("View PR")[1]).toHaveClass("md:hidden");
-    expect(screen.getAllByText("Archive")[1]).toHaveClass("md:hidden");
-    const mediaMenuItem = screen.getAllByText("Media (1)")[1];
-    expect(mediaMenuItem).toHaveClass("md:hidden");
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Details",
+      "View preview",
+      "View PR",
+      "Media (1)",
+      "Copy link",
+      "Archive",
+    ]);
+    expect(screen.getByRole("separator")).toBeInTheDocument();
 
-    fireEvent.click(mediaMenuItem);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Details" }));
     expect(onOpenDetails).toHaveBeenCalledOnce();
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Media (1)" }));
+    expect(onOpenMedia).toHaveBeenCalledOnce();
+  });
+
+  it("confirms archive and keeps the action pending until the callback settles", async () => {
+    let resolveArchive: (() => void) | undefined;
+    const onArchive = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveArchive = resolve;
+        })
+    );
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        onArchive={onArchive}
+        onOpenDetails={vi.fn()}
+        variant="mobile-header"
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: "Session actions" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+
+    expect(onArchive).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(onArchive).toHaveBeenCalledOnce();
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toHaveAttribute("data-disabled");
+
+    resolveArchive?.();
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Archive" })).not.toHaveAttribute("data-disabled")
+    );
   });
 });
 

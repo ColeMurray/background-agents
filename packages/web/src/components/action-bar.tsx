@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type RefObject } from "react";
 import { toast } from "sonner";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
 import type { Artifact } from "@/types/session";
@@ -12,18 +12,20 @@ import {
   LinkIcon,
   GitHubIcon,
   FolderIcon,
+  SidebarIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 
-interface ActionBarProps {
+export interface ActionBarProps {
   sessionId: string;
   sessionStatus: string;
   artifacts: Artifact[];
@@ -36,6 +38,9 @@ interface ActionBarProps {
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
   onOpenDetails: () => void;
+  onOpenMedia?: () => void;
+  variant?: "composer" | "mobile-header";
+  triggerRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function ActionBar({
@@ -46,6 +51,9 @@ export function ActionBar({
   onArchive,
   onUnarchive,
   onOpenDetails,
+  onOpenMedia = onOpenDetails,
+  variant = "composer",
+  triggerRef,
 }: ActionBarProps) {
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
@@ -61,6 +69,7 @@ export function ActionBar({
   const prUrl = getSafeExternalUrl(prArtifact?.url);
 
   const isArchived = sessionStatus === "archived";
+  const isMobileHeader = variant === "mobile-header";
 
   const handleArchiveToggle = async () => {
     if (!isArchived) {
@@ -94,9 +103,9 @@ export function ActionBar({
 
   return (
     <>
-      <div className="flex flex-wrap items-stretch gap-2">
+      <div className={isMobileHeader ? "md:hidden" : "flex flex-wrap items-stretch gap-2"}>
         {/* View Preview */}
-        {previewUrl && (
+        {!isMobileHeader && previewUrl && (
           <Button variant="outline" size="sm" className="hidden gap-1.5 md:inline-flex" asChild>
             <a href={previewUrl} target="_blank" rel="noopener noreferrer">
               <GlobeIcon className="w-4 h-4" />
@@ -109,7 +118,7 @@ export function ActionBar({
         )}
 
         {/* View PR */}
-        {prUrl && (
+        {!isMobileHeader && prUrl && (
           <Button variant="outline" size="sm" className="hidden gap-1.5 md:inline-flex" asChild>
             <a href={prUrl} target="_blank" rel="noopener noreferrer">
               <GitPrIcon className="w-4 h-4" />
@@ -119,18 +128,20 @@ export function ActionBar({
         )}
 
         {/* Archive/Unarchive */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleArchiveToggle}
-          disabled={isArchiving}
-          className="hidden gap-1.5 md:inline-flex"
-        >
-          <ArchiveIcon className="w-4 h-4" />
-          <span>{isArchived ? "Unarchive" : "Archive"}</span>
-        </Button>
+        {!isMobileHeader && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleArchiveToggle}
+            disabled={isArchiving}
+            className="hidden gap-1.5 md:inline-flex"
+          >
+            <ArchiveIcon className="w-4 h-4" />
+            <span>{isArchived ? "Unarchive" : "Archive"}</span>
+          </Button>
+        )}
 
-        {mediaCount > 0 && (
+        {!isMobileHeader && mediaCount > 0 && (
           <div className="hidden items-center rounded-md border border-border-muted px-3 text-sm text-muted-foreground md:inline-flex">
             Media ({mediaCount})
           </div>
@@ -139,13 +150,25 @@ export function ActionBar({
         {/* More menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="!px-2" aria-label="More session actions">
+            <Button
+              ref={triggerRef}
+              variant="outline"
+              size="sm"
+              className="!px-2"
+              aria-label={isMobileHeader ? "Session actions" : "More session actions"}
+            >
               <MoreIcon className="w-4 h-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" side="top">
+          <DropdownMenuContent align="end" side={isMobileHeader ? "bottom" : "top"}>
+            {isMobileHeader && (
+              <DropdownMenuItem onClick={onOpenDetails}>
+                <SidebarIcon className="w-4 h-4" />
+                Details
+              </DropdownMenuItem>
+            )}
             {previewUrl && (
-              <DropdownMenuItem className="md:hidden" asChild>
+              <DropdownMenuItem className={isMobileHeader ? undefined : "md:hidden"} asChild>
                 <a href={previewUrl} target="_blank" rel="noopener noreferrer">
                   <GlobeIcon className="w-4 h-4" />
                   View preview
@@ -154,23 +177,18 @@ export function ActionBar({
               </DropdownMenuItem>
             )}
             {prUrl && (
-              <DropdownMenuItem className="md:hidden" asChild>
+              <DropdownMenuItem className={isMobileHeader ? undefined : "md:hidden"} asChild>
                 <a href={prUrl} target="_blank" rel="noopener noreferrer">
                   <GitPrIcon className="w-4 h-4" />
                   View PR
                 </a>
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem
-              className="md:hidden"
-              onClick={handleArchiveToggle}
-              disabled={isArchiving}
-            >
-              <ArchiveIcon className="w-4 h-4" />
-              {isArchived ? "Unarchive" : "Archive"}
-            </DropdownMenuItem>
             {mediaCount > 0 && (
-              <DropdownMenuItem className="md:hidden" onClick={onOpenDetails}>
+              <DropdownMenuItem
+                className={isMobileHeader ? undefined : "md:hidden"}
+                onClick={onOpenMedia}
+              >
                 <FolderIcon className="w-4 h-4" />
                 Media ({mediaCount})
               </DropdownMenuItem>
@@ -179,7 +197,7 @@ export function ActionBar({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
-            {prUrl && (
+            {!isMobileHeader && prUrl && (
               <DropdownMenuItem className="hidden md:flex" asChild>
                 <a href={prUrl} target="_blank" rel="noopener noreferrer">
                   <GitHubIcon className="w-4 h-4" />
@@ -187,6 +205,15 @@ export function ActionBar({
                 </a>
               </DropdownMenuItem>
             )}
+            {isMobileHeader && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              className={isMobileHeader ? undefined : "md:hidden"}
+              onClick={handleArchiveToggle}
+              disabled={isArchiving}
+            >
+              <ArchiveIcon className="w-4 h-4" />
+              {isArchived ? "Unarchive" : "Archive"}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

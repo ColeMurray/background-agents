@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type RefObject } from "react";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
+import { ActionBar, type ActionBarProps } from "@/components/action-bar";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
 
@@ -30,7 +31,10 @@ export type SessionHeaderProps = {
   connecting: boolean;
   isDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
+  actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
+  onOpenMobileDetails: () => void;
+  actions: Omit<ActionBarProps, "onOpenDetails" | "onOpenMedia" | "variant" | "triggerRef">;
   renameSession: (title: string) => Promise<boolean | undefined>;
 };
 
@@ -41,7 +45,10 @@ export function SessionHeader({
   connecting,
   isDetailsOpen,
   detailsButtonRef,
+  actionsButtonRef,
   onToggleDetails,
+  onOpenMobileDetails,
+  actions,
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
@@ -154,13 +161,20 @@ export function SessionHeader({
             ref={detailsButtonRef}
             type="button"
             onClick={onToggleDetails}
-            className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
+            className="hidden md:block lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
             aria-label="Toggle session details"
             aria-controls="session-details-dialog"
             aria-expanded={isDetailsOpen}
           >
             Details
           </button>
+          <ActionBar
+            {...actions}
+            variant="mobile-header"
+            triggerRef={actionsButtonRef}
+            onOpenDetails={onOpenMobileDetails}
+            onOpenMedia={onOpenMobileDetails}
+          />
           <div className="md:hidden">
             <CombinedStatusDot
               connected={connected}
