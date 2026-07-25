@@ -4,11 +4,13 @@ import {
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
+  resolveEnabledModel,
   spawnChildSessionRequestSchema,
   spawnContextSchema,
   VALID_MODELS,
 } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
+import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -121,15 +123,20 @@ async function handleSpawnChild(
     }
   }
 
-  const rawModel = body.model ?? spawnContext.model;
+  const enabledModels = await getEffectiveEnabledModels(ctx.db);
   if (body.model !== undefined && !isValidModel(body.model)) {
     return error(`Invalid model "${body.model}". Valid models: ${VALID_MODELS.join(", ")}`, 400);
   }
-  const model = getValidModelOrDefault(rawModel);
+  const requestedModel = getValidModelOrDefault(body.model ?? spawnContext.model);
+  if (body.model !== undefined && !enabledModels.includes(requestedModel)) {
+    return error(`Model "${body.model}" is not enabled`, 400);
+  }
+  const model = resolveEnabledModel({ model: requestedModel, enabledModels });
+  const requestedReasoningEffort = body.reasoningEffort ?? spawnContext.reasoningEffort;
   const reasoningEffort =
-    body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
-      ? body.reasoningEffort
-      : spawnContext.reasoningEffort;
+    requestedReasoningEffort && isValidReasoningEffort(model, requestedReasoningEffort)
+      ? requestedReasoningEffort
+      : null;
 
   const childDepth = parentDepth + 1;
   const childId = generateId();

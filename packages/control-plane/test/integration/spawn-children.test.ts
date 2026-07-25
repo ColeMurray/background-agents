@@ -17,6 +17,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     parentSessionId?: string;
     spawnSource?: "user" | "agent";
     environmentId?: string | null;
+    model?: string;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const { stub } = await initNamedSession(parentName, {
@@ -25,6 +26,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       ...(opts?.repoId != null && { repoId: opts.repoId }),
       ...(opts?.userId != null && { userId: opts.userId }),
       ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
+      ...(opts?.model != null && { model: opts.model }),
     });
 
     const sandboxToken = `sb-tok-${Date.now()}`;
@@ -37,7 +39,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       title: "Parent",
       repoOwner: "acme",
       repoName: "web-app",
-      model: "anthropic/claude-sonnet-4-6",
+      model: opts?.model ?? "anthropic/claude-sonnet-4-6",
       reasoningEffort: null,
       baseBranch: null,
       status: "active",
@@ -191,6 +193,80 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       "SELECT environment_id FROM session"
     );
     expect(session.environment_id).toBe("env_parent");
+  });
+
+  it("rejects a disabled model override for grandchildren", async () => {
+    const { parentName, sandboxToken } = await setupParent();
+
+    await env.DB.prepare(
+      "INSERT INTO model_preferences (id, enabled_models, updated_at) VALUES ('global', ?, ?)"
+    )
+      .bind(JSON.stringify(["anthropic/claude-sonnet-4-6"]), Date.now())
+      .run();
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Spawn another child" }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = await childRes.json<{ sessionId: string }>();
+
+    const childStub = env.SESSION.get(env.SESSION.idFromName(child.sessionId));
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${child.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({
+          title: "Grandchild",
+          prompt: "Use a disabled model",
+          model: "opencode/kimi-k2.5",
+        }),
+      }
+    );
+
+    expect(grandchildRes.status).toBe(400);
+    await expect(grandchildRes.json()).resolves.toEqual({
+      error: 'Model "opencode/kimi-k2.5" is not enabled',
+    });
+  });
+
+  it("uses an enabled fallback when the inherited parent model was disabled", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      model: "opencode/kimi-k2.5",
+    });
+
+    await env.DB.prepare(
+      "INSERT INTO model_preferences (id, enabled_models, updated_at) VALUES ('global', ?, ?)"
+    )
+      .bind(JSON.stringify(["anthropic/claude-sonnet-4-6"]), Date.now())
+      .run();
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Use an enabled model" }),
+    });
+
+    expect(response.status).toBe(201);
+    const child = await response.json<{ sessionId: string }>();
+    expect((await store.get(child.sessionId))?.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("propagates null userId from parent to child", async () => {
