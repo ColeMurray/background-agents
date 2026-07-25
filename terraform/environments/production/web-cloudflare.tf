@@ -54,7 +54,7 @@ resource "null_resource" "web_app_cloudflare_secrets" {
       GOOGLE_CLIENT_SECRET     = var.google_client_secret
       NEXTAUTH_SECRET          = var.nextauth_secret
       INTERNAL_CALLBACK_SECRET = var.internal_callback_secret
-      OPENAI_API_KEY            = var.openai_api_key
+      OPENAI_API_KEY           = var.openai_api_key
     }
   }
 
