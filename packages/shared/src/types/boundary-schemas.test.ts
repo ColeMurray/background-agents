@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   automationRepositoriesInputSchema,
   automationRepositoryInputSchema,
+  cancelChildSessionRequestSchema,
   clientMessageSchema,
   createSessionResponseSchema,
   createSessionRequestSchema,
@@ -562,6 +563,22 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe("cancelChildSessionRequestSchema", () => {
+    it("parses an empty options object", () => {
+      expect(cancelChildSessionRequestSchema.safeParse({}).success).toBe(true);
+    });
+
+    it("parses an explicit cancelNested flag", () => {
+      expect(cancelChildSessionRequestSchema.safeParse({ cancelNested: false }).success).toBe(true);
+    });
+
+    it("rejects a non-boolean cancelNested", () => {
+      expect(cancelChildSessionRequestSchema.safeParse({ cancelNested: "yes" }).success).toBe(
+        false
+      );
     });
   });
 

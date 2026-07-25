@@ -262,6 +262,12 @@ export const spawnChildSessionRequestSchema = z.object({
 
 export type SpawnChildSessionRequest = z.infer<typeof spawnChildSessionRequestSchema>;
 
+export const cancelChildSessionRequestSchema = z.object({
+  cancelNested: z.boolean().optional(),
+});
+
+export type CancelChildSessionRequest = z.infer<typeof cancelChildSessionRequestSchema>;
+
 /**
  * Returned by the parent Durable Object's GET /internal/spawn-context.
  *

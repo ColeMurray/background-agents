@@ -7,6 +7,17 @@ import type {
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
 
+const TERMINAL_STATUSES = [
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+] satisfies SessionStatus[];
+const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
+
+/** Prevents corrupt parent links from making recursive descendant queries run indefinitely. */
+const MAX_DESCENDANT_DEPTH = 10;
+
 /**
  * One member of a session's repository set — the identity subset of the
  * shared SessionRepositoryState (no git state; D1 doesn't store it).
@@ -529,12 +540,33 @@ export class SessionIndexStore {
     return (result.results || []).map(toEntry);
   }
 
+  /** List non-terminal descendants deepest-first so cancellation runs bottom-up. */
+  async listActiveDescendantIds(parentSessionId: string): Promise<string[]> {
+    const result = await this.db
+      .prepare(
+        `WITH RECURSIVE descendants(id, status, depth) AS (
+           SELECT id, status, 1 FROM sessions WHERE parent_session_id = ?
+           UNION ALL
+           SELECT sessions.id, sessions.status, descendants.depth + 1
+           FROM sessions
+           JOIN descendants ON sessions.parent_session_id = descendants.id
+           WHERE descendants.depth < ${MAX_DESCENDANT_DEPTH}
+         )
+         SELECT id FROM descendants
+         WHERE status NOT IN (${TERMINAL_STATUS_SQL})
+         ORDER BY depth DESC`
+      )
+      .bind(parentSessionId)
+      .all<{ id: string }>();
+    return (result.results || []).map(({ id }) => id);
+  }
+
   /** Count active (non-terminal) children for concurrent cap enforcement. */
   async countActiveChildren(parentSessionId: string): Promise<number> {
     const result = await this.db
       .prepare(
         `SELECT COUNT(*) as count FROM sessions
-         WHERE parent_session_id = ? AND status NOT IN ('completed', 'failed', 'archived', 'cancelled')`
+         WHERE parent_session_id = ? AND status NOT IN (${TERMINAL_STATUS_SQL})`
       )
       .bind(parentSessionId)
       .first<{ count: number }>();
