@@ -86,7 +86,6 @@ describe("transcriptions API route", () => {
       },
       expectedStatus: 503,
       expectedBody: {
-        code: "openai_quota_exhausted",
         error:
           "OpenAI voice transcription has no available API credit. Add billing or increase the project budget, then try again.",
       },
@@ -103,7 +102,6 @@ describe("transcriptions API route", () => {
       },
       expectedStatus: 429,
       expectedBody: {
-        code: "openai_rate_limited",
         error: "OpenAI is rate-limiting voice transcription. Wait a moment and try again.",
       },
     },
@@ -119,7 +117,6 @@ describe("transcriptions API route", () => {
       },
       expectedStatus: 503,
       expectedBody: {
-        code: "openai_authentication_failed",
         error: "Voice input credentials need administrator attention.",
       },
     },
@@ -135,7 +132,36 @@ describe("transcriptions API route", () => {
       },
       expectedStatus: 502,
       expectedBody: {
-        code: "transcription_provider_failed",
+        error: "Failed to transcribe recording",
+      },
+    },
+    {
+      name: "unknown forbidden response",
+      providerStatus: 403,
+      providerBody: {
+        error: {
+          code: "unexpected_forbidden_code",
+          type: "invalid_request_error",
+          message: "Sensitive provider detail.",
+        },
+      },
+      expectedStatus: 502,
+      expectedBody: {
+        error: "Failed to transcribe recording",
+      },
+    },
+    {
+      name: "unknown 429 response",
+      providerStatus: 429,
+      providerBody: {
+        error: {
+          code: "unexpected_throttle_code",
+          type: "provider_error",
+          message: "Sensitive provider detail.",
+        },
+      },
+      expectedStatus: 502,
+      expectedBody: {
         error: "Failed to transcribe recording",
       },
     },

@@ -74,10 +74,7 @@ export async function POST(request: NextRequest) {
         type: failure.providerType,
         classification: failure.code,
       });
-      return NextResponse.json(
-        { error: failure.message, code: failure.code },
-        { status: failure.status }
-      );
+      return NextResponse.json({ error: failure.message }, { status: failure.status });
     }
 
     const parsed = transcriptionResponseSchema.safeParse(await response.json());
@@ -114,7 +111,7 @@ async function classifyOpenAiTranscriptionError(
     };
   }
 
-  if (providerCode === "invalid_api_key" || response.status === 401 || response.status === 403) {
+  if (providerCode === "invalid_api_key") {
     return {
       code: "openai_authentication_failed",
       message: "Voice input credentials need administrator attention.",
@@ -124,7 +121,7 @@ async function classifyOpenAiTranscriptionError(
     };
   }
 
-  if (response.status === 429) {
+  if (providerCode === "rate_limit_exceeded") {
     return {
       code: "openai_rate_limited",
       message: "OpenAI is rate-limiting voice transcription. Wait a moment and try again.",
