@@ -7,6 +7,7 @@ import {
   resolveEnabledModel,
   spawnChildSessionRequestSchema,
   spawnContextSchema,
+  type ValidModel,
   VALID_MODELS,
 } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
@@ -123,7 +124,19 @@ async function handleSpawnChild(
     }
   }
 
-  const enabledModels = await getEffectiveEnabledModels(ctx.db);
+  let enabledModels: ValidModel[];
+  try {
+    enabledModels = await getEffectiveEnabledModels(ctx.db);
+  } catch (e) {
+    logger.error("Failed to resolve enabled models for child session", {
+      event: "session.spawn_child_model_preferences_failed",
+      parent_id: parentId,
+      error: e instanceof Error ? e.message : String(e),
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+    });
+    return error("Model preferences unavailable", 503);
+  }
   if (body.model !== undefined && !isValidModel(body.model)) {
     return error(`Invalid model "${body.model}". Valid models: ${VALID_MODELS.join(", ")}`, 400);
   }

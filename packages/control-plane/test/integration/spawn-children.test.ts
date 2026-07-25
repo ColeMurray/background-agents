@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
+import { ModelPreferencesStore } from "../../src/db/model-preferences";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO, seedSandboxAuth } from "./helpers";
@@ -18,6 +19,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     spawnSource?: "user" | "agent";
     environmentId?: string | null;
     model?: string;
+    reasoningEffort?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const { stub } = await initNamedSession(parentName, {
@@ -27,6 +29,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       ...(opts?.userId != null && { userId: opts.userId }),
       ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
       ...(opts?.model != null && { model: opts.model }),
+      ...(opts?.reasoningEffort != null && { reasoningEffort: opts.reasoningEffort }),
     });
 
     const sandboxToken = `sb-tok-${Date.now()}`;
@@ -40,7 +43,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       repoOwner: "acme",
       repoName: "web-app",
       model: opts?.model ?? "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
+      reasoningEffort: opts?.reasoningEffort ?? null,
       baseBranch: null,
       status: "active",
       parentSessionId: opts?.parentSessionId ?? null,
@@ -198,11 +201,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
   it("rejects a disabled model override for grandchildren", async () => {
     const { parentName, sandboxToken } = await setupParent();
 
-    await env.DB.prepare(
-      "INSERT INTO model_preferences (id, enabled_models, updated_at) VALUES ('global', ?, ?)"
-    )
-      .bind(JSON.stringify(["anthropic/claude-sonnet-4-6"]), Date.now())
-      .run();
+    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-sonnet-4-6"]);
 
     const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
       method: "POST",
@@ -246,14 +245,11 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
 
   it("uses an enabled fallback when the inherited parent model was disabled", async () => {
     const { parentName, sandboxToken, store } = await setupParent({
-      model: "opencode/kimi-k2.5",
+      model: "openai/gpt-5.5",
+      reasoningEffort: "xhigh",
     });
 
-    await env.DB.prepare(
-      "INSERT INTO model_preferences (id, enabled_models, updated_at) VALUES ('global', ?, ?)"
-    )
-      .bind(JSON.stringify(["anthropic/claude-sonnet-4-6"]), Date.now())
-      .run();
+    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-haiku-4-5"]);
 
     const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
       method: "POST",
@@ -266,7 +262,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
 
     expect(response.status).toBe(201);
     const child = await response.json<{ sessionId: string }>();
-    expect((await store.get(child.sessionId))?.model).toBe("anthropic/claude-sonnet-4-6");
+    const storedChild = await store.get(child.sessionId);
+    expect(storedChild?.model).toBe("anthropic/claude-haiku-4-5");
+    expect(storedChild?.reasoningEffort).toBeNull();
   });
 
   it("propagates null userId from parent to child", async () => {

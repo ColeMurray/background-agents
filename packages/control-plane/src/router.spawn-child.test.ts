@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
 
@@ -11,6 +12,10 @@ const integrationSettingsMocks = vi.hoisted(() => ({
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
+}));
+
+vi.mock("./db/model-preferences", () => ({
+  getEffectiveEnabledModels: vi.fn(),
 }));
 
 vi.mock("./session/integration-settings-resolution", () => integrationSettingsMocks);
@@ -75,6 +80,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
@@ -224,6 +230,33 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const payload = await response.json<{ error: string }>();
     expect(payload.error).toContain('Invalid model "not-a-real-model"');
     expect(payload.error).toContain("Valid models:");
+  });
+
+  it("returns 503 when enabled model preferences cannot be read", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    vi.mocked(getEffectiveEnabledModels).mockRejectedValue(new Error("D1 unavailable"));
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(spawnContext)),
+    } as never;
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: "Model preferences unavailable" });
+    expect(store.create).not.toHaveBeenCalled();
   });
 
   it("returns 400 for a malformed child spawn request", async () => {

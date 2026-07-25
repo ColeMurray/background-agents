@@ -65,15 +65,11 @@ export class ModelPreferencesStore {
   }
 }
 
-/** Resolve the currently enabled catalog, falling back safely when preferences are unavailable. */
+/** Resolve the currently enabled catalog, using defaults only when no usable preferences exist. */
 export async function getEffectiveEnabledModels(db: SqlDatabase): Promise<ValidModel[]> {
-  try {
-    const stored = await new ModelPreferencesStore(db).getEnabledModels();
-    if (!stored) return DEFAULT_ENABLED_MODELS;
+  const stored = await new ModelPreferencesStore(db).getEnabledModels();
+  if (!stored) return DEFAULT_ENABLED_MODELS;
 
-    const normalized = normalizeValidModels(stored);
-    return normalized.length > 0 ? normalized : DEFAULT_ENABLED_MODELS;
-  } catch {
-    return DEFAULT_ENABLED_MODELS;
-  }
+  const normalized = normalizeValidModels(stored);
+  return normalized.length > 0 ? normalized : DEFAULT_ENABLED_MODELS;
 }

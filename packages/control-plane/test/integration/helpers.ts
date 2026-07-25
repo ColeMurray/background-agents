@@ -195,6 +195,7 @@ export async function initNamedSession(
     }>;
     title?: string;
     model?: string;
+    reasoningEffort?: string;
     userId?: string;
     scmLogin?: string;
   }
