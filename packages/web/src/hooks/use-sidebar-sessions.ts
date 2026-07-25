@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { useSession } from "next-auth/react";
+import { useAuthSession } from "@/lib/auth-session";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import useSWR, { mutate } from "swr";
 import { isInactiveSession } from "@/lib/time";
 import {
@@ -21,7 +22,7 @@ export type SessionItem = Session;
 type SessionCreatorFilter = "all" | "mine";
 
 export function useSidebarSessions(currentSessionId: string | null) {
-  const { data: authSession } = useSession();
+  const { data: authSession } = useAuthSession();
   const router = useRouter();
   const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
   const [extraSessionsState, setExtraSessionsState] = useState<{
@@ -83,7 +84,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
     const sessionListVersion = sessionListVersionRef.current;
 
     try {
-      const response = await fetch(
+      const response = await browserApiFetch(
         buildSessionsPageKey({
           excludeStatus: "archived",
           createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,

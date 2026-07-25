@@ -8,6 +8,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_CODE_SERVER_PORT,
@@ -40,7 +41,7 @@ interface EnvironmentSettingsResponse {
   settings: SandboxSettings | null;
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = (url: string) => browserApiFetch(url).then((r) => r.json());
 
 function isValidPort(value: string): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
@@ -442,7 +443,7 @@ export function SandboxSettingsEditor({
         ? { settings: { defaults: settingsPayload, enabledRepos } }
         : { settings: settingsPayload };
 
-      const res = await fetch(apiUrl, {
+      const res = await browserApiFetch(apiUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

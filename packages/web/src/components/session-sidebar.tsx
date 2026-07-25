@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMemo, useCallback } from "react";
-import { useSession } from "next-auth/react";
+import { useAuthSession } from "@/lib/auth-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useSidebarSessions } from "@/hooks/use-sidebar-sessions";
@@ -70,7 +70,7 @@ export function SessionSidebar({
   onToggle,
   onSessionSelect,
 }: SessionSidebarProps) {
-  const { data: authSession } = useSession();
+  const { data: authSession } = useAuthSession();
   const pathname = usePathname();
   const isMobile = useIsMobile();
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useSession } from "next-auth/react";
+import { useAuthSession } from "@/lib/auth-session";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -39,7 +40,7 @@ const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 
 export default function Home() {
-  const { data: session } = useSession();
+  const { data: session } = useAuthSession();
   const router = useRouter();
   const picker = useSessionTargetPicker();
   const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
@@ -117,7 +118,7 @@ export default function Home() {
 
     const promise = (async () => {
       try {
-        const res = await fetch("/api/sessions", {
+        const res = await browserApiFetch("/api/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -254,7 +255,7 @@ export default function Home() {
         }
       }
 
-      const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
+      const res = await browserApiFetch(`/api/sessions/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -18,6 +18,7 @@ import {
   type SlackRepoSettings,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ENVIRONMENTS_KEY } from "@/hooks/use-environments";
 import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/session-target";
@@ -201,12 +202,12 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
       // deleting the whole row); otherwise clear the row entirely.
       const existingRules = settings?.defaults?.routingRules;
       const res = existingRules?.length
-        ? await fetch(GLOBAL_SETTINGS_KEY, {
+        ? await browserApiFetch(GLOBAL_SETTINGS_KEY, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ settings: { defaults: { routingRules: existingRules } } }),
           })
-        : await fetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+        : await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
         setAgentNotificationsEnabled(false);
@@ -236,7 +237,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
     };
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
@@ -404,11 +405,14 @@ function RepoOverridesSection({
     if (!repository) return;
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: {} }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: {} }),
+        }
+      );
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         setAddingRepo("");
@@ -483,11 +487,14 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     if (mode === "off") settings.agentNotificationsEnabled = false;
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings }),
+        }
+      );
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         setDirty(false);
@@ -507,9 +514,12 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     const repository = parseRepositoryFullName(entry.repo);
     if (!repository) return;
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "DELETE",
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "DELETE",
+        }
+      );
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         toast.success(`Override for ${entry.repo} removed.`);
@@ -657,7 +667,7 @@ function RoutingRulesSection({
     };
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),

@@ -1,14 +1,15 @@
 "use client";
 
-import { SessionProvider } from "next-auth/react";
 import { ThemeProvider } from "next-themes";
 import { SWRConfig } from "swr";
 import { WebSessionGate } from "@/components/web-session-gate";
 import { Toaster } from "@/components/ui/sonner";
 import { SyntaxHighlightTheme } from "@/components/syntax-highlight-theme";
+import { AuthSessionProvider } from "@/lib/auth-session";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 async function swrFetcher<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+  const res = await browserApiFetch(url);
   if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
   return res.json();
 }
@@ -26,11 +27,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
           session fetch is safe because WebSessionGate checks only after
           it resolves.
         */}
-        <SessionProvider refetchOnWindowFocus={false}>
+        <AuthSessionProvider>
           <WebSessionGate>{children}</WebSessionGate>
           <SyntaxHighlightTheme />
           <Toaster />
-        </SessionProvider>
+        </AuthSessionProvider>
       </SWRConfig>
     </ThemeProvider>
   );

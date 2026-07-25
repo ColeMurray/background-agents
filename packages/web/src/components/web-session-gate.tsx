@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { signOut, useSession } from "next-auth/react";
+import { signOut, useAuthSession } from "@/lib/auth-session";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 /**
  * Check interval for web session token renewal. Must sit comfortably inside
@@ -18,7 +19,7 @@ const WEB_SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
  * mount, focus/visibility, and an interval.
  */
 export function WebSessionGate({ children }: { children?: ReactNode }) {
-  const { status } = useSession();
+  const { status } = useAuthSession();
   const signingOutRef = useRef(false);
   const [webSessionStatus, setWebSessionStatus] = useState<
     "checking" | "ready" | "temporarily_unavailable"
@@ -40,7 +41,7 @@ export function WebSessionGate({ children }: { children?: ReactNode }) {
       if (checkInFlight) return;
       checkInFlight = true;
       try {
-        const response = await fetch("/api/auth/oi-refresh", { method: "POST" });
+        const response = await browserApiFetch("/api/auth/oi-refresh", { method: "POST" });
         if (cancelled) return;
         if (response.status === 401 && !signingOutRef.current) {
           signingOutRef.current = true;

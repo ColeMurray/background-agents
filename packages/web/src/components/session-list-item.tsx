@@ -9,6 +9,7 @@ import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { formatRelativeTime } from "@/lib/time";
 import { MoreIcon, ArchiveIcon, BranchIcon, BoxIcon } from "@/components/ui/icons";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -135,7 +136,7 @@ export function SessionListItem({
     setIsRenaming(false);
 
     try {
-      const response = await fetch(`/api/sessions/${session.id}/title`, {
+      const response = await browserApiFetch(`/api/sessions/${session.id}/title`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: trimmed }),

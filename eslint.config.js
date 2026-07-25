@@ -143,6 +143,50 @@ export default tseslint.config(
     },
   },
 
+  // Client code depends on app-owned auth and request seams so the terminal
+  // browser-auth implementation can replace NextAuth and add its request
+  // contract without another consumer migration.
+  {
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    ignores: [
+      "packages/web/src/app/api/**",
+      "packages/web/src/lib/auth-session.tsx",
+      "packages/web/src/lib/auth-session.test.tsx",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "next-auth/react",
+              message: "Use the app-owned boundary from @/lib/auth-session.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: [
+      "packages/web/src/app/(app)/**/*.{ts,tsx}",
+      "packages/web/src/app/providers.tsx",
+      "packages/web/src/components/**/*.{ts,tsx}",
+      "packages/web/src/hooks/**/*.{ts,tsx}",
+      "packages/web/src/lib/archive-session.ts",
+    ],
+    ignores: ["**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Use browserApiFetch from @/lib/browser-api-fetch.",
+        },
+      ],
+    },
+  },
+
   // Cloudflare Workers specific config
   {
     files: ["packages/control-plane/**/*.ts"],

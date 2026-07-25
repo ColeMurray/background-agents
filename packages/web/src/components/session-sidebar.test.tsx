@@ -22,8 +22,8 @@ const { mockPush } = vi.hoisted(() => ({
   mockPush: vi.fn(),
 }));
 
-vi.mock("next-auth/react", () => ({
-  useSession: () => ({
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({
     data: {
       user: {
         name: "Test User",

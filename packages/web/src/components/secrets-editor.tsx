@@ -7,6 +7,7 @@ import { encodeRepositoryPathSegments } from "@open-inspect/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 import { normalizeKey, parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
 
@@ -296,7 +297,7 @@ export function SecretsEditor({
     setError("");
 
     try {
-      const response = await fetch(`${apiBase}/${normalizedKey}`, {
+      const response = await browserApiFetch(`${apiBase}/${normalizedKey}`, {
         method: "DELETE",
       });
       const data = await response.json();
@@ -381,7 +382,7 @@ export function SecretsEditor({
         payload[entry.key] = entry.value;
       }
 
-      const response = await fetch(apiBase, {
+      const response = await browserApiFetch(apiBase, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ secrets: payload }),

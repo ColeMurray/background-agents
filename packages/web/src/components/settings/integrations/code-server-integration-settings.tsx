@@ -13,6 +13,7 @@ import {
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { RadioCard } from "@/components/ui/form-controls";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   Select,
   SelectContent,
@@ -120,7 +121,7 @@ function GlobalSettingsSection({
     setSaving(true);
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
@@ -150,7 +151,7 @@ function GlobalSettingsSection({
     }
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
@@ -319,11 +320,14 @@ function RepoOverridesSection({
     if (!repository) return;
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: { enabled: true } }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: { enabled: true } }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -385,11 +389,14 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     const settings: CodeServerSettings = { enabled };
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -411,9 +418,12 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     if (!repository) return;
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "DELETE",
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "DELETE",
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);

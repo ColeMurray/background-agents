@@ -11,6 +11,7 @@ import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionRepositoryState } from "@open-inspect/shared";
 import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   ClockIcon,
   SparkleIcon,
@@ -63,7 +64,9 @@ function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
     if (syncing) return;
     setSyncing(true);
     try {
-      await fetch(`/api/sessions/${sessionId}/pull-requests/refresh`, { method: "POST" });
+      await browserApiFetch(`/api/sessions/${sessionId}/pull-requests/refresh`, {
+        method: "POST",
+      });
     } catch {
       // Fire-and-forget: the socket stream is the source of truth, so a
       // failed trigger only means no update arrives.

@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import type { CodeServerSettings, EnvironmentRepository } from "@open-inspect/shared";
 import { Button } from "@/components/ui/button";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   Select,
   SelectContent,
@@ -95,8 +96,8 @@ function EnvironmentCodeServerOverride({ environmentId }: { environmentId: strin
     try {
       const res =
         resolved === "inherit"
-          ? await fetch(apiUrl, { method: "DELETE" })
-          : await fetch(apiUrl, {
+          ? await browserApiFetch(apiUrl, { method: "DELETE" })
+          : await browserApiFetch(apiUrl, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ settings: { enabled: resolved === "enabled" } }),

@@ -10,8 +10,8 @@ const mocks = vi.hoisted(() => ({
   signOut: vi.fn(),
 }));
 
-vi.mock("next-auth/react", () => ({
-  useSession: () => ({ status: mocks.status }),
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({ data: null, status: mocks.status }),
   signOut: mocks.signOut,
 }));
 

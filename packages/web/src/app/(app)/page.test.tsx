@@ -50,8 +50,8 @@ const repo = {
   defaultBranch: "main",
 };
 
-vi.mock("next-auth/react", () => ({
-  useSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
 }));
 
 vi.mock("next/navigation", () => ({

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 const SETTINGS_KEY = "/api/commit-signing";
 
@@ -48,7 +49,7 @@ export function CommitSigningSettings() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const saveResponse = await fetch(SETTINGS_KEY, {
+      const saveResponse = await browserApiFetch(SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ privateKey, committerName, committerEmail }),
@@ -81,7 +82,7 @@ export function CommitSigningSettings() {
   const handleDisable = async () => {
     setSaving(true);
     try {
-      const disableResponse = await fetch(SETTINGS_KEY, { method: "DELETE" });
+      const disableResponse = await browserApiFetch(SETTINGS_KEY, { method: "DELETE" });
       if (!disableResponse.ok) {
         toast.error("Failed to disable commit signing.");
         return;
