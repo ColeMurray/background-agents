@@ -7,6 +7,7 @@ import {
   signOut as nextAuthSignOut,
   useSession,
 } from "next-auth/react";
+import type { AuthProvider } from "./build-auth-identity";
 
 export interface AuthSessionUser {
   name?: string | null;
@@ -17,7 +18,7 @@ export interface AuthSession {
   user?: AuthSessionUser | null;
 }
 
-export type SignInProvider = "github" | "google";
+export type SignInProvider = AuthProvider;
 
 export type AuthSessionState =
   | {
