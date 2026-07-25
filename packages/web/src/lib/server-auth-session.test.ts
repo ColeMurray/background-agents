@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 vi.mock("next-auth", () => ({
   getServerSession: vi.fn(),
@@ -10,7 +10,7 @@ vi.mock("./auth", () => ({
 
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth";
-import { getServerAuthSession } from "./server-auth-session";
+import { getServerAuthSession, type ServerAuthSession } from "./server-auth-session";
 
 describe("getServerAuthSession", () => {
   beforeEach(() => {
@@ -24,5 +24,9 @@ describe("getServerAuthSession", () => {
     await expect(getServerAuthSession()).resolves.toBe(session);
     expect(getServerSession).toHaveBeenCalledOnce();
     expect(getServerSession).toHaveBeenCalledWith(authOptions);
+  });
+
+  it("exposes an app-owned session contract", () => {
+    expectTypeOf(getServerAuthSession).returns.toEqualTypeOf<Promise<ServerAuthSession | null>>();
   });
 });

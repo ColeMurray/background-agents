@@ -129,12 +129,12 @@ export default tseslint.config(
           paths: [
             {
               name: "next-auth",
-              importNames: ["getServerSession"],
               message: "Use getServerAuthSession from @/lib/server-auth-session.",
             },
+          ],
+          patterns: [
             {
-              name: "@/lib/auth",
-              importNames: ["authOptions"],
+              regex: "(?:^|/)lib/auth$",
               message: "Use getServerAuthSession from @/lib/server-auth-session.",
             },
           ],
