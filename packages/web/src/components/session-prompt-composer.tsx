@@ -122,6 +122,7 @@ export function SessionPromptComposer({
               onKeyDown={prompt.onKeyDown}
               onPaste={handlePaste}
               disabled={prompt.draftLocked}
+              autoComplete="off"
               placeholder={
                 prompt.isProcessing ? "Type your next message..." : "Ask or build anything"
               }

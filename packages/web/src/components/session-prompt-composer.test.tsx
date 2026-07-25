@@ -77,6 +77,15 @@ function ComposerHarness({
 }
 
 describe("SessionPromptComposer", () => {
+  it("disables autofill suggestions for the prompt", () => {
+    render(<ComposerHarness />);
+
+    expect(screen.getByPlaceholderText("Ask or build anything")).toHaveAttribute(
+      "autocomplete",
+      "off"
+    );
+  });
+
   it("starts with one row and grows and shrinks with its content", () => {
     const scrollHeight = vi
       .spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get")
