@@ -890,6 +890,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `LINEAR_CLIENT_SECRET`           | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`          | Linear webhook signing secret (required if Linear enabled)                                  |
 | `ANTHROPIC_API_KEY`              | Anthropic API key                                                                           |
+| `OPENAI_API_KEY`                 | OpenAI API key for optional voice transcription                                             |
 | `DEEPSEEK_API_KEY`               | DeepSeek API key (optional, required only for DeepSeek models)                              |
 | `TOKEN_ENCRYPTION_KEY`           | Generated encryption key (OAuth tokens)                                                     |
 | `REPO_SECRETS_ENCRYPTION_KEY`    | Generated encryption key (repo secrets)                                                     |
@@ -921,6 +922,7 @@ Instead of adding secrets one by one, create a `.secrets` file (don't commit thi
 CLOUDFLARE_API_TOKEN=your-token
 CLOUDFLARE_ACCOUNT_ID=your-account-id
 ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
 DEEPSEEK_API_KEY=sk-...
 # ... add all secrets
 ```

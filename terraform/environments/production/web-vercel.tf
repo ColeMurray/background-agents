@@ -144,5 +144,11 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = false
     },
+    {
+      key       = "OPENAI_API_KEY"
+      value     = var.openai_api_key
+      targets   = ["production", "preview"]
+      sensitive = true
+    },
   ]
 }

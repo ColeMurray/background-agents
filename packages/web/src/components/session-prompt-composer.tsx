@@ -7,6 +7,7 @@ import { ModelIcon, SendIcon, StopIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import type { Artifact } from "@/types/session";
+import { VoiceInputButton } from "@/components/voice-input-button";
 
 type SessionPromptComposerProps = {
   session: {
@@ -29,6 +30,7 @@ type SessionPromptComposerProps = {
     onStopExecution: () => void;
     isCompacting: boolean;
     onCompactContext: () => void;
+    onTranscript: (text: string) => void;
   };
   model: {
     selectedModel: string;
@@ -82,6 +84,10 @@ export function SessionPromptComposer({ session, prompt, model }: SessionPromptC
                   {prompt.isProcessing ? "Queueing..." : "Sending..."}
                 </span>
               )}
+              <VoiceInputButton
+                onTranscript={prompt.onTranscript}
+                disabled={prompt.isCompacting || prompt.isSubmitting}
+              />
               {(prompt.isProcessing || prompt.isCompacting) && (
                 <button
                   type="button"

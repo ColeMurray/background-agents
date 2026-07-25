@@ -97,6 +97,14 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+vi.mock("@/components/voice-input-button", () => ({
+  VoiceInputButton: ({ onTranscript }: { onTranscript: (text: string) => void }) => (
+    <button type="button" onClick={() => onTranscript("Draft from the microphone.")}>
+      Voice input
+    </button>
+  ),
+}));
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -137,6 +145,18 @@ function sessionCreateBody(): Record<string, unknown> {
 }
 
 describe("Home", () => {
+  it("keeps a voice transcript in the new-session draft", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.click(await screen.findByRole("button", { name: "Voice input" }));
+
+    expect(screen.getByPlaceholderText("What do you want to build?")).toHaveValue(
+      "Draft from the microphone."
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("does not create or warm a session while composing", async () => {
     const user = userEvent.setup();
     render(<Home />);

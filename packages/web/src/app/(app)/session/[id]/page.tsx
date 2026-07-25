@@ -26,6 +26,7 @@ import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { ComboboxGroup } from "@/components/ui/combobox";
+import { appendTranscript } from "@/lib/transcription";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -91,6 +92,7 @@ function SessionPageContent() {
     handleSubmit,
     handleInputChange,
     handleKeyDown,
+    handleTranscript,
   } = usePromptInput(
     isCompacting,
     sendPrompt,
@@ -285,6 +287,7 @@ function SessionPageContent() {
           onStopExecution: stopExecution,
           isCompacting,
           onCompactContext: () => compactContext(selectedModel),
+          onTranscript: handleTranscript,
         }}
         model={{
           selectedModel,
@@ -512,6 +515,11 @@ function usePromptInput(
     }, 300);
   };
 
+  const handleTranscript = (text: string) => {
+    setPrompt((draft) => appendTranscript(draft, text));
+    setSubmissionError(null);
+  };
+
   return {
     prompt,
     isSubmitting,
@@ -520,5 +528,6 @@ function usePromptInput(
     handleSubmit,
     handleInputChange,
     handleKeyDown,
+    handleTranscript,
   };
 }

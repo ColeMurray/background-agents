@@ -25,6 +25,8 @@ import { SidebarIcon, ModelIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { SchedulePromptPopover } from "@/components/schedule-prompt-popover";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
+import { VoiceInputButton } from "@/components/voice-input-button";
+import { appendTranscript } from "@/lib/transcription";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
@@ -404,6 +406,10 @@ function HomeContent({
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && <span className="text-xs text-accent">Starting...</span>}
+                    <VoiceInputButton
+                      onTranscript={(text) => handlePromptChange(appendTranscript(prompt, text))}
+                      disabled={creating}
+                    />
                     <SchedulePromptPopover
                       disabled={!prompt.trim() || creating || !isLaunchable}
                       onSchedule={handleSchedule}

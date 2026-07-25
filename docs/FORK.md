@@ -224,6 +224,16 @@ message IDs. Matching retries succeed while conflicting ID reuse fails.
 retry created duplicate work, while allocating a sandbox during composition defeated scheduling's
 main promise that nothing runs before the due time.
 
+### 17. Prompt composers accept draft-only voice input
+
+Both prompt composers can record one browser-native audio clip and send it to an authenticated web
+route for OpenAI transcription. The transcript is appended to the editable draft and never submits
+itself. Session creation, prompt delivery, persistence, and sandbox protocols remain unchanged.
+
+**Why.** Coding prompts often contain enough paths, symbols, and commands that device dictation is
+unreliable. Server-side transcription allows vocabulary steering without exposing the OpenAI key to
+the browser, while keeping mistakes visible and editable before they can start agent work.
+
 ## Where we match upstream against our own docs
 
 The list above is where we differ from upstream. This is the inverse: a place where matching

@@ -10,6 +10,7 @@ set -euo pipefail
 # Optional environment variables:
 #   GOOGLE_CLIENT_SECRET     - Google OAuth client secret (uploaded only when set;
 #                              empty for GitHub-only deployments)
+#   OPENAI_API_KEY           - OpenAI API key for voice transcription
 
 echo "Uploading secrets to worker: ${WORKER_NAME}"
 
@@ -21,6 +22,10 @@ echo "${INTERNAL_CALLBACK_SECRET}" | npx wrangler secret put INTERNAL_CALLBACK_S
 # Google after enabling leaves the old secret in place; delete it manually if needed.)
 if [ -n "${GOOGLE_CLIENT_SECRET:-}" ]; then
   echo "${GOOGLE_CLIENT_SECRET}" | npx wrangler secret put GOOGLE_CLIENT_SECRET --name "${WORKER_NAME}"
+fi
+
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  echo "${OPENAI_API_KEY}" | npx wrangler secret put OPENAI_API_KEY --name "${WORKER_NAME}"
 fi
 
 echo "Secrets uploaded successfully"

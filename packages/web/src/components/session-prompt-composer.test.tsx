@@ -23,6 +23,13 @@ vi.mock("@/components/reasoning-effort-pills", () => ({
     </button>
   ),
 }));
+vi.mock("@/components/voice-input-button", () => ({
+  VoiceInputButton: ({ onTranscript }: { onTranscript: (text: string) => void }) => (
+    <button type="button" onClick={() => onTranscript("Run the voice-input tests.")}>
+      Voice input
+    </button>
+  ),
+}));
 
 afterEach(cleanup);
 
@@ -35,6 +42,7 @@ function renderComposer(
 ) {
   const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
   const onStopExecution = vi.fn();
+  const onTranscript = vi.fn();
   render(
     <SessionPromptComposer
       session={{
@@ -56,6 +64,7 @@ function renderComposer(
         onKeyDown: vi.fn(),
         onStopExecution,
         onCompactContext: vi.fn(),
+        onTranscript,
       }}
       model={{
         selectedModel: "anthropic/claude-sonnet-4-6",
@@ -66,7 +75,7 @@ function renderComposer(
       }}
     />
   );
-  return { onSubmit, onStopExecution };
+  return { onSubmit, onStopExecution, onTranscript };
 }
 
 describe("SessionPromptComposer", () => {
@@ -100,5 +109,14 @@ describe("SessionPromptComposer", () => {
     expect(screen.getByDisplayValue("Run the tests next")).toBeInTheDocument();
     expect(screen.getByText("Not connected. Reconnect and try again.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /queue/i })).toBeEnabled();
+  });
+
+  it("returns voice transcripts to the editable draft", () => {
+    const { onSubmit, onTranscript } = renderComposer();
+
+    fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
+
+    expect(onTranscript).toHaveBeenCalledWith("Run the voice-input tests.");
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

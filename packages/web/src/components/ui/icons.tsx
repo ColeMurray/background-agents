@@ -127,6 +127,15 @@ export function SendIcon({ className }: IconProps) {
   );
 }
 
+export function MicrophoneIcon({ className }: IconProps) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <rect x="9" y="3" width="6" height="11" rx="3" strokeWidth={2} />
+      <path strokeLinecap="round" strokeWidth={2} d="M5 11a7 7 0 0014 0M12 18v3m-4 0h8" />
+    </svg>
+  );
+}
+
 export function StopIcon({ className }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
