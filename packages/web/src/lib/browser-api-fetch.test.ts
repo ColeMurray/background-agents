@@ -53,4 +53,13 @@ describe("toBrowserApiPath", () => {
       "Browser API requests must use a same-origin /api/ path"
     );
   });
+
+  it.each(["/api/../settings", String.raw`/api/..\settings`])(
+    "rejects a path that normalizes outside the BFF API: %s",
+    (path) => {
+      expect(() => toBrowserApiPath(path)).toThrow(
+        "Browser API requests must use a same-origin /api/ path"
+      );
+    }
+  );
 });

@@ -7,10 +7,23 @@
  */
 export type BrowserApiPath = `/api/${string}`;
 
+const BROWSER_API_SENTINEL_ORIGIN = "https://browser-api.invalid";
 const INVALID_BROWSER_API_PATH_MESSAGE = "Browser API requests must use a same-origin /api/ path";
 
 function assertBrowserApiPath(input: string): asserts input is BrowserApiPath {
-  if (!input.startsWith("/api/")) {
+  let parsed: URL;
+  try {
+    parsed = new URL(input, BROWSER_API_SENTINEL_ORIGIN);
+  } catch {
+    throw new Error(INVALID_BROWSER_API_PATH_MESSAGE);
+  }
+
+  if (
+    !input.startsWith("/") ||
+    input.startsWith("//") ||
+    parsed.origin !== BROWSER_API_SENTINEL_ORIGIN ||
+    !parsed.pathname.startsWith("/api/")
+  ) {
     throw new Error(INVALID_BROWSER_API_PATH_MESSAGE);
   }
 }
