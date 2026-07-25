@@ -35,7 +35,7 @@ interface ActionBarProps {
   primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
-  onOpenDetails?: () => void;
+  onOpenDetails: () => void;
 }
 
 export function ActionBar({
@@ -169,7 +169,7 @@ export function ActionBar({
               <ArchiveIcon className="w-4 h-4" />
               {isArchived ? "Unarchive" : "Archive"}
             </DropdownMenuItem>
-            {mediaCount > 0 && onOpenDetails && (
+            {mediaCount > 0 && (
               <DropdownMenuItem className="md:hidden" onClick={onOpenDetails}>
                 <FolderIcon className="w-4 h-4" />
                 Media ({mediaCount})

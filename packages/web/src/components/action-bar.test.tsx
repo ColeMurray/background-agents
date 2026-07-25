@@ -32,6 +32,7 @@ describe("ActionBar", () => {
             createdAt: 1234,
           },
         ]}
+        onOpenDetails={() => undefined}
       />
     );
 
@@ -79,6 +80,7 @@ describe("ActionBar", () => {
             createdAt: 1236,
           },
         ]}
+        onOpenDetails={() => undefined}
       />
     );
 
@@ -86,7 +88,14 @@ describe("ActionBar", () => {
   });
 
   it("does not render a media count indicator when no media artifacts exist", () => {
-    render(<ActionBar sessionId="session-1" sessionStatus="active" artifacts={[]} />);
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        onOpenDetails={() => undefined}
+      />
+    );
 
     expect(screen.queryByText(/Media/)).not.toBeInTheDocument();
   });
@@ -171,6 +180,7 @@ describe("repository-aware PR selection", () => {
         sessionStatus="active"
         artifacts={[backendPr, webPr]}
         primaryRepo={{ repoOwner: "acme", repoName: "web" }}
+        onOpenDetails={() => undefined}
       />
     );
 
@@ -180,7 +190,12 @@ describe("repository-aware PR selection", () => {
 
   it("falls back to the first PR artifact without repo context", () => {
     render(
-      <ActionBar sessionId="session-1" sessionStatus="active" artifacts={[backendPr, webPr]} />
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[backendPr, webPr]}
+        onOpenDetails={() => undefined}
+      />
     );
 
     const link = screen.getByRole("link", { name: /view pr/i });
