@@ -6,7 +6,7 @@ import {
 import { createBrowserAuth } from "./browser-auth";
 import { GitHubBrowserAuthProfileResolver } from "./github-browser-auth-profile";
 import { GoogleBrowserAuthProfileResolver } from "./google-browser-auth-profile";
-import { GitHubOAuthProvider } from "./providers/github";
+import { GitHubProviderIdentityResolver } from "./providers/github-identity-resolver";
 import { D1BrowserAuthUserProjection } from "../db/browser-auth-users";
 import type { Env } from "../types";
 
@@ -79,10 +79,7 @@ export function createBrowserAuthFromEnv(env: Env, database: D1Database) {
   const githubClientId = requireConfig(env.GITHUB_CLIENT_ID, "GITHUB_CLIENT_ID");
   const githubClientSecret = requireConfig(env.GITHUB_CLIENT_SECRET, "GITHUB_CLIENT_SECRET");
   const admissionPolicy = createAdmissionPolicy(env);
-  const githubIdentityResolver = new GitHubOAuthProvider({
-    clientId: githubClientId,
-    clientSecret: githubClientSecret,
-    callbackUri: `${publicWebOrigin}/api/auth/callback/github`,
+  const githubIdentityResolver = new GitHubProviderIdentityResolver({
     issuer: GITHUB_ISSUER,
     userAgent: `${env.APP_NAME?.trim() || "Open-Inspect"} Control Plane`,
   });

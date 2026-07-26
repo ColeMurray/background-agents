@@ -6,7 +6,7 @@ import type {
 import type { ProviderCredentialInput } from "./provider-credential";
 import {
   OAuthProviderError,
-  type ProviderCodeExchangeResult,
+  type ProviderSignInResult,
   type VerifiedProviderIdentity,
 } from "./providers/types";
 
@@ -35,7 +35,7 @@ export class GitHubBrowserAuthProfileResolver {
       throw new OAuthProviderError("malformed_response", "GitHub did not return a verified email");
     }
 
-    const signIn: ProviderCodeExchangeResult<"github"> = {
+    const signIn: ProviderSignInResult<"github"> = {
       identity,
       credential: toProviderCredential(tokens),
     };

@@ -1,3 +1,4 @@
+import { BROWSER_AUTH_PROXY_ROUTES } from "@open-inspect/shared";
 import { BrowserAuthConfigurationError } from "../auth/browser-auth-runtime";
 import { createLogger } from "../logger";
 import { error, parsePattern, type Route } from "./shared";
@@ -45,39 +46,8 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
  * The browser can reach only this positive Better Auth allowlist, and only
  * through a freshly signed service:web proxy request.
  */
-export const browserAuthRoutes: Route[] = [
-  {
-    method: "POST",
-    pattern: parsePattern("/api/auth/sign-in/social"),
-    handler: requireWebService(handleBrowserAuth),
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/api/auth/callback/github"),
-    handler: requireWebService(handleBrowserAuth),
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/api/auth/callback/google"),
-    handler: requireWebService(handleBrowserAuth),
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/api/auth/get-session"),
-    handler: requireWebService(handleBrowserAuth),
-  },
-  {
-    method: "POST",
-    pattern: parsePattern("/api/auth/sign-out"),
-    handler: requireWebService(handleBrowserAuth),
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/api/auth/error"),
-    handler: requireWebService(handleBrowserAuth),
-  },
-];
-
-export function isBrowserAuthProxyRoute(method: string, path: string): boolean {
-  return browserAuthRoutes.some((route) => route.method === method && route.pattern.test(path));
-}
+export const browserAuthRoutes: Route[] = BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
+  method,
+  pattern: parsePattern(path),
+  handler: requireWebService(handleBrowserAuth),
+}));

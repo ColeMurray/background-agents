@@ -318,7 +318,6 @@ export async function authenticate(
     try {
       const browser = await authenticateBrowserSession(
         ctx.getBrowserAuth(),
-        ctx.db,
         channel.request.headers
       );
       if (!browser) {

@@ -317,9 +317,9 @@ describe("authenticate — compound browser credentials", () => {
     } | null,
     accounts: Array<{
       id: string;
-      provider_id: string;
-      account_id: string;
-      user_id: string;
+      providerId: string;
+      accountId: string;
+      userId: string;
     }> = []
   ): RequestContext {
     const ctx = createCtx();
@@ -327,18 +327,9 @@ describe("authenticate — compound browser credentials", () => {
       ({
         api: {
           getSession: vi.fn(async () => session),
+          listUserAccounts: vi.fn(async () => accounts),
         },
       }) as never;
-    ctx.db = {
-      prepare: vi.fn(() => {
-        const statement = {
-          bind: vi.fn(() => statement),
-          all: vi.fn(async () => ({ results: accounts, meta: { changes: 0 } })),
-        };
-        return statement;
-      }),
-      batch: vi.fn(),
-    } as never;
     return ctx;
   }
 
@@ -359,9 +350,9 @@ describe("authenticate — compound browser credentials", () => {
       [
         {
           id: "account-1",
-          provider_id: "github",
-          account_id: "583231",
-          user_id: "user-1",
+          providerId: "github",
+          accountId: "583231",
+          userId: "user-1",
         },
       ]
     );

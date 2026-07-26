@@ -3,6 +3,7 @@
  */
 
 import type { Env } from "./types";
+import { isBrowserAuthProxyRoute } from "@open-inspect/shared";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
 import { getBrowserAuth } from "./auth/browser-auth-runtime";
@@ -24,7 +25,7 @@ import {
   error,
   HttpError,
 } from "./routes/shared";
-import { browserAuthRoutes, isBrowserAuthProxyRoute } from "./routes/browser-auth";
+import { browserAuthRoutes } from "./routes/browser-auth";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
 import { modelPreferencesRoutes } from "./routes/model-preferences";

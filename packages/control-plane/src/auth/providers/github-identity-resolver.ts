@@ -1,59 +1,12 @@
 import { z } from "zod";
-import type { ProviderCredentialInput } from "../provider-credential";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./constants";
-import {
-  assertCanonicalIssuer,
-  OAuthProviderError,
-  type OAuthSignInProvider,
-  type ProviderAuthorizationRequest,
-  type ProviderCodeExchangeRequest,
-  type ProviderCodeExchangeResult,
-  type VerifiedProviderIdentity,
-} from "./types";
+import { assertCanonicalIssuer, OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 
-const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const GITHUB_ISSUER = "https://github.com";
-const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_API_URL = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_EMAILS_PER_PAGE = 100;
 const GITHUB_EMAILS_MAX_PAGES = 10;
-
-const githubTokenResponseSchema = z
-  .object({
-    access_token: z.string().min(1),
-    token_type: z.string().transform((value, ctx) => {
-      if (value.toLowerCase() !== "bearer") {
-        ctx.addIssue({ code: "custom", message: "token_type must be bearer" });
-        return z.NEVER;
-      }
-      return "bearer" as const;
-    }),
-    expires_in: z.number().int().positive().optional(),
-    refresh_token: z.string().min(1).optional(),
-    refresh_token_expires_in: z.number().int().positive().optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.refresh_token && value.expires_in === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["expires_in"],
-        message: "refreshable credentials require access expiry",
-      });
-    }
-    if (value.refresh_token_expires_in !== undefined && !value.refresh_token) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["refresh_token_expires_in"],
-        message: "refresh expiry requires a refresh token",
-      });
-    }
-  });
-
-const githubOAuthErrorSchema = z.object({
-  error: z.string().min(1),
-  error_description: z.string().optional(),
-});
 
 const githubUserSchema = z.object({
   id: z.number().int().positive(),
@@ -71,55 +24,31 @@ const githubEmailSchema = z.object({
 
 const githubEmailPageSchema = z.array(githubEmailSchema);
 
-export interface GitHubOAuthProviderConfig {
-  readonly clientId: string;
-  readonly clientSecret: string;
-  readonly callbackUri: string;
+export interface GitHubProviderIdentityResolverConfig {
   readonly issuer: string;
   readonly userAgent: string;
 }
 
-export interface GitHubOAuthProviderDependencies {
+export interface GitHubProviderIdentityResolverDependencies {
   readonly fetch?: typeof globalThis.fetch;
-  readonly clock?: { now(): number };
   readonly requestTimeoutMs?: number;
 }
 
-export class GitHubOAuthProvider implements OAuthSignInProvider<"github"> {
-  readonly provider = "github" as const;
+/**
+ * Resolves GitHub identity evidence from an access token exchanged and owned
+ * by Better Auth. This boundary deliberately implements no OAuth protocol.
+ */
+export class GitHubProviderIdentityResolver {
   private readonly fetchImpl: typeof globalThis.fetch;
-  private readonly clock: { now(): number };
   private readonly requestTimeoutMs: number;
 
   constructor(
-    private readonly config: GitHubOAuthProviderConfig,
-    dependencies: GitHubOAuthProviderDependencies = {}
+    private readonly config: GitHubProviderIdentityResolverConfig,
+    dependencies: GitHubProviderIdentityResolverDependencies = {}
   ) {
     assertCanonicalIssuer(config.issuer, GITHUB_ISSUER);
     this.fetchImpl = dependencies.fetch ?? globalThis.fetch;
-    this.clock = dependencies.clock ?? { now: () => Date.now() };
     this.requestTimeoutMs = dependencies.requestTimeoutMs ?? DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
-  }
-
-  async createAuthorizationUrl(request: ProviderAuthorizationRequest<"github">): Promise<URL> {
-    const url = new URL(GITHUB_AUTHORIZE_URL);
-    url.searchParams.set("client_id", this.config.clientId);
-    url.searchParams.set("redirect_uri", this.config.callbackUri);
-    url.searchParams.set("state", request.state);
-    url.searchParams.set("code_challenge", request.codeChallenge);
-    url.searchParams.set("code_challenge_method", "S256");
-    return url;
-  }
-
-  async exchangeAuthorizationCode(
-    request: ProviderCodeExchangeRequest<"github">
-  ): Promise<ProviderCodeExchangeResult<"github">> {
-    const token = await this.exchangeCode(request);
-    const identity = await this.resolveIdentity(token.access_token);
-    return {
-      identity,
-      credential: this.toCredential(token),
-    };
   }
 
   async resolveIdentity(accessToken: string): Promise<VerifiedProviderIdentity<"github">> {
@@ -132,7 +61,7 @@ export class GitHubOAuthProvider implements OAuthSignInProvider<"github"> {
       ...new Set(verifiedEmailEntries.map((entry) => entry.email.toLowerCase())),
     ];
     return {
-      provider: this.provider,
+      provider: "github",
       issuer: GITHUB_ISSUER,
       subject: String(user.id),
       login: user.login,
@@ -142,36 +71,6 @@ export class GitHubOAuthProvider implements OAuthSignInProvider<"github"> {
       primaryEmail:
         verifiedEmailEntries.find((entry) => entry.primary)?.email.toLowerCase() ?? null,
     };
-  }
-
-  private async exchangeCode(
-    request: ProviderCodeExchangeRequest<"github">
-  ): Promise<z.infer<typeof githubTokenResponseSchema>> {
-    const body = new URLSearchParams({
-      client_id: this.config.clientId,
-      client_secret: this.config.clientSecret,
-      code: request.code,
-      redirect_uri: this.config.callbackUri,
-      code_verifier: request.codeVerifier,
-    });
-    const response = await this.fetchWithTimeout(GITHUB_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body,
-    });
-    const raw = await this.parseJson(response, "GitHub token");
-    const providerError = githubOAuthErrorSchema.safeParse(raw);
-    if (!response.ok || providerError.success) {
-      throw new OAuthProviderError("provider_rejected", "GitHub rejected the authorization code");
-    }
-    const parsed = githubTokenResponseSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new OAuthProviderError("malformed_response", "GitHub returned an invalid token");
-    }
-    return parsed.data;
   }
 
   private async fetchGitHubUser(accessToken: string): Promise<z.infer<typeof githubUserSchema>> {
@@ -208,7 +107,7 @@ export class GitHubOAuthProvider implements OAuthSignInProvider<"github"> {
       }
       seenUrls.add(serializedUrl);
 
-      const response: Response = await this.fetchWithTimeout(currentUrl, {
+      const response = await this.fetchWithTimeout(currentUrl, {
         headers: this.apiHeaders(accessToken),
       });
       if (!response.ok) {
@@ -288,30 +187,6 @@ export class GitHubOAuthProvider implements OAuthSignInProvider<"github"> {
       "X-GitHub-Api-Version": GITHUB_API_VERSION,
       "User-Agent": this.config.userAgent,
     };
-  }
-
-  private toCredential(token: z.infer<typeof githubTokenResponseSchema>): ProviderCredentialInput {
-    const now = this.clock.now();
-    if (token.refresh_token && token.expires_in !== undefined) {
-      return {
-        kind: "refreshable",
-        accessToken: token.access_token,
-        accessExpiresAt: now + token.expires_in * 1000,
-        refreshToken: token.refresh_token,
-        refreshExpiresAt:
-          token.refresh_token_expires_in === undefined
-            ? null
-            : now + token.refresh_token_expires_in * 1000,
-      };
-    }
-    if (token.expires_in !== undefined) {
-      return {
-        kind: "access_only_expiring",
-        accessToken: token.access_token,
-        accessExpiresAt: now + token.expires_in * 1000,
-      };
-    }
-    return { kind: "access_only_nonexpiring", accessToken: token.access_token };
   }
 
   private async parseJson(response: Response, context: string): Promise<unknown> {

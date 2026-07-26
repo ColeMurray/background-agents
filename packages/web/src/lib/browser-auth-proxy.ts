@@ -1,17 +1,7 @@
-import { buildServiceAuthHeaders } from "@open-inspect/shared";
+import { buildServiceAuthHeaders, isBrowserAuthProxyRoute } from "@open-inspect/shared";
 import { dispatchControlPlaneFetch, getControlPlaneUrl } from "./control-plane-transport";
 
 const AUTH_PROXY_TIMEOUT_MS = 15_000;
-
-const AUTH_PROXY_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
-  GET: new Set([
-    "/api/auth/callback/github",
-    "/api/auth/callback/google",
-    "/api/auth/error",
-    "/api/auth/get-session",
-  ]),
-  POST: new Set(["/api/auth/sign-in/social", "/api/auth/sign-out"]),
-};
 
 const REQUEST_HEADERS = [
   "Accept",
@@ -32,10 +22,6 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
-
-function isAllowedRequest(method: string, pathname: string): boolean {
-  return AUTH_PROXY_ROUTES[method.toUpperCase()]?.has(pathname) ?? false;
-}
 
 function copyRequestHeaders(request: Request): Headers {
   const headers = new Headers();
@@ -75,7 +61,7 @@ function copyResponseHeaders(upstream: Headers): Headers {
 export async function proxyBrowserAuthRequest(request: Request): Promise<Response> {
   const incomingUrl = new URL(request.url);
   const method = request.method.toUpperCase();
-  if (!isAllowedRequest(method, incomingUrl.pathname)) {
+  if (!isBrowserAuthProxyRoute(method, incomingUrl.pathname)) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 

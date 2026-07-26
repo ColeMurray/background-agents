@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { AuthenticationContext } from "./principal";
 import type { BrowserAuthRuntime } from "./browser-auth-runtime";
-import type { SqlDatabase } from "../db/sql-database";
 
 const sessionSchema = z.object({
   session: z.object({
@@ -15,9 +14,9 @@ const sessionSchema = z.object({
 
 const providerAccountSchema = z.object({
   id: z.string().min(1),
-  provider_id: z.string().min(1),
-  account_id: z.string().min(1),
-  user_id: z.string().min(1),
+  providerId: z.string().min(1),
+  accountId: z.string().min(1),
+  userId: z.string().min(1),
 });
 
 export interface AuthenticatedBrowserUser {
@@ -36,7 +35,6 @@ export class BrowserSessionIntegrityError extends Error {
 
 export async function authenticateBrowserSession(
   auth: BrowserAuthRuntime,
-  db: SqlDatabase,
   headers: Headers
 ): Promise<AuthenticatedBrowserUser | null> {
   const candidate = await auth.api.getSession({
@@ -54,27 +52,14 @@ export async function authenticateBrowserSession(
     throw new BrowserSessionIntegrityError("Better Auth returned a cross-user session");
   }
 
-  const result = await db
-    .prepare(
-      `SELECT
-         id,
-         providerId AS provider_id,
-         accountId AS account_id,
-         userId AS user_id
-       FROM auth_accounts
-       WHERE userId = ?
-       ORDER BY id
-       LIMIT 2`
-    )
-    .bind(user.id)
-    .all();
-  if (result.results.length !== 1) {
+  const accounts = await auth.api.listUserAccounts({ headers });
+  if (accounts.length !== 1) {
     throw new BrowserSessionIntegrityError(
       "Browser session does not resolve to exactly one provider account"
     );
   }
-  const parsedAccount = providerAccountSchema.safeParse(result.results[0]);
-  if (!parsedAccount.success || parsedAccount.data.user_id !== user.id) {
+  const parsedAccount = providerAccountSchema.safeParse(accounts[0]);
+  if (!parsedAccount.success || parsedAccount.data.userId !== user.id) {
     throw new BrowserSessionIntegrityError("Browser session provider account is corrupt");
   }
 
@@ -85,8 +70,8 @@ export async function authenticateBrowserSession(
       credentialId: session.id,
       providerAccount: {
         id: parsedAccount.data.id,
-        provider: parsedAccount.data.provider_id,
-        subject: parsedAccount.data.account_id,
+        provider: parsedAccount.data.providerId,
+        subject: parsedAccount.data.accountId,
       },
       channel: {
         kind: "sig1",

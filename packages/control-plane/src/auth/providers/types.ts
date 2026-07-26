@@ -1,40 +1,6 @@
 import type { SignInProvider } from "../sign-in-provider";
 import type { ProviderCredentialInput } from "../provider-credential";
 
-interface ProviderAuthorizationRequestBinding {
-  readonly state: string;
-  readonly codeChallenge: string;
-}
-
-interface ProviderAuthorizationRequestByProvider {
-  readonly github: ProviderAuthorizationRequestBinding & {
-    readonly oidcNonce?: never;
-  };
-  readonly google: ProviderAuthorizationRequestBinding & {
-    readonly oidcNonce: string;
-  };
-}
-
-export type ProviderAuthorizationRequest<P extends SignInProvider> =
-  ProviderAuthorizationRequestByProvider[P];
-
-interface ProviderCodeExchangeRequestBinding {
-  readonly code: string;
-  readonly codeVerifier: string;
-}
-
-interface ProviderCodeExchangeRequestByProvider {
-  readonly github: ProviderCodeExchangeRequestBinding & {
-    readonly oidcNonceHash?: never;
-  };
-  readonly google: ProviderCodeExchangeRequestBinding & {
-    readonly oidcNonceHash: string;
-  };
-}
-
-export type ProviderCodeExchangeRequest<P extends SignInProvider> =
-  ProviderCodeExchangeRequestByProvider[P];
-
 export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvider> {
   readonly provider: P;
   readonly issuer: string;
@@ -46,7 +12,7 @@ export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvi
   readonly primaryEmail: string | null;
 }
 
-interface ProviderCodeExchangeResultByProvider {
+interface ProviderSignInResultByProvider {
   readonly github: {
     readonly identity: VerifiedProviderIdentity<"github">;
     readonly credential: ProviderCredentialInput;
@@ -57,8 +23,7 @@ interface ProviderCodeExchangeResultByProvider {
   };
 }
 
-export type ProviderCodeExchangeResult<P extends SignInProvider> =
-  ProviderCodeExchangeResultByProvider[P];
+export type ProviderSignInResult<P extends SignInProvider> = ProviderSignInResultByProvider[P];
 
 export type OAuthProviderFailure =
   | "invalid_configuration"
@@ -89,15 +54,3 @@ export function assertCanonicalIssuer(configuredIssuer: string, expectedIssuer: 
     throw new OAuthProviderError("invalid_configuration", "Provider issuer is not canonical");
   }
 }
-
-export interface OAuthSignInProvider<P extends SignInProvider> {
-  readonly provider: P;
-  createAuthorizationUrl(request: ProviderAuthorizationRequest<P>): Promise<URL>;
-  exchangeAuthorizationCode(
-    request: ProviderCodeExchangeRequest<P>
-  ): Promise<ProviderCodeExchangeResult<P>>;
-}
-
-export type OAuthSignInProviderRegistry = {
-  readonly [P in SignInProvider]: OAuthSignInProvider<P>;
-};

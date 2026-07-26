@@ -5,7 +5,7 @@ import type {
   BrowserAuthProviderProfile,
   BrowserAuthProviderTokens,
 } from "./browser-auth-provider-profile";
-import { OAuthProviderError, type ProviderCodeExchangeResult } from "./providers/types";
+import { OAuthProviderError, type ProviderSignInResult } from "./providers/types";
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
 
@@ -56,7 +56,7 @@ export class GoogleBrowserAuthProfileResolver {
     }
 
     const email = parsedClaims.data.email.toLowerCase();
-    const signIn: ProviderCodeExchangeResult<"google"> = {
+    const signIn: ProviderSignInResult<"google"> = {
       identity: {
         provider: "google",
         issuer: GOOGLE_ISSUER,

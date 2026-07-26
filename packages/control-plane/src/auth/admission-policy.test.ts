@@ -7,7 +7,7 @@ import {
   parseAdmissionBoolean,
   type AdmissionPolicyConfig,
 } from "./admission-policy";
-import type { ProviderCodeExchangeResult } from "./providers/types";
+import type { ProviderSignInResult } from "./providers/types";
 
 const BASE_CONFIG: AdmissionPolicyConfig = {
   allowedGitHubUsers: [],
@@ -17,7 +17,7 @@ const BASE_CONFIG: AdmissionPolicyConfig = {
   unsafeAllowAllUsers: false,
 };
 
-const GOOGLE_SIGN_IN: ProviderCodeExchangeResult<"google"> = {
+const GOOGLE_SIGN_IN: ProviderSignInResult<"google"> = {
   identity: {
     provider: "google",
     issuer: "https://accounts.google.com",
@@ -116,7 +116,7 @@ describe("AdmissionPolicy", () => {
   });
 
   it("distinguishes definitive non-membership from an unavailable organization check", async () => {
-    const signIn: ProviderCodeExchangeResult<"github"> = {
+    const signIn: ProviderSignInResult<"github"> = {
       identity: {
         provider: "github",
         issuer: "https://github.com",

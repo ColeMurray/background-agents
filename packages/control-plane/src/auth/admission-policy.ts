@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./providers/constants";
-import type { ProviderCodeExchangeResult } from "./providers/types";
+import type { ProviderSignInResult } from "./providers/types";
 
 export type VerifiedProviderSignIn =
-  | ProviderCodeExchangeResult<"github">
-  | ProviderCodeExchangeResult<"google">;
+  | ProviderSignInResult<"github">
+  | ProviderSignInResult<"google">;
 
 export interface AdmissionPolicyConfig {
   readonly allowedGitHubUsers: readonly string[];
@@ -61,9 +61,7 @@ function emailDomain(email: string): string | null {
   return email.slice(separator + 1).toLowerCase();
 }
 
-function isGitHubSignIn(
-  signIn: VerifiedProviderSignIn
-): signIn is ProviderCodeExchangeResult<"github"> {
+function isGitHubSignIn(signIn: VerifiedProviderSignIn): signIn is ProviderSignInResult<"github"> {
   return signIn.identity.provider === "github";
 }
 
@@ -120,7 +118,7 @@ export class AdmissionPolicy {
   }
 
   private async requireGitHubOrganization(
-    signIn: ProviderCodeExchangeResult<"github">
+    signIn: ProviderSignInResult<"github">
   ): Promise<AdmissionDecision> {
     const accessToken = signIn.credential.accessToken;
     let unavailable = false;
