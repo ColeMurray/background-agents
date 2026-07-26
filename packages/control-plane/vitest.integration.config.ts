@@ -52,6 +52,12 @@ export default defineConfig({
             SERVICE_AUTH_SECRET_GITHUB_BOT: "test-service-secret-github-bot",
             SERVICE_AUTH_SECRET_LINEAR_BOT: "test-service-secret-linear-bot",
             SERVICE_AUTH_SECRET_MODAL: "test-service-secret-modal",
+            BROWSER_AUTH_SECRET: "test-browser-auth-secret-with-at-least-32-characters",
+            GITHUB_CLIENT_ID: "github-app-client-id",
+            GITHUB_CLIENT_SECRET: "github-app-client-secret",
+            GOOGLE_CLIENT_ID: "google-client-id",
+            GOOGLE_CLIENT_SECRET: "google-client-secret",
+            UNSAFE_ALLOW_ALL_USERS: "true",
             // Must be valid base64 for 32 bytes — the exchange route's SCM
             // capture encrypts with it inline (fail-closed) rather than
             // inside a swallowed waitUntil.

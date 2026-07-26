@@ -9,6 +9,7 @@ import type { RequestMetrics } from "../db/instrumented-d1";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
+import type { BrowserAuthRuntime } from "../auth/browser-auth-runtime";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -30,6 +31,8 @@ export type RequestContext = CorrelationContext & {
   db: SqlDatabase;
   /** Worker ExecutionContext for waitUntil (background tasks). */
   executionCtx?: ExecutionContext;
+  /** Lazy runtime dependency; only browser-auth routes construct it. */
+  getBrowserAuth?: () => BrowserAuthRuntime;
   /**
    * The request's verified principal. Absent only on public routes and CORS
    * preflights — every authenticated request carries one.

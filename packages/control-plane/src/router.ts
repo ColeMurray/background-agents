@@ -5,6 +5,7 @@
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
+import { getBrowserAuth } from "./auth/browser-auth-runtime";
 import {
   resolveScmProviderFromEnv,
   SourceControlProviderError,
@@ -24,6 +25,7 @@ import {
   HttpError,
 } from "./routes/shared";
 import { authTokenRoutes } from "./routes/auth-tokens";
+import { browserAuthRoutes } from "./routes/browser-auth";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
@@ -317,6 +319,7 @@ const routes: Route[] = [
 
   // Token issuance (exchange + refresh; web service principal only)
   ...authTokenRoutes,
+  ...browserAuthRoutes,
 
   // Session management
   ...sessionRoutes,
@@ -401,6 +404,8 @@ export async function handleRequest(
     metrics,
     // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
     db: instrumentD1(env.DB, metrics),
+    // eslint-disable-next-line no-restricted-syntax -- composition root injects the raw D1 adapter required by Better Auth
+    getBrowserAuth: () => getBrowserAuth(env, env.DB),
     executionCtx,
   };
 
