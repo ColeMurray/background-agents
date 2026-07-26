@@ -1,7 +1,13 @@
 import {
   OAuthFlowVerifierIntegrityError,
   type OAuthFlowVerifierBinding,
+  type OAuthFlowVerifierCipher,
 } from "./oauth-flow-verifier";
+import {
+  ProviderCredentialIntegrityError,
+  type ProviderCredentialCipherBinding,
+  type ProviderCredentialCipherPort,
+} from "./provider-credential-cipher";
 
 export type AuthEncryptionPurpose = "provider_credentials" | "provider_pkce_flow";
 
@@ -87,27 +93,28 @@ function encodeCiphertext(iv: Uint8Array, ciphertext: ArrayBuffer): string {
   return btoa(String.fromCharCode(...combined));
 }
 
-function decodeCiphertext(value: string): { iv: Uint8Array; ciphertext: Uint8Array } {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    throw new OAuthFlowVerifierIntegrityError();
-  }
-
+function decodeCiphertext(
+  value: string,
+  integrityError: () => Error
+): { iv: Uint8Array; ciphertext: Uint8Array } {
   try {
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+      throw new Error("Ciphertext is not canonical base64");
+    }
     const combined = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
     if (combined.byteLength <= AES_GCM_IV_BYTES + AES_GCM_TAG_BYTES) {
-      throw new OAuthFlowVerifierIntegrityError();
+      throw new Error("Ciphertext is too short");
     }
     return {
       iv: combined.slice(0, AES_GCM_IV_BYTES),
       ciphertext: combined.slice(AES_GCM_IV_BYTES),
     };
-  } catch (error) {
-    if (error instanceof OAuthFlowVerifierIntegrityError) throw error;
-    throw new OAuthFlowVerifierIntegrityError();
+  } catch {
+    throw integrityError();
   }
 }
 
-export class ProviderPkceFlowCipher {
+export class ProviderPkceFlowCipher implements OAuthFlowVerifierCipher {
   private readonly keys = new Map<number, Promise<CryptoKey>>();
   private readonly ivGenerator: InitializationVectorGenerator;
 
@@ -138,7 +145,10 @@ export class ProviderPkceFlowCipher {
   }
 
   async decrypt(encrypted: string, context: OAuthFlowVerifierBinding): Promise<string> {
-    const { iv, ciphertext } = decodeCiphertext(encrypted);
+    const { iv, ciphertext } = decodeCiphertext(
+      encrypted,
+      () => new OAuthFlowVerifierIntegrityError()
+    );
     try {
       const plaintext = await crypto.subtle.decrypt(
         {
@@ -164,6 +174,91 @@ export class ProviderPkceFlowCipher {
     const derived = deriveAuthEncryptionKeyBytes(
       this.rootKeyBase64,
       "provider_pkce_flow",
+      version
+    ).then((bytes) =>
+      crypto.subtle.importKey("raw", bytes, { name: "AES-GCM", length: 256 }, false, [
+        "encrypt",
+        "decrypt",
+      ])
+    );
+    this.keys.set(version, derived);
+    return derived;
+  }
+}
+
+function providerCredentialAssociatedData(context: ProviderCredentialCipherBinding): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify([
+      "provider_credentials",
+      context.providerIdentityId,
+      context.credentialKind,
+      context.tokenRole,
+      context.encryptionKeyVersion,
+      context.rowVersion,
+    ])
+  );
+}
+
+export class ProviderCredentialCipher implements ProviderCredentialCipherPort {
+  private readonly keys = new Map<number, Promise<CryptoKey>>();
+  private readonly ivGenerator: InitializationVectorGenerator;
+
+  constructor(
+    private readonly rootKeyBase64: string,
+    dependencies: { readonly ivGenerator?: InitializationVectorGenerator } = {}
+  ) {
+    this.ivGenerator = dependencies.ivGenerator ?? {
+      generate: () => crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES)),
+    };
+  }
+
+  async encrypt(plaintext: string, context: ProviderCredentialCipherBinding): Promise<string> {
+    const iv = this.ivGenerator.generate();
+    if (iv.byteLength !== AES_GCM_IV_BYTES) {
+      throw new Error("Provider credential IV generator returned an invalid IV");
+    }
+    const ciphertext = await crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv,
+        additionalData: providerCredentialAssociatedData(context),
+      },
+      await this.getKey(context.encryptionKeyVersion),
+      new TextEncoder().encode(plaintext)
+    );
+    return encodeCiphertext(iv, ciphertext);
+  }
+
+  async decrypt(encrypted: string, context: ProviderCredentialCipherBinding): Promise<string> {
+    const { iv, ciphertext } = decodeCiphertext(
+      encrypted,
+      () => new ProviderCredentialIntegrityError()
+    );
+    try {
+      const plaintext = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv,
+          additionalData: providerCredentialAssociatedData(context),
+        },
+        await this.getKey(context.encryptionKeyVersion),
+        ciphertext
+      );
+      return new TextDecoder().decode(plaintext);
+    } catch (error) {
+      if (error instanceof UnsupportedAuthEncryptionVersionError) throw error;
+      if (error instanceof InvalidAuthEncryptionRootError) throw error;
+      throw new ProviderCredentialIntegrityError();
+    }
+  }
+
+  private getKey(version: number): Promise<CryptoKey> {
+    const existing = this.keys.get(version);
+    if (existing) return existing;
+
+    const derived = deriveAuthEncryptionKeyBytes(
+      this.rootKeyBase64,
+      "provider_credentials",
       version
     ).then((bytes) =>
       crypto.subtle.importKey("raw", bytes, { name: "AES-GCM", length: 256 }, false, [
