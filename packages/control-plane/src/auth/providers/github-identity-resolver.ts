@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createLogger, type Logger } from "../../logger";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./constants";
 import { assertCanonicalIssuer, OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 
@@ -7,6 +8,7 @@ const GITHUB_API_URL = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_EMAILS_PER_PAGE = 100;
 const GITHUB_EMAILS_MAX_PAGES = 10;
+const GITHUB_NETWORK_REQUEST_ATTEMPTS = 2;
 
 const githubUserSchema = z.object({
   id: z.number().int().positive(),
@@ -32,6 +34,7 @@ export interface GitHubProviderIdentityResolverConfig {
 export interface GitHubProviderIdentityResolverDependencies {
   readonly fetch?: typeof globalThis.fetch;
   readonly requestTimeoutMs?: number;
+  readonly logger?: Pick<Logger, "error">;
 }
 
 /**
@@ -41,6 +44,7 @@ export interface GitHubProviderIdentityResolverDependencies {
 export class GitHubProviderIdentityResolver {
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly requestTimeoutMs: number;
+  private readonly logger: Pick<Logger, "error">;
 
   constructor(
     private readonly config: GitHubProviderIdentityResolverConfig,
@@ -49,6 +53,7 @@ export class GitHubProviderIdentityResolver {
     assertCanonicalIssuer(config.issuer, GITHUB_ISSUER);
     this.fetchImpl = dependencies.fetch ?? globalThis.fetch;
     this.requestTimeoutMs = dependencies.requestTimeoutMs ?? DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
+    this.logger = dependencies.logger ?? createLogger("github-provider-identity");
   }
 
   async resolveIdentity(accessToken: string): Promise<VerifiedProviderIdentity<"github">> {
@@ -198,14 +203,25 @@ export class GitHubProviderIdentityResolver {
   }
 
   private async fetchWithTimeout(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-    try {
-      return await this.fetchImpl(input, { ...init, signal: controller.signal });
-    } catch {
-      throw new OAuthProviderError("provider_unavailable", "GitHub request failed");
-    } finally {
-      clearTimeout(timeout);
+    let lastCause: unknown;
+    for (let attempt = 1; attempt <= GITHUB_NETWORK_REQUEST_ATTEMPTS; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+      try {
+        return await this.fetchImpl(input, { ...init, signal: controller.signal });
+      } catch (cause) {
+        lastCause = cause;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+    this.logger.error("GitHub provider request failed", {
+      event: "auth.github_provider_request_failed",
+      attempts: GITHUB_NETWORK_REQUEST_ATTEMPTS,
+      error: lastCause instanceof Error ? lastCause : new Error(String(lastCause)),
+    });
+    throw new OAuthProviderError("provider_unavailable", "GitHub request failed", {
+      cause: lastCause,
+    });
   }
 }

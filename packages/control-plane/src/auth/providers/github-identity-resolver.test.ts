@@ -65,6 +65,69 @@ describe("GitHubProviderIdentityResolver", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("retries one transient GitHub network failure", async () => {
+    let userAttempts = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "https://api.github.com/user") {
+        userAttempts += 1;
+        if (userAttempts === 1) {
+          throw new TypeError("temporary network failure");
+        }
+        return Response.json({
+          id: 583_231,
+          login: "octocat",
+          name: "The Octocat",
+          avatar_url: null,
+        });
+      }
+      return Response.json([
+        {
+          email: "octocat@example.com",
+          primary: true,
+          verified: true,
+          visibility: null,
+        },
+      ]);
+    });
+    const resolver = new GitHubProviderIdentityResolver(config, { fetch });
+
+    await expect(resolver.resolveIdentity("ghu-access")).resolves.toMatchObject({
+      subject: "583231",
+      primaryEmail: "octocat@example.com",
+    });
+    expect(userAttempts).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves the final network failure for provider diagnostics", async () => {
+    const cause = new TypeError("persistent network failure");
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(cause);
+    const resolver = new GitHubProviderIdentityResolver(config, { fetch });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      name: "OAuthProviderError",
+      failure: "provider_unavailable",
+      cause,
+    });
+  });
+
+  it("logs a sanitized diagnostic after the network retry is exhausted", async () => {
+    const cause = new TypeError("persistent network failure");
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(cause);
+    const logger = { error: vi.fn() };
+    const resolver = new GitHubProviderIdentityResolver(config, { fetch, logger });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+    });
+    expect(logger.error).toHaveBeenCalledWith("GitHub provider request failed", {
+      event: "auth.github_provider_request_failed",
+      attempts: 2,
+      error: cause,
+    });
+  });
+
   it("paginates GitHub emails to exhaustion", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       email: `unverified-${index}@example.com`,

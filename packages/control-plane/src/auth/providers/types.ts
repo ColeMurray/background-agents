@@ -35,9 +35,10 @@ export type OAuthProviderFailure =
 export class OAuthProviderError extends Error {
   constructor(
     readonly failure: OAuthProviderFailure,
-    message: string
+    message: string,
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     this.name = "OAuthProviderError";
   }
 }
