@@ -4,8 +4,7 @@ import {
   browserAuthSessionResponseSchema,
   type BrowserAuthSessionUser,
 } from "./browser-auth-session-contract";
-
-const SESSION_COOKIE_NAME = "__Secure-openinspect.session_token";
+import { serializeBrowserSessionCookies } from "./browser-session-cookie";
 
 export type ServerAuthUser = BrowserAuthSessionUser;
 
@@ -28,14 +27,8 @@ export interface ServerAuthSession {
  */
 export async function getServerAuthSession(): Promise<ServerAuthSession | null> {
   const cookieStore = await cookies();
-  const sessionCookies = cookieStore
-    .getAll()
-    .filter(
-      ({ name }) => name === SESSION_COOKIE_NAME || name.startsWith(`${SESSION_COOKIE_NAME}.`)
-    );
-  if (sessionCookies.length === 0) return null;
-
-  const cookieHeader = sessionCookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const cookieHeader = serializeBrowserSessionCookies(cookieStore.getAll());
+  if (!cookieHeader) return null;
   const response = await proxyBrowserAuthRequest(
     new Request("https://browser-auth.internal/api/auth/get-session", {
       headers: { Cookie: cookieHeader },
