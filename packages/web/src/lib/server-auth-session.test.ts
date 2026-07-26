@@ -30,14 +30,14 @@ describe("getServerAuthSession", () => {
   it("resolves the app session through the signed browser-auth proxy", async () => {
     const session = {
       user: {
-        id: "user-1",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada",
         email: "ada@example.com",
         image: "https://images.example/ada",
       },
       session: {
         id: "session-1",
-        userId: "user-1",
+        userId: "0123456789abcdef0123456789abcdef",
         expiresAt: "2099-01-01T00:00:00.000Z",
       },
     };
@@ -92,6 +92,23 @@ describe("getServerAuthSession", () => {
     );
 
     await expect(getServerAuthSession()).rejects.toThrow();
+  });
+
+  it("rejects a noncanonical browser user id", async () => {
+    mocks.proxyBrowserAuthRequest.mockResolvedValue(
+      Response.json({
+        user: { id: "better-auth-default-id" },
+        session: {
+          id: "session-1",
+          userId: "better-auth-default-id",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        },
+      })
+    );
+
+    await expect(getServerAuthSession()).rejects.toThrow(
+      "Browser session user id is not canonical"
+    );
   });
 
   it("exposes an app-owned session contract", () => {

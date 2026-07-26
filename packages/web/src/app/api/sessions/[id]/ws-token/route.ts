@@ -1,14 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import { buildAuthDisplay, buildScmAttribution } from "@/lib/build-auth-identity";
+import { buildAuthDisplay } from "@/lib/build-auth-identity";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 /**
  * Generate a WebSocket authentication token for the current user.
  *
  * This endpoint:
- * 1. Verifies the user is authenticated via NextAuth
+ * 1. Verifies the Better Auth browser session
  * 2. Extracts user info from the session
  * 3. Proxies the request to the control plane to generate a token
  * 4. Returns the token to the client for WebSocket connection
@@ -26,10 +26,8 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const { id: sessionId } = await params;
 
   try {
-    // Extract user info from NextAuth session. Participant identity (userId)
-    // and SCM credentials are derived by the control plane from the Bearer
-    // principal and are rejected in the body under strict enforcement — the
-    // body carries display/attribution fields only.
+    // Participant identity and SCM provenance are derived by the control
+    // plane. The request carries only a cosmetic presence name.
     const user = session.user;
     const { authName } = buildAuthDisplay(user);
 
@@ -38,8 +36,6 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       method: "POST",
       body: JSON.stringify({
         authName,
-        // GitHub-only commit attribution; empty for Google.
-        ...buildScmAttribution(user),
       }),
     });
     const fetchMs = Date.now() - fetchStart;

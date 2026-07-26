@@ -15,7 +15,7 @@ export type ServerAuthUser = BrowserAuthSessionUser;
  * route authorization does not depend on framework-owned session types.
  */
 export interface ServerAuthSession {
-  user?: ServerAuthUser | null;
+  user: ServerAuthUser;
 }
 
 /**

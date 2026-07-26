@@ -1,3 +1,4 @@
+import { isCanonicalUserId } from "@open-inspect/shared";
 import type {
   BrowserAuthUser,
   BrowserAuthUserProjection,
@@ -25,6 +26,9 @@ export class D1BrowserAuthUserProjection implements BrowserAuthUserProjection {
 
   async project(user: BrowserAuthUser): Promise<void> {
     const id = requireNonEmpty(user.id, "id");
+    if (!isCanonicalUserId(id)) {
+      throw new Error("Browser auth user id is not canonical");
+    }
     const email = requireNonEmpty(user.email, "email").toLowerCase();
     const createdAt = requireTimestamp(user.createdAt, "createdAt");
     const updatedAt = requireTimestamp(user.updatedAt, "updatedAt");

@@ -42,9 +42,9 @@ export function createBrowserAuth(config: BrowserAuthConfig) {
     advanced: {
       cookiePrefix: "openinspect",
       useSecureCookies: true,
-      // Browser authentication and application authorization share the same
-      // canonical user ID. The activation layer projects this ID into users.id
-      // before any Better Auth route is exposed.
+      // Application authorization names users by the existing canonical
+      // 32-character lowercase-hex ID. Keep Better Auth authoritative for ID
+      // creation while preserving that stable cross-service contract.
       database: {
         generateId: () => generateId(),
       },

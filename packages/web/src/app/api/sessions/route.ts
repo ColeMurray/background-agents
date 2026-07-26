@@ -1,13 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import { buildAuthDisplay, buildScmAttribution } from "@/lib/build-auth-identity";
+import { buildAuthDisplay } from "@/lib/build-auth-identity";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   buildControlPlanePath,
   SESSION_CONTROL_PLANE_QUERY_PARAMS,
 } from "@/lib/control-plane-query";
-import { resolveCurrentUserId } from "@/lib/current-user";
 import { CURRENT_USER_CREATED_BY } from "@/lib/session-list";
 
 export async function GET(request: NextRequest) {
@@ -25,16 +24,11 @@ export async function GET(request: NextRequest) {
 
     const createdByValues = searchParams.getAll("createdBy");
     if (createdByValues.includes(CURRENT_USER_CREATED_BY)) {
-      const resolved = await resolveCurrentUserId(session.user);
-      if (!resolved.ok) {
-        return NextResponse.json(resolved.body, { status: resolved.status });
-      }
-
       searchParams.delete("createdBy");
       for (const value of createdByValues) {
         searchParams.append(
           "createdBy",
-          value === CURRENT_USER_CREATED_BY ? resolved.userId : value
+          value === CURRENT_USER_CREATED_BY ? session.user.id : value
         );
       }
     }
@@ -71,11 +65,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Explicitly pick allowed fields from the client body. Identity
-    // (userId/spawnSource/authProvider/authUserId/SCM credentials) is derived
-    // by the control plane from the authenticated Bearer principal and is
-    // rejected in the body under strict enforcement — send only the
-    // display/attribution blocks, which stay body-carried by design.
+    // Explicitly pick allowed fields from the client body. Identity and SCM
+    // provenance derive from authenticated control-plane state.
     const user = session.user;
 
     const sessionBody = {
@@ -90,10 +81,7 @@ export async function POST(request: NextRequest) {
       // side): a named environment or an ad-hoc repository list.
       environmentId: body.environmentId,
       repositories: body.repositories,
-      // Display-only auth block (GitHub or Google); GitHub-only scm*
-      // attribution is empty for Google.
       ...buildAuthDisplay(user),
-      ...buildScmAttribution(user),
     };
 
     const response = await controlPlaneUserFetch("/sessions", {

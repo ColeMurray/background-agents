@@ -11,7 +11,6 @@ vi.mock("@/lib/control-plane", () => ({
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { clearCurrentUserIdCacheForTests } from "@/lib/current-user";
 import { GET, POST } from "./route";
 
 function request(path: string) {
@@ -34,7 +33,6 @@ function controlPlaneBody(callIndex = 0): Record<string, unknown> {
 describe("sessions API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    clearCurrentUserIdCacheForTests();
   });
 
   it("returns 401 when the user session is missing", async () => {
@@ -48,7 +46,9 @@ describe("sessions API route", () => {
   });
 
   it("forwards allowed session query params", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    });
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ sessions: [], hasMore: false }, { status: 200 })
     );
@@ -66,72 +66,46 @@ describe("sessions API route", () => {
     await expect(response.json()).resolves.toEqual({ sessions: [], hasMore: false });
   });
 
-  it("resolves createdBy=me before forwarding sessions to the control plane", async () => {
+  it("replaces createdBy=me with the canonical session principal", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "12345",
-        login: "ada",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
       },
-    } as never);
-    vi.mocked(controlPlaneUserFetch)
-      .mockResolvedValueOnce(Response.json({ userId: "0123456789abcdef0123456789abcdef" }))
-      .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
+    });
+    vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
+      Response.json({ sessions: [], hasMore: false }, { status: 200 })
+    );
 
     const response = await GET(
       request("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me")
     );
 
-    expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
-      method: "PUT",
-    });
-    expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
-      2,
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
     );
     expect(response.status).toBe(200);
   });
 
-  it("returns 409 when createdBy=me cannot resolve a user id", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { email: "ada@example.com" },
-    } as never);
-
-    const response = await GET(request("/api/sessions?createdBy=me"));
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({ error: "User id unavailable" });
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
-  });
-
-  it("resolves createdBy=me for a Google user via the google provider route", async () => {
+  it("does not branch on the provider used to authenticate the session", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "google-sub-1",
+        id: "fedcba9876543210fedcba9876543210",
         name: "Pat PM",
         email: "pm@gmail.com",
         image: "https://lh3.googleusercontent.com/a/pat",
-        provider: "google",
       },
-    } as never);
-    vi.mocked(controlPlaneUserFetch)
-      .mockResolvedValueOnce(Response.json({ userId: "0123456789abcdef0123456789abcdef" }))
-      .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
+    });
+    vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
+      Response.json({ sessions: [], hasMore: false }, { status: 200 })
+    );
 
     const response = await GET(request("/api/sessions?limit=50&createdBy=me"));
 
-    expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
-      1,
-      "/provider-identities/google/google-sub-1",
-      {
-        method: "PUT",
-      }
-    );
-    expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
-      2,
-      "/sessions?limit=50&createdBy=0123456789abcdef0123456789abcdef"
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions?limit=50&createdBy=fedcba9876543210fedcba9876543210"
     );
     expect(response.status).toBe(200);
   });
@@ -139,59 +113,49 @@ describe("sessions API route", () => {
   it("resolves createdBy=me alongside explicit creator filters", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "12345",
-        login: "ada",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
       },
-    } as never);
-    vi.mocked(controlPlaneUserFetch)
-      .mockResolvedValueOnce(Response.json({ userId: "0123456789abcdef0123456789abcdef" }))
-      .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
+    });
+    vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
+      Response.json({ sessions: [], hasMore: false }, { status: 200 })
+    );
 
     const response = await GET(
       request("/api/sessions?createdBy=ffffffffffffffffffffffffffffffff&createdBy=me&limit=25")
     );
 
-    expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
-      method: "PUT",
-    });
-    expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
-      2,
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/sessions?limit=25&createdBy=ffffffffffffffffffffffffffffffff&createdBy=0123456789abcdef0123456789abcdef"
     );
     expect(response.status).toBe(200);
   });
 
-  it("reuses the resolved current user across createdBy=me pagination requests", async () => {
+  it("uses the same canonical principal across pagination requests", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "12345",
-        login: "ada",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
       },
-    } as never);
+    });
     vi.mocked(controlPlaneUserFetch)
-      .mockResolvedValueOnce(Response.json({ userId: "0123456789abcdef0123456789abcdef" }))
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: true }, { status: 200 }))
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
 
     await GET(request("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"));
     await GET(request("/api/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=me"));
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledTimes(3);
-    expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
-      method: "PUT",
-    });
+    expect(controlPlaneUserFetch).toHaveBeenCalledTimes(2);
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
-      2,
+      1,
       "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
-      3,
+      2,
       "/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
     );
   });
@@ -211,15 +175,13 @@ describe("sessions API route (POST)", () => {
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
-  it("sends auth* display and scm* attribution for a GitHub session — never identity or credentials", async () => {
+  it("sends display fields without identity or SCM assertions", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "12345",
-        login: "ada",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
-        provider: "github",
       },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -241,10 +203,6 @@ describe("sessions API route (POST)", () => {
       authEmail: "ada@example.com",
       authName: "Ada Lovelace",
       authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmLogin: "ada",
-      scmName: "Ada Lovelace",
-      scmEmail: "ada@example.com",
-      scmAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
     });
     // Forbidden under strict identity enforcement: the control plane derives
     // these from the Bearer principal, so the web must not send them.
@@ -259,14 +217,13 @@ describe("sessions API route (POST)", () => {
     expect(sent.scmTokenExpiresAt).toBeUndefined();
   });
 
-  it("sends auth* display but no scm* for a Google session", async () => {
+  it("uses the same display-only body for another sign-in provider", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "google-sub-1",
+        id: "fedcba9876543210fedcba9876543210",
         name: "Pat PM",
         email: "pm@gmail.com",
         image: "https://lh3.googleusercontent.com/a/pat",
-        provider: "google",
       },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -292,7 +249,7 @@ describe("sessions API route (POST)", () => {
 
   it("forwards environmentId for environment launches", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "12345", provider: "github" },
+      user: { id: "0123456789abcdef0123456789abcdef" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess3" }, { status: 201 })
@@ -310,7 +267,7 @@ describe("sessions API route (POST)", () => {
 
   it("forwards the repositories list for ad-hoc multi-repo launches", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "12345", provider: "github" },
+      user: { id: "0123456789abcdef0123456789abcdef" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess4" }, { status: 201 })
@@ -330,7 +287,7 @@ describe("sessions API route (POST)", () => {
 
   it("still strips fields outside the allowlist", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "12345", provider: "github" },
+      user: { id: "0123456789abcdef0123456789abcdef" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess5" }, { status: 201 })

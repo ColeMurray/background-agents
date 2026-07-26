@@ -48,15 +48,13 @@ describe("automations API route (POST)", () => {
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
-  it("sends auth* display and scm* attribution for a GitHub user — never identity or credentials", async () => {
+  it("sends cosmetic auth display without identity or SCM assertions", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "12345",
-        login: "ada",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
-        provider: "github",
       },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -77,10 +75,6 @@ describe("automations API route (POST)", () => {
       authEmail: "ada@example.com",
       authName: "Ada Lovelace",
       authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmLogin: "ada",
-      scmName: "Ada Lovelace",
-      scmEmail: "ada@example.com",
-      scmAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
     });
     // Forbidden under strict identity enforcement: the control plane derives
     // created_by from the Bearer principal.
@@ -94,14 +88,13 @@ describe("automations API route (POST)", () => {
     expect(sent.scmTokenExpiresAt).toBeUndefined();
   });
 
-  it("sends auth* display but no scm* for a Google user (F1/F2: a Google sub must never become a GitHub identity)", async () => {
+  it("uses the same display-only shape for another provider", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "google-sub-1",
+        id: "fedcba9876543210fedcba9876543210",
         name: "Pat PM",
         email: "pm@gmail.com",
         image: "https://lh3.googleusercontent.com/a/pat",
-        provider: "google",
       },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -119,9 +112,7 @@ describe("automations API route (POST)", () => {
     expect(sent.userId).toBeUndefined();
     expect(sent.authProvider).toBeUndefined();
     expect(sent.authUserId).toBeUndefined();
-    // Regression guard: the bug sent scmUserId = user.id = the Google sub, which
-    // the control plane then stored under provider='github'. After the fix there
-    // is no scm* block at all for a Google user.
+    // Provider identity and SCM provenance come from control-plane auth state.
     expect(sent.scmUserId).toBeUndefined();
     expect(sent.scmToken).toBeUndefined();
     expect(sent.scmLogin).toBeUndefined();
@@ -132,7 +123,7 @@ describe("automations API route (POST)", () => {
 
   it("drops non-allowlisted fields (including client-asserted identity) from the forwarded body", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "12345", login: "ada", provider: "github" },
+      user: { id: "0123456789abcdef0123456789abcdef" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto3" } }, { status: 201 })

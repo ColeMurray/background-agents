@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { buildServiceAuthHeaders } from "@open-inspect/shared";
+import { buildServiceAuthHeaders, isCanonicalUserId } from "@open-inspect/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "../../src/router";
 
@@ -123,6 +123,7 @@ describe("browser auth callback", () => {
       user: { id: string; name: string; email: string };
       session: { userId: string };
     }>();
+    expect(isCanonicalUserId(session.user.id)).toBe(true);
     expect(session).toMatchObject({
       user: {
         id: expect.any(String),
