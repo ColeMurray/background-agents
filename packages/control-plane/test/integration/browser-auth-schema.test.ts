@@ -81,7 +81,7 @@ describe("terminal browser-auth schema", () => {
       )
         .bind("a".repeat(64))
         .run()
-    ).rejects.toThrow();
+    ).rejects.toThrow(/FOREIGN KEY constraint failed/);
 
     await expect(
       env.DB.prepare(
@@ -95,7 +95,7 @@ describe("terminal browser-auth schema", () => {
       )
         .bind("b".repeat(64), "c".repeat(43))
         .run()
-    ).rejects.toThrow();
+    ).rejects.toThrow(/FOREIGN KEY constraint failed/);
 
     await expect(
       env.DB.prepare(
@@ -107,7 +107,7 @@ describe("terminal browser-auth schema", () => {
            'identity-2', 1, 1
          )`
       ).run()
-    ).rejects.toThrow();
+    ).rejects.toThrow(/FOREIGN KEY constraint failed/);
   });
 
   it("enforces provider-credential row shapes and supported storage versions", async () => {
@@ -146,11 +146,13 @@ describe("terminal browser-auth schema", () => {
 
     await expect(
       insertCredential("access_only_expiring", 2, "unexpected-refresh", null)
-    ).rejects.toThrow();
-    await expect(insertCredential("access_only_nonexpiring", 2, null, null)).rejects.toThrow();
-    await expect(
-      insertCredential("refreshable", 2, "refresh-ciphertext", null, 2)
-    ).rejects.toThrow();
+    ).rejects.toThrow(/CHECK constraint failed/);
+    await expect(insertCredential("access_only_nonexpiring", 2, null, null)).rejects.toThrow(
+      /CHECK constraint failed/
+    );
+    await expect(insertCredential("refreshable", 2, "refresh-ciphertext", null, 2)).rejects.toThrow(
+      /CHECK constraint failed/
+    );
     await expect(
       insertCredential("refreshable", 2, "refresh-ciphertext", null)
     ).resolves.toMatchObject({ meta: { changes: 1 } });
@@ -183,7 +185,7 @@ describe("terminal browser-auth schema", () => {
            'identity-1', 1, 1
          )`
       ).run()
-    ).rejects.toThrow();
+    ).rejects.toThrow(/CHECK constraint failed/);
     await expect(
       env.DB.prepare(
         `INSERT INTO verified_email_claims
@@ -194,7 +196,7 @@ describe("terminal browser-auth schema", () => {
            'identity-1', 1, 1
          )`
       ).run()
-    ).rejects.toThrow();
+    ).rejects.toThrow(/CHECK constraint failed/);
     await expect(
       env.DB.prepare(
         `INSERT INTO verified_email_claims

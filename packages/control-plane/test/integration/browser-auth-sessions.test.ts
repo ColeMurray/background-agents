@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { BrowserAuthSessionStore } from "../../src/db/browser-auth-sessions";
+import {
+  BROWSER_SESSION_ABSOLUTE_LIFETIME_MS,
+  BROWSER_SESSION_IDLE_LIFETIME_MS,
+  BROWSER_SESSION_TOUCH_INTERVAL_MS,
+  BrowserAuthSessionStore,
+} from "../../src/db/browser-auth-sessions";
 import type { BrowserSessionAuthenticationError } from "../../src/db/browser-auth-sessions";
 import { hashToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
@@ -41,8 +46,8 @@ describe("BrowserAuthSessionStore", () => {
     ).resolves.toEqual({
       credential: CREDENTIAL,
       credentialId: "browser-session-1",
-      expiresAt: NOW_MS + 7 * 24 * 60 * 60 * 1000,
-      absoluteExpiresAt: NOW_MS + 30 * 24 * 60 * 60 * 1000,
+      expiresAt: NOW_MS + BROWSER_SESSION_IDLE_LIFETIME_MS,
+      absoluteExpiresAt: NOW_MS + BROWSER_SESSION_ABSOLUTE_LIFETIME_MS,
     });
 
     const persisted = await env.DB.prepare(
@@ -126,14 +131,14 @@ describe("BrowserAuthSessionStore", () => {
       })
     );
 
-    now += 8 * 24 * 60 * 60 * 1000;
+    now += BROWSER_SESSION_IDLE_LIFETIME_MS + 1;
     await expect(store.authenticate(CREDENTIAL)).rejects.toEqual(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "idle_expired",
       })
     );
 
-    now = NOW_MS + 31 * 24 * 60 * 60 * 1000;
+    now = NOW_MS + BROWSER_SESSION_ABSOLUTE_LIFETIME_MS + 1;
     await expect(store.authenticate(CREDENTIAL)).rejects.toEqual(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "absolute_expired",
@@ -196,7 +201,7 @@ describe("BrowserAuthSessionStore", () => {
       providerIdentityId: "identity-1",
     });
 
-    now += 23 * 60 * 60 * 1000;
+    now += BROWSER_SESSION_TOUCH_INTERVAL_MS - 1;
     await store.touchQualifyingActivity(created.credentialId);
     let row = await env.DB.prepare(
       "SELECT last_used_at, expires_at FROM browser_auth_sessions WHERE id = ?"
@@ -205,11 +210,11 @@ describe("BrowserAuthSessionStore", () => {
       .first<{ last_used_at: number; expires_at: number }>();
     expect(row).toEqual({
       last_used_at: NOW_MS,
-      expires_at: NOW_MS + 7 * 24 * 60 * 60 * 1000,
+      expires_at: NOW_MS + BROWSER_SESSION_IDLE_LIFETIME_MS,
     });
 
     for (const day of [6, 12, 18, 24, 28]) {
-      now = NOW_MS + day * 24 * 60 * 60 * 1000;
+      now = NOW_MS + day * BROWSER_SESSION_TOUCH_INTERVAL_MS;
       await store.touchQualifyingActivity(created.credentialId);
     }
     row = await env.DB.prepare(
@@ -226,13 +231,14 @@ describe("BrowserAuthSessionStore", () => {
   it("does not renew a revoked or expired session", async () => {
     let now = NOW_MS;
     let credentialSequence = 0;
+    let idSequence = 0;
     const store = new BrowserAuthSessionStore(env.DB, {
       clock: { now: () => now },
       credentialGenerator: {
         generate: () =>
           `oi_bsess_${String.fromCharCode("a".charCodeAt(0) + credentialSequence++).repeat(43)}`,
       },
-      idGenerator: { generate: () => `browser-session-${credentialSequence}` },
+      idGenerator: { generate: () => `browser-session-${++idSequence}` },
     });
     const revoked = await store.create({
       userId: "user-1",
@@ -244,7 +250,7 @@ describe("BrowserAuthSessionStore", () => {
     });
     await store.revoke(revoked.credential, "operator");
 
-    now += 8 * 24 * 60 * 60 * 1000;
+    now += BROWSER_SESSION_IDLE_LIFETIME_MS + 1;
     await store.touchQualifyingActivity(revoked.credentialId);
     await store.touchQualifyingActivity(expired.credentialId);
 
