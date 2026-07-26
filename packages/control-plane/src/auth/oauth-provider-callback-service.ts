@@ -8,8 +8,9 @@ import type {
   ResolvedImmutableProviderIdentity,
 } from "./immutable-provider-identity";
 import { AccountLinkRequiredError } from "./immutable-provider-identity";
-import type { ConsumedOAuthFlowState, OAuthFlowStateReader } from "./oauth-flow-state";
-import { OAuthProviderError, type OAuthSignInProviderRegistry } from "./providers/types";
+import type { OAuthProviderCallbackHandlerRegistry } from "./oauth-provider-callback-handler";
+import type { ConsumedOAuthFlowState } from "./oauth-flow-state";
+import { OAuthProviderError } from "./providers/types";
 import type { SignInProvider } from "./sign-in-provider";
 
 const MAX_PROVIDER_AUTHORIZATION_CODE_LENGTH = 4_096;
@@ -43,8 +44,7 @@ export interface OAuthClientRegistryPort {
 
 export interface OAuthProviderCallbackServiceDependencies {
   readonly clients: OAuthClientRegistryPort;
-  readonly providers: OAuthSignInProviderRegistry;
-  readonly flowStateStore: OAuthFlowStateReader;
+  readonly providerHandlers: OAuthProviderCallbackHandlerRegistry;
   readonly admissionPolicy: AdmissionPolicyPort;
   readonly identityService: ImmutableProviderIdentityPort;
   readonly authorizationCodeStore: OAuthAuthorizationCodeIssuer;
@@ -73,11 +73,9 @@ export type OAuthProviderCallbackFailure =
 export class OAuthProviderCallbackError extends Error {
   constructor(
     readonly failure: OAuthProviderCallbackFailure,
-    readonly redirectUri: string,
-    readonly state: string,
-    cause: unknown
+    readonly redirectUri: string
   ) {
-    super("OAuth provider callback could not be completed", { cause });
+    super("OAuth provider callback could not be completed");
     this.name = "OAuthProviderCallbackError";
   }
 }
@@ -109,49 +107,19 @@ export class OAuthProviderCallbackService {
       throw new OAuthProviderCallbackRequestError();
     }
 
-    if (provider === "google") {
-      const flow = await this.dependencies.flowStateStore.consume(input.state, "google");
-      this.requireTrustedFlowBinding(flow);
-      try {
-        const signIn = await this.dependencies.providers.google.exchangeAuthorizationCode({
-          code: input.code,
-          codeVerifier: flow.providerPkceVerifier,
-          oidcNonceHash: flow.oidcNonceHash,
-        });
-        return await this.completeVerifiedSignIn(flow, signIn, input.state);
-      } catch (error) {
-        throw new OAuthProviderCallbackError(
-          callbackFailure(error),
-          flow.redirectUri,
-          input.state,
-          error
-        );
-      }
-    }
-
-    const flow = await this.dependencies.flowStateStore.consume(input.state, "github");
+    const callback = await this.dependencies.providerHandlers[provider].consume(input.state);
+    const { flow } = callback;
     this.requireTrustedFlowBinding(flow);
     try {
-      const signIn = await this.dependencies.providers.github.exchangeAuthorizationCode({
-        code: input.code,
-        codeVerifier: flow.providerPkceVerifier,
-      });
+      const signIn = await callback.exchange(input.code);
       return await this.completeVerifiedSignIn(flow, signIn, input.state);
     } catch (error) {
-      throw new OAuthProviderCallbackError(
-        callbackFailure(error),
-        flow.redirectUri,
-        input.state,
-        error
-      );
+      throw new OAuthProviderCallbackError(callbackFailure(error), flow.redirectUri);
     }
   }
 
   async completeDenial(provider: SignInProvider, state: string): Promise<URL> {
-    const flow =
-      provider === "google"
-        ? await this.dependencies.flowStateStore.consume(state, "google")
-        : await this.dependencies.flowStateStore.consume(state, "github");
+    const { flow } = await this.dependencies.providerHandlers[provider].consume(state);
     this.requireTrustedFlowBinding(flow);
     const redirect = new URL(flow.redirectUri);
     redirect.searchParams.set("error", "access_denied");

@@ -20,7 +20,6 @@ export type GitHubAppPermissionRequirements = Readonly<Record<string, GitHubAppP
 
 export interface GitHubAppPermissionOptions {
   readonly requireOrganizationMembers: boolean;
-  readonly requireEmailAddresses: boolean;
   readonly requireIssues: boolean;
 }
 
@@ -54,9 +53,9 @@ export function buildGitHubAppPermissionRequirements(
     contents: "write",
     pull_requests: "write",
     metadata: "read",
+    email_addresses: "read",
     ...(options.requireIssues ? { issues: "write" as const } : {}),
     ...(options.requireOrganizationMembers ? { members: "read" as const } : {}),
-    ...(options.requireEmailAddresses ? { email_addresses: "read" as const } : {}),
   };
 }
 
@@ -118,9 +117,10 @@ function assertPermissions(
 
 export async function preflightGitHubAppPermissions(
   config: GitHubAppConfig,
-  requirements: GitHubAppPermissionRequirements,
+  options: GitHubAppPermissionOptions,
   dependencies: GitHubAppPermissionPreflightDependencies = defaultDependencies
 ): Promise<GitHubAppPermissionPreflightReport> {
+  const requirements = buildGitHubAppPermissionRequirements(options);
   let jwt: string;
   try {
     jwt = await dependencies.generateAppJwt(config.appId, config.privateKey);

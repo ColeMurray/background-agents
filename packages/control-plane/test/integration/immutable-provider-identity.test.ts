@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import {
+  AccountLinkRequiredError,
   ImmutableProviderIdentityService,
   InvalidProviderIdentityEvidenceError,
   ProviderIdentityAdapterMismatchError,
-  type AccountLinkRequiredError,
   type ProviderIdentityEvidence,
 } from "../../src/auth/immutable-provider-identity";
 import { ProviderCredentialStore } from "../../src/db/provider-credentials";
@@ -41,7 +41,7 @@ describe("ImmutableProviderIdentityService", () => {
       userId: "user-1",
       providerIdentityId: "identity-1",
       isNewUser: true,
-      collisions: [],
+      collisionCount: 0,
     });
 
     await expect(
@@ -77,8 +77,9 @@ describe("ImmutableProviderIdentityService", () => {
       },
     });
 
-    await expect(
-      service.resolve({
+    let rejection: unknown;
+    try {
+      await service.resolve({
         identity: {
           provider: "google",
           issuer: "https://accounts.google.com",
@@ -86,13 +87,14 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: ["person@example.com"],
           primaryEmail: "person@example.com",
         },
-      })
-    ).rejects.toEqual(
-      expect.objectContaining<AccountLinkRequiredError>({
-        name: "AccountLinkRequiredError",
-        conflictingEmails: ["person@example.com"],
-      })
-    );
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(AccountLinkRequiredError);
+    expect(rejection).toMatchObject({ collisionCount: 1 });
+    expect(rejection).not.toHaveProperty("conflictingEmails");
 
     await expect(
       env.DB.prepare(
@@ -144,7 +146,7 @@ describe("ImmutableProviderIdentityService", () => {
       userId: "google-user",
       providerIdentityId: "google-identity",
       isNewUser: false,
-      collisions: ["github@example.com"],
+      collisionCount: 1,
     });
 
     await expect(
@@ -323,6 +325,113 @@ describe("ImmutableProviderIdentityService", () => {
         },
       })
     ).rejects.toBeInstanceOf(InvalidProviderIdentityEvidenceError);
+  });
+
+  it("preserves the provider subject exactly", async () => {
+    const ids = ["user-1", "identity-1"];
+    const service = new ImmutableProviderIdentityService(env.DB, {
+      clock: { now: () => NOW_MS },
+      idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
+    });
+
+    await service.resolve({
+      identity: {
+        provider: "google",
+        issuer: "https://accounts.google.com",
+        subject: " subject-with-significant-spaces ",
+        verifiedEmails: [],
+        primaryEmail: null,
+      },
+    });
+
+    await expect(
+      env.DB.prepare(
+        `SELECT provider_user_id
+         FROM user_identities
+         WHERE id = 'identity-1'`
+      ).first()
+    ).resolves.toEqual({
+      provider_user_id: " subject-with-significant-spaces ",
+    });
+  });
+
+  it("resolves a bounded provider email set without one D1 binding or statement per email", async () => {
+    const ids = ["user-1", "identity-1"];
+    const service = new ImmutableProviderIdentityService(env.DB, {
+      clock: { now: () => NOW_MS },
+      idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
+    });
+    const verifiedEmails = Array.from({ length: 101 }, (_, index) => `person-${index}@example.com`);
+
+    await expect(
+      service.resolve({
+        identity: {
+          provider: "google",
+          issuer: "https://accounts.google.com",
+          subject: "google-many-emails",
+          verifiedEmails,
+          primaryEmail: verifiedEmails[0],
+        },
+      })
+    ).resolves.toMatchObject({
+      userId: "user-1",
+      providerIdentityId: "identity-1",
+      isNewUser: true,
+      collisionCount: 0,
+    });
+
+    await expect(
+      service.resolve({
+        identity: {
+          provider: "google",
+          issuer: "https://accounts.google.com",
+          subject: "google-many-emails",
+          verifiedEmails,
+          primaryEmail: verifiedEmails[0],
+        },
+      })
+    ).resolves.toMatchObject({
+      userId: "user-1",
+      providerIdentityId: "identity-1",
+      isNewUser: false,
+      collisionCount: 0,
+    });
+
+    await expect(
+      env.DB.prepare("SELECT count(*) AS count FROM verified_email_claims").first()
+    ).resolves.toEqual({ count: 101 });
+  });
+
+  it("rejects an unbounded provider email set before writing identity state", async () => {
+    const service = new ImmutableProviderIdentityService(env.DB, {
+      clock: { now: () => NOW_MS },
+      idGenerator: { generate: () => crypto.randomUUID() },
+    });
+    const verifiedEmails = Array.from(
+      { length: 1_001 },
+      (_, index) => `person-${index}@example.com`
+    );
+
+    await expect(
+      service.resolve({
+        identity: {
+          provider: "google",
+          issuer: "https://accounts.google.com",
+          subject: "google-too-many-emails",
+          verifiedEmails,
+          primaryEmail: verifiedEmails[0],
+        },
+      })
+    ).rejects.toBeInstanceOf(InvalidProviderIdentityEvidenceError);
+
+    await expect(
+      env.DB.prepare(
+        `SELECT
+           (SELECT count(*) FROM users) AS users,
+           (SELECT count(*) FROM user_identities) AS identities,
+           (SELECT count(*) FROM verified_email_claims) AS claims`
+      ).first()
+    ).resolves.toEqual({ users: 0, identities: 0, claims: 0 });
   });
 
   it("rejects provider credentials attached to a Google identity at runtime", async () => {

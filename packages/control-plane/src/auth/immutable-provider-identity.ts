@@ -9,6 +9,7 @@ const CANONICAL_ISSUERS: Readonly<Record<SignInProvider, string>> = {
   google: "https://accounts.google.com",
 };
 const MAX_RESOLUTION_ATTEMPTS = 3;
+const MAX_VERIFIED_EMAIL_CLAIMS = 1_000;
 
 export type ProviderIdentityEvidence =
   | {
@@ -24,7 +25,7 @@ export interface ResolvedImmutableProviderIdentity {
   readonly userId: string;
   readonly providerIdentityId: string;
   readonly isNewUser: boolean;
-  readonly collisions: readonly string[];
+  readonly collisionCount: number;
 }
 
 export interface ImmutableProviderIdentityDependencies {
@@ -58,7 +59,7 @@ export class InvalidProviderIdentityEvidenceError extends Error {
 }
 
 export class AccountLinkRequiredError extends Error {
-  constructor(readonly conflictingEmails: readonly string[]) {
+  constructor(readonly collisionCount: number) {
     super("This verified identity requires explicit account linking");
     this.name = "AccountLinkRequiredError";
   }
@@ -105,14 +106,18 @@ function normalizeIdentityEvidence(identity: VerifiedProviderIdentity): Normaliz
       "Provider identity issuer is not the configured canonical issuer"
     );
   }
-  const subject = identity.subject.trim();
-  if (subject.length === 0) {
+  if (identity.subject.length === 0) {
     throw new InvalidProviderIdentityEvidenceError("Provider identity subject is empty");
   }
 
   const verifiedEmails = [
     ...new Set(identity.verifiedEmails.map((email) => email.trim().toLowerCase()).filter(Boolean)),
   ];
+  if (verifiedEmails.length > MAX_VERIFIED_EMAIL_CLAIMS) {
+    throw new InvalidProviderIdentityEvidenceError(
+      "Provider identity has too many verified email claims"
+    );
+  }
   const primaryEmail = identity.primaryEmail?.trim().toLowerCase() || null;
   if (primaryEmail !== null && !verifiedEmails.includes(primaryEmail)) {
     throw new InvalidProviderIdentityEvidenceError(
@@ -123,7 +128,7 @@ function normalizeIdentityEvidence(identity: VerifiedProviderIdentity): Normaliz
   return {
     provider: identity.provider,
     issuer: identity.issuer,
-    subject,
+    subject: identity.subject,
     login: normalizeOptional(identity.login),
     displayName: normalizeOptional(identity.displayName),
     avatarUrl: normalizeOptional(identity.avatarUrl),
@@ -137,10 +142,6 @@ function requireGeneratedId(value: string, kind: string): string {
     throw new Error(`Provider identity ${kind} generator returned an invalid id`);
   }
   return value;
-}
-
-function placeholders(count: number): string {
-  return Array.from({ length: count }, () => "?").join(", ");
 }
 
 export class ImmutableProviderIdentityService {
@@ -166,7 +167,7 @@ export class ImmutableProviderIdentityService {
 
       const conflictingEmails = await this.findConflictingEmails(identity.verifiedEmails, null);
       if (conflictingEmails.length > 0) {
-        throw new AccountLinkRequiredError(conflictingEmails);
+        throw new AccountLinkRequiredError(conflictingEmails.length);
       }
 
       try {
@@ -217,17 +218,21 @@ export class ImmutableProviderIdentityService {
           identity.primaryEmail,
           now
         ),
-      ...identity.verifiedEmails.map((email) =>
+    ];
+    if (identity.verifiedEmails.length > 0) {
+      statements.push(
         this.db
           .prepare(
             `INSERT INTO verified_email_claims (
                email, user_id, source_kind, source_provider_identity_id,
                created_at, last_verified_at
-             ) VALUES (?, ?, 'provider_verified', ?, ?, ?)`
+             )
+             SELECT CAST(value AS TEXT), ?, 'provider_verified', ?, ?, ?
+             FROM json_each(?)`
           )
-          .bind(email, userId, providerIdentityId, now, now)
-      ),
-    ];
+          .bind(userId, providerIdentityId, now, now, JSON.stringify(identity.verifiedEmails))
+      );
+    }
     if (credentialWrite) {
       statements.push(
         await credentialWrite.store.prepareInitialInsert(
@@ -244,7 +249,7 @@ export class ImmutableProviderIdentityService {
       userId,
       providerIdentityId,
       isNewUser: true,
-      collisions: [],
+      collisionCount: 0,
     };
   }
 
@@ -278,8 +283,6 @@ export class ImmutableProviderIdentityService {
     }
 
     const now = this.dependencies.clock.now();
-    const claims = await this.findClaims(identity.verifiedEmails);
-    const claimsByEmail = new Map(claims.map((claim) => [claim.email, claim]));
     const statements: SqlStatement[] = [
       this.db
         .prepare(
@@ -296,31 +299,29 @@ export class ImmutableProviderIdentityService {
         )
         .bind(identity.displayName, identity.avatarUrl, now, existing.user_id),
     ];
-
-    for (const email of identity.verifiedEmails) {
-      const claim = claimsByEmail.get(email);
-      if (claim?.user_id === existing.user_id && claim.source_kind !== "legacy_canonical") {
-        statements.push(
-          this.db
-            .prepare(
-              `UPDATE verified_email_claims
-               SET last_verified_at = ?
-               WHERE email = ? AND user_id = ?`
-            )
-            .bind(now, email, existing.user_id)
-        );
-      } else if (!claim) {
-        statements.push(
-          this.db
-            .prepare(
-              `INSERT OR IGNORE INTO verified_email_claims (
-                 email, user_id, source_kind, source_provider_identity_id,
-                 created_at, last_verified_at
-               ) VALUES (?, ?, 'provider_verified', ?, ?, ?)`
-            )
-            .bind(email, existing.user_id, existing.id, now, now)
-        );
-      }
+    if (identity.verifiedEmails.length > 0) {
+      const serializedEmails = JSON.stringify(identity.verifiedEmails);
+      statements.push(
+        this.db
+          .prepare(
+            `UPDATE verified_email_claims
+             SET last_verified_at = ?
+             WHERE user_id = ?
+               AND source_kind != 'legacy_canonical'
+               AND email IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
+          )
+          .bind(now, existing.user_id, serializedEmails),
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO verified_email_claims (
+               email, user_id, source_kind, source_provider_identity_id,
+               created_at, last_verified_at
+             )
+             SELECT CAST(value AS TEXT), ?, 'provider_verified', ?, ?, ?
+             FROM json_each(?)`
+          )
+          .bind(existing.user_id, existing.id, now, now, serializedEmails)
+      );
     }
 
     await this.db.batch(statements);
@@ -331,7 +332,8 @@ export class ImmutableProviderIdentityService {
       userId: existing.user_id,
       providerIdentityId: existing.id,
       isNewUser: false,
-      collisions: await this.findConflictingEmails(identity.verifiedEmails, existing.user_id),
+      collisionCount: (await this.findConflictingEmails(identity.verifiedEmails, existing.user_id))
+        .length,
     };
   }
 
@@ -352,9 +354,9 @@ export class ImmutableProviderIdentityService {
       .prepare(
         `SELECT email, user_id, source_kind
          FROM verified_email_claims
-         WHERE email IN (${placeholders(emails.length)})`
+         WHERE email IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
       )
-      .bind(...emails)
+      .bind(JSON.stringify(emails))
       .all<EmailClaimRow>();
 
     return result.results.map((row) => {

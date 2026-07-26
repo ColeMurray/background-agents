@@ -33,15 +33,21 @@ describe("GitHub App permission preflight", () => {
       );
     const requirements = buildGitHubAppPermissionRequirements({
       requireOrganizationMembers: true,
-      requireEmailAddresses: true,
       requireIssues: false,
     });
 
     await expect(
-      preflightGitHubAppPermissions(config, requirements, {
-        fetcher,
-        generateAppJwt: vi.fn(async () => "app-jwt"),
-      })
+      preflightGitHubAppPermissions(
+        config,
+        {
+          requireOrganizationMembers: true,
+          requireIssues: false,
+        },
+        {
+          fetcher,
+          generateAppJwt: vi.fn(async () => "app-jwt"),
+        }
+      )
     ).resolves.toEqual({
       appId: "123",
       installationId: "456",
@@ -61,15 +67,23 @@ describe("GitHub App permission preflight", () => {
     );
   });
 
+  it("always requires access to the provider email evidence used by sign-in", () => {
+    expect(
+      buildGitHubAppPermissionRequirements({
+        requireOrganizationMembers: false,
+        requireIssues: false,
+      })
+    ).toMatchObject({ email_addresses: "read" });
+  });
+
   it("wraps transport failures in the preflight error boundary", async () => {
     await expect(
       preflightGitHubAppPermissions(
         config,
-        buildGitHubAppPermissionRequirements({
+        {
           requireOrganizationMembers: false,
-          requireEmailAddresses: true,
           requireIssues: false,
-        }),
+        },
         {
           fetcher: vi.fn(async () => {
             throw new TypeError("network down");
@@ -84,11 +98,10 @@ describe("GitHub App permission preflight", () => {
     await expect(
       preflightGitHubAppPermissions(
         config,
-        buildGitHubAppPermissionRequirements({
+        {
           requireOrganizationMembers: false,
-          requireEmailAddresses: true,
           requireIssues: false,
-        }),
+        },
         {
           fetcher: vi.fn(),
           generateAppJwt: vi.fn(async () => {
@@ -125,11 +138,10 @@ describe("GitHub App permission preflight", () => {
     await expect(
       preflightGitHubAppPermissions(
         config,
-        buildGitHubAppPermissionRequirements({
+        {
           requireOrganizationMembers: false,
-          requireEmailAddresses: true,
           requireIssues: false,
-        }),
+        },
         {
           fetcher,
           generateAppJwt: vi.fn(async () => "app-jwt"),
@@ -143,11 +155,50 @@ describe("GitHub App permission preflight", () => {
     );
   });
 
-  it("rejects a suspended or mismatched installation", async () => {
+  it("rejects a suspended installation", async () => {
     const permissions = {
       contents: "write",
       pull_requests: "write",
       metadata: "read",
+      email_addresses: "read",
+    };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ id: 123, permissions }))
+      .mockResolvedValueOnce(
+        Response.json({
+          id: 456,
+          app_id: 123,
+          permissions,
+          suspended_at: "2026-07-25T00:00:00Z",
+        })
+      );
+
+    await expect(
+      preflightGitHubAppPermissions(
+        config,
+        {
+          requireOrganizationMembers: false,
+          requireIssues: false,
+        },
+        {
+          fetcher,
+          generateAppJwt: vi.fn(async () => "app-jwt"),
+        }
+      )
+    ).rejects.toEqual(
+      expect.objectContaining({
+        message: "GitHub App installation is suspended",
+      })
+    );
+  });
+
+  it("rejects an installation belonging to a different app", async () => {
+    const permissions = {
+      contents: "write",
+      pull_requests: "write",
+      metadata: "read",
+      email_addresses: "read",
     };
     const fetcher = vi
       .fn()
@@ -157,38 +208,40 @@ describe("GitHub App permission preflight", () => {
           id: 456,
           app_id: 999,
           permissions,
-          suspended_at: "2026-07-25T00:00:00Z",
+          suspended_at: null,
         })
       );
 
     await expect(
       preflightGitHubAppPermissions(
         config,
-        buildGitHubAppPermissionRequirements({
+        {
           requireOrganizationMembers: false,
-          requireEmailAddresses: false,
           requireIssues: false,
-        }),
+        },
         {
           fetcher,
           generateAppJwt: vi.fn(async () => "app-jwt"),
         }
       )
-    ).rejects.toBeInstanceOf(GitHubAppPermissionPreflightError);
+    ).rejects.toEqual(
+      expect.objectContaining({
+        message:
+          "GitHub App installation response does not match the configured app and installation",
+      })
+    );
   });
 
   it("requires issues write only when GitHub bot behavior is enabled", () => {
     expect(
       buildGitHubAppPermissionRequirements({
         requireOrganizationMembers: false,
-        requireEmailAddresses: false,
         requireIssues: true,
       })
     ).toMatchObject({ issues: "write" });
     expect(
       buildGitHubAppPermissionRequirements({
         requireOrganizationMembers: false,
-        requireEmailAddresses: false,
         requireIssues: false,
       })
     ).not.toHaveProperty("issues");

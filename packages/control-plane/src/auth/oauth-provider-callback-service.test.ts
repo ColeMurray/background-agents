@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AdmissionDeniedError, AdmissionUnavailableError } from "./admission-policy";
 import { AccountLinkRequiredError } from "./immutable-provider-identity";
+import { createOAuthProviderCallbackHandlers } from "./oauth-provider-callback-handler";
 import { OAuthProviderCallbackService } from "./oauth-provider-callback-service";
 import type { OAuthFlowStateReader } from "./oauth-flow-state";
 import { OAuthProviderError, type OAuthSignInProviderRegistry } from "./providers/types";
@@ -38,14 +39,67 @@ function providerRegistry(): OAuthSignInProviderRegistry {
 }
 
 describe("OAuthProviderCallbackService", () => {
-  it("rejects a missing provider code before consuming transaction state", async () => {
-    const consumeFlow = vi.fn();
+  it("delegates provider callback mechanics to the selected handler", async () => {
+    const exchange = vi.fn(async () => ({
+      identity: {
+        provider: "google" as const,
+        issuer: "https://accounts.google.com",
+        subject: "google-subject",
+        verifiedEmails: ["person@example.com"],
+        primaryEmail: "person@example.com",
+      },
+      credential: null,
+    }));
+    const consume = vi.fn(async () => ({
+      flow: {
+        flowId: "flow-1",
+        provider: "google" as const,
+        clientId: "web" as const,
+        redirectUri: "https://web.example/api/auth/callback",
+        clientCodeChallenge: CLIENT_CHALLENGE,
+        providerPkceVerifier: PROVIDER_VERIFIER,
+        oidcNonceHash: "f".repeat(64),
+      },
+      exchange,
+    }));
     const service = new OAuthProviderCallbackService({
       clients: { accepts: vi.fn(() => true) },
-      providers: providerRegistry(),
-      flowStateStore: {
-        consume: consumeFlow,
-      } as unknown as OAuthFlowStateReader,
+      providerHandlers: {
+        github: { consume: vi.fn() },
+        google: { consume },
+      },
+      admissionPolicy: { requireAdmission: vi.fn() },
+      identityService: {
+        resolve: vi.fn(async () => ({
+          userId: "user-1",
+          providerIdentityId: "identity-1",
+          isNewUser: true,
+          collisionCount: 0,
+        })),
+      },
+      authorizationCodeStore: {
+        issue: vi.fn(async () => ({
+          code: `oi_code_${"a".repeat(43)}`,
+          expiresAt: 1_800_000_060_000,
+        })),
+      },
+    });
+
+    await service.completeAuthorization("google", { state: STATE, code: "google-code" });
+
+    expect(consume).toHaveBeenCalledWith(STATE);
+    expect(exchange).toHaveBeenCalledWith("google-code");
+  });
+
+  it("rejects a missing provider code before consuming transaction state", async () => {
+    const consumeFlow = vi.fn();
+    const providers = providerRegistry();
+    const flowStateStore = {
+      consume: consumeFlow,
+    } as unknown as OAuthFlowStateReader;
+    const service = new OAuthProviderCallbackService({
+      clients: { accepts: vi.fn(() => true) },
+      providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: { requireAdmission: vi.fn() },
       identityService: { resolve: vi.fn() },
       authorizationCodeStore: { issue: vi.fn() },
@@ -79,7 +133,7 @@ describe("OAuthProviderCallbackService", () => {
         userId: "user-1",
         providerIdentityId: "identity-1",
         isNewUser: true,
-        collisions: [],
+        collisionCount: 0,
       })),
     };
     const authorizationCodeStore = {
@@ -90,8 +144,7 @@ describe("OAuthProviderCallbackService", () => {
     };
     const service = new OAuthProviderCallbackService({
       clients: { accepts: vi.fn(() => true) },
-      providers,
-      flowStateStore,
+      providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy,
       identityService,
       authorizationCodeStore,
@@ -142,12 +195,12 @@ describe("OAuthProviderCallbackService", () => {
       providerPkceVerifier: PROVIDER_VERIFIER,
       oidcNonceHash: null,
     }));
+    const flowStateStore = {
+      consume: consumeFlow,
+    } as unknown as OAuthFlowStateReader;
     const service = new OAuthProviderCallbackService({
       clients: { accepts: vi.fn(() => true) },
-      providers,
-      flowStateStore: {
-        consume: consumeFlow,
-      } as unknown as OAuthFlowStateReader,
+      providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: { requireAdmission: vi.fn() },
       identityService: { resolve: vi.fn() },
       authorizationCodeStore: { issue: vi.fn() },
@@ -170,54 +223,61 @@ describe("OAuthProviderCallbackService", () => {
       providerPkceVerifier: PROVIDER_VERIFIER,
       oidcNonceHash: null,
     }));
+    const providers = providerRegistry();
+    const flowStateStore = {
+      consume: consumeFlow,
+    } as unknown as OAuthFlowStateReader;
     const service = new OAuthProviderCallbackService({
       clients: { accepts: vi.fn(() => true) },
-      providers: providerRegistry(),
-      flowStateStore: {
-        consume: consumeFlow,
-      } as unknown as OAuthFlowStateReader,
+      providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: {
         requireAdmission: vi.fn(async () => ({ reason: "email_allowlist" })),
       },
       identityService: {
         resolve: vi.fn(async () => {
-          throw new AccountLinkRequiredError(["person@example.com"]);
+          throw new AccountLinkRequiredError(1);
         }),
       },
       authorizationCodeStore: { issue: vi.fn() },
     });
 
-    await expect(
-      service.completeAuthorization("github", {
+    let rejection: unknown;
+    try {
+      await service.completeAuthorization("github", {
         state: STATE,
         code: "github-code",
-      })
-    ).rejects.toEqual(
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toEqual(
       expect.objectContaining({
         name: "OAuthProviderCallbackError",
         failure: "account_link_required",
         redirectUri: "https://web.example/api/auth/callback",
-        state: STATE,
       })
     );
+    expect(rejection).not.toHaveProperty("state");
+    expect(rejection).not.toHaveProperty("cause");
   });
 
   it("rejects a consumed flow whose client redirect binding is no longer registered", async () => {
     const providers = providerRegistry();
+    const flowStateStore = {
+      consume: vi.fn(async () => ({
+        flowId: "flow-1",
+        provider: "github" as const,
+        clientId: "web" as const,
+        redirectUri: "https://attacker.example/callback",
+        clientCodeChallenge: CLIENT_CHALLENGE,
+        providerPkceVerifier: PROVIDER_VERIFIER,
+        oidcNonceHash: null,
+      })),
+    } as unknown as OAuthFlowStateReader;
     const service = new OAuthProviderCallbackService({
       clients: { accepts: vi.fn(() => false) },
-      providers,
-      flowStateStore: {
-        consume: vi.fn(async () => ({
-          flowId: "flow-1",
-          provider: "github" as const,
-          clientId: "web" as const,
-          redirectUri: "https://attacker.example/callback",
-          clientCodeChallenge: CLIENT_CHALLENGE,
-          providerPkceVerifier: PROVIDER_VERIFIER,
-          oidcNonceHash: null,
-        })),
-      } as unknown as OAuthFlowStateReader,
+      providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: { requireAdmission: vi.fn() },
       identityService: { resolve: vi.fn() },
       authorizationCodeStore: { issue: vi.fn() },
@@ -249,23 +309,23 @@ describe("OAuthProviderCallbackService", () => {
         userId: "user-1",
         providerIdentityId: "identity-1",
         isNewUser: true,
-        collisions: [],
+        collisionCount: 0,
       })),
     };
+    const flowStateStore = {
+      consume: vi.fn(async () => ({
+        flowId: "flow-1",
+        provider: "google" as const,
+        clientId: "web" as const,
+        redirectUri: "https://web.example/api/auth/callback",
+        clientCodeChallenge: CLIENT_CHALLENGE,
+        providerPkceVerifier: PROVIDER_VERIFIER,
+        oidcNonceHash: "f".repeat(64),
+      })),
+    } as unknown as OAuthFlowStateReader;
     const service = new OAuthProviderCallbackService({
       clients: { accepts: vi.fn(() => true) },
-      providers,
-      flowStateStore: {
-        consume: vi.fn(async () => ({
-          flowId: "flow-1",
-          provider: "google" as const,
-          clientId: "web" as const,
-          redirectUri: "https://web.example/api/auth/callback",
-          clientCodeChallenge: CLIENT_CHALLENGE,
-          providerPkceVerifier: PROVIDER_VERIFIER,
-          oidcNonceHash: "f".repeat(64),
-        })),
-      } as unknown as OAuthFlowStateReader,
+      providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: {
         requireAdmission: vi.fn(async () => ({ reason: "email_allowlist" })),
       },
@@ -311,20 +371,20 @@ describe("OAuthProviderCallbackService", () => {
       if (cause instanceof OAuthProviderError) {
         vi.mocked(providers.github.exchangeAuthorizationCode).mockRejectedValue(cause);
       }
+      const flowStateStore = {
+        consume: vi.fn(async () => ({
+          flowId: "flow-1",
+          provider: "github" as const,
+          clientId: "web" as const,
+          redirectUri: "https://web.example/api/auth/callback",
+          clientCodeChallenge: CLIENT_CHALLENGE,
+          providerPkceVerifier: PROVIDER_VERIFIER,
+          oidcNonceHash: null,
+        })),
+      } as unknown as OAuthFlowStateReader;
       const service = new OAuthProviderCallbackService({
         clients: { accepts: vi.fn(() => true) },
-        providers,
-        flowStateStore: {
-          consume: vi.fn(async () => ({
-            flowId: "flow-1",
-            provider: "github" as const,
-            clientId: "web" as const,
-            redirectUri: "https://web.example/api/auth/callback",
-            clientCodeChallenge: CLIENT_CHALLENGE,
-            providerPkceVerifier: PROVIDER_VERIFIER,
-            oidcNonceHash: null,
-          })),
-        } as unknown as OAuthFlowStateReader,
+        providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
         admissionPolicy: {
           requireAdmission: vi.fn(async () => {
             if (!(cause instanceof OAuthProviderError)) throw cause;

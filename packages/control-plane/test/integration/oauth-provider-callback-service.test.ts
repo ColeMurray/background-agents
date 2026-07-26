@@ -4,6 +4,7 @@ import { AdmissionPolicy } from "../../src/auth/admission-policy";
 import { hashToken } from "../../src/auth/crypto";
 import { ImmutableProviderIdentityService } from "../../src/auth/immutable-provider-identity";
 import { StaticOAuthClientRegistry } from "../../src/auth/oauth-authorization-service";
+import { createOAuthProviderCallbackHandlers } from "../../src/auth/oauth-provider-callback-handler";
 import { OAuthProviderCallbackService } from "../../src/auth/oauth-provider-callback-service";
 import { createPkceS256Challenge } from "../../src/auth/pkce";
 import type {
@@ -114,8 +115,10 @@ describe("OAuth provider callback transaction", () => {
     } satisfies OAuthSignInProviderRegistry;
     const callbackService = new OAuthProviderCallbackService({
       clients: new StaticOAuthClientRegistry([REDIRECT_URI]),
-      providers,
-      flowStateStore: flowStore,
+      providerHandlers: createOAuthProviderCallbackHandlers({
+        providers,
+        flowStateStore: flowStore,
+      }),
       admissionPolicy: new AdmissionPolicy({
         allowedGitHubUsers: [],
         allowedEmails: ["person@example.com"],
