@@ -77,3 +77,7 @@ export const browserAuthRoutes: Route[] = [
     handler: requireWebService(handleBrowserAuth),
   },
 ];
+
+export function isBrowserAuthProxyRoute(method: string, path: string): boolean {
+  return browserAuthRoutes.some((route) => route.method === method && route.pattern.test(path));
+}

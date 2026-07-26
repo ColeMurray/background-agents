@@ -148,5 +148,22 @@ describe("browser auth callback", () => {
       email: "octocat@example.com",
       avatar_url: "https://avatars.example/octocat",
     });
+
+    const resourceResponse = await handleRequest(
+      await signedWebRequest("/model-preferences", {
+        method: "GET",
+        cookie: sessionCookie,
+      }),
+      env
+    );
+    expect(resourceResponse.status).toBe(200);
+
+    const channelOnlyResponse = await handleRequest(
+      await signedWebRequest("/model-preferences", {
+        method: "GET",
+      }),
+      env
+    );
+    expect(channelOnlyResponse.status).toBe(401);
   });
 });

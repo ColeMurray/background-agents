@@ -30,6 +30,10 @@ import {
   type AuthenticationContext,
   type Principal,
 } from "./principal";
+import {
+  authenticateBrowserSession,
+  BrowserSessionIntegrityError,
+} from "./browser-session-authenticator";
 import { ACCESS_TOKEN_PREFIX, WebSessionTokenService } from "./web-session-tokens";
 import { ApiTokenStore } from "../db/api-tokens";
 import { UserStore } from "../db/user-store";
@@ -48,7 +52,7 @@ export interface AuthError {
    * attempt is terminal; "none" means no recognized credential was presented
    * at all, and the router may still try sandbox auth on sandbox routes.
    */
-  failedScheme: "per-service" | "user-token" | "none";
+  failedScheme: "per-service" | "browser-session" | "user-token" | "none";
 }
 
 /**
@@ -71,6 +75,14 @@ export type AuthResult =
 
 export function isAuthError(result: AuthResult): result is AuthError {
   return !("principal" in result);
+}
+
+export interface AuthenticationRequirement {
+  /**
+   * Whether a verified service:web request is acting as the service itself or
+   * as a browser user through a Better Auth session.
+   */
+  readonly webService?: "service" | "browser";
 }
 
 /** The per-service verification keys the CP holds. */
@@ -317,11 +329,64 @@ async function authenticateWebSessionToken(
 export async function authenticate(
   request: Request,
   env: Env,
-  ctx: RequestContext
+  ctx: RequestContext,
+  requirement: AuthenticationRequirement = {}
 ): Promise<AuthResult> {
   const signatureHeader = request.headers.get(SERVICE_SIGNATURE_HEADER);
   if (signatureHeader !== null) {
-    return authenticateServiceCredential(request, env, ctx, signatureHeader);
+    const channel = await authenticateServiceCredential(request, env, ctx, signatureHeader);
+    if (
+      isAuthError(channel) ||
+      channel.principal.kind !== "service" ||
+      channel.principal.service !== "web" ||
+      requirement.webService !== "browser"
+    ) {
+      return channel;
+    }
+    if (!ctx.getBrowserAuth) {
+      logger.error("Browser authentication runtime unavailable", {
+        event: "auth.browser.misconfigured",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        reason: "Browser authentication is not configured",
+        status: 500,
+        failedScheme: "browser-session",
+      };
+    }
+    try {
+      const browser = await authenticateBrowserSession(
+        ctx.getBrowserAuth(),
+        ctx.db,
+        channel.request.headers
+      );
+      if (!browser) {
+        return {
+          reason: "Unauthorized",
+          status: 401,
+          failedScheme: "browser-session",
+        };
+      }
+      return {
+        principal: { kind: "user", userId: browser.userId },
+        authentication: browser.authentication,
+        request: channel.request,
+      };
+    } catch (cause) {
+      logger.error("Browser session validation failed", {
+        event: "auth.browser.failed",
+        failure: cause instanceof BrowserSessionIntegrityError ? "integrity" : "runtime",
+        error: cause,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        reason: "Browser authentication failed",
+        status: 500,
+        failedScheme: "browser-session",
+      };
+    }
   }
 
   const authHeader = request.headers.get("Authorization");

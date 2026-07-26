@@ -25,7 +25,7 @@ import {
   HttpError,
 } from "./routes/shared";
 import { authTokenRoutes } from "./routes/auth-tokens";
-import { browserAuthRoutes } from "./routes/browser-auth";
+import { browserAuthRoutes, isBrowserAuthProxyRoute } from "./routes/browser-auth";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
@@ -170,6 +170,10 @@ function isScmAgnosticRoute(path: string): boolean {
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
+}
+
+function isLegacyWebTokenRoute(method: string, path: string): boolean {
+  return method === "POST" && (path === "/auth/tokens/exchange" || path === "/auth/tokens/refresh");
 }
 
 function isProviderImplementedRoute(provider: SourceControlProviderName, path: string): boolean {
@@ -423,6 +427,17 @@ export async function handleRequest(
     });
   }
 
+  const matchedRoute = routes
+    .filter((route) => route.method === method)
+    .map((route) => ({ route, match: path.match(route.pattern) }))
+    .find(
+      (candidate): candidate is { route: Route; match: RegExpMatchArray } =>
+        candidate.match !== null
+    );
+  if (!matchedRoute) {
+    return withCorsAndTraceHeaders(error("Not found", 404), ctx);
+  }
+
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
     const requiresSandboxAuth = isSandboxAuthOnlyRoute(path);
@@ -436,7 +451,12 @@ export async function handleRequest(
         ? await verifySandboxAuth(request, env, sandboxSessionId, ctx)
         : error("Unauthorized: Invalid session path", 401);
     } else {
-      const authResult = await authenticate(request, env, ctx);
+      const authResult = await authenticate(request, env, ctx, {
+        webService:
+          isBrowserAuthProxyRoute(method, path) || isLegacyWebTokenRoute(method, path)
+            ? "service"
+            : "browser",
+      });
 
       if (isAuthError(authResult)) {
         // A service-credential or user-token attempt is terminal; only a
@@ -473,55 +493,45 @@ export async function handleRequest(
     return providerCheck;
   }
 
-  // Find matching route
-  for (const route of routes) {
-    if (route.method !== method) continue;
-
-    const match = path.match(route.pattern);
-    if (match) {
-      let response: Response;
-      let outcome: "success" | "error";
-      try {
-        response = await route.handler(request, env, match, ctx);
-        outcome = response.status >= 500 ? "error" : "success";
-      } catch (e) {
-        if (e instanceof HttpError) {
-          response = error(e.message, e.status);
-          outcome = e.status >= 500 ? "error" : "success";
-        } else {
-          const durationMs = Date.now() - startTime;
-          logger.error("http.request", {
-            event: "http.request",
-            request_id: ctx.request_id,
-            trace_id: ctx.trace_id,
-            http_method: method,
-            http_path: path,
-            http_status: 500,
-            duration_ms: durationMs,
-            outcome: "error",
-            error: e instanceof Error ? e : String(e),
-            ...ctx.metrics.summarize(),
-          });
-          return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
-        }
-      }
-
+  let response: Response;
+  let outcome: "success" | "error";
+  try {
+    response = await matchedRoute.route.handler(request, env, matchedRoute.match, ctx);
+    outcome = response.status >= 500 ? "error" : "success";
+  } catch (e) {
+    if (e instanceof HttpError) {
+      response = error(e.message, e.status);
+      outcome = e.status >= 500 ? "error" : "success";
+    } else {
       const durationMs = Date.now() - startTime;
-      logger.info("http.request", {
+      logger.error("http.request", {
         event: "http.request",
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
         http_method: method,
         http_path: path,
-        http_status: response.status,
+        http_status: 500,
         duration_ms: durationMs,
-        outcome,
+        outcome: "error",
+        error: e instanceof Error ? e : String(e),
         ...ctx.metrics.summarize(),
       });
-
-      return withCorsAndTraceHeaders(response, ctx);
+      return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
     }
   }
 
-  return error("Not found", 404);
+  const durationMs = Date.now() - startTime;
+  logger.info("http.request", {
+    event: "http.request",
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+    http_method: method,
+    http_path: path,
+    http_status: response.status,
+    duration_ms: durationMs,
+    outcome,
+    ...ctx.metrics.summarize(),
+  });
+
+  return withCorsAndTraceHeaders(response, ctx);
 }

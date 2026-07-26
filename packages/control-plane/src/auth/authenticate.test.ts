@@ -309,6 +309,101 @@ describe("authenticate — service credentials", () => {
   });
 });
 
+describe("authenticate — compound browser credentials", () => {
+  function createBrowserCtx(
+    session: {
+      session: { id: string; userId: string };
+      user: { id: string };
+    } | null,
+    accounts: Array<{
+      id: string;
+      provider_id: string;
+      account_id: string;
+      user_id: string;
+    }> = []
+  ): RequestContext {
+    const ctx = createCtx();
+    ctx.getBrowserAuth = () =>
+      ({
+        api: {
+          getSession: vi.fn(async () => session),
+        },
+      }) as never;
+    ctx.db = {
+      prepare: vi.fn(() => {
+        const statement = {
+          bind: vi.fn(() => statement),
+          all: vi.fn(async () => ({ results: accounts, meta: { changes: 0 } })),
+        };
+        return statement;
+      }),
+      batch: vi.fn(),
+    } as never;
+    return ctx;
+  }
+
+  it("requires the web sig1 channel and Better Auth session for a browser resource", async () => {
+    const request = await signedRequest({
+      service: "web",
+      method: "GET",
+      url: "https://cp.test.local/sessions",
+      mutate: (headers) => {
+        headers.Cookie = "__Secure-openinspect.session_token=signed-session-token";
+      },
+    });
+    const ctx = createBrowserCtx(
+      {
+        session: { id: "session-1", userId: "user-1" },
+        user: { id: "user-1" },
+      },
+      [
+        {
+          id: "account-1",
+          provider_id: "github",
+          account_id: "583231",
+          user_id: "user-1",
+        },
+      ]
+    );
+
+    const result = await authenticate(request, createEnv(), ctx, {
+      webService: "browser",
+    });
+
+    expect(isAuthError(result)).toBe(false);
+    if (isAuthError(result)) return;
+    expect(result.principal).toEqual({ kind: "user", userId: "user-1" });
+    expect(result.authentication).toEqual({
+      mechanism: "browser_session",
+      credentialId: "session-1",
+      providerAccount: {
+        id: "account-1",
+        provider: "github",
+        subject: "583231",
+      },
+      channel: { kind: "sig1", service: "web" },
+    });
+  });
+
+  it("does not let a valid web channel fall back when its browser session is absent", async () => {
+    const request = await signedRequest({
+      service: "web",
+      method: "GET",
+      url: "https://cp.test.local/sessions",
+    });
+
+    const result = await authenticate(request, createEnv(), createBrowserCtx(null), {
+      webService: "browser",
+    });
+
+    expect(result).toEqual({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "browser-session",
+    });
+  });
+});
+
 describe("authenticate — nonce replay logging", () => {
   it("warns on nonce reuse inside the validity window but still authenticates", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
