@@ -1,7 +1,7 @@
 import { base64UrlEncode } from "./encoding";
 import type { OAuthFlowStateWriter } from "./oauth-flow-state";
 import { createPkceS256Challenge, isPkceS256Challenge, isPkceVerifier } from "./pkce";
-import type { OAuthSignInProvider } from "./providers/types";
+import type { OAuthSignInProviderRegistry } from "./providers/types";
 import { isSignInProvider, type SignInProvider } from "./sign-in-provider";
 
 const OPAQUE_STATE_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
@@ -55,7 +55,7 @@ export class WebCryptoOpaqueValueGenerator implements OpaqueValueGenerator {
 
 export interface OAuthAuthorizationServiceDependencies {
   readonly clients: StaticOAuthClientRegistry;
-  readonly providers: Readonly<Record<SignInProvider, OAuthSignInProvider>>;
+  readonly providers: OAuthSignInProviderRegistry;
   readonly flowStateStore: OAuthFlowStateWriter;
   readonly opaqueValueGenerator: OpaqueValueGenerator;
 }
@@ -64,8 +64,7 @@ export class OAuthAuthorizationService {
   constructor(private readonly dependencies: OAuthAuthorizationServiceDependencies) {}
 
   async authorize(request: OAuthAuthorizationRequest): Promise<URL> {
-    this.validateRequest(request);
-    const provider = request.provider as SignInProvider;
+    const provider = this.validateRequest(request);
     const providerPkceVerifier = this.dependencies.opaqueValueGenerator.generate();
     if (!isPkceVerifier(providerPkceVerifier)) {
       throw new Error("OAuth opaque-value generator returned an invalid PKCE verifier");
@@ -109,7 +108,7 @@ export class OAuthAuthorizationService {
     return redirect;
   }
 
-  private validateRequest(request: OAuthAuthorizationRequest): void {
+  private validateRequest(request: OAuthAuthorizationRequest): SignInProvider {
     if (request.responseType !== "code") {
       throw new OAuthAuthorizationRequestError("unsupported_response_type");
     }
@@ -126,5 +125,6 @@ export class OAuthAuthorizationService {
     ) {
       throw new OAuthAuthorizationRequestError("invalid_request");
     }
+    return request.provider;
   }
 }

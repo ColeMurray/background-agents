@@ -1,19 +1,17 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { hashToken } from "../../src/auth/crypto";
 import {
   OAuthFlowVerifierIntegrityError,
   type OAuthFlowVerifierCipher,
 } from "../../src/auth/oauth-flow-verifier";
+import type { CreateOAuthFlowStateInput } from "../../src/auth/oauth-flow-state";
 import { ProviderPkceFlowCipher } from "../../src/auth/auth-encryption";
 import {
   InvalidOAuthFlowStateInputError,
   OAuthFlowStateStore,
 } from "../../src/db/oauth-flow-state";
-import type {
-  CreateOAuthFlowStateInput,
-  OAuthFlowStateConsumptionError,
-} from "../../src/db/oauth-flow-state";
+import type { OAuthFlowStateConsumptionError } from "../../src/db/oauth-flow-state";
 import { cleanD1Tables } from "./cleanup";
 
 const NOW_MS = 1_800_000_000_000;
@@ -65,7 +63,9 @@ describe("OAuthFlowStateStore", () => {
     expect(JSON.stringify(row)).not.toContain(PROVIDER_VERIFIER);
     expect(JSON.stringify(row)).not.toContain(OIDC_NONCE);
 
-    await expect(store.consume(STATE, "google")).resolves.toMatchObject({
+    const consumed = await store.consume(STATE, "google");
+    expectTypeOf(consumed.oidcNonceHash).toEqualTypeOf<string>();
+    expect(consumed).toMatchObject({
       flowId: "flow-1",
       provider: "google",
       clientCodeChallenge: CLIENT_CHALLENGE,

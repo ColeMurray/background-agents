@@ -19,10 +19,10 @@ const googleIdentityClaimsSchema = z
   .object({
     iss: z.literal(GOOGLE_ISSUER),
     sub: z.string().min(1),
-    email: z.string().email().optional(),
+    email: z.email().optional(),
     email_verified: z.boolean().optional(),
     name: z.string().min(1).optional(),
-    picture: z.string().url().optional(),
+    picture: z.url().optional(),
   })
   .superRefine((claims, ctx) => {
     if (claims.email_verified === true && claims.email === undefined) {
@@ -43,7 +43,7 @@ export interface GoogleOidcProviderConfig {
 
 export type GoogleOidcProviderDependencies = OidcAuthorizationCodeClientDependencies;
 
-export class GoogleOidcProvider implements OAuthSignInProvider {
+export class GoogleOidcProvider implements OAuthSignInProvider<"google"> {
   readonly provider = "google" as const;
   private readonly oidc: OidcAuthorizationCodeClient;
 
@@ -61,10 +61,7 @@ export class GoogleOidcProvider implements OAuthSignInProvider {
     );
   }
 
-  async createAuthorizationUrl(request: ProviderAuthorizationRequest): Promise<URL> {
-    if (!request.oidcNonce) {
-      throw new OAuthProviderError("invalid_request", "Google authorization requires a nonce");
-    }
+  async createAuthorizationUrl(request: ProviderAuthorizationRequest<"google">): Promise<URL> {
     return this.oidc.createAuthorizationUrl({
       state: request.state,
       codeChallenge: request.codeChallenge,
@@ -73,14 +70,8 @@ export class GoogleOidcProvider implements OAuthSignInProvider {
   }
 
   async exchangeAuthorizationCode(
-    request: ProviderCodeExchangeRequest
-  ): Promise<ProviderCodeExchangeResult> {
-    if (!request.oidcNonceHash) {
-      throw new OAuthProviderError(
-        "invalid_request",
-        "Google authorization-code exchange requires a nonce hash"
-      );
-    }
+    request: ProviderCodeExchangeRequest<"google">
+  ): Promise<ProviderCodeExchangeResult<"google">> {
     const rawClaims = await this.oidc.exchangeAuthorizationCode({
       code: request.code,
       codeVerifier: request.codeVerifier,

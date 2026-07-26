@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { ProviderCredentialInput } from "../provider-credential-cipher";
+import type { ProviderCredentialInput } from "../provider-credential";
+import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./constants";
 import {
   assertCanonicalIssuer,
   OAuthProviderError,
@@ -14,7 +15,6 @@ const GITHUB_ISSUER = "https://github.com";
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_API_URL = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
-const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 10_000;
 const GITHUB_EMAILS_PER_PAGE = 100;
 const GITHUB_EMAILS_MAX_PAGES = 10;
 
@@ -58,11 +58,11 @@ const githubUserSchema = z.object({
   id: z.number().int().positive(),
   login: z.string().min(1),
   name: z.string().nullable().optional(),
-  avatar_url: z.string().url().nullable().optional(),
+  avatar_url: z.url().nullable().optional(),
 });
 
 const githubEmailSchema = z.object({
-  email: z.string().email(),
+  email: z.email(),
   primary: z.boolean(),
   verified: z.boolean(),
   visibility: z.string().nullable(),
@@ -84,7 +84,7 @@ export interface GitHubOAuthProviderDependencies {
   readonly requestTimeoutMs?: number;
 }
 
-export class GitHubOAuthProvider implements OAuthSignInProvider {
+export class GitHubOAuthProvider implements OAuthSignInProvider<"github"> {
   readonly provider = "github" as const;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly clock: { now(): number };
@@ -100,7 +100,7 @@ export class GitHubOAuthProvider implements OAuthSignInProvider {
     this.requestTimeoutMs = dependencies.requestTimeoutMs ?? DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
   }
 
-  async createAuthorizationUrl(request: ProviderAuthorizationRequest): Promise<URL> {
+  async createAuthorizationUrl(request: ProviderAuthorizationRequest<"github">): Promise<URL> {
     const url = new URL(GITHUB_AUTHORIZE_URL);
     url.searchParams.set("client_id", this.config.clientId);
     url.searchParams.set("redirect_uri", this.config.callbackUri);
@@ -111,8 +111,8 @@ export class GitHubOAuthProvider implements OAuthSignInProvider {
   }
 
   async exchangeAuthorizationCode(
-    request: ProviderCodeExchangeRequest
-  ): Promise<ProviderCodeExchangeResult> {
+    request: ProviderCodeExchangeRequest<"github">
+  ): Promise<ProviderCodeExchangeResult<"github">> {
     const token = await this.exchangeCode(request);
     const [user, emailEntries] = await Promise.all([
       this.fetchGitHubUser(token.access_token),
@@ -139,7 +139,7 @@ export class GitHubOAuthProvider implements OAuthSignInProvider {
   }
 
   private async exchangeCode(
-    request: ProviderCodeExchangeRequest
+    request: ProviderCodeExchangeRequest<"github">
   ): Promise<z.infer<typeof githubTokenResponseSchema>> {
     const body = new URLSearchParams({
       client_id: this.config.clientId,

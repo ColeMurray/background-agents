@@ -40,6 +40,14 @@ export type ConsumedOAuthFlowState =
       readonly oidcNonceHash: string;
     });
 
+export type ConsumedOAuthFlowStateFor<P extends SignInProvider> = Extract<
+  ConsumedOAuthFlowState,
+  { provider: P }
+>;
+
 export interface OAuthFlowStateReader {
-  consume(state: string, expectedProvider: SignInProvider): Promise<ConsumedOAuthFlowState>;
+  consume<P extends SignInProvider>(
+    state: string,
+    expectedProvider: P
+  ): Promise<ConsumedOAuthFlowStateFor<P>>;
 }

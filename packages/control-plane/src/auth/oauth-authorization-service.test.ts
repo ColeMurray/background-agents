@@ -12,24 +12,22 @@ import type {
   ProviderCodeExchangeRequest,
   ProviderCodeExchangeResult,
 } from "./providers/types";
+import type { SignInProvider } from "./sign-in-provider";
 
-class FakeProvider implements OAuthSignInProvider {
-  readonly provider: "github" | "google";
+class FakeProvider<P extends SignInProvider> implements OAuthSignInProvider<P> {
   readonly createAuthorizationUrl = vi.fn(
-    async (request: ProviderAuthorizationRequest): Promise<URL> => {
+    async (request: ProviderAuthorizationRequest<P>): Promise<URL> => {
       const url = new URL(`https://${this.provider}.example/authorize`);
       url.searchParams.set("state", request.state);
       return url;
     }
   );
 
-  constructor(provider: "github" | "google") {
-    this.provider = provider;
-  }
+  constructor(readonly provider: P) {}
 
   exchangeAuthorizationCode(
-    _request: ProviderCodeExchangeRequest
-  ): Promise<ProviderCodeExchangeResult> {
+    _request: ProviderCodeExchangeRequest<P>
+  ): Promise<ProviderCodeExchangeResult<P>> {
     throw new Error("not used");
   }
 }

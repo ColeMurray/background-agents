@@ -1,20 +1,42 @@
 import type { SignInProvider } from "../sign-in-provider";
-import type { ProviderCredentialInput } from "../provider-credential-cipher";
+import type { ProviderCredentialInput } from "../provider-credential";
 
-export interface ProviderAuthorizationRequest {
+interface ProviderAuthorizationRequestBinding {
   readonly state: string;
   readonly codeChallenge: string;
-  readonly oidcNonce?: string;
 }
 
-export interface ProviderCodeExchangeRequest {
+interface ProviderAuthorizationRequestByProvider {
+  readonly github: ProviderAuthorizationRequestBinding & {
+    readonly oidcNonce?: never;
+  };
+  readonly google: ProviderAuthorizationRequestBinding & {
+    readonly oidcNonce: string;
+  };
+}
+
+export type ProviderAuthorizationRequest<P extends SignInProvider> =
+  ProviderAuthorizationRequestByProvider[P];
+
+interface ProviderCodeExchangeRequestBinding {
   readonly code: string;
   readonly codeVerifier: string;
-  readonly oidcNonceHash?: string;
 }
 
-export interface VerifiedProviderIdentity {
-  readonly provider: SignInProvider;
+interface ProviderCodeExchangeRequestByProvider {
+  readonly github: ProviderCodeExchangeRequestBinding & {
+    readonly oidcNonceHash?: never;
+  };
+  readonly google: ProviderCodeExchangeRequestBinding & {
+    readonly oidcNonceHash: string;
+  };
+}
+
+export type ProviderCodeExchangeRequest<P extends SignInProvider> =
+  ProviderCodeExchangeRequestByProvider[P];
+
+export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvider> {
+  readonly provider: P;
   readonly issuer: string;
   readonly subject: string;
   readonly login?: string;
@@ -24,10 +46,19 @@ export interface VerifiedProviderIdentity {
   readonly primaryEmail: string | null;
 }
 
-export interface ProviderCodeExchangeResult {
-  readonly identity: VerifiedProviderIdentity;
-  readonly credential: ProviderCredentialInput | null;
+interface ProviderCodeExchangeResultByProvider {
+  readonly github: {
+    readonly identity: VerifiedProviderIdentity<"github">;
+    readonly credential: ProviderCredentialInput;
+  };
+  readonly google: {
+    readonly identity: VerifiedProviderIdentity<"google">;
+    readonly credential: null;
+  };
 }
+
+export type ProviderCodeExchangeResult<P extends SignInProvider> =
+  ProviderCodeExchangeResultByProvider[P];
 
 export type OAuthProviderFailure =
   | "invalid_configuration"
@@ -59,10 +90,14 @@ export function assertCanonicalIssuer(configuredIssuer: string, expectedIssuer: 
   }
 }
 
-export interface OAuthSignInProvider {
-  readonly provider: SignInProvider;
-  createAuthorizationUrl(request: ProviderAuthorizationRequest): Promise<URL>;
+export interface OAuthSignInProvider<P extends SignInProvider> {
+  readonly provider: P;
+  createAuthorizationUrl(request: ProviderAuthorizationRequest<P>): Promise<URL>;
   exchangeAuthorizationCode(
-    request: ProviderCodeExchangeRequest
-  ): Promise<ProviderCodeExchangeResult>;
+    request: ProviderCodeExchangeRequest<P>
+  ): Promise<ProviderCodeExchangeResult<P>>;
 }
+
+export type OAuthSignInProviderRegistry = {
+  readonly [P in SignInProvider]: OAuthSignInProvider<P>;
+};
