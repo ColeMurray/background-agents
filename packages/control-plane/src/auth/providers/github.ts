@@ -8,6 +8,7 @@ import {
   type ProviderAuthorizationRequest,
   type ProviderCodeExchangeRequest,
   type ProviderCodeExchangeResult,
+  type VerifiedProviderIdentity,
 } from "./types";
 
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
@@ -114,27 +115,32 @@ export class GitHubOAuthProvider implements OAuthSignInProvider<"github"> {
     request: ProviderCodeExchangeRequest<"github">
   ): Promise<ProviderCodeExchangeResult<"github">> {
     const token = await this.exchangeCode(request);
+    const identity = await this.resolveIdentity(token.access_token);
+    return {
+      identity,
+      credential: this.toCredential(token),
+    };
+  }
+
+  async resolveIdentity(accessToken: string): Promise<VerifiedProviderIdentity<"github">> {
     const [user, emailEntries] = await Promise.all([
-      this.fetchGitHubUser(token.access_token),
-      this.fetchVerifiedEmails(token.access_token),
+      this.fetchGitHubUser(accessToken),
+      this.fetchVerifiedEmails(accessToken),
     ]);
     const verifiedEmailEntries = emailEntries.filter((entry) => entry.verified);
     const verifiedEmails = [
       ...new Set(verifiedEmailEntries.map((entry) => entry.email.toLowerCase())),
     ];
     return {
-      identity: {
-        provider: this.provider,
-        issuer: GITHUB_ISSUER,
-        subject: String(user.id),
-        login: user.login,
-        displayName: user.name ?? user.login,
-        ...(user.avatar_url ? { avatarUrl: user.avatar_url } : {}),
-        verifiedEmails,
-        primaryEmail:
-          verifiedEmailEntries.find((entry) => entry.primary)?.email.toLowerCase() ?? null,
-      },
-      credential: this.toCredential(token),
+      provider: this.provider,
+      issuer: GITHUB_ISSUER,
+      subject: String(user.id),
+      login: user.login,
+      displayName: user.name ?? user.login,
+      ...(user.avatar_url ? { avatarUrl: user.avatar_url } : {}),
+      verifiedEmails,
+      primaryEmail:
+        verifiedEmailEntries.find((entry) => entry.primary)?.email.toLowerCase() ?? null,
     };
   }
 

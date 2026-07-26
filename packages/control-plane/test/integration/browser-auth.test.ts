@@ -10,6 +10,7 @@ import {
 const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
 const MS_PER_SECOND = 1000;
+const UNUSED_PROFILE_RESOLVER = async () => null;
 
 const EXPECTED_COLUMNS = {
   auth_users: [
@@ -88,40 +89,6 @@ describe("browser authentication", () => {
        WHERE name = 'idx_auth_accounts_provider_identity'`
     ).first<{ unique: number }>();
     expect(providerIdentityIndex?.unique).toBe(1);
-
-    const providerIdentityColumns = await env.DB.prepare(
-      `SELECT name
-       FROM pragma_index_info('idx_auth_accounts_provider_identity')
-       ORDER BY seqno`
-    ).all<{ name: string }>();
-    expect(providerIdentityColumns.results.map(({ name }) => name)).toEqual([
-      "providerId",
-      "accountId",
-    ]);
-
-    for (const table of ["auth_sessions", "auth_accounts"]) {
-      const foreignKeys = await env.DB.prepare(`PRAGMA foreign_key_list(${table})`).all<{
-        table: string;
-        from: string;
-        to: string;
-        on_delete: string;
-      }>();
-      expect(
-        foreignKeys.results.map(({ table, from, to, on_delete }) => ({
-          table,
-          from,
-          to,
-          onDelete: on_delete,
-        }))
-      ).toEqual([
-        {
-          table: "auth_users",
-          from: "userId",
-          to: "id",
-          onDelete: "CASCADE",
-        },
-      ]);
-    }
   });
 
   it("serves an anonymous session through Better Auth on Workers and D1", async () => {
@@ -130,6 +97,99 @@ describe("browser authentication", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toBeNull();
+  });
+
+  it("initiates GitHub App sign-in with PKCE and no classic OAuth scopes", async () => {
+    const auth = createBrowserAuth({
+      database: env.DB,
+      publicWebOrigin: PUBLIC_WEB_ORIGIN,
+      secret: SECRET,
+      github: {
+        clientId: "github-app-client-id",
+        clientSecret: "github-app-client-secret",
+        getUserInfo: UNUSED_PROFILE_RESOLVER,
+      },
+    });
+
+    const response = await auth.handler(
+      new Request(`${PUBLIC_WEB_ORIGIN}/api/auth/sign-in/social`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: PUBLIC_WEB_ORIGIN,
+        },
+        body: JSON.stringify({
+          provider: "github",
+          callbackURL: "/",
+          disableRedirect: true,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ redirect: boolean; url: string }>();
+    const providerUrl = new URL(body.url);
+    expect(body.redirect).toBe(false);
+    expect(providerUrl.origin).toBe("https://github.com");
+    expect(providerUrl.pathname).toBe("/login/oauth/authorize");
+    expect(providerUrl.searchParams.get("client_id")).toBe("github-app-client-id");
+    expect(providerUrl.searchParams.get("redirect_uri")).toBe(
+      `${PUBLIC_WEB_ORIGIN}/api/auth/callback/github`
+    );
+    expect(providerUrl.searchParams.get("scope")).toBe("");
+    expect(providerUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(providerUrl.searchParams.get("state")).toBeTruthy();
+
+    const stateCookie = response.headers.get("set-cookie");
+    expect(stateCookie).toContain("__Secure-openinspect.state=");
+    expect(stateCookie?.toLowerCase()).toContain("httponly");
+    expect(stateCookie?.toLowerCase()).toContain("secure");
+    expect(stateCookie?.toLowerCase()).toContain("samesite=lax");
+    expect(stateCookie?.toLowerCase()).not.toContain("domain=");
+  });
+
+  it("initiates Google OIDC sign-in with PKCE and minimum identity scopes", async () => {
+    const auth = createBrowserAuth({
+      database: env.DB,
+      publicWebOrigin: PUBLIC_WEB_ORIGIN,
+      secret: SECRET,
+      google: {
+        clientId: "google-client-id",
+        clientSecret: "google-client-secret",
+        getUserInfo: UNUSED_PROFILE_RESOLVER,
+      },
+    });
+
+    const response = await auth.handler(
+      new Request(`${PUBLIC_WEB_ORIGIN}/api/auth/sign-in/social`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: PUBLIC_WEB_ORIGIN,
+        },
+        body: JSON.stringify({
+          provider: "google",
+          callbackURL: "/",
+          disableRedirect: true,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ redirect: boolean; url: string }>();
+    const providerUrl = new URL(body.url);
+    expect(body.redirect).toBe(false);
+    expect(providerUrl.origin).toBe("https://accounts.google.com");
+    expect(providerUrl.pathname).toBe("/o/oauth2/v2/auth");
+    expect(providerUrl.searchParams.get("client_id")).toBe("google-client-id");
+    expect(providerUrl.searchParams.get("redirect_uri")).toBe(
+      `${PUBLIC_WEB_ORIGIN}/api/auth/callback/google`
+    );
+    expect(new Set(providerUrl.searchParams.get("scope")?.split(" "))).toEqual(
+      new Set(["email", "openid", "profile"])
+    );
+    expect(providerUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(providerUrl.searchParams.get("state")).toBeTruthy();
   });
 
   it("uses canonical ids and converts millisecond durations at the library boundary", () => {

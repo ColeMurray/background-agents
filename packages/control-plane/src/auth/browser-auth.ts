@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import type { BrowserAuthProviderProfileResolver } from "./browser-auth-provider-profile";
 import { generateId } from "./crypto";
 
 const MS_PER_SECOND = 1000;
@@ -10,6 +11,16 @@ export interface BrowserAuthConfig {
   readonly database: D1Database;
   readonly publicWebOrigin: string;
   readonly secret: string;
+  readonly github?: {
+    readonly clientId: string;
+    readonly clientSecret: string;
+    readonly getUserInfo: BrowserAuthProviderProfileResolver;
+  };
+  readonly google?: {
+    readonly clientId: string;
+    readonly clientSecret: string;
+    readonly getUserInfo: BrowserAuthProviderProfileResolver;
+  };
 }
 
 /**
@@ -35,6 +46,17 @@ export function createBrowserAuth(config: BrowserAuthConfig) {
       database: {
         generateId: () => generateId(),
       },
+    },
+    socialProviders: {
+      ...(config.github
+        ? {
+            github: {
+              ...config.github,
+              disableDefaultScope: true,
+            },
+          }
+        : {}),
+      ...(config.google ? { google: config.google } : {}),
     },
     user: {
       modelName: "auth_users",

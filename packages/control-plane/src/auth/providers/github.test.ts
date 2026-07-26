@@ -41,6 +41,39 @@ describe("GitHubOAuthProvider", () => {
     expect(authorizationUrl.searchParams.has("scope")).toBe(false);
   });
 
+  it("resolves validated identity from an existing access token", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          id: 583_231,
+          login: "octocat",
+          name: "The Octocat",
+          avatar_url: "https://avatars.example/octocat",
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            email: "Primary@Example.com",
+            primary: true,
+            verified: true,
+            visibility: "private",
+          },
+        ])
+      );
+    const provider = new GitHubOAuthProvider(config, { fetch });
+
+    await expect(provider.resolveIdentity("ghu-access")).resolves.toMatchObject({
+      provider: "github",
+      issuer: "https://github.com",
+      subject: "583231",
+      verifiedEmails: ["primary@example.com"],
+      primaryEmail: "primary@example.com",
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("exchanges the code with PKCE and returns validated identity and credential evidence", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
