@@ -1,11 +1,12 @@
 import { env } from "cloudflare:test";
 import { buildServiceAuthHeaders, isCanonicalUserId } from "@open-inspect/shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBrowserAuth } from "../../src/auth/browser-auth-runtime";
 import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
 import { handleRequest } from "../../src/router";
 import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
+import { cleanD1Tables } from "./cleanup";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
@@ -46,59 +47,48 @@ function cookiePair(response: Response, cookieName: string): string {
   return cookie.split(";", 1)[0];
 }
 
-afterEach(() => {
+beforeAll(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === "https://github.com/login/oauth/access_token") {
+      return Response.json({
+        access_token: "github-access-token",
+        token_type: "bearer",
+        expires_in: 28_800,
+        refresh_token: "github-refresh-token",
+        refresh_token_expires_in: 15_897_600,
+      });
+    }
+    if (url === "https://api.github.com/user") {
+      return Response.json({
+        id: 583_231,
+        login: "octocat",
+        name: "The Octocat",
+        avatar_url: "https://avatars.example/octocat",
+      });
+    }
+    if (url.startsWith("https://api.github.com/user/emails")) {
+      return Response.json([
+        {
+          email: "octocat@example.com",
+          primary: true,
+          verified: true,
+          visibility: "private",
+        },
+      ]);
+    }
+    throw new Error(`Unexpected external request: ${url}`);
+  });
+});
+
+beforeEach(cleanD1Tables);
+
+afterAll(() => {
   vi.restoreAllMocks();
 });
 
 describe("browser auth callback", () => {
   it("creates and resolves a GitHub browser session through the signed proxy", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        Response.json({
-          access_token: "github-access-token",
-          token_type: "bearer",
-          expires_in: 28_800,
-          refresh_token: "github-refresh-token",
-          refresh_token_expires_in: 15_897_600,
-        })
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          id: 583_231,
-          login: "octocat",
-          name: "The Octocat",
-          avatar_url: "https://avatars.example/octocat",
-        })
-      )
-      .mockResolvedValueOnce(
-        Response.json([
-          {
-            email: "octocat@example.com",
-            primary: true,
-            verified: true,
-            visibility: "private",
-          },
-        ])
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          id: 583_231,
-          login: "octocat",
-          name: "The Octocat",
-          avatar_url: "https://avatars.example/octocat",
-        })
-      )
-      .mockResolvedValueOnce(
-        Response.json([
-          {
-            email: "octocat@example.com",
-            primary: true,
-            verified: true,
-            visibility: "private",
-          },
-        ])
-      );
-
     const initiationBody = JSON.stringify({
       provider: "github",
       callbackURL: "/after-sign-in",
@@ -226,5 +216,125 @@ describe("browser auth callback", () => {
       env
     );
     expect(channelOnlyResponse.status).toBe(401);
+  });
+
+  it("signs an existing canonical user in through a migrated GitHub account", async () => {
+    const canonicalUserId = "11111111111111111111111111111111";
+    const providerIdentityId = "22222222222222222222222222222222";
+    const now = new Date("2026-07-26T21:47:56.000Z");
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users (
+           id, display_name, email, avatar_url, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(
+        canonicalUserId,
+        "Legacy User",
+        "octocat@example.com",
+        null,
+        now.getTime(),
+        now.getTime()
+      ),
+      env.DB.prepare(
+        `INSERT INTO user_identities (
+           id, user_id, provider, provider_user_id, provider_login,
+           provider_email, created_at, provider_issuer
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        providerIdentityId,
+        canonicalUserId,
+        "github",
+        "583231",
+        "octocat",
+        "octocat@example.com",
+        now.getTime(),
+        "https://github.com"
+      ),
+      env.DB.prepare(
+        `INSERT INTO auth_users (
+           id, name, email, emailVerified, image, createdAt, updatedAt
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        canonicalUserId,
+        "Legacy User",
+        "octocat@example.com",
+        0,
+        null,
+        now.toISOString(),
+        now.toISOString()
+      ),
+      env.DB.prepare(
+        `INSERT INTO auth_accounts (
+           id, accountId, providerId, userId, accessToken, refreshToken,
+           idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope,
+           password, createdAt, updatedAt
+         ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
+      ).bind(
+        providerIdentityId,
+        "583231",
+        "github",
+        canonicalUserId,
+        now.toISOString(),
+        now.toISOString()
+      ),
+    ]);
+
+    const initiationBody = JSON.stringify({
+      provider: "github",
+      callbackURL: "/after-sign-in",
+      disableRedirect: true,
+    });
+    const initiationResponse = await handleRequest(
+      await signedWebRequest("/api/auth/sign-in/social", {
+        method: "POST",
+        body: initiationBody,
+      }),
+      env
+    );
+    const providerUrl = new URL((await initiationResponse.json<{ url: string }>()).url);
+    const state = providerUrl.searchParams.get("state");
+    const stateCookie = cookiePair(initiationResponse, "__Secure-openinspect.state");
+
+    const callbackResponse = await handleRequest(
+      await signedWebRequest(
+        `/api/auth/callback/github?code=authorization-code&state=${encodeURIComponent(state ?? "")}`,
+        {
+          method: "GET",
+          cookie: stateCookie,
+        }
+      ),
+      env
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    const sessionCookie = cookiePair(callbackResponse, "__Secure-openinspect.session_token");
+    const sessionResponse = await handleRequest(
+      await signedWebRequest("/api/auth/get-session", {
+        method: "GET",
+        cookie: sessionCookie,
+      }),
+      env
+    );
+    expect(await sessionResponse.json<{ user: { id: string } }>()).toMatchObject({
+      user: { id: canonicalUserId },
+    });
+    expect(
+      await env.DB.prepare(
+        `SELECT COUNT(*) AS count
+         FROM users
+         WHERE email = ?`
+      )
+        .bind("octocat@example.com")
+        .first<{ count: number }>()
+    ).toEqual({ count: 1 });
+    expect(
+      await env.DB.prepare(
+        `SELECT emailVerified
+         FROM auth_users
+         WHERE id = ?`
+      )
+        .bind(canonicalUserId)
+        .first<{ emailVerified: number }>()
+    ).toEqual({ emailVerified: 1 });
   });
 });
