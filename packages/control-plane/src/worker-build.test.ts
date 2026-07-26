@@ -1,0 +1,25 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
+const repositoryDirectory = fileURLToPath(new URL("../../..", import.meta.url));
+
+describe("control-plane worker build", () => {
+  it("uses the workerd AsyncLocalStorage implementation", () => {
+    execFileSync("npm", ["run", "build", "-w", "@open-inspect/shared"], {
+      cwd: repositoryDirectory,
+      stdio: "pipe",
+    });
+    execFileSync("npm", ["run", "build"], {
+      cwd: packageDirectory,
+      stdio: "pipe",
+    });
+
+    const bundle = readFileSync(new URL("../dist/index.js", import.meta.url), "utf8");
+
+    expect(bundle.includes('"node:async_hooks"')).toBe(true);
+    expect(bundle.includes("AsyncLocalStoragePolyfill")).toBe(false);
+  });
+});
