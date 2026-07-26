@@ -119,7 +119,11 @@ describe("browser auth callback", () => {
     );
 
     expect(sessionResponse.status).toBe(200);
-    expect(await sessionResponse.json()).toMatchObject({
+    const session = await sessionResponse.json<{
+      user: { id: string; name: string; email: string };
+      session: { userId: string };
+    }>();
+    expect(session).toMatchObject({
       user: {
         id: expect.any(String),
         name: "The Octocat",
@@ -128,6 +132,21 @@ describe("browser auth callback", () => {
       session: {
         userId: expect.any(String),
       },
+    });
+
+    await expect(
+      env.DB.prepare(
+        `SELECT id, display_name, email, avatar_url
+         FROM users
+         WHERE id = ?`
+      )
+        .bind(session.user.id)
+        .first()
+    ).resolves.toEqual({
+      id: session.user.id,
+      display_name: "The Octocat",
+      email: "octocat@example.com",
+      avatar_url: "https://avatars.example/octocat",
     });
   });
 });

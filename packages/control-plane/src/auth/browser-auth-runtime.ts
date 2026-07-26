@@ -7,6 +7,7 @@ import { createBrowserAuth } from "./browser-auth";
 import { GitHubBrowserAuthProfileResolver } from "./github-browser-auth-profile";
 import { GoogleBrowserAuthProfileResolver } from "./google-browser-auth-profile";
 import { GitHubOAuthProvider } from "./providers/github";
+import { D1BrowserAuthUserProjection } from "../db/browser-auth-users";
 import type { Env } from "../types";
 
 const GITHUB_ISSUER = "https://github.com";
@@ -95,6 +96,7 @@ export function createBrowserAuthFromEnv(env: Env, database: D1Database) {
     database,
     publicWebOrigin,
     secret,
+    userProjection: new D1BrowserAuthUserProjection(database),
     github: {
       clientId: githubClientId,
       clientSecret: githubClientSecret,

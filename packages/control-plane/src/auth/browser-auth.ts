@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import type { BrowserAuthProviderProfileResolver } from "./browser-auth-provider-profile";
+import type { BrowserAuthUserProjection } from "./browser-auth-user-projection";
 import { generateId } from "./crypto";
 
 const MS_PER_SECOND = 1000;
@@ -11,6 +12,7 @@ export interface BrowserAuthConfig {
   readonly database: D1Database;
   readonly publicWebOrigin: string;
   readonly secret: string;
+  readonly userProjection: BrowserAuthUserProjection;
   readonly github?: {
     readonly clientId: string;
     readonly clientSecret: string;
@@ -76,6 +78,16 @@ export function createBrowserAuth(config: BrowserAuthConfig) {
     verification: {
       modelName: "auth_verifications",
       storeIdentifier: "hashed",
+    },
+    databaseHooks: {
+      user: {
+        create: {
+          after: (user) => config.userProjection.project(user),
+        },
+        update: {
+          after: (user) => config.userProjection.project(user),
+        },
+      },
     },
   });
 }
