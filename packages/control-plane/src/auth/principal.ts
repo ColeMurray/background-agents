@@ -29,11 +29,11 @@ export interface ResolvedIdentity {
 export interface AuthenticationContext {
   mechanism: "browser_session";
   credentialId: string;
-  providerAccount: {
+  /** GitHub credential authority for SCM enrichment, independent of sign-in provenance. */
+  githubAccount: {
     id: string;
-    provider: string;
     subject: string;
-  };
+  } | null;
   channel: {
     kind: "sig1";
     service: "web";

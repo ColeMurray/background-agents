@@ -75,9 +75,8 @@ const browserGitHubAccountInfoSchema = z.object({
   }),
 });
 
-export interface BrowserProviderAccount {
+export interface BrowserGitHubAccount {
   readonly id: string;
-  readonly provider: string;
   readonly subject: string;
 }
 
@@ -104,11 +103,9 @@ export interface BrowserGitHubEnrichmentDependencies {
  */
 export async function resolveBrowserGitHubEnrichment(
   userId: string,
-  account: BrowserProviderAccount,
+  account: BrowserGitHubAccount,
   dependencies: BrowserGitHubEnrichmentDependencies
 ): Promise<GitHubEnrichment | null> {
-  if (account.provider !== "github") return null;
-
   const selection = {
     providerId: "github" as const,
     accountId: account.subject,
@@ -217,7 +214,9 @@ export async function resolveGitHubEnrichmentForRequest(
   }
 
   const auth = ctx.getBrowserAuth();
-  return resolveBrowserGitHubEnrichment(userId, ctx.authentication.providerAccount, {
+  const githubAccount = ctx.authentication.githubAccount;
+  if (!githubAccount) return null;
+  return resolveBrowserGitHubEnrichment(userId, githubAccount, {
     getAccessToken: (selection) => auth.api.getAccessToken({ body: selection }),
     getAccountInfo: (selection) => auth.api.accountInfo({ query: selection }),
     encryptAccessToken: (accessToken) => encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY),

@@ -28,9 +28,8 @@ vi.mock("./auth/browser-session-authenticator", () => ({
     authentication: {
       mechanism: "browser_session",
       credentialId: "session-1",
-      providerAccount: {
+      githubAccount: {
         id: "account-1",
-        provider: "github",
         subject: "583231",
       },
       channel: { kind: "sig1", service: "web" },

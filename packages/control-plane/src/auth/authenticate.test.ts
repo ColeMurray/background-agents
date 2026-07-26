@@ -354,6 +354,12 @@ describe("authenticate — compound browser credentials", () => {
           accountId: "583231",
           userId: "user-1",
         },
+        {
+          id: "account-2",
+          providerId: "google",
+          accountId: "google-subject",
+          userId: "user-1",
+        },
       ]
     );
 
@@ -367,9 +373,8 @@ describe("authenticate — compound browser credentials", () => {
     expect(result.authentication).toEqual({
       mechanism: "browser_session",
       credentialId: "session-1",
-      providerAccount: {
+      githubAccount: {
         id: "account-1",
-        provider: "github",
         subject: "583231",
       },
       channel: { kind: "sig1", service: "web" },

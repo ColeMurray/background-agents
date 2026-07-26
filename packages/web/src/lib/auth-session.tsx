@@ -56,6 +56,8 @@ export async function signIn(provider: SignInProvider): Promise<void> {
 export async function signOut(): Promise<void> {
   const response = await browserApiFetch("/api/auth/sign-out", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
   });
   if (!response.ok) {
     throw new Error(`Sign-out failed with status ${response.status}`);

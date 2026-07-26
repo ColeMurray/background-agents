@@ -52,27 +52,34 @@ export async function authenticateBrowserSession(
     throw new BrowserSessionIntegrityError("Better Auth returned a cross-user session");
   }
 
-  const accounts = await auth.api.listUserAccounts({ headers });
-  if (accounts.length !== 1) {
-    throw new BrowserSessionIntegrityError(
-      "Browser session does not resolve to exactly one provider account"
-    );
-  }
-  const parsedAccount = providerAccountSchema.safeParse(accounts[0]);
-  if (!parsedAccount.success || parsedAccount.data.userId !== user.id) {
+  const parsedAccounts = z
+    .array(providerAccountSchema)
+    .safeParse(await auth.api.listUserAccounts({ headers }));
+  if (
+    !parsedAccounts.success ||
+    parsedAccounts.data.some((account) => account.userId !== user.id)
+  ) {
     throw new BrowserSessionIntegrityError("Browser session provider account is corrupt");
   }
+  const githubAccounts = parsedAccounts.data.filter((account) => account.providerId === "github");
+  if (githubAccounts.length > 1) {
+    throw new BrowserSessionIntegrityError(
+      "Browser session resolves to multiple GitHub provider accounts"
+    );
+  }
+  const githubAccount = githubAccounts[0] ?? null;
 
   return {
     userId: user.id,
     authentication: {
       mechanism: "browser_session",
       credentialId: session.id,
-      providerAccount: {
-        id: parsedAccount.data.id,
-        provider: parsedAccount.data.providerId,
-        subject: parsedAccount.data.accountId,
-      },
+      githubAccount: githubAccount
+        ? {
+            id: githubAccount.id,
+            subject: githubAccount.accountId,
+          }
+        : null,
       channel: {
         kind: "sig1",
         service: "web",

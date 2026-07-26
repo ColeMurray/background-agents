@@ -152,6 +152,8 @@ describe("signOut", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("/api/auth/sign-out", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
       mode: "same-origin",
       credentials: "same-origin",
     });

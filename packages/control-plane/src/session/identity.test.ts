@@ -193,7 +193,6 @@ describe("resolveGitHubEnrichment", () => {
 describe("resolveBrowserGitHubEnrichment", () => {
   const githubAccount = {
     id: "account-row-1",
-    provider: "github",
     subject: "42",
   };
 
@@ -245,23 +244,6 @@ describe("resolveBrowserGitHubEnrichment", () => {
     expect(getAccessToken).toHaveBeenCalledWith(accountSelection);
     expect(getAccountInfo).toHaveBeenCalledWith(accountSelection);
     expect(encryptAccessToken).toHaveBeenCalledWith("current-access-token");
-  });
-
-  it("returns null for a non-GitHub browser account", async () => {
-    const dependencies = {
-      getAccessToken: vi.fn(),
-      getAccountInfo: vi.fn(),
-      encryptAccessToken: vi.fn(),
-    };
-
-    await expect(
-      resolveBrowserGitHubEnrichment(
-        "0123456789abcdef0123456789abcdef",
-        { ...githubAccount, provider: "google" },
-        dependencies
-      )
-    ).resolves.toBeNull();
-    expect(dependencies.getAccessToken).not.toHaveBeenCalled();
   });
 
   it("rejects provider profile substitution", async () => {

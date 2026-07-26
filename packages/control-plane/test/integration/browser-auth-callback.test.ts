@@ -165,9 +165,8 @@ describe("browser auth callback", () => {
         authentication: {
           mechanism: "browser_session",
           credentialId: session.session.id,
-          providerAccount: {
+          githubAccount: {
             id: account?.id ?? "",
-            provider: account?.providerId ?? "",
             subject: account?.accountId ?? "",
           },
           channel: { kind: "sig1", service: "web" },
@@ -277,6 +276,20 @@ describe("browser auth callback", () => {
         now.toISOString(),
         now.toISOString()
       ),
+      env.DB.prepare(
+        `INSERT INTO auth_accounts (
+           id, accountId, providerId, userId, accessToken, refreshToken,
+           idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope,
+           password, createdAt, updatedAt
+         ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
+      ).bind(
+        "33333333333333333333333333333333",
+        "google-subject",
+        "google",
+        canonicalUserId,
+        now.toISOString(),
+        now.toISOString()
+      ),
     ]);
 
     const initiationBody = JSON.stringify({
@@ -336,5 +349,14 @@ describe("browser auth callback", () => {
         .bind(canonicalUserId)
         .first<{ emailVerified: number }>()
     ).toEqual({ emailVerified: 1 });
+
+    const resourceResponse = await handleRequest(
+      await signedWebRequest("/model-preferences", {
+        method: "GET",
+        cookie: sessionCookie,
+      }),
+      env
+    );
+    expect(resourceResponse.status).toBe(200);
   });
 });
