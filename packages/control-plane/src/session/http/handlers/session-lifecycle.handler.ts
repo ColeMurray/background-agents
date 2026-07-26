@@ -1,11 +1,6 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import {
-  getValidModelOrDefault,
-  isValidModel,
-  type RepositoryRef,
-  type SandboxSettings,
-} from "@open-inspect/shared";
+import { getValidModelOrDefault, isValidModel, type RepositoryRef } from "@open-inspect/shared";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import type { SessionStatusService } from "../../session-status-service";
@@ -17,45 +12,6 @@ import {
 import { z } from "zod";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
-
-/**
- * Request body for the /internal/init endpoint.
- * The router constructs this from SessionInitInput — see session/initialize.ts.
- * Note: `userId` here is the participantUserId from SessionInitInput.
- */
-interface InitRequest {
-  sessionName: string;
-  repoOwner: string | null;
-  repoName: string | null;
-  repoId?: number | null;
-  defaultBranch?: string | null;
-  branch?: string | null;
-  /**
-   * Ordered member list ([0] = primary, matching the scalar fields).
-   * initialize.ts always sends it for repository sessions (synthesizing a
-   * one-entry list for scalar callers) and an empty list for repo-less ones.
-   */
-  repositories?: RepositoryRef[];
-  /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
-  environmentId?: string | null;
-  title?: string;
-  model?: string;
-  reasoningEffort?: string;
-  userId: string;
-  scmLogin?: string;
-  scmName?: string;
-  scmEmail?: string;
-  scmToken?: string | null;
-  scmTokenEncrypted?: string | null;
-  scmRefreshTokenEncrypted?: string | null;
-  scmTokenExpiresAt?: number | null;
-  scmUserId?: string | null;
-  parentSessionId?: string | null;
-  spawnSource?: SpawnSource;
-  spawnDepth?: number;
-  codeServerEnabled?: boolean;
-  sandboxSettings?: SandboxSettings;
-}
 
 export interface SessionLifecycleHandlerDeps {
   repository: Pick<
@@ -106,9 +62,82 @@ export interface SessionLifecycleHandler {
   cancel: () => Promise<Response>;
 }
 
-function parseUserIdBody(body: unknown): { userId?: string } {
-  return body as { userId?: string };
-}
+const repositoryRefSchema = z.object({
+  repoOwner: z.string(),
+  repoName: z.string(),
+  repoId: z.number(),
+  baseBranch: z.string(),
+});
+
+const spawnSourceSchema = z.enum([
+  "user",
+  "agent",
+  "automation",
+  "github-bot",
+  "linear-bot",
+  "slack-bot",
+] satisfies [SpawnSource, ...SpawnSource[]]);
+
+const sandboxSettingsSchema = z
+  .object({
+    tunnelPorts: z.array(z.number()).optional(),
+    terminalEnabled: z.boolean().optional(),
+    codeServerPort: z.number().optional(),
+    terminalPort: z.number().optional(),
+    maxConcurrentChildSessions: z.number().optional(),
+    maxTotalChildSessions: z.number().optional(),
+    cpuCores: z.number().nullable().optional(),
+    memoryMib: z.number().nullable().optional(),
+    buildTimeoutSeconds: z.number().optional(),
+  })
+  .optional();
+
+/**
+ * Request body for the /internal/init endpoint.
+ * The router constructs this from SessionInitInput — see session/initialize.ts.
+ * Note: `userId` here is the participantUserId from SessionInitInput.
+ */
+const initRequestSchema = z.object({
+  sessionName: z.string(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  repoId: z.number().nullable().optional(),
+  defaultBranch: z.string().nullable().optional(),
+  branch: z.string().nullable().optional(),
+  /**
+   * Ordered member list ([0] = primary, matching the scalar fields).
+   * initialize.ts always sends it for repository sessions (synthesizing a
+   * one-entry list for scalar callers) and an empty list for repo-less ones.
+   */
+  repositories: z.array(repositoryRefSchema).optional(),
+  /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
+  environmentId: z.string().nullable().optional(),
+  title: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  userId: z.string(),
+  scmLogin: z.string().optional(),
+  scmName: z.string().optional(),
+  scmEmail: z.string().optional(),
+  scmToken: z.string().nullable().optional(),
+  scmTokenEncrypted: z.string().nullable().optional(),
+  scmRefreshTokenEncrypted: z.string().nullable().optional(),
+  scmTokenExpiresAt: z.number().nullable().optional(),
+  scmUserId: z.string().nullable().optional(),
+  parentSessionId: z.string().nullable().optional(),
+  spawnSource: spawnSourceSchema.optional(),
+  spawnDepth: z.number().optional(),
+  codeServerEnabled: z.boolean().optional(),
+  sandboxSettings: sandboxSettingsSchema,
+});
+
+type InitRequest = z.infer<typeof initRequestSchema>;
+
+const userIdBodySchema = z.object({
+  userId: z.string().optional(),
+});
+
+type UserIdBody = z.infer<typeof userIdBodySchema>;
 
 const titleUpdateBodySchema = z.object({
   userId: z.string().optional(),
@@ -122,7 +151,19 @@ export function createSessionLifecycleHandler(
 ): SessionLifecycleHandler {
   return {
     async init(request: Request, log: Logger): Promise<Response> {
-      const body = (await request.json()) as InitRequest;
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const parseResult = initRequestSchema.safeParse(raw);
+      if (!parseResult.success) {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const body: InitRequest = parseResult.data;
 
       const sessionId = deps.getDurableObjectId();
       const sessionName = body.sessionName;
@@ -343,9 +384,13 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      let body: { userId?: string };
+      let body: UserIdBody;
       try {
-        body = parseUserIdBody(await request.json());
+        const result = userIdBodySchema.safeParse(await request.json());
+        if (!result.success) {
+          return Response.json({ error: "Invalid request body" }, { status: 400 });
+        }
+        body = result.data;
       } catch {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
@@ -370,9 +415,13 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      let body: { userId?: string };
+      let body: UserIdBody;
       try {
-        body = parseUserIdBody(await request.json());
+        const result = userIdBodySchema.safeParse(await request.json());
+        if (!result.success) {
+          return Response.json({ error: "Invalid request body" }, { status: 400 });
+        }
+        body = result.data;
       } catch {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }

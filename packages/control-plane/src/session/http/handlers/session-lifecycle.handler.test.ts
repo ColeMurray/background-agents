@@ -345,6 +345,75 @@ describe("createSessionLifecycleHandler", () => {
     expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([]);
   });
 
+  it("accepts nullable init fields and sandbox settings", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          environmentId: null,
+          scmToken: null,
+          scmTokenEncrypted: null,
+          scmRefreshTokenEncrypted: null,
+          scmTokenExpiresAt: null,
+          scmUserId: null,
+          parentSessionId: null,
+          sandboxSettings: { cpuCores: null, memoryMib: null, tunnelPorts: [3000] },
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        environmentId: null,
+        parentSessionId: null,
+      })
+    );
+    const upsert = repository.upsertSession.mock.calls[0]![0];
+    expect(JSON.parse(upsert.sandboxSettings!)).toEqual({
+      cpuCores: null,
+      memoryMib: null,
+      tunnelPorts: [3000],
+    });
+  });
+
+  it("rejects malformed init bodies before creating records", async () => {
+    const { handler, repository, scheduleWarmSandbox } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          userId: 123,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+  });
+
   it("rejects a repositories list whose primary does not match the scalar mirror", async () => {
     const { handler, repository } = createHandler();
 
@@ -660,6 +729,23 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid request body" });
+  });
+
+  it("returns 400 for malformed archive fields", async () => {
+    const { handler, getSession, getParticipantByUserId } = createHandler();
+    getSession.mockReturnValue(createSession());
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(getParticipantByUserId).not.toHaveBeenCalled();
   });
 
   it("returns 403 when archive user is not a participant", async () => {
