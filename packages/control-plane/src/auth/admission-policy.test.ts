@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AdmissionDeniedError,
   AdmissionPolicy,
@@ -28,7 +28,26 @@ const GOOGLE_SIGN_IN: ProviderSignInResult<"google"> = {
   credential: null,
 };
 
+const GITHUB_SIGN_IN: ProviderSignInResult<"github"> = {
+  identity: {
+    provider: "github",
+    issuer: "https://github.com",
+    subject: "123",
+    login: "octocat",
+    verifiedEmails: [],
+    primaryEmail: null,
+  },
+  credential: {
+    kind: "access_only_nonexpiring",
+    accessToken: "ghu_token",
+  },
+};
+
 describe("AdmissionPolicy", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("evaluates the complete verified email set with OR semantics", async () => {
     const policy = new AdmissionPolicy({
       ...BASE_CONFIG,
@@ -50,22 +69,7 @@ describe("AdmissionPolicy", () => {
       { fetcher }
     );
 
-    await expect(
-      policy.requireAdmission({
-        identity: {
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "123",
-          login: "octocat",
-          verifiedEmails: [],
-          primaryEmail: null,
-        },
-        credential: {
-          kind: "access_only_nonexpiring",
-          accessToken: "ghu_token",
-        },
-      })
-    ).resolves.toEqual({
+    await expect(policy.requireAdmission(GITHUB_SIGN_IN)).resolves.toEqual({
       reason: "github_organization",
       organization: "open-inspect",
     });
@@ -76,6 +80,26 @@ describe("AdmissionPolicy", () => {
         signal: expect.any(AbortSignal),
       })
     );
+  });
+
+  it("preserves the Worker receiver when using the default global fetch", async () => {
+    const runtimeFetch = vi.fn(function (this: unknown) {
+      if (this !== globalThis) {
+        throw new TypeError("Illegal invocation");
+      }
+      return Promise.resolve(Response.json({ state: "active" }));
+    });
+    vi.stubGlobal("fetch", runtimeFetch);
+    const policy = new AdmissionPolicy({
+      ...BASE_CONFIG,
+      allowedGitHubOrganizations: ["open-inspect"],
+    });
+
+    await expect(policy.requireAdmission(GITHUB_SIGN_IN)).resolves.toEqual({
+      reason: "github_organization",
+      organization: "open-inspect",
+    });
+    expect(runtimeFetch).toHaveBeenCalledOnce();
   });
 
   it("parses deployment admission settings conservatively", () => {
@@ -116,19 +140,6 @@ describe("AdmissionPolicy", () => {
   });
 
   it("distinguishes definitive non-membership from an unavailable organization check", async () => {
-    const signIn: ProviderSignInResult<"github"> = {
-      identity: {
-        provider: "github",
-        issuer: "https://github.com",
-        subject: "123",
-        verifiedEmails: [],
-        primaryEmail: null,
-      },
-      credential: {
-        kind: "access_only_nonexpiring",
-        accessToken: "ghu_token",
-      },
-    };
     const unavailable = new AdmissionPolicy(
       {
         ...BASE_CONFIG,
@@ -138,7 +149,7 @@ describe("AdmissionPolicy", () => {
         fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 })),
       }
     );
-    await expect(unavailable.requireAdmission(signIn)).rejects.toBeInstanceOf(
+    await expect(unavailable.requireAdmission(GITHUB_SIGN_IN)).rejects.toBeInstanceOf(
       AdmissionUnavailableError
     );
 
@@ -151,7 +162,9 @@ describe("AdmissionPolicy", () => {
         fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 404 })),
       }
     );
-    await expect(denied.requireAdmission(signIn)).rejects.toBeInstanceOf(AdmissionDeniedError);
+    await expect(denied.requireAdmission(GITHUB_SIGN_IN)).rejects.toBeInstanceOf(
+      AdmissionDeniedError
+    );
 
     const pending = new AdmissionPolicy(
       {
@@ -162,6 +175,8 @@ describe("AdmissionPolicy", () => {
         fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ state: "pending" })),
       }
     );
-    await expect(pending.requireAdmission(signIn)).rejects.toBeInstanceOf(AdmissionDeniedError);
+    await expect(pending.requireAdmission(GITHUB_SIGN_IN)).rejects.toBeInstanceOf(
+      AdmissionDeniedError
+    );
   });
 });

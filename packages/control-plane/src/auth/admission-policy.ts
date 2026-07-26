@@ -77,7 +77,7 @@ export class AdmissionPolicy {
       allowedGitHubOrganizations: normalize(config.allowedGitHubOrganizations),
       unsafeAllowAllUsers: config.unsafeAllowAllUsers,
     };
-    this.fetcher = dependencies.fetcher ?? fetch;
+    this.fetcher = dependencies.fetcher ?? globalThis.fetch.bind(globalThis);
   }
 
   async requireAdmission(signIn: VerifiedProviderSignIn): Promise<AdmissionDecision> {

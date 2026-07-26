@@ -1,3 +1,4 @@
+import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared";
 import { betterAuth } from "better-auth";
 import type { BrowserAuthProviderProfileResolver } from "./browser-auth-provider-profile";
 import type { BrowserAuthUserProjection } from "./browser-auth-user-projection";
@@ -39,8 +40,19 @@ export function createBrowserAuth(config: BrowserAuthConfig) {
     secret: config.secret,
     trustedOrigins: [config.publicWebOrigin],
     telemetry: { enabled: false },
+    // Workers do not expose NODE_ENV through process.env under every supported
+    // compatibility date. Keep the production security behavior explicit.
+    rateLimit: {
+      enabled: true,
+      window: 60,
+      max: 100,
+      storage: "memory",
+    },
     advanced: {
       cookiePrefix: "openinspect",
+      ipAddress: {
+        ipAddressHeaders: [BROWSER_AUTH_CLIENT_IP_HEADER],
+      },
       // Production is HTTPS-only. Loopback HTTP remains available for local
       // development, where browsers reject Secure cookies by design.
       useSecureCookies: new URL(config.publicWebOrigin).protocol === "https:",

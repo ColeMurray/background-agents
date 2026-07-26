@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared";
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it } from "vitest";
 import {
@@ -149,6 +150,44 @@ describe("browser authentication", () => {
     expect(stateCookie?.toLowerCase()).toContain("secure");
     expect(stateCookie?.toLowerCase()).toContain("samesite=lax");
     expect(stateCookie?.toLowerCase()).not.toContain("domain=");
+  });
+
+  it("rate limits repeated browser sign-in attempts by the trusted client IP", async () => {
+    const auth = createBrowserAuth({
+      database: env.DB,
+      publicWebOrigin: PUBLIC_WEB_ORIGIN,
+      secret: SECRET,
+      userProjection: UNUSED_USER_PROJECTION,
+      github: {
+        clientId: "github-app-client-id",
+        clientSecret: "github-app-client-secret",
+        getUserInfo: UNUSED_PROFILE_RESOLVER,
+      },
+    });
+    const signIn = () =>
+      auth.handler(
+        new Request(`${PUBLIC_WEB_ORIGIN}/api/auth/sign-in/social`, {
+          method: "POST",
+          headers: {
+            [BROWSER_AUTH_CLIENT_IP_HEADER]: "203.0.113.73",
+            "Content-Type": "application/json",
+            Origin: PUBLIC_WEB_ORIGIN,
+          },
+          body: JSON.stringify({
+            provider: "github",
+            callbackURL: "/",
+            disableRedirect: true,
+          }),
+        })
+      );
+
+    await expect(signIn()).resolves.toMatchObject({ status: 200 });
+    await expect(signIn()).resolves.toMatchObject({ status: 200 });
+    await expect(signIn()).resolves.toMatchObject({ status: 200 });
+
+    const limited = await signIn();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("X-Retry-After")).toBeTruthy();
   });
 
   it("uses a non-Secure host-only cookie only for loopback HTTP development", async () => {

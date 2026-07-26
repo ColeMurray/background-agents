@@ -62,6 +62,8 @@ describe("proxyBrowserAuthRequest", () => {
           "Content-Type": "application/json",
           Origin: "https://web.example",
           "User-Agent": "Test Browser",
+          "X-Forwarded-For": "203.0.113.42",
+          "X-OpenInspect-Client-IP": "198.51.100.99",
           "X-OpenInspect-Service": "modal",
           "X-OpenInspect-Service-Signature": "caller-controlled",
         },
@@ -83,6 +85,7 @@ describe("proxyBrowserAuthRequest", () => {
     expect(sentHeaders.get("Content-Type")).toBe("application/json");
     expect(sentHeaders.get("Origin")).toBe("https://web.example");
     expect(sentHeaders.get("User-Agent")).toBe("Test Browser");
+    expect(sentHeaders.get("X-OpenInspect-Client-IP")).toBe("203.0.113.42");
     expect(sentHeaders.get("Authorization")).toBeNull();
     expect(sentHeaders.get("Connection")).toBeNull();
     expect(sentHeaders.get("X-OpenInspect-Service")).toBe("web");

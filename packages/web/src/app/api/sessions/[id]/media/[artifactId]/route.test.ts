@@ -93,11 +93,37 @@ describe("session media API route", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(response.headers.get("Vary")).toBe("Cookie");
     expect(response.headers.get("Content-Type")).toBe("image/png");
-    expect(response.headers.get("Content-Length")).toBe(String(upstreamBody.byteLength));
+    expect(response.headers.get("Content-Length")).toBeNull();
     expect(response.headers.get("ETag")).toBe('"artifact-etag"');
     expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual(
       Array.from(upstreamBody)
     );
+  });
+
+  it("does not reuse the encoded payload length for a decoded media stream", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "user-1" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      new Response("decoded media", {
+        headers: {
+          "Content-Type": "text/plain",
+          "Content-Encoding": "br",
+          "Content-Length": "4",
+        },
+      })
+    );
+
+    const response = await GET(new Request("http://localhost/api/sessions/session-1/media/a1"), {
+      params: Promise.resolve({
+        id: "session-1",
+        artifactId: "artifact-1",
+      }),
+    });
+
+    expect(response.headers.get("Content-Encoding")).toBeNull();
+    expect(response.headers.get("Content-Length")).toBeNull();
+    await expect(response.text()).resolves.toBe("decoded media");
   });
 
   it("forwards range requests and range response headers", async () => {
@@ -135,7 +161,7 @@ describe("session media API route", () => {
     });
     expect(response.status).toBe(206);
     expect(response.headers.get("Content-Type")).toBe("video/mp4");
-    expect(response.headers.get("Content-Length")).toBe(String(upstreamBody.byteLength));
+    expect(response.headers.get("Content-Length")).toBeNull();
     expect(response.headers.get("Content-Range")).toBe("bytes 4-7/24");
     expect(response.headers.get("Accept-Ranges")).toBe("bytes");
     expect(response.headers.get("ETag")).toBe('"video-etag"');

@@ -21,5 +21,7 @@ describe("control-plane worker build", () => {
 
     expect(bundle.includes('"node:async_hooks"')).toBe(true);
     expect(bundle.includes("AsyncLocalStoragePolyfill")).toBe(false);
+    expect(bundle.includes("@opentelemetry/semantic-conventions/build/esm/")).toBe(true);
+    expect(bundle.includes("@opentelemetry/semantic-conventions/build/src/")).toBe(false);
   });
 });

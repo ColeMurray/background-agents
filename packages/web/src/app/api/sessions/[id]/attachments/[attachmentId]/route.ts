@@ -42,13 +42,7 @@ export async function GET(
       Vary: "Cookie",
     });
 
-    for (const headerName of [
-      "Content-Type",
-      "Content-Length",
-      "Content-Range",
-      "Accept-Ranges",
-      "ETag",
-    ]) {
+    for (const headerName of ["Content-Type", "Content-Range", "Accept-Ranges", "ETag"]) {
       const headerValue = response.headers.get(headerName);
       if (headerValue) {
         headers.set(headerName, headerValue);

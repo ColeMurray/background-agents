@@ -33,10 +33,8 @@ export async function GET(
       "X-Content-Type-Options": "nosniff",
       Vary: "Cookie",
     });
-    for (const name of ["Content-Length", "ETag"]) {
-      const value = upstream.headers.get(name);
-      if (value) headers.set(name, value);
-    }
+    const etag = upstream.headers.get("ETag");
+    if (etag) headers.set("ETag", etag);
     return new Response(upstream.body, { status: upstream.status, headers });
   } catch (error) {
     console.error("Failed to fetch session diff file:", error);

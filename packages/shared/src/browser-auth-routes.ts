@@ -3,6 +3,8 @@
  * control plane. Keeping one declaration prevents either side from silently
  * widening or narrowing the signed proxy contract.
  */
+export const BROWSER_AUTH_CLIENT_IP_HEADER = "X-OpenInspect-Client-IP";
+
 export const BROWSER_AUTH_PROXY_ROUTES = [
   ["POST", "/api/auth/sign-in/social"],
   ["GET", "/api/auth/callback/github"],

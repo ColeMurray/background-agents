@@ -45,6 +45,10 @@ export default defineConfig({
           configPath: "./wrangler.jsonc",
         },
         miniflare: {
+          // Match the Terraform-managed production runtime. The Vitest pool
+          // otherwise defaults its runner to today's compatibility date.
+          compatibilityDate: "2024-09-23",
+          compatibilityFlags: ["nodejs_compat"],
           bindings: {
             IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
             SERVICE_AUTH_SECRET_WEB: "test-service-secret-web",

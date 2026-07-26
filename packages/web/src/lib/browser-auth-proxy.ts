@@ -1,4 +1,8 @@
-import { buildServiceAuthHeaders, isBrowserAuthProxyRoute } from "@open-inspect/shared";
+import {
+  BROWSER_AUTH_CLIENT_IP_HEADER,
+  buildServiceAuthHeaders,
+  isBrowserAuthProxyRoute,
+} from "@open-inspect/shared";
 import { dispatchControlPlaneFetch, getControlPlaneUrl } from "./control-plane-transport";
 
 const AUTH_PROXY_TIMEOUT_MS = 15_000;
@@ -30,6 +34,11 @@ function copyRequestHeaders(request: Request): Headers {
   for (const name of REQUEST_HEADERS) {
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
+  }
+  const clientIp =
+    request.headers.get("X-Vercel-Forwarded-For") ?? request.headers.get("X-Forwarded-For");
+  if (clientIp !== null) {
+    headers.set(BROWSER_AUTH_CLIENT_IP_HEADER, clientIp);
   }
   return headers;
 }
