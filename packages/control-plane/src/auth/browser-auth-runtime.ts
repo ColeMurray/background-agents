@@ -28,18 +28,33 @@ function requireConfig(value: string | undefined, name: string): string {
   return normalized;
 }
 
-function requirePublicWebOrigin(value: string | undefined): string {
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+export function parsePublicWebOrigin(value: string | undefined): string {
   const configured = requireConfig(value, "WEB_APP_URL");
-  let origin: URL;
+  let url: URL;
   try {
-    origin = new URL(configured);
+    url = new URL(configured);
   } catch {
     throw new BrowserAuthConfigurationError("WEB_APP_URL is invalid");
   }
-  if (origin.origin !== configured.replace(/\/+$/, "") || origin.protocol !== "https:") {
-    throw new BrowserAuthConfigurationError("WEB_APP_URL must be an HTTPS origin");
+
+  const isOriginOnly =
+    url.username === "" &&
+    url.password === "" &&
+    url.pathname === "/" &&
+    url.search === "" &&
+    url.hash === "";
+  const isSecure = url.protocol === "https:";
+  const isLocalDevelopment = url.protocol === "http:" && isLoopbackHost(url.hostname);
+  if (!isOriginOnly || (!isSecure && !isLocalDevelopment)) {
+    throw new BrowserAuthConfigurationError(
+      "WEB_APP_URL must be an HTTPS origin or an HTTP loopback origin"
+    );
   }
-  return origin.origin;
+  return url.origin;
 }
 
 function createAdmissionPolicy(env: Env): AdmissionPolicy {
@@ -53,7 +68,7 @@ function createAdmissionPolicy(env: Env): AdmissionPolicy {
 }
 
 export function createBrowserAuthFromEnv(env: Env, database: D1Database) {
-  const publicWebOrigin = requirePublicWebOrigin(env.WEB_APP_URL);
+  const publicWebOrigin = parsePublicWebOrigin(env.WEB_APP_URL);
   const secret = requireConfig(env.BROWSER_AUTH_SECRET, "BROWSER_AUTH_SECRET");
   if (secret.length < MINIMUM_SECRET_LENGTH) {
     throw new BrowserAuthConfigurationError(

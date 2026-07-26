@@ -151,6 +151,43 @@ describe("browser authentication", () => {
     expect(stateCookie?.toLowerCase()).not.toContain("domain=");
   });
 
+  it("uses a non-Secure host-only cookie only for loopback HTTP development", async () => {
+    const localOrigin = "http://localhost:3000";
+    const auth = createBrowserAuth({
+      database: env.DB,
+      publicWebOrigin: localOrigin,
+      secret: SECRET,
+      userProjection: UNUSED_USER_PROJECTION,
+      github: {
+        clientId: "github-app-client-id",
+        clientSecret: "github-app-client-secret",
+        getUserInfo: UNUSED_PROFILE_RESOLVER,
+      },
+    });
+
+    const response = await auth.handler(
+      new Request(`${localOrigin}/api/auth/sign-in/social`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: localOrigin,
+        },
+        body: JSON.stringify({
+          provider: "github",
+          callbackURL: "/",
+          disableRedirect: true,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const stateCookie = response.headers.get("set-cookie");
+    expect(stateCookie).toContain("openinspect.state=");
+    expect(stateCookie).not.toContain("__Secure-");
+    expect(stateCookie?.toLowerCase()).not.toContain("; secure");
+    expect(stateCookie?.toLowerCase()).toContain("httponly");
+  });
+
   it("initiates Google OIDC sign-in with PKCE and minimum identity scopes", async () => {
     const auth = createBrowserAuth({
       database: env.DB,

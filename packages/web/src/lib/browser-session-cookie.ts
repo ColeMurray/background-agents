@@ -1,4 +1,5 @@
-const BROWSER_SESSION_COOKIE_PATTERN = /^__Secure-openinspect\.session_token(?:\.[0-9]+)?$/;
+const BROWSER_SESSION_COOKIE_PATTERN =
+  /^(?:__Secure-openinspect|openinspect)\.session_token(?:\.[0-9]+)?$/;
 
 export interface BrowserCookie {
   readonly name: string;

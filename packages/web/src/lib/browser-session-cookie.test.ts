@@ -24,6 +24,16 @@ describe("serializeBrowserSessionCookies", () => {
     );
   });
 
+  it("supports Better Auth's host-only localhost cookie without widening the name", () => {
+    expect(
+      serializeBrowserSessionCookies([
+        { name: "openinspect.session_token", value: "local-session.signature" },
+        { name: "openinspect.state", value: "state" },
+        { name: "openinspect.session_token.attacker", value: "ignored" },
+      ])
+    ).toBe("openinspect.session_token=local-session.signature");
+  });
+
   it("returns null when the session cookie is absent", () => {
     expect(serializeBrowserSessionCookies([])).toBeNull();
   });

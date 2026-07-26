@@ -41,7 +41,9 @@ export function createBrowserAuth(config: BrowserAuthConfig) {
     telemetry: { enabled: false },
     advanced: {
       cookiePrefix: "openinspect",
-      useSecureCookies: true,
+      // Production is HTTPS-only. Loopback HTTP remains available for local
+      // development, where browsers reject Secure cookies by design.
+      useSecureCookies: new URL(config.publicWebOrigin).protocol === "https:",
       // Application authorization names users by the existing canonical
       // 32-character lowercase-hex ID. Keep Better Auth authoritative for ID
       // creation while preserving that stable cross-service contract.
