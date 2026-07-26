@@ -4,21 +4,14 @@
 -- comes only from user_identities' exact provider issuer and subject.
 
 -- Better Auth's D1 transaction fallback is non-atomic. A failed first sign-in
--- can therefore leave auth_users behind when the canonical users projection
--- rejects a duplicate email. Remove only that unreferenced partial-write shape
--- before inserting the canonical row below.
+-- can therefore leave the new auth user, account, and session behind when the
+-- canonical users projection rejects a duplicate email. Remove that entire
+-- partial identity graph before inserting the canonical row below. The foreign
+-- keys cascade only from a Better Auth user whose normalized email is already
+-- owned by a different canonical user; unrelated Better Auth identities are
+-- untouched.
 DELETE FROM auth_users
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM auth_accounts
-    WHERE auth_accounts.userId = auth_users.id
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM auth_sessions
-    WHERE auth_sessions.userId = auth_users.id
-  )
-  AND EXISTS (
+WHERE EXISTS (
     SELECT 1
     FROM users
     WHERE users.id <> auth_users.id

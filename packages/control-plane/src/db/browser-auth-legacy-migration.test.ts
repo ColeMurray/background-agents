@@ -63,6 +63,31 @@ describe("Better Auth legacy account backfill migration", () => {
           '2026-07-26T21:47:56.000Z',
           '2026-07-26T21:47:56.000Z'
         );
+
+        -- Better Auth creates the provider account in the same logical
+        -- transaction as the user. D1's non-atomic transaction fallback can
+        -- retain both rows when the post-create canonical projection fails.
+        INSERT INTO auth_accounts (
+          id, accountId, providerId, userId, createdAt, updatedAt
+        ) VALUES (
+          'partial-account',
+          '583231',
+          'github',
+          '33333333333333333333333333333333',
+          '2026-07-26T21:47:56.000Z',
+          '2026-07-26T21:47:56.000Z'
+        );
+
+        INSERT INTO auth_sessions (
+          id, expiresAt, token, createdAt, updatedAt, userId
+        ) VALUES (
+          'partial-session',
+          '2026-08-02T21:47:56.000Z',
+          'partial-session-token',
+          '2026-07-26T21:47:56.000Z',
+          '2026-07-26T21:47:56.000Z',
+          '33333333333333333333333333333333'
+        );
       `);
 
       const migrationSql = readFileSync(`${MIGRATIONS_DIRECTORY}/${BACKFILL_MIGRATION}`, "utf8");
@@ -102,6 +127,7 @@ describe("Better Auth legacy account backfill migration", () => {
       db.exec(migrationSql);
       expect(db.prepare("SELECT COUNT(*) AS count FROM auth_users").get()).toEqual({ count: 1 });
       expect(db.prepare("SELECT COUNT(*) AS count FROM auth_accounts").get()).toEqual({ count: 1 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM auth_sessions").get()).toEqual({ count: 0 });
     } finally {
       db.close();
     }
