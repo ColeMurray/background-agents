@@ -27,6 +27,7 @@ import {
   ASSERTION_RIGHTS,
   isActorNamespace,
   type ActorNamespace,
+  type AuthenticationContext,
   type Principal,
 } from "./principal";
 import { ACCESS_TOKEN_PREFIX, WebSessionTokenService } from "./web-session-tokens";
@@ -60,7 +61,13 @@ export interface AuthError {
  */
 export const SERVICE_REQUEST_MAX_BODY_BYTES = 16 * 1024 * 1024;
 
-export type AuthResult = { principal: Principal; request: Request } | AuthError;
+export type AuthResult =
+  | {
+      principal: Principal;
+      request: Request;
+      authentication?: AuthenticationContext;
+    }
+  | AuthError;
 
 export function isAuthError(result: AuthResult): result is AuthError {
   return !("principal" in result);
@@ -295,14 +302,13 @@ async function authenticateWebSessionToken(
   return {
     principal: {
       kind: "user",
-      user: {
-        provider: verification.provider,
-        providerUserId: verification.providerUserId,
-        canonicalUserId: verification.userId,
-        // Web users participate under their bare canonical id.
-        participantUserId: verification.userId,
-      },
-      tokenId: verification.tokenId,
+      userId: verification.userId,
+    },
+    authentication: {
+      mechanism: "legacy_web_token",
+      credentialId: verification.tokenId,
+      provider: verification.provider,
+      subject: verification.providerUserId,
     },
     request,
   };

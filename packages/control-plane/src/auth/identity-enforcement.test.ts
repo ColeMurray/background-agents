@@ -8,19 +8,20 @@ import {
   requireEventPoster,
   resolveCanonicalUserId,
 } from "./identity-enforcement";
-import type { Principal, ResolvedIdentity } from "./principal";
+import type { AuthenticationContext, Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
 import type { RequestContext } from "../routes/shared";
 
 const USER_PRINCIPAL: Principal = {
   kind: "user",
-  user: {
-    provider: "github",
-    providerUserId: "583231",
-    canonicalUserId: "canon-1",
-    participantUserId: "canon-1",
-  },
-  tokenId: "token-1",
+  userId: "canon-1",
+};
+
+const USER_AUTHENTICATION: AuthenticationContext = {
+  mechanism: "legacy_web_token",
+  credentialId: "token-1",
+  provider: "github",
+  subject: "583231",
 };
 
 const SLACK_ACTOR: ResolvedIdentity = {
@@ -36,11 +37,17 @@ const SLACK_BOT_PRINCIPAL: Principal = {
   actor: SLACK_ACTOR,
 };
 
-function createCtx(principal?: Principal): RequestContext {
+function createCtx(
+  principal?: Principal,
+  authentication: AuthenticationContext | null | undefined = principal?.kind === "user"
+    ? USER_AUTHENTICATION
+    : undefined
+): RequestContext {
   return {
     trace_id: "trace-test",
     request_id: "req-test",
     principal,
+    authentication: authentication ?? undefined,
   } as RequestContext;
 }
 
@@ -379,20 +386,14 @@ describe("authorizeProviderIdentityRequest", () => {
     expect(authz.action === "deny" && authz.response.status).toBe(403);
   });
 
-  it("fails closed if a user principal ever lacks a canonical id", () => {
+  it("denies a user principal without provider authentication provenance", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const principal: Principal = {
-      kind: "user",
-      user: {
-        provider: "github",
-        providerUserId: "583231",
-        canonicalUserId: null,
-        participantUserId: "583231",
-      },
-      tokenId: "token-1",
-    };
-    const authz = authorizeProviderIdentityRequest(createCtx(principal), "github", "583231");
-    expect(authz.action === "deny" && authz.response.status).toBe(500);
+    const authz = authorizeProviderIdentityRequest(
+      createCtx(USER_PRINCIPAL, null),
+      "github",
+      "583231"
+    );
+    expect(authz.action === "deny" && authz.response.status).toBe(403);
   });
 
   it("denies every other service principal", () => {

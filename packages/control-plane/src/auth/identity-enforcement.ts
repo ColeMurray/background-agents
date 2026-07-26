@@ -108,8 +108,8 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
   switch (principal.kind) {
     case "user":
       return {
-        participantUserId: principal.user.participantUserId,
-        canonicalUserId: principal.user.canonicalUserId,
+        participantUserId: principal.userId,
+        canonicalUserId: principal.userId,
         actor: null,
         spawnSource: "user",
       };
@@ -322,20 +322,20 @@ export function authorizeProviderIdentityRequest(
 ): ProviderIdentityAuthorization {
   const principal = ctx.principal;
   if (principal?.kind === "user") {
-    if (provider === principal.user.provider && providerUserId === principal.user.providerUserId) {
-      // canonicalUserId is always set for user principals (minted from the
-      // token row); the body is deliberately never consulted here. Fail
-      // closed on the impossible null rather than emitting an invalid id.
-      const canonicalUserId = principal.user.canonicalUserId;
-      if (!canonicalUserId) {
-        return { action: "deny", response: error("User principal has no canonical id", 500) };
-      }
-      return { action: "resolve", canonicalUserId };
+    const authentication = ctx.authentication;
+    if (
+      authentication?.mechanism === "legacy_web_token" &&
+      provider === authentication.provider &&
+      providerUserId === authentication.subject
+    ) {
+      return { action: "resolve", canonicalUserId: principal.userId };
     }
     logMismatchRejected(
       "provider-identities",
       "provider-identity-path",
-      `${principal.user.provider}:${principal.user.providerUserId}`,
+      authentication?.mechanism === "legacy_web_token"
+        ? `${authentication.provider}:${authentication.subject}`
+        : "no-provider-provenance",
       `${provider}:${providerUserId}`,
       ctx
     );

@@ -294,7 +294,7 @@ function logPrincipal(principal: Principal, ctx: RequestContext, path: string): 
       fields.session_id = principal.sessionId;
       break;
     case "user":
-      fields.user_id = principal.user.canonicalUserId ?? undefined;
+      fields.user_id = principal.userId;
       break;
   }
   logger.info("auth.principal", {
@@ -454,6 +454,7 @@ export async function handleRequest(
       } else {
         authError = null;
         ctx.principal = authResult.principal;
+        ctx.authentication = authResult.authentication;
         request = authResult.request;
       }
     }

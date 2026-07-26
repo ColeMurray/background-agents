@@ -26,8 +26,33 @@ export interface ResolvedIdentity {
   participantUserId: string;
 }
 
+export type AuthenticationContext =
+  | {
+      mechanism: "browser_session";
+      credentialId: string;
+      providerAccount: {
+        id: string;
+        provider: string;
+        subject: string;
+      };
+      channel: {
+        kind: "sig1";
+        service: "web";
+      };
+    }
+  | {
+      /**
+       * Transitional provenance for the legacy oi_at_ path. Removed with the
+       * final browser-auth cutover.
+       */
+      mechanism: "legacy_web_token";
+      credentialId: string;
+      provider: "github" | "google";
+      subject: string;
+    };
+
 export type Principal =
-  | { kind: "user"; user: ResolvedIdentity; tokenId: string }
+  | { kind: "user"; userId: string }
   | { kind: "service"; service: ServiceName; actor: ResolvedIdentity | null }
   | { kind: "sandbox"; sessionId: string };
 

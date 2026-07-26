@@ -28,20 +28,20 @@ function createCtx(): RequestContext {
 
 function userCtx(
   canonicalUserId: string,
-  provider: "github" | "google" | "slack" | "linear" = "github",
+  provider: "github" | "google" = "github",
   providerUserId = "12345"
 ): RequestContext {
   return {
     ...createCtx(),
     principal: {
       kind: "user",
-      user: {
-        provider,
-        providerUserId,
-        canonicalUserId,
-        participantUserId: canonicalUserId,
-      },
-      tokenId: "tok-1",
+      userId: canonicalUserId,
+    },
+    authentication: {
+      mechanism: "legacy_web_token",
+      credentialId: "tok-1",
+      provider,
+      subject: providerUserId,
     },
   };
 }
