@@ -235,7 +235,7 @@ repo_secrets_encryption_key = ""
 # Generate with: openssl rand -hex 32
 modal_api_secret = ""
 
-# NextAuth.js secret
+# Browser authentication secret (the Terraform input retains its legacy name)
 nextauth_secret = ""
 
 # =============================================================================

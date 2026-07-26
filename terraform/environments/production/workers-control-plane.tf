@@ -65,7 +65,13 @@ module "control_plane_worker" {
   plain_text_bindings = concat(
     [
       { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
+      { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
       { name = "WEB_APP_URL", value = local.web_app_url },
+      { name = "ALLOWED_USERS", value = var.allowed_users },
+      { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },
+      { name = "ALLOWED_EMAILS", value = var.allowed_emails },
+      { name = "ALLOWED_GITHUB_ORGS", value = var.allowed_github_orgs },
+      { name = "UNSAFE_ALLOW_ALL_USERS", value = tostring(var.unsafe_allow_all_users) },
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
@@ -119,6 +125,10 @@ module "control_plane_worker" {
 
   secrets = concat(
     [
+      # The existing operator-managed auth secret now signs Better Auth state
+      # and cookies in the control plane. Keeping the Terraform input stable
+      # avoids coupling secret rotation to the browser-auth cutover.
+      { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
       { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
@@ -135,6 +145,9 @@ module "control_plane_worker" {
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     ],
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret },
+    ] : [],
     local.use_modal_backend ? [
       { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
       { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
