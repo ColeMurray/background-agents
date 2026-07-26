@@ -192,6 +192,50 @@ describe("GoogleOidcProvider", () => {
     expect(String(fetch.mock.calls[2][0])).toBe("https://www.googleapis.com/oauth2/v3/certs");
   });
 
+  it("does not trust an unverified Google email as account-linking evidence", async () => {
+    const nowEpochSeconds = Math.floor(Date.now() / 1000);
+    const nonce = "nonce-value";
+    const { idToken, publicJwk } = await createSignedIdToken({
+      iss: "https://accounts.google.com",
+      sub: "google-subject",
+      aud: "google-client",
+      exp: nowEpochSeconds + 300,
+      iat: nowEpochSeconds,
+      nonce,
+      email: "person@example.com",
+      email_verified: false,
+    });
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json(discoveryDocument))
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: "google-access",
+          token_type: "Bearer",
+          id_token: idToken,
+        })
+      )
+      .mockResolvedValueOnce(Response.json({ keys: [publicJwk] }));
+    const provider = new GoogleOidcProvider(config, { fetch });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        code: "google-code",
+        codeVerifier: "v".repeat(43),
+        oidcNonceHash: await hashToken(nonce),
+      })
+    ).resolves.toEqual({
+      identity: {
+        provider: "google",
+        issuer: "https://accounts.google.com",
+        subject: "google-subject",
+        verifiedEmails: [],
+        primaryEmail: null,
+      },
+      credential: null,
+    });
+  });
+
   it("rejects an ID token that does not verify against the discovered JWKS", async () => {
     const nowEpochSeconds = Math.floor(Date.now() / 1000);
     const { idToken, publicJwk } = await createSignedIdToken({

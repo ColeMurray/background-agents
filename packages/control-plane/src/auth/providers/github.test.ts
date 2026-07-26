@@ -289,4 +289,45 @@ describe("GitHubOAuthProvider", () => {
     });
     expect(fetch).toHaveBeenCalledTimes(3);
   });
+
+  it("fails closed when GitHub email pagination exceeds the bounded page limit", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: "ghu-access",
+          token_type: "bearer",
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          id: 583_231,
+          login: "octocat",
+        })
+      );
+    for (let page = 1; page <= 10; page += 1) {
+      fetch.mockResolvedValueOnce(
+        Response.json([], {
+          headers: {
+            Link: `<https://api.github.com/user/emails?per_page=100&page=${page + 1}>; rel="next"`,
+          },
+        })
+      );
+    }
+    const provider = new GitHubOAuthProvider(config, { fetch });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        code: "github-code",
+        codeVerifier: "v".repeat(43),
+      })
+    ).rejects.toMatchObject({
+      name: "OAuthProviderError",
+      failure: "malformed_response",
+    });
+    expect(fetch).toHaveBeenCalledTimes(12);
+    expect(String(fetch.mock.calls[11][0])).toBe(
+      "https://api.github.com/user/emails?per_page=100&page=10"
+    );
+  });
 });
