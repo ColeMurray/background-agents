@@ -1,12 +1,19 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { hashToken } from "../../src/auth/crypto";
-import { ProviderPkceFlowCipher } from "../../src/auth/terminal-encryption";
+import {
+  OAuthFlowVerifierIntegrityError,
+  type OAuthFlowVerifierCipher,
+} from "../../src/auth/oauth-flow-verifier";
+import { ProviderPkceFlowCipher } from "../../src/auth/auth-encryption";
 import {
   InvalidOAuthFlowStateInputError,
   OAuthFlowStateStore,
 } from "../../src/db/oauth-flow-state";
-import type { OAuthFlowStateConsumptionError } from "../../src/db/oauth-flow-state";
+import type {
+  CreateOAuthFlowStateInput,
+  OAuthFlowStateConsumptionError,
+} from "../../src/db/oauth-flow-state";
 import { cleanD1Tables } from "./cleanup";
 
 const NOW_MS = 1_800_000_000_000;
@@ -22,8 +29,11 @@ const OIDC_NONCE = "n".repeat(43);
 describe("OAuthFlowStateStore", () => {
   beforeEach(cleanD1Tables);
 
-  function createStore(now = NOW_MS): OAuthFlowStateStore {
-    return new OAuthFlowStateStore(env.DB, new ProviderPkceFlowCipher(ROOT_KEY_BASE64), {
+  function createStore(
+    now = NOW_MS,
+    verifierCipher: OAuthFlowVerifierCipher = new ProviderPkceFlowCipher(ROOT_KEY_BASE64)
+  ): OAuthFlowStateStore {
+    return new OAuthFlowStateStore(env.DB, verifierCipher, {
       clock: { now: () => now },
       idGenerator: { generate: () => "flow-1" },
       tokenHasher: { hash: hashToken },
@@ -159,6 +169,31 @@ describe("OAuthFlowStateStore", () => {
     ).resolves.toEqual({ consumed_at: null });
   });
 
+  it("normalizes integrity failures declared by the cipher port", async () => {
+    await createStore().create({
+      state: STATE,
+      provider: "github",
+      clientId: "web",
+      redirectUri: "https://web.example/api/auth/callback",
+      clientCodeChallenge: CLIENT_CHALLENGE,
+      providerPkceVerifier: PROVIDER_VERIFIER,
+    });
+    const failingCipher: OAuthFlowVerifierCipher = {
+      encrypt: async () => {
+        throw new Error("unexpected encryption");
+      },
+      decrypt: async () => {
+        throw new OAuthFlowVerifierIntegrityError();
+      },
+    };
+
+    await expect(createStore(NOW_MS, failingCipher).consume(STATE, "github")).rejects.toEqual(
+      expect.objectContaining<OAuthFlowStateConsumptionError>({
+        rejection: "corrupt",
+      })
+    );
+  });
+
   it("rejects provider-inconsistent nonce input before writing state", async () => {
     const store = createStore();
     await expect(
@@ -169,7 +204,7 @@ describe("OAuthFlowStateStore", () => {
         redirectUri: "https://web.example/api/auth/callback",
         clientCodeChallenge: CLIENT_CHALLENGE,
         providerPkceVerifier: PROVIDER_VERIFIER,
-      })
+      } as unknown as CreateOAuthFlowStateInput)
     ).rejects.toBeInstanceOf(InvalidOAuthFlowStateInputError);
     await expect(
       store.create({
@@ -180,7 +215,7 @@ describe("OAuthFlowStateStore", () => {
         clientCodeChallenge: CLIENT_CHALLENGE,
         providerPkceVerifier: PROVIDER_VERIFIER,
         oidcNonce: OIDC_NONCE,
-      })
+      } as unknown as CreateOAuthFlowStateInput)
     ).rejects.toBeInstanceOf(InvalidOAuthFlowStateInputError);
     await expect(
       env.DB.prepare("SELECT count(*) AS count FROM oauth_flow_state").first()

@@ -9,18 +9,16 @@
 import { z } from "zod";
 
 import { getGitHubUser, getGitHubUserEmails, GitHubUserApiError } from "./github";
+import type { SignInProvider } from "./sign-in-provider";
 import { createLogger } from "../logger";
 
 const logger = createLogger("subject-verification");
-
-/** The sign-in providers whose subjects the web exchange can verify. */
-export type WebAuthProvider = "github" | "google";
 
 export const SUBJECT_TOKEN_TYPES = ["github-access-token", "google-access-token"] as const;
 export type SubjectTokenType = (typeof SUBJECT_TOKEN_TYPES)[number];
 
 export interface VerifiedSubject {
-  provider: WebAuthProvider;
+  provider: SignInProvider;
   providerUserId: string;
   providerLogin?: string;
   providerEmail?: string;
@@ -65,7 +63,7 @@ class ProviderStatusError extends Error {
  * Per-provider code contributes only the URL/schema/shape mapping.
  */
 async function fetchProviderIdentity(
-  provider: WebAuthProvider,
+  provider: SignInProvider,
   fetchSubject: (signal: AbortSignal) => Promise<VerifiedSubject>
 ): Promise<SubjectVerificationResult> {
   const controller = new AbortController();

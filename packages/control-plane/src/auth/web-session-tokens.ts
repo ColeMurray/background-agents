@@ -14,7 +14,7 @@
 
 import { generateId, hashToken } from "./crypto";
 import { base64UrlEncode } from "./encoding";
-import type { WebAuthProvider } from "./subject-verification";
+import { isSignInProvider, type SignInProvider } from "./sign-in-provider";
 import type { ApiTokenRow, WebSessionTokenStore } from "../db/api-tokens";
 
 export const WEB_SESSION_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
@@ -27,7 +27,7 @@ export const REFRESH_TOKEN_PREFIX = "oi_rt_";
 
 /** The provider-verified subject a token pair was minted for. */
 export interface TokenSubject {
-  provider: WebAuthProvider;
+  provider: SignInProvider;
   providerUserId: string;
 }
 
@@ -43,7 +43,7 @@ export type AccessTokenVerification =
       ok: true;
       tokenId: string;
       userId: string;
-      provider: WebAuthProvider;
+      provider: SignInProvider;
       providerUserId: string;
     }
   | { ok: false; failure: "unknown" | "expired" | "revoked" };
@@ -80,7 +80,7 @@ function randomTokenBody(): string {
  * kinds).
  */
 interface WebSessionRow extends ApiTokenRow {
-  provider: WebAuthProvider;
+  provider: SignInProvider;
   providerUserId: string;
   familyId: string;
 }
@@ -92,11 +92,7 @@ interface WebSessionRow extends ApiTokenRow {
  * token.
  */
 function isWebSessionRow(row: ApiTokenRow): row is WebSessionRow {
-  return (
-    (row.provider === "github" || row.provider === "google") &&
-    row.providerUserId !== null &&
-    row.familyId !== null
-  );
+  return isSignInProvider(row.provider) && row.providerUserId !== null && row.familyId !== null;
 }
 
 export class WebSessionTokenService {

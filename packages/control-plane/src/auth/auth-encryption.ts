@@ -1,3 +1,8 @@
+import {
+  OAuthFlowVerifierIntegrityError,
+  type OAuthFlowVerifierBinding,
+} from "./oauth-flow-verifier";
+
 export type AuthEncryptionPurpose = "provider_credentials" | "provider_pkce_flow";
 
 const HKDF_SALT = "openinspect/auth-key-derivation/v1";
@@ -62,19 +67,6 @@ export async function deriveAuthEncryptionKeyBytes(
   return new Uint8Array(bits);
 }
 
-export class AuthCiphertextIntegrityError extends Error {
-  constructor() {
-    super("Authentication ciphertext could not be verified");
-    this.name = "AuthCiphertextIntegrityError";
-  }
-}
-
-export interface ProviderPkceFlowCipherContext {
-  flowId: string;
-  provider: "github" | "google";
-  keyVersion: number;
-}
-
 export interface InitializationVectorGenerator {
   generate(): Uint8Array;
 }
@@ -82,7 +74,7 @@ export interface InitializationVectorGenerator {
 const AES_GCM_IV_BYTES = 12;
 const AES_GCM_TAG_BYTES = 16;
 
-function providerPkceFlowAssociatedData(context: ProviderPkceFlowCipherContext): Uint8Array {
+function providerPkceFlowAssociatedData(context: OAuthFlowVerifierBinding): Uint8Array {
   return new TextEncoder().encode(
     JSON.stringify(["provider_pkce_flow", context.flowId, context.provider, context.keyVersion])
   );
@@ -97,21 +89,21 @@ function encodeCiphertext(iv: Uint8Array, ciphertext: ArrayBuffer): string {
 
 function decodeCiphertext(value: string): { iv: Uint8Array; ciphertext: Uint8Array } {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    throw new AuthCiphertextIntegrityError();
+    throw new OAuthFlowVerifierIntegrityError();
   }
 
   try {
     const combined = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
     if (combined.byteLength <= AES_GCM_IV_BYTES + AES_GCM_TAG_BYTES) {
-      throw new AuthCiphertextIntegrityError();
+      throw new OAuthFlowVerifierIntegrityError();
     }
     return {
       iv: combined.slice(0, AES_GCM_IV_BYTES),
       ciphertext: combined.slice(AES_GCM_IV_BYTES),
     };
   } catch (error) {
-    if (error instanceof AuthCiphertextIntegrityError) throw error;
-    throw new AuthCiphertextIntegrityError();
+    if (error instanceof OAuthFlowVerifierIntegrityError) throw error;
+    throw new OAuthFlowVerifierIntegrityError();
   }
 }
 
@@ -128,7 +120,7 @@ export class ProviderPkceFlowCipher {
     };
   }
 
-  async encrypt(plaintext: string, context: ProviderPkceFlowCipherContext): Promise<string> {
+  async encrypt(plaintext: string, context: OAuthFlowVerifierBinding): Promise<string> {
     const iv = this.ivGenerator.generate();
     if (iv.byteLength !== AES_GCM_IV_BYTES) {
       throw new Error("Provider PKCE flow IV generator returned an invalid IV");
@@ -145,7 +137,7 @@ export class ProviderPkceFlowCipher {
     return encodeCiphertext(iv, ciphertext);
   }
 
-  async decrypt(encrypted: string, context: ProviderPkceFlowCipherContext): Promise<string> {
+  async decrypt(encrypted: string, context: OAuthFlowVerifierBinding): Promise<string> {
     const { iv, ciphertext } = decodeCiphertext(encrypted);
     try {
       const plaintext = await crypto.subtle.decrypt(
@@ -161,7 +153,7 @@ export class ProviderPkceFlowCipher {
     } catch (error) {
       if (error instanceof UnsupportedAuthEncryptionVersionError) throw error;
       if (error instanceof InvalidAuthEncryptionRootError) throw error;
-      throw new AuthCiphertextIntegrityError();
+      throw new OAuthFlowVerifierIntegrityError();
     }
   }
 

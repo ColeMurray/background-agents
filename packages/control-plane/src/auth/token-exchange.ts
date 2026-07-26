@@ -6,11 +6,8 @@
  * sequence without going through the internal route.
  */
 
-import {
-  verifySubjectToken,
-  type SubjectTokenType,
-  type WebAuthProvider,
-} from "./subject-verification";
+import type { SignInProvider } from "./sign-in-provider";
+import { verifySubjectToken, type SubjectTokenType } from "./subject-verification";
 import type { WebSessionTokenService, WebSessionTokenPair } from "./web-session-tokens";
 import type { SqlDatabase } from "../db/sql-database";
 import { UserStore } from "../db/user-store";
@@ -24,7 +21,7 @@ export interface ExchangeRequest {
 }
 
 export type ExchangeResult =
-  | { ok: true; userId: string; provider: WebAuthProvider; pair: WebSessionTokenPair }
+  | { ok: true; userId: string; provider: SignInProvider; pair: WebSessionTokenPair }
   | { ok: false; failure: "subject_rejected" | "provider_unavailable" };
 
 /**

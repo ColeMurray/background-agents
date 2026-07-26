@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { OAuthFlowVerifierIntegrityError } from "./oauth-flow-verifier";
 import {
-  AuthCiphertextIntegrityError,
   InvalidAuthEncryptionRootError,
   ProviderPkceFlowCipher,
   UnsupportedAuthEncryptionVersionError,
   deriveAuthEncryptionKeyBytes,
-} from "./terminal-encryption";
+} from "./auth-encryption";
 
 const ROOT_KEY_BASE64 = Buffer.from(
   "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
@@ -54,6 +54,6 @@ describe("ProviderPkceFlowCipher", () => {
     await expect(cipher.decrypt(encrypted, context)).resolves.toBe("provider-pkce-verifier");
     await expect(
       cipher.decrypt(encrypted, { ...context, provider: "github" })
-    ).rejects.toBeInstanceOf(AuthCiphertextIntegrityError);
+    ).rejects.toBeInstanceOf(OAuthFlowVerifierIntegrityError);
   });
 });

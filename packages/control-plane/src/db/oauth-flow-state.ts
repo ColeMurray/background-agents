@@ -1,5 +1,10 @@
-import { AuthCiphertextIntegrityError } from "../auth/terminal-encryption";
 import { isPkceS256Challenge, isPkceVerifier } from "../auth/pkce";
+import {
+  OAuthFlowVerifierIntegrityError,
+  type OAuthFlowVerifierBinding,
+  type OAuthFlowVerifierCipher,
+} from "../auth/oauth-flow-verifier";
+import { isSignInProvider, type SignInProvider } from "../auth/sign-in-provider";
 import type { Clock, TokenHasher } from "./browser-auth-sessions";
 import type { SqlDatabase } from "./sql-database";
 
@@ -8,57 +13,68 @@ export const OAUTH_FLOW_KEY_VERSION = 1;
 
 const OPAQUE_VALUE_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 
-export type OAuthProvider = "github" | "google";
-
-export interface OAuthFlowVerifierBinding {
-  flowId: string;
-  provider: OAuthProvider;
-  keyVersion: number;
-}
-
-export interface OAuthFlowVerifierCipher {
-  encrypt(plaintext: string, binding: OAuthFlowVerifierBinding): Promise<string>;
-  decrypt(ciphertext: string, binding: OAuthFlowVerifierBinding): Promise<string>;
-}
-
 export interface OAuthFlowStateStoreDependencies {
   readonly clock: Clock;
   readonly idGenerator: { generate(): string };
   readonly tokenHasher: TokenHasher;
 }
 
-export interface CreateOAuthFlowStateInput {
+interface OAuthFlowStateInputBinding {
   state: string;
-  provider: OAuthProvider;
   clientId: "web";
   redirectUri: string;
   clientCodeChallenge: string;
   providerPkceVerifier: string;
-  oidcNonce?: string;
 }
 
-export interface ConsumedOAuthFlowState {
+export type CreateOAuthFlowStateInput =
+  | (OAuthFlowStateInputBinding & {
+      provider: "github";
+      oidcNonce?: never;
+    })
+  | (OAuthFlowStateInputBinding & {
+      provider: "google";
+      oidcNonce: string;
+    });
+
+interface ConsumedOAuthFlowStateBinding {
   flowId: string;
-  provider: OAuthProvider;
   clientId: "web";
   redirectUri: string;
   clientCodeChallenge: string;
   providerPkceVerifier: string;
-  oidcNonceHash: string | null;
 }
 
-type OAuthFlowRow = {
+export type ConsumedOAuthFlowState =
+  | (ConsumedOAuthFlowStateBinding & {
+      provider: "github";
+      oidcNonceHash: null;
+    })
+  | (ConsumedOAuthFlowStateBinding & {
+      provider: "google";
+      oidcNonceHash: string;
+    });
+
+interface OAuthFlowRowBinding {
   id: string;
-  provider: OAuthProvider;
   clientId: "web";
   redirectUri: string;
   clientCodeChallenge: string;
   providerPkceVerifierCiphertext: string;
   providerPkceKeyVersion: number;
-  oidcNonceHash: string | null;
   expiresAt: number;
   consumedAt: number | null;
-};
+}
+
+type OAuthFlowRow =
+  | (OAuthFlowRowBinding & {
+      provider: "github";
+      oidcNonceHash: null;
+    })
+  | (OAuthFlowRowBinding & {
+      provider: "google";
+      oidcNonceHash: string;
+    });
 
 export type OAuthFlowStateRejection =
   | "malformed"
@@ -98,7 +114,7 @@ function decodeOAuthFlowRow(value: unknown): OAuthFlowRow {
   const row = value as Record<string, unknown>;
   if (
     !isNonEmptyString(row.id) ||
-    (row.provider !== "github" && row.provider !== "google") ||
+    !isSignInProvider(row.provider) ||
     row.client_id !== "web" ||
     !isNonEmptyString(row.redirect_uri) ||
     !isPkceS256Challenge(row.client_code_challenge) ||
@@ -110,30 +126,29 @@ function decodeOAuthFlowRow(value: unknown): OAuthFlowRow {
     throw new OAuthFlowStateConsumptionError("corrupt");
   }
 
-  let oidcNonceHash: string | null;
-  if (row.provider === "github") {
-    if (row.oidc_nonce_hash !== null) {
-      throw new OAuthFlowStateConsumptionError("corrupt");
-    }
-    oidcNonceHash = null;
-  } else {
-    if (typeof row.oidc_nonce_hash !== "string" || !/^[0-9a-f]{64}$/.test(row.oidc_nonce_hash)) {
-      throw new OAuthFlowStateConsumptionError("corrupt");
-    }
-    oidcNonceHash = row.oidc_nonce_hash;
-  }
-
-  return {
+  const binding = {
     id: row.id,
-    provider: row.provider,
-    clientId: "web",
+    clientId: "web" as const,
     redirectUri: row.redirect_uri,
     clientCodeChallenge: row.client_code_challenge,
     providerPkceVerifierCiphertext: row.provider_pkce_verifier_ciphertext,
     providerPkceKeyVersion: row.provider_pkce_key_version,
-    oidcNonceHash,
     expiresAt: row.expires_at,
     consumedAt: row.consumed_at,
+  };
+  if (row.provider === "github") {
+    if (row.oidc_nonce_hash !== null) {
+      throw new OAuthFlowStateConsumptionError("corrupt");
+    }
+    return { ...binding, provider: "github", oidcNonceHash: null };
+  }
+  if (typeof row.oidc_nonce_hash !== "string" || !/^[0-9a-f]{64}$/.test(row.oidc_nonce_hash)) {
+    throw new OAuthFlowStateConsumptionError("corrupt");
+  }
+  return {
+    ...binding,
+    provider: "google",
+    oidcNonceHash: row.oidc_nonce_hash,
   };
 }
 
@@ -180,7 +195,9 @@ export class OAuthFlowStateStore {
     const [stateHash, verifierCiphertext, oidcNonceHash] = await Promise.all([
       this.dependencies.tokenHasher.hash(input.state),
       this.verifierCipher.encrypt(input.providerPkceVerifier, binding),
-      input.oidcNonce ? this.dependencies.tokenHasher.hash(input.oidcNonce) : Promise.resolve(null),
+      input.provider === "google"
+        ? this.dependencies.tokenHasher.hash(input.oidcNonce)
+        : Promise.resolve(null),
     ]);
 
     const result = await this.db
@@ -212,7 +229,7 @@ export class OAuthFlowStateStore {
     return { flowId };
   }
 
-  async consume(state: string, expectedProvider: OAuthProvider): Promise<ConsumedOAuthFlowState> {
+  async consume(state: string, expectedProvider: SignInProvider): Promise<ConsumedOAuthFlowState> {
     if (!OPAQUE_VALUE_PATTERN.test(state)) {
       throw new OAuthFlowStateConsumptionError("malformed");
     }
@@ -251,7 +268,7 @@ export class OAuthFlowStateStore {
         keyVersion: row.providerPkceKeyVersion,
       });
     } catch (error) {
-      if (error instanceof AuthCiphertextIntegrityError) {
+      if (error instanceof OAuthFlowVerifierIntegrityError) {
         throw new OAuthFlowStateConsumptionError("corrupt");
       }
       throw error;
@@ -272,15 +289,20 @@ export class OAuthFlowStateStore {
       await this.throwCurrentRejection(row.id, now);
     }
 
-    return {
+    const consumedBinding = {
       flowId: row.id,
-      provider: row.provider,
       clientId: row.clientId,
       redirectUri: row.redirectUri,
       clientCodeChallenge: row.clientCodeChallenge,
       providerPkceVerifier,
-      oidcNonceHash: row.oidcNonceHash,
     };
+    return row.provider === "github"
+      ? { ...consumedBinding, provider: "github", oidcNonceHash: null }
+      : {
+          ...consumedBinding,
+          provider: "google",
+          oidcNonceHash: row.oidcNonceHash,
+        };
   }
 
   private async throwCurrentRejection(flowId: string, now: number): Promise<never> {
