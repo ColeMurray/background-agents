@@ -5,9 +5,9 @@ import useSWR from "swr";
 import { mutate } from "swr";
 import { sessionDiffStateSchema, type SessionDiffState } from "@open-inspect/shared";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
-export function sessionDiffKey(sessionId: string): string {
+export function sessionDiffKey(sessionId: string): BrowserApiPath {
   return `/api/sessions/${sessionId}/diff`;
 }
 

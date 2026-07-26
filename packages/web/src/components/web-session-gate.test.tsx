@@ -44,7 +44,11 @@ describe("WebSessionGate", () => {
     mocks.status = "authenticated";
     rerender(<WebSessionGate />);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledWith("/api/auth/oi-refresh", { method: "POST" });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/auth/oi-refresh", {
+      method: "POST",
+      mode: "same-origin",
+      credentials: "same-origin",
+    });
   });
 
   it("signs out when renewal reports that the session is no longer authenticated", async () => {

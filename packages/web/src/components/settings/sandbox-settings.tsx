@@ -8,7 +8,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
-import { browserApiFetch, toBrowserApiPath, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_CODE_SERVER_PORT,
@@ -41,7 +41,7 @@ interface EnvironmentSettingsResponse {
   settings: SandboxSettings | null;
 }
 
-const fetcher = (url: string) => browserApiFetch(toBrowserApiPath(url)).then((r) => r.json());
+const fetcher = (url: BrowserApiPath) => browserApiFetch(url).then((r) => r.json());
 
 function isValidPort(value: string): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;

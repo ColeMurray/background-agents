@@ -6,10 +6,10 @@ import { WebSessionGate } from "@/components/web-session-gate";
 import { Toaster } from "@/components/ui/sonner";
 import { SyntaxHighlightTheme } from "@/components/syntax-highlight-theme";
 import { AuthSessionProvider } from "@/lib/auth-session";
-import { browserApiFetch, toBrowserApiPath } from "@/lib/browser-api-fetch";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
-async function swrFetcher<T>(url: string): Promise<T> {
-  const res = await browserApiFetch(toBrowserApiPath(url));
+async function swrFetcher<T>(url: BrowserApiPath): Promise<T> {
+  const res = await browserApiFetch(url);
   if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
   return res.json();
 }

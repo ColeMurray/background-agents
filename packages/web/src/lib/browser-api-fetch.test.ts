@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import { browserApiFetch, toBrowserApiPath, type BrowserApiPath } from "./browser-api-fetch";
+import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -21,45 +21,22 @@ describe("browserApiFetch", () => {
     };
 
     await expect(browserApiFetch("/api/sessions/session-1/title", init)).resolves.toBe(response);
-    expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/title", init);
+    expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/title", {
+      ...init,
+      mode: "same-origin",
+      credentials: "same-origin",
+    });
   });
 
-  it("preserves an omitted request initializer", async () => {
+  it("enforces same-origin browser behavior when the request initializer is omitted", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await browserApiFetch("/api/repos");
 
-    expect(fetchMock.mock.calls[0]).toEqual(["/api/repos"]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/repos", {
+      mode: "same-origin",
+      credentials: "same-origin",
+    });
   });
-
-  it("rejects a non-BFF target even if the compile-time contract is bypassed", () => {
-    expect(() => browserApiFetch("https://example.com/api/sessions" as BrowserApiPath)).toThrow(
-      "Browser API requests must use a same-origin /api/ path"
-    );
-  });
-});
-
-describe("toBrowserApiPath", () => {
-  it("narrows a validated dynamic BFF path", () => {
-    const path = toBrowserApiPath(`/api/sessions/${crypto.randomUUID()}`);
-
-    expectTypeOf(path).toEqualTypeOf<BrowserApiPath>();
-    expect(path).toMatch(/^\/api\/sessions\//);
-  });
-
-  it("rejects a dynamic path outside the BFF API", () => {
-    expect(() => toBrowserApiPath("/settings")).toThrow(
-      "Browser API requests must use a same-origin /api/ path"
-    );
-  });
-
-  it.each(["/api/../settings", String.raw`/api/..\settings`])(
-    "rejects a path that normalizes outside the BFF API: %s",
-    (path) => {
-      expect(() => toBrowserApiPath(path)).toThrow(
-        "Browser API requests must use a same-origin /api/ path"
-      );
-    }
-  );
 });
