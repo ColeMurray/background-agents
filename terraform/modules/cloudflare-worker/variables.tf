@@ -74,6 +74,27 @@ variable "queue_bindings" {
   default = []
 }
 
+variable "rate_limit_bindings" {
+  description = "List of Workers Rate Limiting API bindings"
+  type = list(object({
+    binding_name = string
+    namespace_id = string
+    limit        = number
+    period       = number
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for binding in var.rate_limit_bindings :
+      can(regex("^[1-9][0-9]*$", binding.namespace_id)) &&
+      binding.limit > 0 &&
+      contains([10, 60], binding.period)
+    ])
+    error_message = "Rate-limit namespace ids must be positive integers, limits must be positive, and periods must be 10 or 60 seconds."
+  }
+}
+
 variable "plain_text_bindings" {
   description = "List of plain text environment variable bindings"
   type = list(object({

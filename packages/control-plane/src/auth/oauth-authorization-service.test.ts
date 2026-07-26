@@ -151,6 +151,35 @@ describe("OAuthAuthorizationService", () => {
     expect(google.createAuthorizationUrl).not.toHaveBeenCalled();
   });
 
+  it("rejects a configured provider label whose adapter is disabled", async () => {
+    const github = new FakeProvider("github");
+    const create = vi.fn();
+    const generate = vi.fn(() => "v".repeat(43));
+    const service = new OAuthAuthorizationService({
+      clients: new StaticOAuthClientRegistry(["https://web.example.com/api/auth/callback"]),
+      providers: { github },
+      flowStateStore: { create },
+      opaqueValueGenerator: { generate },
+    });
+
+    await expect(
+      service.authorize({
+        responseType: "code",
+        clientId: "web",
+        redirectUri: "https://web.example.com/api/auth/callback",
+        state: "s".repeat(43),
+        codeChallenge: "c".repeat(43),
+        codeChallengeMethod: "S256",
+        provider: "google",
+      })
+    ).rejects.toMatchObject({
+      name: "OAuthAuthorizationRequestError",
+      code: "invalid_request",
+    });
+    expect(generate).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("persists the generated Google nonce for hash-only storage", async () => {
     const github = new FakeProvider("github");
     const google = new FakeProvider("google");

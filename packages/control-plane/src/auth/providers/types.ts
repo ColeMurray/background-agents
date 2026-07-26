@@ -101,3 +101,6 @@ export interface OAuthSignInProvider<P extends SignInProvider> {
 export type OAuthSignInProviderRegistry = {
   readonly [P in SignInProvider]: OAuthSignInProvider<P>;
 };
+
+export type ConfiguredOAuthSignInProviderRegistry = Pick<OAuthSignInProviderRegistry, "github"> &
+  Partial<Pick<OAuthSignInProviderRegistry, "google">>;

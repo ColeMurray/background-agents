@@ -1,7 +1,7 @@
 import { base64UrlEncode } from "./encoding";
 import type { OAuthFlowStateWriter } from "./oauth-flow-state";
 import { createPkceS256Challenge, isPkceS256Challenge, isPkceVerifier } from "./pkce";
-import type { OAuthSignInProviderRegistry } from "./providers/types";
+import type { ConfiguredOAuthSignInProviderRegistry } from "./providers/types";
 import { isSignInProvider, type SignInProvider } from "./sign-in-provider";
 
 const OPAQUE_STATE_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
@@ -55,7 +55,7 @@ export class WebCryptoOpaqueValueGenerator implements OpaqueValueGenerator {
 
 export interface OAuthAuthorizationServiceDependencies {
   readonly clients: StaticOAuthClientRegistry;
-  readonly providers: OAuthSignInProviderRegistry;
+  readonly providers: ConfiguredOAuthSignInProviderRegistry;
   readonly flowStateStore: OAuthFlowStateWriter;
   readonly opaqueValueGenerator: OpaqueValueGenerator;
 }
@@ -72,11 +72,15 @@ export class OAuthAuthorizationService {
     const providerCodeChallenge = await createPkceS256Challenge(providerPkceVerifier);
 
     if (provider === "google") {
+      const google = this.dependencies.providers.google;
+      if (!google) {
+        throw new OAuthAuthorizationRequestError("invalid_request");
+      }
       const oidcNonce = this.dependencies.opaqueValueGenerator.generate();
       if (!OPAQUE_STATE_PATTERN.test(oidcNonce)) {
         throw new Error("OAuth opaque-value generator returned an invalid OIDC nonce");
       }
-      const redirect = await this.dependencies.providers.google.createAuthorizationUrl({
+      const redirect = await google.createAuthorizationUrl({
         state: request.state,
         codeChallenge: providerCodeChallenge,
         oidcNonce,
@@ -121,7 +125,8 @@ export class OAuthAuthorizationService {
       !OPAQUE_STATE_PATTERN.test(request.state) ||
       !isPkceS256Challenge(request.codeChallenge) ||
       request.codeChallengeMethod !== "S256" ||
-      !isSignInProvider(request.provider)
+      !isSignInProvider(request.provider) ||
+      !this.dependencies.providers[request.provider]
     ) {
       throw new OAuthAuthorizationRequestError("invalid_request");
     }

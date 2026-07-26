@@ -1,5 +1,8 @@
 import type { ConsumedOAuthFlowStateFor, OAuthFlowStateReader } from "./oauth-flow-state";
-import type { OAuthSignInProviderRegistry, ProviderCodeExchangeResult } from "./providers/types";
+import {
+  type ConfiguredOAuthSignInProviderRegistry,
+  type ProviderCodeExchangeResult,
+} from "./providers/types";
 import type { SignInProvider } from "./sign-in-provider";
 
 export interface ConsumedOAuthProviderCallback<P extends SignInProvider> {
@@ -17,7 +20,14 @@ export type OAuthProviderCallbackHandlerRegistry = {
 
 export interface OAuthProviderCallbackHandlerDependencies {
   readonly flowStateStore: OAuthFlowStateReader;
-  readonly providers: OAuthSignInProviderRegistry;
+  readonly providers: ConfiguredOAuthSignInProviderRegistry;
+}
+
+export class OAuthProviderDisabledError extends Error {
+  constructor(readonly provider: SignInProvider) {
+    super("OAuth sign-in provider is disabled");
+    this.name = "OAuthProviderDisabledError";
+  }
 }
 
 export function createOAuthProviderCallbackHandlers(
@@ -39,11 +49,15 @@ export function createOAuthProviderCallbackHandlers(
     },
     google: {
       async consume(state) {
+        const google = dependencies.providers.google;
+        if (!google) {
+          throw new OAuthProviderDisabledError("google");
+        }
         const flow = await dependencies.flowStateStore.consume(state, "google");
         return {
           flow,
           exchange: (code) =>
-            dependencies.providers.google.exchangeAuthorizationCode({
+            google.exchangeAuthorizationCode({
               code,
               codeVerifier: flow.providerPkceVerifier,
               oidcNonceHash: flow.oidcNonceHash,

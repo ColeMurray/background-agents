@@ -45,6 +45,17 @@ module "control_plane_worker" {
     }
   ]
 
+  rate_limit_bindings = [
+    {
+      binding_name = "AUTH_RATE_LIMITER"
+      # Workers requires a positive integer namespace string. Deriving it from
+      # the deployment name keeps counters isolated between deployments.
+      namespace_id = tostring(parseint(substr(md5("openinspect-auth-${var.deployment_name}"), 0, 8), 16) + 1)
+      limit        = 60
+      period       = 60
+    }
+  ]
+
   service_bindings = concat(
     var.enable_slack_bot ? [
       {
@@ -65,8 +76,15 @@ module "control_plane_worker" {
   plain_text_bindings = concat(
     [
       { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
+      { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
       { name = "WEB_APP_URL", value = local.web_app_url },
       { name = "WORKER_URL", value = local.control_plane_url },
+      { name = "OAUTH_WEB_REDIRECT_URIS", value = "${local.web_app_url}/api/auth/callback" },
+      { name = "ALLOWED_USERS", value = var.allowed_users },
+      { name = "ALLOWED_EMAILS", value = var.allowed_emails },
+      { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },
+      { name = "ALLOWED_GITHUB_ORGS", value = var.allowed_github_orgs },
+      { name = "UNSAFE_ALLOW_ALL_USERS", value = tostring(var.unsafe_allow_all_users) },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
@@ -135,6 +153,9 @@ module "control_plane_worker" {
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     ],
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret },
+    ] : [],
     local.use_modal_backend ? [
       { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
       { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },

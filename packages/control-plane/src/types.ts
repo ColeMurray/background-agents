@@ -53,12 +53,17 @@ export interface Env {
   // D1 database
   DB: D1Database;
 
+  // Edge abuse control for public OAuth protocol endpoints.
+  AUTH_RATE_LIMITER?: RateLimit;
+
   // R2 buckets
   MEDIA_BUCKET: R2Bucket;
 
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
@@ -94,6 +99,12 @@ export interface Env {
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
+  OAUTH_WEB_REDIRECT_URIS?: string; // Comma-separated exact BFF callback URIs
+  ALLOWED_USERS?: string;
+  ALLOWED_EMAILS?: string;
+  ALLOWED_EMAIL_DOMAINS?: string;
+  ALLOWED_GITHUB_ORGS?: string;
+  UNSAFE_ALLOW_ALL_USERS?: string;
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
   MODAL_WORKSPACE?: string; // Modal workspace name

@@ -34,6 +34,16 @@ locals {
       name       = queue.binding_name
       queue_name = queue.queue_name
     }],
+    # Workers Rate Limiting API bindings
+    [for rate_limit in var.rate_limit_bindings : {
+      type         = "ratelimit"
+      name         = rate_limit.binding_name
+      namespace_id = rate_limit.namespace_id
+      simple = {
+        limit  = rate_limit.limit
+        period = rate_limit.period
+      }
+    }],
     # Plain text bindings (environment variables)
     [for pt in var.plain_text_bindings : {
       type = "plain_text"

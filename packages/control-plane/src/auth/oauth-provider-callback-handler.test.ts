@@ -110,4 +110,24 @@ describe("createOAuthProviderCallbackHandlers", () => {
       oidcNonceHash: "f".repeat(64),
     });
   });
+
+  it("rejects a callback for a disabled provider before consuming flow state", async () => {
+    const consume = vi.fn();
+    const handlers = createOAuthProviderCallbackHandlers({
+      flowStateStore: { consume } as unknown as OAuthFlowStateReader,
+      providers: {
+        github: {
+          provider: "github",
+          createAuthorizationUrl: vi.fn(),
+          exchangeAuthorizationCode: vi.fn(),
+        },
+      },
+    });
+
+    await expect(handlers.google.consume(STATE)).rejects.toMatchObject({
+      name: "OAuthProviderDisabledError",
+      provider: "google",
+    });
+    expect(consume).not.toHaveBeenCalled();
+  });
 });

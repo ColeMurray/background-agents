@@ -45,6 +45,10 @@ function decodeRootKey(rootKeyBase64: string): Uint8Array {
   throw new InvalidAuthEncryptionRootError();
 }
 
+export function assertValidAuthEncryptionRoot(rootKeyBase64: string): void {
+  decodeRootKey(rootKeyBase64);
+}
+
 export async function deriveAuthEncryptionKeyBytes(
   rootKeyBase64: string,
   purpose: AuthEncryptionPurpose,
