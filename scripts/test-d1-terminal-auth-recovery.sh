@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATIONS_DIR="$PROJECT_ROOT/terraform/d1/migrations"
 VERIFIER="$SCRIPT_DIR/d1/0047_terminal_browser_auth_status.sql"
+PREFLIGHT="$SCRIPT_DIR/d1/0047_terminal_browser_auth_preflight.sql"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
@@ -28,6 +29,25 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   sqlite3 "$BASE_DATABASE" < "$migration_file"
 done
 assert_status "$BASE_DATABASE" "not_applied"
+if [ "$(sqlite3 -separator '|' "$BASE_DATABASE" < "$PREFLIGHT")" \
+  != "ready|0|0||" ]; then
+  echo "A valid legacy email set did not pass migration preflight" >&2
+  exit 1
+fi
+
+INVALID_EMAIL_DATABASE="$TEST_DIR/invalid-email.db"
+cp "$BASE_DATABASE" "$INVALID_EMAIL_DATABASE"
+sqlite3 "$INVALID_EMAIL_DATABASE" \
+  "INSERT INTO users (id, display_name, email, avatar_url, created_at, updated_at)
+   VALUES
+     ('blank-user', NULL, '   ', NULL, 1, 1),
+     ('duplicate-a', NULL, 'duplicate@example.com', NULL, 1, 1),
+     ('duplicate-b', NULL, ' duplicate@example.com ', NULL, 1, 1);"
+if [ "$(sqlite3 -separator '|' "$INVALID_EMAIL_DATABASE" < "$PREFLIGHT")" \
+  != "blocked|1|2|blank-user|duplicate-a,duplicate-b" ]; then
+  echo "Invalid legacy email rows were not reported deterministically" >&2
+  exit 1
+fi
 
 PARTIAL_DATABASE="$TEST_DIR/partial.db"
 cp "$BASE_DATABASE" "$PARTIAL_DATABASE"
@@ -124,3 +144,21 @@ if PATH="$SCRIPT_DIR/test-fixtures/d1-migrate:$PATH" \
 fi
 grep -F "version 0047 is already recorded as 0047_downstream_custom.sql" \
   "$TEST_DIR/version-collision.out" >/dev/null
+
+touch "$TEST_DIR/preflight-block.log"
+if PATH="$SCRIPT_DIR/test-fixtures/d1-migrate:$PATH" \
+  D1_MIGRATE_TEST_LOG="$TEST_DIR/preflight-block.log" \
+  D1_MIGRATE_TEST_STATUS="not_applied" \
+  D1_MIGRATE_TEST_PREFLIGHT_STATUS="blocked" \
+  bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS" \
+  >"$TEST_DIR/preflight-block.out" 2>&1; then
+  echo "Invalid legacy emails must block migration before DDL" >&2
+  exit 1
+fi
+grep -F "legacy email preflight blocked migration" \
+  "$TEST_DIR/preflight-block.out" >/dev/null
+if grep -F -- "--file $RECOVERY_MIGRATIONS/0047_terminal_browser_auth.sql" \
+  "$TEST_DIR/preflight-block.log"; then
+  echo "Migration DDL ran after the legacy email preflight failed" >&2
+  exit 1
+fi

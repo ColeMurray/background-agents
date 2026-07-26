@@ -126,6 +126,38 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
     esac
   fi
 
+  if [ "$VERSION" = "0047" ] && [ "$FILENAME" = "0047_terminal_browser_auth.sql" ]; then
+    PREFLIGHT_JSON=$(
+      $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+        --file "$SCRIPT_DIR/d1/0047_terminal_browser_auth_preflight.sql" \
+        --json
+    )
+    PREFLIGHT_STATUS=$(printf '%s' "$PREFLIGHT_JSON" | jq -er '.[0].results[0].status')
+    if [ "$PREFLIGHT_STATUS" != "ready" ]; then
+      INVALID_COUNT=$(
+        printf '%s' "$PREFLIGHT_JSON" |
+          jq -er '.[0].results[0].invalid_email_count'
+      )
+      DUPLICATE_COUNT=$(
+        printf '%s' "$PREFLIGHT_JSON" |
+          jq -er '.[0].results[0].duplicate_email_user_count'
+      )
+      INVALID_IDS=$(
+        printf '%s' "$PREFLIGHT_JSON" |
+          jq -r '.[0].results[0].invalid_user_ids // ""'
+      )
+      DUPLICATE_IDS=$(
+        printf '%s' "$PREFLIGHT_JSON" |
+          jq -r '.[0].results[0].duplicate_user_ids // ""'
+      )
+      echo "ERROR: legacy email preflight blocked migration $FILENAME." >&2
+      echo "Invalid email rows: $INVALID_COUNT (user ids: ${INVALID_IDS:-none})" >&2
+      echo "Duplicate normalized email rows: $DUPLICATE_COUNT (user ids: ${DUPLICATE_IDS:-none})" >&2
+      echo "Repair these canonical users before retrying; no migration DDL was applied." >&2
+      exit 1
+    fi
+  fi
+
   echo "Applying: $FILENAME"
   $WRANGLER d1 execute "$DATABASE_NAME" --remote --file "$file"
 

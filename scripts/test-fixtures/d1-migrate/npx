@@ -22,6 +22,10 @@ case "$*" in
   *"0047_terminal_browser_auth_status.sql"*)
     printf '[{"results":[{"status":"%s"}]}]\n' "${D1_MIGRATE_TEST_STATUS:?}"
     ;;
+  *"0047_terminal_browser_auth_preflight.sql"*)
+    printf '[{"results":[{"status":"%s","invalid_email_count":1,"duplicate_email_user_count":2,"invalid_user_ids":"blank-user","duplicate_user_ids":"duplicate-a,duplicate-b"}]}]\n' \
+      "${D1_MIGRATE_TEST_PREFLIGHT_STATUS:-ready}"
+    ;;
   *"INSERT INTO _schema_migrations"*)
     ;;
   *"SELECT name FROM _schema_migrations"*)
