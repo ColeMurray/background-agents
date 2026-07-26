@@ -1,41 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UserStore } from "./db/user-store";
+import { resolveGitHubEnrichmentForRequest } from "./session/identity";
 import { handleRequest } from "./router";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
 }));
 
-// Prompts attribute to the verified principal, never a body field. Resolve
-// the bearer token to a fixed user principal so the tests exercise the
-// principal-derived author path through the real router.
-vi.mock("./auth/web-session-tokens", async (importOriginal) => {
+vi.mock("./session/identity", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    WebSessionTokenService: vi.fn(function () {
-      return {
-        verifyAccessToken: async () => ({
-          ok: true,
-          tokenId: "token-1",
-          userId: "user-1",
-          provider: "github",
-          providerUserId: "583231",
-        }),
-      };
-    }),
+    resolveGitHubEnrichmentForRequest: vi.fn(),
   };
 });
 
-function userPromptRequest(body: Record<string, unknown>): Request {
-  return new Request("https://test.local/sessions/session-1/prompt", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer oi_at_test-token",
+vi.mock("./auth/browser-auth-runtime", () => ({
+  getBrowserAuth: vi.fn(() => ({})),
+}));
+
+vi.mock("./auth/browser-session-authenticator", () => ({
+  BrowserSessionIntegrityError: class BrowserSessionIntegrityError extends Error {},
+  authenticateBrowserSession: vi.fn(async () => ({
+    userId: "user-1",
+    authentication: {
+      mechanism: "browser_session",
+      credentialId: "session-1",
+      providerAccount: {
+        id: "account-1",
+        provider: "github",
+        subject: "583231",
+      },
+      channel: { kind: "sig1", service: "web" },
     },
+  })),
+}));
+
+function userPromptRequest(body: Record<string, unknown>): Promise<Request> {
+  return signedServiceRequest("https://test.local/sessions/session-1/prompt", {
+    method: "POST",
     body: JSON.stringify(body),
+    headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
   });
 }
 
@@ -47,6 +54,7 @@ function createEnv(sessionFetch: ReturnType<typeof vi.fn>): Record<string, unkno
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
   return {
+    ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: {
       prepare: vi.fn(() => statement),
@@ -70,15 +78,13 @@ describe("session prompt identity enrichment", () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getUserById: async () => ({ id: "user-1", displayName: "Trusted Ada" }),
-        getIdentitiesForUser: async () => [
-          {
-            provider: "github",
-            providerUserId: "1001",
-            providerLogin: "ada",
-            providerEmail: "private@example.com",
-          },
-        ],
       } as never;
+    });
+    vi.mocked(resolveGitHubEnrichmentForRequest).mockResolvedValue({
+      scmUserId: "1001",
+      scmLogin: "ada",
+      displayName: "Trusted Ada",
+      email: "1001+ada@users.noreply.github.com",
     });
     const sessionFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
@@ -97,7 +103,7 @@ describe("session prompt identity enrichment", () => {
       return Response.json({ status: "queued" });
     });
     const response = await handleRequest(
-      userPromptRequest({ content: "Fix the bug" }),
+      await userPromptRequest({ content: "Fix the bug" }),
       createEnv(sessionFetch) as never
     );
 
@@ -120,7 +126,7 @@ describe("session prompt identity enrichment", () => {
       return Response.json({ status: "queued" });
     });
     const response = await handleRequest(
-      userPromptRequest({ content: "Fix the bug" }),
+      await userPromptRequest({ content: "Fix the bug" }),
       createEnv(sessionFetch) as never
     );
 
@@ -132,9 +138,9 @@ describe("session prompt identity enrichment", () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getUserById: async () => ({ id: "user-1", displayName: "Unlinked User" }),
-        getIdentitiesForUser: async () => [],
       } as never;
     });
+    vi.mocked(resolveGitHubEnrichmentForRequest).mockResolvedValue(null);
     const sessionFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
       expect(body.authorId).toBe("user-1");
@@ -142,7 +148,7 @@ describe("session prompt identity enrichment", () => {
       return Response.json({ status: "queued" });
     });
     const response = await handleRequest(
-      userPromptRequest({ content: "Fix the bug" }),
+      await userPromptRequest({ content: "Fix the bug" }),
       createEnv(sessionFetch) as never
     );
 
@@ -153,7 +159,7 @@ describe("session prompt identity enrichment", () => {
   it("rejects a caller-asserted authorId without forwarding to the runtime", async () => {
     const sessionFetch = vi.fn(async () => Response.json({ status: "queued" }));
     const response = await handleRequest(
-      userPromptRequest({ content: "Fix the bug", authorId: "someone-else" }),
+      await userPromptRequest({ content: "Fix the bug", authorId: "someone-else" }),
       createEnv(sessionFetch) as never
     );
 

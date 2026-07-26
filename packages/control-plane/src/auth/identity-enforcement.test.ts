@@ -3,25 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyIdentityEnforcement,
   deriveIdentity,
-  authorizeProviderIdentityRequest,
   mayAttachCallbackContext,
   requireEventPoster,
   resolveCanonicalUserId,
 } from "./identity-enforcement";
-import type { AuthenticationContext, Principal, ResolvedIdentity } from "./principal";
+import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
 import type { RequestContext } from "../routes/shared";
 
 const USER_PRINCIPAL: Principal = {
   kind: "user",
   userId: "canon-1",
-};
-
-const USER_AUTHENTICATION: AuthenticationContext = {
-  mechanism: "legacy_web_token",
-  credentialId: "token-1",
-  provider: "github",
-  subject: "583231",
 };
 
 const SLACK_ACTOR: ResolvedIdentity = {
@@ -37,17 +29,11 @@ const SLACK_BOT_PRINCIPAL: Principal = {
   actor: SLACK_ACTOR,
 };
 
-function createCtx(
-  principal?: Principal,
-  authentication: AuthenticationContext | null | undefined = principal?.kind === "user"
-    ? USER_AUTHENTICATION
-    : undefined
-): RequestContext {
+function createCtx(principal?: Principal): RequestContext {
   return {
     trace_id: "trace-test",
     request_id: "req-test",
     principal,
-    authentication: authentication ?? undefined,
   } as RequestContext;
 }
 
@@ -350,61 +336,5 @@ describe("requireEventPoster", () => {
     expect(requireEventPoster(createCtx(SLACK_BOT_PRINCIPAL), "slack")).toBeNull();
     // Sentry events are not bot-posted: explicit exemption for any service.
     expect(requireEventPoster(createCtx(GITHUB_BOT), "sentry")).toBeNull();
-  });
-});
-
-describe("authorizeProviderIdentityRequest", () => {
-  it("logs and denies a user principal upserting another identity", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const authz = authorizeProviderIdentityRequest(createCtx(USER_PRINCIPAL), "github", "999999");
-    expect(authz.action).toBe("deny");
-    expect(authz.action === "deny" && authz.response.status).toBe(403);
-    const mismatch = loggedEvents(warn).find((e) => e.event === "identity.mismatch_rejected");
-    expect(mismatch).toMatchObject({
-      expected: "github:583231",
-      actual: "github:999999",
-    });
-  });
-
-  it("resolves a matching user to its token-fixed canonical id, never an upsert", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    // The takeover guard: a matching user resolves to the id its token already
-    // carries — it must NEVER return `upsert`, which would let the request
-    // body's providerEmail re-link the identity to another user.
-    const authz = authorizeProviderIdentityRequest(createCtx(USER_PRINCIPAL), "github", "583231");
-    expect(authz).toEqual({ action: "resolve", canonicalUserId: "canon-1" });
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("denies the web service now that provider identity linking requires a user token", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const authz = authorizeProviderIdentityRequest(
-      createCtx({ kind: "service", service: "web", actor: null }),
-      "github",
-      "999999"
-    );
-    expect(authz.action === "deny" && authz.response.status).toBe(403);
-  });
-
-  it("denies a user principal without provider authentication provenance", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const authz = authorizeProviderIdentityRequest(
-      createCtx(USER_PRINCIPAL, null),
-      "github",
-      "583231"
-    );
-    expect(authz.action === "deny" && authz.response.status).toBe(403);
-  });
-
-  it("denies every other service principal", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const slack = authorizeProviderIdentityRequest(createCtx(SLACK_BOT_PRINCIPAL), "slack", "UANY");
-    expect(slack.action === "deny" && slack.response.status).toBe(403);
-    const modal = authorizeProviderIdentityRequest(
-      createCtx({ kind: "service", service: "modal", actor: null }),
-      "github",
-      "999999"
-    );
-    expect(modal.action === "deny" && modal.response.status).toBe(403);
   });
 });

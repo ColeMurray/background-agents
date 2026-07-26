@@ -24,7 +24,6 @@ import {
   error,
   HttpError,
 } from "./routes/shared";
-import { authTokenRoutes } from "./routes/auth-tokens";
 import { browserAuthRoutes, isBrowserAuthProxyRoute } from "./routes/browser-auth";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
@@ -37,7 +36,6 @@ import { imageBuildRoutes } from "./routes/image-builds";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
-import { providerIdentityRoutes } from "./routes/provider-identities";
 import { sessionRoutes } from "./routes/sessions";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
@@ -161,19 +159,10 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
 
 function isScmAgnosticRoute(path: string): boolean {
   return (
-    // Token issuance is identity work, independent of the SCM provider.
-    /^\/auth\/tokens\/(exchange|refresh)$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    // Identity resolution is independent of the SCM provider. Only the known
-    // auth providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
-    /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
-}
-
-function isLegacyWebTokenRoute(method: string, path: string): boolean {
-  return method === "POST" && (path === "/auth/tokens/exchange" || path === "/auth/tokens/refresh");
 }
 
 function isProviderImplementedRoute(provider: SourceControlProviderName, path: string): boolean {
@@ -321,8 +310,6 @@ const routes: Route[] = [
     handler: async () => json({ status: "healthy", service: "open-inspect-control-plane" }),
   },
 
-  // Token issuance (exchange + refresh; web service principal only)
-  ...authTokenRoutes,
   ...browserAuthRoutes,
 
   // Session management
@@ -364,9 +351,6 @@ const routes: Route[] = [
 
   // Analytics
   ...analyticsRoutes,
-
-  // Provider identities
-  ...providerIdentityRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
@@ -452,16 +436,13 @@ export async function handleRequest(
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService:
-          isBrowserAuthProxyRoute(method, path) || isLegacyWebTokenRoute(method, path)
-            ? "service"
-            : "browser",
+        webService: isBrowserAuthProxyRoute(method, path) ? "service" : "browser",
       });
 
       if (isAuthError(authResult)) {
-        // A service-credential or user-token attempt is terminal; only a
-        // request with no recognized credential may still be a sandbox-token
-        // call on a sandbox-accepting route.
+        // A service-credential attempt is terminal; only a request with no
+        // recognized credential may still be a sandbox-token call on a
+        // sandbox-accepting route.
         authError = error(authResult.reason, authResult.status);
 
         if (

@@ -2,9 +2,9 @@
  * Edge authentication: resolve every non-public, non-sandbox request to a
  * typed `Principal` before any handler runs.
  *
- * Dispatch order: a `sig1` service signature (verified against
- * that service's own secret — a failed attempt is terminal), then an
- * `oi_at_` web session token. Anything else is not a recognized credential.
+ * A `sig1` service signature is verified against that service's own secret.
+ * Browser requests additionally require a Better Auth session. Anything else
+ * is not a recognized credential.
  *
  * Sandbox tokens stay router-verified (they need the session id from the
  * path and a DO round-trip), so they are not dispatched here.
@@ -34,8 +34,6 @@ import {
   authenticateBrowserSession,
   BrowserSessionIntegrityError,
 } from "./browser-session-authenticator";
-import { ACCESS_TOKEN_PREFIX, WebSessionTokenService } from "./web-session-tokens";
-import { ApiTokenStore } from "../db/api-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import type { RequestContext } from "../routes/shared";
@@ -48,11 +46,11 @@ export interface AuthError {
   reason: string;
   status: 401 | 413 | 500;
   /**
-   * Which scheme was attempted and failed. A per-service or user-token
-   * attempt is terminal; "none" means no recognized credential was presented
-   * at all, and the router may still try sandbox auth on sandbox routes.
+   * Which scheme was attempted and failed. A per-service attempt is terminal;
+   * "none" means no recognized credential was presented at all, and the
+   * router may still try sandbox auth on sandbox routes.
    */
-  failedScheme: "per-service" | "browser-session" | "user-token" | "none";
+  failedScheme: "per-service" | "browser-session" | "none";
 }
 
 /**
@@ -288,44 +286,6 @@ async function authenticateServiceCredential(
   };
 }
 
-async function authenticateWebSessionToken(
-  token: string,
-  request: Request,
-  ctx: RequestContext
-): Promise<AuthResult> {
-  const store = new ApiTokenStore(ctx.db);
-  const verification = await new WebSessionTokenService(store).verifyAccessToken(token);
-  if (!verification.ok) {
-    logger.warn("Web session token rejected", {
-      event: "auth.user_token_failed",
-      failure: verification.failure,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return { reason: "Unauthorized", status: 401, failedScheme: "user-token" };
-  }
-
-  ctx.executionCtx?.waitUntil(
-    store.touchLastUsed(verification.tokenId).catch(() => {
-      // Best-effort usage stamp; never block or fail the request for it.
-    })
-  );
-
-  return {
-    principal: {
-      kind: "user",
-      userId: verification.userId,
-    },
-    authentication: {
-      mechanism: "legacy_web_token",
-      credentialId: verification.tokenId,
-      provider: verification.provider,
-      subject: verification.providerUserId,
-    },
-    request,
-  };
-}
-
 export async function authenticate(
   request: Request,
   env: Env,
@@ -387,11 +347,6 @@ export async function authenticate(
         failedScheme: "browser-session",
       };
     }
-  }
-
-  const authHeader = request.headers.get("Authorization");
-  if (authHeader?.startsWith(`Bearer ${ACCESS_TOKEN_PREFIX}`)) {
-    return authenticateWebSessionToken(authHeader.slice("Bearer ".length), request, ctx);
   }
 
   // No recognized credential. The shared bearer is retired — a

@@ -34,7 +34,6 @@ import {
   type AutomationRepositoryInsert,
   type AutomationEnvironmentRow,
 } from "../db/automation-store";
-import { ApiTokenStore } from "../db/api-tokens";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import {
   buildSlackCompletionNotification,
@@ -510,11 +509,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // 1. Recovery sweep
     await this.recoverySweep(store);
 
-    // 2. Retention sweep: purge api_tokens rows long past expiry — nothing
-    // else ever deletes them (rotation mints 2 rows per user per period).
-    await this.apiTokenRetentionSweep(now);
-
-    // 3. Process overdue automations, bounded by the per-tick child budget.
+    // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
     const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
       store.getRepositoriesForAutomationIds(overdue.map((automation) => automation.id)),
@@ -594,25 +589,6 @@ export class SchedulerDO extends DurableObject<Env> {
     return new Response(JSON.stringify({ processed, skipped, failed }), {
       headers: { "Content-Type": "application/json" },
     });
-  }
-
-  // ─── Retention sweep ─────────────────────────────────────────────────────
-
-  private async apiTokenRetentionSweep(now: number): Promise<void> {
-    try {
-      const deleted = await new ApiTokenStore(this.db).deleteExpired(now);
-      if (deleted > 0) {
-        this.log.info("Expired api_tokens rows purged", {
-          event: "scheduler.api_token_retention",
-          deleted,
-        });
-      }
-    } catch (e) {
-      this.log.error("api_tokens retention sweep failed", {
-        event: "scheduler.api_token_retention_error",
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
   }
 
   // ─── Recovery sweep ──────────────────────────────────────────────────────

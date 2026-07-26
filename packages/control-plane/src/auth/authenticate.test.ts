@@ -435,10 +435,8 @@ describe("authenticate — nonce replay logging", () => {
   });
 });
 
-describe("authenticate — web session token dispatch", () => {
-  it("dispatches oi_at_ bearers to token verification, never the shared bearer", async () => {
-    // An unknown token must fail as a user-token attempt (terminal), even
-    // though the same header would otherwise reach the shared-bearer arm.
+describe("authenticate — retired web session tokens", () => {
+  it("treats oi_at_ bearers as unrecognized after the browser-session cutover", async () => {
     const request = new Request("https://cp.test.local/sessions", {
       headers: { Authorization: "Bearer oi_at_unknown-token-value" },
     });
@@ -446,7 +444,7 @@ describe("authenticate — web session token dispatch", () => {
     expect(result).toEqual({
       reason: "Unauthorized",
       status: 401,
-      failedScheme: "user-token",
+      failedScheme: "none",
     });
   });
 });
