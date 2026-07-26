@@ -78,5 +78,26 @@ export default defineConfig({
   test: {
     include: ["test/integration/**/*.test.ts"],
     setupFiles: ["test/integration/apply-migrations.ts"],
+    onUnhandledError(error) {
+      // Better Auth implements OAuth callback redirects as thrown APIError
+      // values. Its handler catches and converts them to the expected 3xx
+      // response, but the Workers pool reports the intermediate rejection as
+      // unhandled. Filter only that library-owned redirect control flow; every
+      // other unhandled error remains fatal.
+      const betterAuthStack =
+        "errorStack" in error && typeof error.errorStack === "string"
+          ? error.errorStack
+          : error.stack;
+      if (
+        error.name === "APIError" &&
+        "statusCode" in error &&
+        typeof error.statusCode === "number" &&
+        error.statusCode >= 300 &&
+        error.statusCode < 400 &&
+        betterAuthStack?.includes("/better-auth/dist/api/routes/")
+      ) {
+        return false;
+      }
+    },
   },
 });
