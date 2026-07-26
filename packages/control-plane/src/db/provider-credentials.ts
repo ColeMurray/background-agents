@@ -2,6 +2,7 @@ import {
   ProviderCredentialIntegrityError,
   type ProviderCredentialCipherBinding,
   type ProviderCredentialCipherPort,
+  type ProviderCredentialInput,
   type ProviderCredentialKind,
 } from "../auth/provider-credential-cipher";
 import type { Clock } from "./browser-auth-sessions";
@@ -14,23 +15,7 @@ const SUPPORTED_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSIONS: ReadonlySet<number>
 ]);
 const MAX_SIGN_IN_UPSERT_ATTEMPTS = 4;
 
-export type ProviderCredentialInput =
-  | {
-      kind: "refreshable";
-      accessToken: string;
-      accessExpiresAt: number;
-      refreshToken: string;
-      refreshExpiresAt: number | null;
-    }
-  | {
-      kind: "access_only_expiring";
-      accessToken: string;
-      accessExpiresAt: number;
-    }
-  | {
-      kind: "access_only_nonexpiring";
-      accessToken: string;
-    };
+export type { ProviderCredentialInput } from "../auth/provider-credential-cipher";
 
 interface ProviderCredentialMetadata {
   providerIdentityId: string;

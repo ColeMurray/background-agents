@@ -4,6 +4,7 @@ import {
   type OAuthFlowVerifierBinding,
   type OAuthFlowVerifierCipher,
 } from "../auth/oauth-flow-verifier";
+import type { ConsumedOAuthFlowState, CreateOAuthFlowStateInput } from "../auth/oauth-flow-state";
 import { isSignInProvider, type SignInProvider } from "../auth/sign-in-provider";
 import type { Clock, TokenHasher } from "./browser-auth-sessions";
 import type { SqlDatabase } from "./sql-database";
@@ -19,41 +20,7 @@ export interface OAuthFlowStateStoreDependencies {
   readonly tokenHasher: TokenHasher;
 }
 
-interface OAuthFlowStateInputBinding {
-  state: string;
-  clientId: "web";
-  redirectUri: string;
-  clientCodeChallenge: string;
-  providerPkceVerifier: string;
-}
-
-export type CreateOAuthFlowStateInput =
-  | (OAuthFlowStateInputBinding & {
-      provider: "github";
-      oidcNonce?: never;
-    })
-  | (OAuthFlowStateInputBinding & {
-      provider: "google";
-      oidcNonce: string;
-    });
-
-interface ConsumedOAuthFlowStateBinding {
-  flowId: string;
-  clientId: "web";
-  redirectUri: string;
-  clientCodeChallenge: string;
-  providerPkceVerifier: string;
-}
-
-export type ConsumedOAuthFlowState =
-  | (ConsumedOAuthFlowStateBinding & {
-      provider: "github";
-      oidcNonceHash: null;
-    })
-  | (ConsumedOAuthFlowStateBinding & {
-      provider: "google";
-      oidcNonceHash: string;
-    });
+export type { ConsumedOAuthFlowState, CreateOAuthFlowStateInput } from "../auth/oauth-flow-state";
 
 interface OAuthFlowRowBinding {
   id: string;
