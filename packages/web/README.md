@@ -4,7 +4,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 
 ## Features
 
-- GitHub OAuth authentication
+- GitHub and optional Google authentication through the control plane
 - Session dashboard with list view
 - Real-time streaming via WebSocket
 - Message timeline with tool calls
@@ -25,7 +25,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                      API Routes                           │   │
-│  │  /api/auth/[...nextauth] - GitHub OAuth                  │   │
+│  │  /api/auth/[...auth]     - Signed auth proxy             │   │
 │  │  /api/sessions           - Session CRUD                  │   │
 │  │  /api/repos              - Repository list               │   │
 │  │  /api/repos/:owner/:name/secrets - Secrets CRUD          │   │
@@ -73,34 +73,18 @@ Required permissions for the GitHub App:
 Create `.env.local`:
 
 ```bash
-# GitHub App (for user authentication)
-GITHUB_CLIENT_ID=your_github_app_client_id
-GITHUB_CLIENT_SECRET=your_github_app_client_secret
-
-# NextAuth
-NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=your_random_secret  # Generate: openssl rand -base64 32
-
-# Access Control
-ALLOWED_USERS=username1,username2          # Comma-separated GitHub usernames
-ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
-ALLOWED_GITHUB_ORGS=acme,umbrella          # Comma-separated GitHub orgs with active members allowed
-UNSAFE_ALLOW_ALL_USERS=false               # Set true to explicitly allow all users when all lists are empty
-
 # Control Plane
 CONTROL_PLANE_URL=http://localhost:8787
 NEXT_PUBLIC_WS_URL=ws://localhost:8787
+SERVICE_AUTH_SECRET=your_web_service_sig1_secret
+
+# Match the control plane's enabled providers
+NEXT_PUBLIC_GOOGLE_ENABLED=false
 ```
 
-> **Access Control**: If `ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, and `ALLOWED_GITHUB_ORGS` are all
-> empty, sign-in is denied unless `UNSAFE_ALLOW_ALL_USERS=true`. For Terraform-managed production
-> deploys, Terraform also fails validation unless you set at least one allowlist or explicitly opt
-> in with `unsafe_allow_all_users = true`. **Allowlists use OR semantics**: matching any configured
-> username, email domain, or active GitHub org membership grants access. `ALLOWED_GITHUB_ORGS` is
-> checked at sign-in with the signing-in user's OAuth token; existing sessions last until session
-> expiry. The `read:org` OAuth scope is requested only when `ALLOWED_GITHUB_ORGS` is configured.
-> GitHub Apps using org access need Organization permissions: Members read-only; existing GitHub
-> Apps must republish/request approval after that permission changes.
+The web app is a framework-free BFF. It signs requests with `SERVICE_AUTH_SECRET`, forwards only
+Better Auth's opaque session cookie, and does not hold OAuth provider credentials or admission
+policy. Configure those on the control plane through Terraform.
 
 ### Development
 

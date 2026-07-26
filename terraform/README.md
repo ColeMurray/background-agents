@@ -193,7 +193,6 @@ WEB_PLATFORM # Optional; defaults to vercel
 VERCEL_API_TOKEN
 VERCEL_TEAM_ID
 VERCEL_PROJECT_ID
-NEXTAUTH_URL # Used by the Vercel web deploy workflow
 
 # Modal
 MODAL_TOKEN_ID
@@ -252,7 +251,7 @@ ANTHROPIC_API_KEY
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
-NEXTAUTH_SECRET
+NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 
 # Access control
 ALLOWED_USERS
