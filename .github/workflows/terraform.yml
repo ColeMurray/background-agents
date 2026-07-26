@@ -77,6 +77,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Verify D1 migration recovery
+        run: npm run test:d1-migration-recovery
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:

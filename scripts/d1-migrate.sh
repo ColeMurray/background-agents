@@ -61,16 +61,74 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
   [ -f "$file" ] || continue
   FILENAME=$(basename "$file")
   VERSION=$(echo "$FILENAME" | grep -oE '^[0-9]+')
+  SAFE_FILENAME=$(echo "$FILENAME" | sed "s/'/''/g")
 
   if echo "$APPLIED" | grep -qxF "$VERSION"; then
+    if [ "$VERSION" = "0047" ] && [ "$FILENAME" = "0047_terminal_browser_auth.sql" ]; then
+      RECORDED_NAME=$(
+        $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+          --command "SELECT name FROM _schema_migrations WHERE version = '$VERSION'" \
+          --json |
+          jq -er '.[0].results[0].name'
+      )
+      if [ "$RECORDED_NAME" != "$FILENAME" ]; then
+        echo "ERROR: version $VERSION is already recorded as $RECORDED_NAME." >&2
+        echo "Renumber this migration before applying it to this installation." >&2
+        exit 1
+      fi
+    fi
     echo "Skip (already applied): $FILENAME"
     continue
+  fi
+
+  # Migration 0047 contains an additive but non-idempotent ALTER TABLE. D1
+  # applies the SQL file and records the migration ledger in separate remote
+  # calls, so the schema may be complete even if the ledger write failed.
+  # Verify that exact state before replaying DDL; fail closed on partial or
+  # unexpected schemas.
+  if [ "$VERSION" = "0047" ] && [ "$FILENAME" = "0047_terminal_browser_auth.sql" ]; then
+    RECOVERY_STATUS=$(
+      $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+        --file "$SCRIPT_DIR/d1/0047_terminal_browser_auth_status.sql" \
+        --json |
+        jq -er '.[0].results[0].status'
+    )
+
+    case "$RECOVERY_STATUS" in
+      complete)
+        echo "Repairing missing migration ledger: $FILENAME"
+        $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+          --command "INSERT INTO _schema_migrations (version, name) VALUES ('$VERSION', '$SAFE_FILENAME')"
+        RECORDED_NAME=$(
+          $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+            --command "SELECT name FROM _schema_migrations WHERE version = '$VERSION'" \
+            --json |
+            jq -er '.[0].results[0].name'
+        )
+        if [ "$RECORDED_NAME" != "$FILENAME" ]; then
+          echo "ERROR: migration $VERSION ledger repair recorded an unexpected name." >&2
+          exit 1
+        fi
+        echo "Repaired migration ledger: $FILENAME"
+        continue
+        ;;
+      not_applied)
+        ;;
+      partial)
+        echo "ERROR: migration $FILENAME is partially applied; refusing to replay DDL." >&2
+        echo "Inspect or restore the database before retrying; do not record the ledger manually." >&2
+        exit 1
+        ;;
+      *)
+        echo "ERROR: migration $FILENAME verifier returned '$RECOVERY_STATUS'." >&2
+        exit 1
+        ;;
+    esac
   fi
 
   echo "Applying: $FILENAME"
   $WRANGLER d1 execute "$DATABASE_NAME" --remote --file "$file"
 
-  SAFE_FILENAME=$(echo "$FILENAME" | sed "s/'/''/g")
   $WRANGLER d1 execute "$DATABASE_NAME" --remote \
     --command "INSERT INTO _schema_migrations (version, name) VALUES ('$VERSION', '$SAFE_FILENAME')"
 
