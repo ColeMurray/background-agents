@@ -16,32 +16,6 @@ module "web_app" {
   build_command   = "next build"
 
   environment_variables = [
-    # GitHub OAuth
-    {
-      key       = "GITHUB_CLIENT_ID"
-      value     = var.github_client_id
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    {
-      key       = "GITHUB_CLIENT_SECRET"
-      value     = var.github_client_secret
-      targets   = ["production", "preview"]
-      sensitive = true
-    },
-    # NextAuth
-    {
-      key       = "NEXTAUTH_URL"
-      value     = local.web_app_url
-      targets   = ["production"]
-      sensitive = false
-    },
-    {
-      key       = "NEXTAUTH_SECRET"
-      value     = var.nextauth_secret
-      targets   = ["production", "preview"]
-      sensitive = true
-    },
     # Control Plane
     {
       key       = "CONTROL_PLANE_URL"
@@ -86,61 +60,15 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = true
     },
-    # Access Control
-    {
-      key       = "ALLOWED_USERS"
-      value     = var.allowed_users
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    {
-      key       = "ALLOWED_EMAIL_DOMAINS"
-      value     = var.allowed_email_domains
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    {
-      key       = "ALLOWED_GITHUB_ORGS"
-      value     = var.allowed_github_orgs
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    {
-      key       = "UNSAFE_ALLOW_ALL_USERS"
-      value     = tostring(var.unsafe_allow_all_users)
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    # New env vars MUST be appended here. The module's env-var resource is
-    # count-indexed by list position (modules/vercel-project/main.tf uses count,
-    # because Vercel values are sensitive and can't be for_each keys), so
-    # inserting mid-list renumbers every downstream var and forces Vercel to
-    # destroy/recreate them — which races into ENV_CONFLICT. Appending keeps
-    # existing indices stable.
-    # Google OAuth (optional; both empty for GitHub-only deployments)
-    {
-      key       = "GOOGLE_CLIENT_ID"
-      value     = var.google_client_id
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    {
-      key       = "GOOGLE_CLIENT_SECRET"
-      value     = var.google_client_secret
-      targets   = ["production", "preview"]
-      sensitive = true
-    },
+    # This cutover intentionally removes the legacy web-owned auth variables,
+    # so the first apply replaces the module's count-indexed env resources.
+    # After that one-time transition, append new variables to keep indices
+    # stable and avoid Vercel ENV_CONFLICT replacement races.
     # Build-time flag that reveals the "Sign in with Google" button. Inlined into
     # the client bundle, so it must be present at build time (not just runtime).
     {
       key       = "NEXT_PUBLIC_GOOGLE_ENABLED"
       value     = tostring(local.google_enabled)
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    {
-      key       = "ALLOWED_EMAILS"
-      value     = var.allowed_emails
       targets   = ["production", "preview"]
       sensitive = false
     },

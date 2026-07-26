@@ -67,9 +67,6 @@ jobs:
       - name: Build Project
         if: steps.check-secrets.outputs.configured == 'true'
         run: vercel build --prod --token=${{ secrets.VERCEL_API_TOKEN }}
-        env:
-          # Required for NextAuth static generation - set via GitHub secret or Vercel will provide
-          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL || 'https://localhost:3000' }}
 
       - name: Deploy to Vercel
         if: steps.check-secrets.outputs.configured == 'true'

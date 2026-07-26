@@ -1214,7 +1214,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // (handleCreateAutomation resolves it for both GitHub and Google users), so this
     // lookup is skipped for them. The fallback below only covers legacy rows with
     // user_id = NULL: those predate Google login and store the GitHub numeric user ID
-    // in created_by (from NextAuth session.user.id), so a github-only identity lookup
+    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
     // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
     let userId = automation.user_id;
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {

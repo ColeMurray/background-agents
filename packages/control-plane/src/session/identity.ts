@@ -199,9 +199,8 @@ export async function resolveGitHubEnrichment(
 /**
  * Select the credential authority associated with the authenticated request.
  *
- * Browser sessions read/refresh through Better Auth. Transitional user tokens
- * and bot identities retain the legacy identity/token-store lookup until
- * those paths are removed in the final cutover.
+ * Browser sessions read/refresh through Better Auth. Bot identities retain
+ * their existing actor identity/token-store lookup.
  */
 export async function resolveGitHubEnrichmentForRequest(
   env: Env,
