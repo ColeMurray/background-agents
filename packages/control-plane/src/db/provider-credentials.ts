@@ -9,6 +9,11 @@ import { isCheckConstraintError, isUniqueConstraintError } from "./errors";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export const CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION = 1;
+/**
+ * Migration 0047's CHECK expression is part of stale sign-in conflict
+ * detection: SQLite/D1 includes it in the constraint error message.
+ */
+export const PROVIDER_CREDENTIAL_ROW_VERSION_CHECK = "row_version >= 1";
 const SUPPORTED_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSIONS: ReadonlySet<number> = new Set([
   CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
 ]);
@@ -322,7 +327,7 @@ export class ProviderCredentialStore {
   }
 
   isSignInVersionConflict(error: unknown): boolean {
-    return isCheckConstraintError(error, "row_version >= 1");
+    return isCheckConstraintError(error, PROVIDER_CREDENTIAL_ROW_VERSION_CHECK);
   }
 
   async upsertFromSignIn(

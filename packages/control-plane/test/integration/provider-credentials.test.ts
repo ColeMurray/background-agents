@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ProviderCredentialCipher } from "../../src/auth/auth-encryption";
 import type { ProviderCredentialCipherPort } from "../../src/auth/provider-credential-cipher";
 import {
+  PROVIDER_CREDENTIAL_ROW_VERSION_CHECK,
   ProviderCredentialStore,
   ProviderCredentialVersionConflictError,
   StoredProviderCredentialCorruptError,
@@ -38,6 +39,21 @@ describe("ProviderCredentialStore", () => {
     store = new ProviderCredentialStore(env.DB, new ProviderCredentialCipher(ROOT_KEY_BASE64), {
       now: () => NOW_MS,
     });
+  });
+
+  it("pins the row-version check used to detect stale sign-in writes", async () => {
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO provider_credentials (
+           provider_identity_id, credential_kind,
+           access_token_ciphertext, access_expires_at,
+           refresh_token_ciphertext, refresh_expires_at,
+           encryption_key_version, row_version, updated_at
+         ) VALUES (?, 'access_only_nonexpiring', ?, NULL, NULL, NULL, 1, 0, ?)`
+      )
+        .bind("identity-1", "ciphertext", NOW_MS)
+        .run()
+    ).rejects.toThrow(`CHECK constraint failed: ${PROVIDER_CREDENTIAL_ROW_VERSION_CHECK}`);
   });
 
   it("round-trips refreshable credentials without storing plaintext tokens", async () => {
