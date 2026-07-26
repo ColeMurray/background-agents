@@ -8,7 +8,10 @@ import type { Clock } from "./browser-auth-sessions";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
-export const PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION = 1;
+export const CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION = 1;
+const SUPPORTED_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSIONS: ReadonlySet<number> = new Set([
+  CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
+]);
 const MAX_SIGN_IN_UPSERT_ATTEMPTS = 4;
 
 export type ProviderCredentialInput =
@@ -118,6 +121,14 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isSupportedProviderCredentialEncryptionKeyVersion(value: unknown): value is number {
+  return (
+    isFiniteInteger(value) &&
+    value > 0 &&
+    SUPPORTED_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSIONS.has(value)
+  );
+}
+
 function validateInput(providerIdentityId: string, input: ProviderCredentialInput): void {
   if (!isNonEmptyString(providerIdentityId) || !isNonEmptyString(input.accessToken)) {
     throw new InvalidProviderCredentialInputError(
@@ -158,7 +169,7 @@ function decodeProviderCredentialRow(value: unknown): ProviderCredentialRow {
   if (
     !isNonEmptyString(row.provider_identity_id) ||
     !isNonEmptyString(row.access_token_ciphertext) ||
-    row.encryption_key_version !== PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION ||
+    !isSupportedProviderCredentialEncryptionKeyVersion(row.encryption_key_version) ||
     !isFiniteInteger(row.row_version) ||
     row.row_version < 1 ||
     !isFiniteInteger(row.updated_at)
@@ -222,13 +233,14 @@ function cipherBinding(
   providerIdentityId: string,
   credentialKind: ProviderCredentialKind,
   tokenRole: "access" | "refresh",
+  encryptionKeyVersion: number,
   rowVersion: number
 ): ProviderCredentialCipherBinding {
   return {
     providerIdentityId,
     credentialKind,
     tokenRole,
-    encryptionKeyVersion: PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
+    encryptionKeyVersion,
     rowVersion,
   };
 }
@@ -299,6 +311,7 @@ export class ProviderCredentialStore {
         await this.updateObservedVersion(
           providerIdentityId,
           previousVersion,
+          rowVersion,
           credential.kind,
           encrypted,
           updatedAt
@@ -335,12 +348,24 @@ export class ProviderCredentialStore {
     const [accessTokenCiphertext, refreshTokenCiphertext] = await Promise.all([
       this.cipher.encrypt(
         credential.accessToken,
-        cipherBinding(providerIdentityId, credential.kind, "access", rowVersion)
+        cipherBinding(
+          providerIdentityId,
+          credential.kind,
+          "access",
+          CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
+          rowVersion
+        )
       ),
       credential.kind === "refreshable"
         ? this.cipher.encrypt(
             credential.refreshToken,
-            cipherBinding(providerIdentityId, credential.kind, "refresh", rowVersion)
+            cipherBinding(
+              providerIdentityId,
+              credential.kind,
+              "refresh",
+              CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
+              rowVersion
+            )
           )
         : Promise.resolve(null),
     ]);
@@ -376,7 +401,7 @@ export class ProviderCredentialStore {
         encrypted.accessExpiresAt,
         encrypted.refreshTokenCiphertext,
         encrypted.refreshExpiresAt,
-        PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
+        CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
         rowVersion,
         updatedAt
       );
@@ -385,11 +410,11 @@ export class ProviderCredentialStore {
   private async updateObservedVersion(
     providerIdentityId: string,
     observedRowVersion: number,
+    rowVersion: number,
     credentialKind: ProviderCredentialKind,
     encrypted: EncryptedProviderCredential,
     updatedAt: number
   ): Promise<boolean> {
-    const rowVersion = observedRowVersion + 1;
     const result = await this.db
       .prepare(
         `UPDATE provider_credentials
@@ -409,7 +434,7 @@ export class ProviderCredentialStore {
         encrypted.accessExpiresAt,
         encrypted.refreshTokenCiphertext,
         encrypted.refreshExpiresAt,
-        PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
+        CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
         rowVersion,
         updatedAt,
         providerIdentityId,
@@ -440,7 +465,13 @@ export class ProviderCredentialStore {
     try {
       const accessToken = await this.cipher.decrypt(
         row.accessTokenCiphertext,
-        cipherBinding(row.providerIdentityId, row.credentialKind, "access", row.rowVersion)
+        cipherBinding(
+          row.providerIdentityId,
+          row.credentialKind,
+          "access",
+          row.encryptionKeyVersion,
+          row.rowVersion
+        )
       );
       if (!isNonEmptyString(accessToken)) {
         throw new StoredProviderCredentialCorruptError();
@@ -455,7 +486,13 @@ export class ProviderCredentialStore {
       if (row.credentialKind === "refreshable") {
         const refreshToken = await this.cipher.decrypt(
           row.refreshTokenCiphertext,
-          cipherBinding(row.providerIdentityId, row.credentialKind, "refresh", row.rowVersion)
+          cipherBinding(
+            row.providerIdentityId,
+            row.credentialKind,
+            "refresh",
+            row.encryptionKeyVersion,
+            row.rowVersion
+          )
         );
         if (!isNonEmptyString(refreshToken)) {
           throw new StoredProviderCredentialCorruptError();
@@ -512,6 +549,7 @@ export class ProviderCredentialStore {
       !(await this.updateObservedVersion(
         providerIdentityId,
         observedRowVersion,
+        rowVersion,
         credential.kind,
         encrypted,
         this.clock.now()

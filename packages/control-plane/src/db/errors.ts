@@ -7,10 +7,3 @@ export function isUniqueConstraintError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.toLowerCase().includes("unique constraint failed");
 }
-
-export function isNotNullConstraintError(err: unknown, qualifiedColumn: string): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return message
-    .toLowerCase()
-    .includes(`not null constraint failed: ${qualifiedColumn.toLowerCase()}`);
-}

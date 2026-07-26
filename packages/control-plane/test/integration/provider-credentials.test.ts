@@ -16,6 +16,8 @@ const ROOT_KEY_BASE64 = Buffer.from(
 ).toString("base64");
 
 describe("ProviderCredentialStore", () => {
+  let store: ProviderCredentialStore;
+
   beforeEach(async () => {
     await cleanD1Tables();
     await env.DB.batch([
@@ -33,15 +35,12 @@ describe("ProviderCredentialStore", () => {
          )`
       ).bind(NOW_MS),
     ]);
+    store = new ProviderCredentialStore(env.DB, new ProviderCredentialCipher(ROOT_KEY_BASE64), {
+      now: () => NOW_MS,
+    });
   });
 
   it("round-trips refreshable credentials without storing plaintext tokens", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
-
     await expect(
       store.upsertFromSignIn("identity-1", {
         kind: "refreshable",
@@ -73,11 +72,6 @@ describe("ProviderCredentialStore", () => {
   });
 
   it("does not let stale invalidation delete credentials from a newer sign-in", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
     const firstVersion = await store.upsertFromSignIn("identity-1", {
       kind: "access_only_nonexpiring",
       accessToken: "old-access-token",
@@ -96,12 +90,6 @@ describe("ProviderCredentialStore", () => {
   });
 
   it("serializes concurrent sign-ins through row-version retries", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
-
     const versions = await Promise.all([
       store.upsertFromSignIn("identity-1", {
         kind: "access_only_nonexpiring",
@@ -120,11 +108,6 @@ describe("ProviderCredentialStore", () => {
   });
 
   it("does not let a stale refresh overwrite credentials from a newer sign-in", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
     const observedVersion = await store.upsertFromSignIn("identity-1", {
       kind: "refreshable",
       accessToken: "expired-access-token",
@@ -153,11 +136,6 @@ describe("ProviderCredentialStore", () => {
   });
 
   it("replaces the exact credential version observed by a provider refresh", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
     const observedVersion = await store.upsertFromSignIn("identity-1", {
       kind: "refreshable",
       accessToken: "expired-access-token",
@@ -184,12 +162,6 @@ describe("ProviderCredentialStore", () => {
   });
 
   it("supports both current access-only credential shapes", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
-
     await store.upsertFromSignIn("identity-1", {
       kind: "access_only_expiring",
       accessToken: "expiring-access-token",
@@ -217,11 +189,6 @@ describe("ProviderCredentialStore", () => {
   });
 
   it("fails closed when ciphertext is moved to a different row version", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
     await store.upsertFromSignIn("identity-1", {
       kind: "access_only_nonexpiring",
       accessToken: "access-token",
@@ -238,11 +205,6 @@ describe("ProviderCredentialStore", () => {
   });
 
   it("composes initial credential creation into an identity-owned atomic batch", async () => {
-    const store = new ProviderCredentialStore(
-      env.DB,
-      new ProviderCredentialCipher(ROOT_KEY_BASE64),
-      { now: () => NOW_MS }
-    );
     const credentialInsert = await store.prepareInitialInsert("identity-2", {
       kind: "access_only_nonexpiring",
       accessToken: "new-identity-access-token",
@@ -277,15 +239,15 @@ describe("ProviderCredentialStore", () => {
       encrypt: async () => "authenticated-ciphertext",
       decrypt: async () => "",
     };
-    const store = new ProviderCredentialStore(env.DB, emptyPlaintextCipher, {
+    const corruptStore = new ProviderCredentialStore(env.DB, emptyPlaintextCipher, {
       now: () => NOW_MS,
     });
-    await store.upsertFromSignIn("identity-1", {
+    await corruptStore.upsertFromSignIn("identity-1", {
       kind: "access_only_nonexpiring",
       accessToken: "nonempty-input-token",
     });
 
-    await expect(store.get("identity-1")).rejects.toBeInstanceOf(
+    await expect(corruptStore.get("identity-1")).rejects.toBeInstanceOf(
       StoredProviderCredentialCorruptError
     );
   });

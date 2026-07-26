@@ -114,56 +114,60 @@ function decodeCiphertext(
   }
 }
 
-export class ProviderPkceFlowCipher implements OAuthFlowVerifierCipher {
+interface AesGcmPurposeCipherOptions<Binding> {
+  readonly rootKeyBase64: string;
+  readonly purpose: AuthEncryptionPurpose;
+  readonly associatedData: (binding: Binding) => Uint8Array;
+  readonly keyVersion: (binding: Binding) => number;
+  readonly integrityError: () => Error;
+  readonly invalidIvError: () => Error;
+  readonly ivGenerator?: InitializationVectorGenerator;
+}
+
+class AesGcmPurposeCipher<Binding> {
   private readonly keys = new Map<number, Promise<CryptoKey>>();
   private readonly ivGenerator: InitializationVectorGenerator;
 
-  constructor(
-    private readonly rootKeyBase64: string,
-    dependencies: { readonly ivGenerator?: InitializationVectorGenerator } = {}
-  ) {
-    this.ivGenerator = dependencies.ivGenerator ?? {
+  constructor(private readonly options: AesGcmPurposeCipherOptions<Binding>) {
+    this.ivGenerator = options.ivGenerator ?? {
       generate: () => crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES)),
     };
   }
 
-  async encrypt(plaintext: string, context: OAuthFlowVerifierBinding): Promise<string> {
+  async encrypt(plaintext: string, binding: Binding): Promise<string> {
     const iv = this.ivGenerator.generate();
     if (iv.byteLength !== AES_GCM_IV_BYTES) {
-      throw new Error("Provider PKCE flow IV generator returned an invalid IV");
+      throw this.options.invalidIvError();
     }
     const ciphertext = await crypto.subtle.encrypt(
       {
         name: "AES-GCM",
         iv,
-        additionalData: providerPkceFlowAssociatedData(context),
+        additionalData: this.options.associatedData(binding),
       },
-      await this.getKey(context.keyVersion),
+      await this.getKey(this.options.keyVersion(binding)),
       new TextEncoder().encode(plaintext)
     );
     return encodeCiphertext(iv, ciphertext);
   }
 
-  async decrypt(encrypted: string, context: OAuthFlowVerifierBinding): Promise<string> {
-    const { iv, ciphertext } = decodeCiphertext(
-      encrypted,
-      () => new OAuthFlowVerifierIntegrityError()
-    );
+  async decrypt(encrypted: string, binding: Binding): Promise<string> {
+    const { iv, ciphertext } = decodeCiphertext(encrypted, this.options.integrityError);
     try {
       const plaintext = await crypto.subtle.decrypt(
         {
           name: "AES-GCM",
           iv,
-          additionalData: providerPkceFlowAssociatedData(context),
+          additionalData: this.options.associatedData(binding),
         },
-        await this.getKey(context.keyVersion),
+        await this.getKey(this.options.keyVersion(binding)),
         ciphertext
       );
       return new TextDecoder().decode(plaintext);
     } catch (error) {
       if (error instanceof UnsupportedAuthEncryptionVersionError) throw error;
       if (error instanceof InvalidAuthEncryptionRootError) throw error;
-      throw new OAuthFlowVerifierIntegrityError();
+      throw this.options.integrityError();
     }
   }
 
@@ -172,8 +176,8 @@ export class ProviderPkceFlowCipher implements OAuthFlowVerifierCipher {
     if (existing) return existing;
 
     const derived = deriveAuthEncryptionKeyBytes(
-      this.rootKeyBase64,
-      "provider_pkce_flow",
+      this.options.rootKeyBase64,
+      this.options.purpose,
       version
     ).then((bytes) =>
       crypto.subtle.importKey("raw", bytes, { name: "AES-GCM", length: 256 }, false, [
@@ -183,6 +187,33 @@ export class ProviderPkceFlowCipher implements OAuthFlowVerifierCipher {
     );
     this.keys.set(version, derived);
     return derived;
+  }
+}
+
+export class ProviderPkceFlowCipher implements OAuthFlowVerifierCipher {
+  private readonly cipher: AesGcmPurposeCipher<OAuthFlowVerifierBinding>;
+
+  constructor(
+    rootKeyBase64: string,
+    dependencies: { readonly ivGenerator?: InitializationVectorGenerator } = {}
+  ) {
+    this.cipher = new AesGcmPurposeCipher({
+      rootKeyBase64,
+      purpose: "provider_pkce_flow",
+      associatedData: providerPkceFlowAssociatedData,
+      keyVersion: (binding) => binding.keyVersion,
+      integrityError: () => new OAuthFlowVerifierIntegrityError(),
+      invalidIvError: () => new Error("Provider PKCE flow IV generator returned an invalid IV"),
+      ivGenerator: dependencies.ivGenerator,
+    });
+  }
+
+  encrypt(plaintext: string, context: OAuthFlowVerifierBinding): Promise<string> {
+    return this.cipher.encrypt(plaintext, context);
+  }
+
+  decrypt(encrypted: string, context: OAuthFlowVerifierBinding): Promise<string> {
+    return this.cipher.decrypt(encrypted, context);
   }
 }
 
@@ -200,73 +231,28 @@ function providerCredentialAssociatedData(context: ProviderCredentialCipherBindi
 }
 
 export class ProviderCredentialCipher implements ProviderCredentialCipherPort {
-  private readonly keys = new Map<number, Promise<CryptoKey>>();
-  private readonly ivGenerator: InitializationVectorGenerator;
+  private readonly cipher: AesGcmPurposeCipher<ProviderCredentialCipherBinding>;
 
   constructor(
-    private readonly rootKeyBase64: string,
+    rootKeyBase64: string,
     dependencies: { readonly ivGenerator?: InitializationVectorGenerator } = {}
   ) {
-    this.ivGenerator = dependencies.ivGenerator ?? {
-      generate: () => crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES)),
-    };
+    this.cipher = new AesGcmPurposeCipher({
+      rootKeyBase64,
+      purpose: "provider_credentials",
+      associatedData: providerCredentialAssociatedData,
+      keyVersion: (binding) => binding.encryptionKeyVersion,
+      integrityError: () => new ProviderCredentialIntegrityError(),
+      invalidIvError: () => new Error("Provider credential IV generator returned an invalid IV"),
+      ivGenerator: dependencies.ivGenerator,
+    });
   }
 
-  async encrypt(plaintext: string, context: ProviderCredentialCipherBinding): Promise<string> {
-    const iv = this.ivGenerator.generate();
-    if (iv.byteLength !== AES_GCM_IV_BYTES) {
-      throw new Error("Provider credential IV generator returned an invalid IV");
-    }
-    const ciphertext = await crypto.subtle.encrypt(
-      {
-        name: "AES-GCM",
-        iv,
-        additionalData: providerCredentialAssociatedData(context),
-      },
-      await this.getKey(context.encryptionKeyVersion),
-      new TextEncoder().encode(plaintext)
-    );
-    return encodeCiphertext(iv, ciphertext);
+  encrypt(plaintext: string, context: ProviderCredentialCipherBinding): Promise<string> {
+    return this.cipher.encrypt(plaintext, context);
   }
 
-  async decrypt(encrypted: string, context: ProviderCredentialCipherBinding): Promise<string> {
-    const { iv, ciphertext } = decodeCiphertext(
-      encrypted,
-      () => new ProviderCredentialIntegrityError()
-    );
-    try {
-      const plaintext = await crypto.subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv,
-          additionalData: providerCredentialAssociatedData(context),
-        },
-        await this.getKey(context.encryptionKeyVersion),
-        ciphertext
-      );
-      return new TextDecoder().decode(plaintext);
-    } catch (error) {
-      if (error instanceof UnsupportedAuthEncryptionVersionError) throw error;
-      if (error instanceof InvalidAuthEncryptionRootError) throw error;
-      throw new ProviderCredentialIntegrityError();
-    }
-  }
-
-  private getKey(version: number): Promise<CryptoKey> {
-    const existing = this.keys.get(version);
-    if (existing) return existing;
-
-    const derived = deriveAuthEncryptionKeyBytes(
-      this.rootKeyBase64,
-      "provider_credentials",
-      version
-    ).then((bytes) =>
-      crypto.subtle.importKey("raw", bytes, { name: "AES-GCM", length: 256 }, false, [
-        "encrypt",
-        "decrypt",
-      ])
-    );
-    this.keys.set(version, derived);
-    return derived;
+  decrypt(encrypted: string, context: ProviderCredentialCipherBinding): Promise<string> {
+    return this.cipher.decrypt(encrypted, context);
   }
 }

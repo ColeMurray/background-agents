@@ -72,6 +72,7 @@ describe("ProviderPkceFlowCipher", () => {
 
     const encrypted = await cipher.encrypt("provider-pkce-verifier", context);
 
+    expect(encrypted).toBe("AAECAwQFBgcICQoLU7ir/zg3qDSh4hffgBH4d57nSJPZYWPWIpEfJ+mJY7P039F+Idk=");
     expect(Buffer.from(encrypted, "base64").subarray(0, initializationVector.byteLength)).toEqual(
       Buffer.from(initializationVector)
     );
@@ -95,7 +96,10 @@ describe("ProviderPkceFlowCipher", () => {
 
 describe("ProviderCredentialCipher", () => {
   it("binds ciphertext to its identity, shape, token role, and row version", async () => {
-    const cipher = new ProviderCredentialCipher(ROOT_KEY_BASE64);
+    const initializationVector = Uint8Array.from({ length: 12 }, (_, index) => index);
+    const cipher = new ProviderCredentialCipher(ROOT_KEY_BASE64, {
+      ivGenerator: { generate: () => initializationVector },
+    });
     const binding = {
       providerIdentityId: "identity-1",
       credentialKind: "refreshable" as const,
@@ -105,6 +109,7 @@ describe("ProviderCredentialCipher", () => {
     };
     const encrypted = await cipher.encrypt("provider-access-token", binding);
 
+    expect(encrypted).toBe("AAECAwQFBgcICQoLiRyTliBzKgjV8xzRi0vqSQPLGq0sVzWGmPuFl+yGTHHBQtlqZQ==");
     await expect(cipher.decrypt(encrypted, binding)).resolves.toBe("provider-access-token");
     await expect(
       cipher.decrypt(encrypted, { ...binding, providerIdentityId: "identity-2" })

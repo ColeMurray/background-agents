@@ -13,8 +13,7 @@ import {
   type CreatedBrowserAuthSession,
   type TokenHasher,
 } from "./browser-auth-sessions";
-import { isNotNullConstraintError } from "./errors";
-import type { SqlDatabase, SqlResult } from "./sql-database";
+import type { SqlDatabase } from "./sql-database";
 
 export const OAUTH_AUTHORIZATION_CODE_LIFETIME_MS = 60 * 1000;
 
@@ -217,82 +216,60 @@ export class OAuthAuthorizationCodeStore {
     const credential = parseBrowserSessionCredential(
       this.dependencies.browserCredentialGenerator.generate()
     );
-    const redemptionId = this.dependencies.idGenerator.generate();
-    if (!isNonEmptyString(redemptionId)) {
-      throw new Error("OAuth redemption id generator returned an invalid id");
-    }
     const credentialId = parseBrowserSessionId(this.dependencies.idGenerator.generate());
     const credentialHash = await this.dependencies.tokenHasher.hash(credential);
     const expiresAt = now + BROWSER_SESSION_IDLE_LIFETIME_MS;
     const absoluteExpiresAt = now + BROWSER_SESSION_ABSOLUTE_LIFETIME_MS;
 
-    let consumeResult: SqlResult;
-    let sessionResult: SqlResult;
-    try {
-      // The scalar subqueries deliberately yield NULL when this redemption did
-      // not win the CAS. The session NOT NULL constraints then abort the whole
-      // D1 batch, so a code claim can never commit without its browser session.
-      [consumeResult, sessionResult] = await this.db.batch([
-        this.db
-          .prepare(
-            `UPDATE oauth_authorization_codes
-             SET consumed_at = ?, consumed_by = ?
-             WHERE code_hash = ?
-               AND client_id = ?
-               AND redirect_uri = ?
-               AND consumed_at IS NULL
-               AND expires_at > ?`
-          )
-          .bind(now, redemptionId, codeHash, input.clientId, input.redirectUri, now),
-        this.db
-          .prepare(
-            `INSERT INTO browser_auth_sessions (
-               id, token_hash, user_id, client_id, provider_identity_id,
-               created_at, last_used_at, expires_at, absolute_expires_at,
-               revoked_at, revoked_reason
-             ) VALUES (
-               ?, ?,
-               (
-                 SELECT user_id
-                 FROM oauth_authorization_codes
-                 WHERE code_hash = ? AND consumed_by = ? AND consumed_at = ?
-               ),
-               'web',
-               (
-                 SELECT provider_identity_id
-                 FROM oauth_authorization_codes
-                 WHERE code_hash = ? AND consumed_by = ? AND consumed_at = ?
-               ),
-               ?, ?, ?, ?, NULL, NULL
-             )`
-          )
-          .bind(
-            credentialId,
-            credentialHash,
-            codeHash,
-            redemptionId,
-            now,
-            codeHash,
-            redemptionId,
-            now,
-            now,
-            now,
-            expiresAt,
-            absoluteExpiresAt
-          ),
-      ]);
-    } catch (error) {
-      if (
-        !isNotNullConstraintError(error, "browser_auth_sessions.user_id") &&
-        !isNotNullConstraintError(error, "browser_auth_sessions.provider_identity_id")
-      ) {
-        throw error;
-      }
-      return this.throwCurrentRejection(codeHash, now);
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE oauth_authorization_codes
+           SET consumed_at = ?, consumed_by = ?
+           WHERE code_hash = ?
+             AND client_id = ?
+             AND redirect_uri = ?
+             AND consumed_at IS NULL
+             AND expires_at > ?`
+        )
+        .bind(now, credentialId, codeHash, input.clientId, input.redirectUri, now),
+      this.db
+        .prepare(
+          `INSERT INTO browser_auth_sessions (
+             id, token_hash, user_id, client_id, provider_identity_id,
+             created_at, last_used_at, expires_at, absolute_expires_at,
+             revoked_at, revoked_reason
+           )
+           SELECT
+             ?, ?, user_id, 'web', provider_identity_id,
+             ?, ?, ?, ?, NULL, NULL
+           FROM oauth_authorization_codes
+           WHERE code_hash = ?
+             AND consumed_by = ?
+             AND consumed_at = ?`
+        )
+        .bind(
+          credentialId,
+          credentialHash,
+          now,
+          now,
+          expiresAt,
+          absoluteExpiresAt,
+          codeHash,
+          credentialId,
+          now
+        ),
+    ]);
+    const [consumeResult, sessionResult] = results;
+    if (!consumeResult || !sessionResult) {
+      throw new Error("OAuth authorization code redemption batch returned an invalid result");
     }
 
-    if (consumeResult.meta.changes !== 1 || sessionResult.meta.changes !== 1) {
+    if (consumeResult.meta.changes === 0 && sessionResult.meta.changes === 0) {
       return this.throwCurrentRejection(codeHash, now);
+    }
+    if (consumeResult.meta.changes !== 1 || sessionResult.meta.changes !== 1) {
+      throw new Error("OAuth authorization code redemption batch violated its result invariant");
     }
     return { credential, credentialId, expiresAt, absoluteExpiresAt };
   }
