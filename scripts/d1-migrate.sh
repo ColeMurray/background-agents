@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DATABASE_NAME="${1:?Usage: d1-migrate.sh <database-name> [migrations-dir]}"
+DATABASE_NAME="${1:?Usage: d1-migrate.sh <database-name> [migrations-dir] [checks-dir]}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MIGRATIONS_DIR="${2:-$SCRIPT_DIR/../terraform/d1/migrations}"
+CHECKS_DIR="${3:-$SCRIPT_DIR/d1}"
 
 WRANGLER="npx wrangler"
 
@@ -56,10 +57,16 @@ $WRANGLER d1 execute "$DATABASE_NAME" --remote \
     completed_at TEXT NOT NULL DEFAULT (datetime('now'))
   )"
 
-# 2. Get applied versions (parse JSON output)
-APPLIED=$($WRANGLER d1 execute "$DATABASE_NAME" --remote \
-  --command "SELECT version FROM _schema_migrations ORDER BY version" \
-  --json | jq -r '.[0].results[].version // empty' 2>/dev/null || echo "")
+# 2. Get the applied versions and their exact filenames. A numeric prefix is
+# only unique within this repository; downstream installations can already
+# have used the same version for a different migration.
+APPLIED_JSON=$(
+  $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+    --command "SELECT version, name FROM _schema_migrations ORDER BY version" \
+    --json
+)
+printf '%s' "$APPLIED_JSON" |
+  jq -e '.[0].results | type == "array"' >/dev/null
 
 # 3. Apply pending migrations in order
 COUNT=0
@@ -68,34 +75,33 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
   FILENAME=$(basename "$file")
   VERSION=$(echo "$FILENAME" | grep -oE '^[0-9]+')
   SAFE_FILENAME=$(echo "$FILENAME" | sed "s/'/''/g")
+  MIGRATION_STEM="${FILENAME%.sql}"
+  STATUS_FILE="$CHECKS_DIR/${MIGRATION_STEM}_status.sql"
+  PREFLIGHT_FILE="$CHECKS_DIR/${MIGRATION_STEM}_preflight.sql"
 
-  if echo "$APPLIED" | grep -qxF "$VERSION"; then
-    if [ "$VERSION" = "0047" ] && [ "$FILENAME" = "0047_terminal_browser_auth.sql" ]; then
-      RECORDED_NAME=$(
-        $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-          --command "SELECT name FROM _schema_migrations WHERE version = '$VERSION'" \
-          --json |
-          jq -er '.[0].results[0].name'
-      )
-      if [ "$RECORDED_NAME" != "$FILENAME" ]; then
-        echo "ERROR: version $VERSION is already recorded as $RECORDED_NAME." >&2
-        echo "Renumber this migration before applying it to this installation." >&2
-        exit 1
-      fi
+  RECORDED_NAME=$(
+    printf '%s' "$APPLIED_JSON" |
+      jq -r --arg version "$VERSION" \
+        '.[0].results[]? | select(.version == $version) | .name'
+  )
+  if [ -n "$RECORDED_NAME" ]; then
+    if [ "$RECORDED_NAME" != "$FILENAME" ]; then
+      echo "ERROR: version $VERSION is already recorded as $RECORDED_NAME." >&2
+      echo "Renumber this migration before applying it to this installation." >&2
+      exit 1
     fi
     echo "Skip (already applied): $FILENAME"
     continue
   fi
 
-  # Migration 0047 contains an additive but non-idempotent ALTER TABLE. D1
-  # applies the SQL file and records the migration ledger in separate remote
-  # calls, so the schema may be complete even if the ledger write failed.
-  # Verify that exact state before replaying DDL; fail closed on partial or
-  # unexpected schemas.
-  if [ "$VERSION" = "0047" ] && [ "$FILENAME" = "0047_terminal_browser_auth.sql" ]; then
+  # A migration with additive but non-idempotent DDL may provide a companion
+  # verifier named <migration-stem>_status.sql. D1 applies the SQL file and
+  # records the migration ledger in separate remote calls, so the verifier
+  # distinguishes a complete-but-unrecorded migration from unsafe partial DDL.
+  if [ -f "$STATUS_FILE" ]; then
     RECOVERY_STATUS=$(
       $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-        --file "$SCRIPT_DIR/d1/0047_terminal_browser_auth_status.sql" \
+        --file "$STATUS_FILE" \
         --json |
         jq -er '.[0].results[0].status'
     )
@@ -132,34 +138,26 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
     esac
   fi
 
-  if [ "$VERSION" = "0047" ] && [ "$FILENAME" = "0047_terminal_browser_auth.sql" ]; then
+  # A migration may also provide <migration-stem>_preflight.sql. Its first row
+  # must return status=ready before any migration DDL is attempted. Other
+  # columns are emitted as operator diagnostics and must not contain secrets.
+  if [ -f "$PREFLIGHT_FILE" ]; then
     PREFLIGHT_JSON=$(
       $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-        --file "$SCRIPT_DIR/d1/0047_terminal_browser_auth_preflight.sql" \
+        --file "$PREFLIGHT_FILE" \
         --json
     )
     PREFLIGHT_STATUS=$(printf '%s' "$PREFLIGHT_JSON" | jq -er '.[0].results[0].status')
     if [ "$PREFLIGHT_STATUS" != "ready" ]; then
-      INVALID_COUNT=$(
+      PREFLIGHT_DETAILS=$(
         printf '%s' "$PREFLIGHT_JSON" |
-          jq -er '.[0].results[0].invalid_email_count'
+          jq -c '.[0].results[0] | del(.status)'
       )
-      DUPLICATE_COUNT=$(
-        printf '%s' "$PREFLIGHT_JSON" |
-          jq -er '.[0].results[0].duplicate_email_user_count'
-      )
-      INVALID_IDS=$(
-        printf '%s' "$PREFLIGHT_JSON" |
-          jq -r '.[0].results[0].invalid_user_ids // ""'
-      )
-      DUPLICATE_IDS=$(
-        printf '%s' "$PREFLIGHT_JSON" |
-          jq -r '.[0].results[0].duplicate_user_ids // ""'
-      )
-      echo "ERROR: legacy email preflight blocked migration $FILENAME." >&2
-      echo "Invalid email rows: $INVALID_COUNT (user ids: ${INVALID_IDS:-none})" >&2
-      echo "Duplicate normalized email rows: $DUPLICATE_COUNT (user ids: ${DUPLICATE_IDS:-none})" >&2
-      echo "Repair these canonical users before retrying; no migration DDL was applied." >&2
+      echo "ERROR: preflight blocked migration $FILENAME." >&2
+      if [ "$PREFLIGHT_DETAILS" != "{}" ]; then
+        echo "Details: $PREFLIGHT_DETAILS" >&2
+      fi
+      echo "Repair the reported state before retrying; no migration DDL was applied." >&2
       exit 1
     fi
   fi

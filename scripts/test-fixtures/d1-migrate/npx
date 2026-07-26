@@ -8,21 +8,25 @@ fi
 shift
 
 printf '%s\n' "$*" >> "${D1_MIGRATE_TEST_LOG:?}"
+TEST_VERSION="${D1_MIGRATE_TEST_VERSION:-0047}"
+TEST_FILENAME="${D1_MIGRATE_TEST_FILENAME:-0047_terminal_browser_auth.sql}"
 
 case "$*" in
   *"CREATE TABLE IF NOT EXISTS _schema_migrations"*)
     ;;
-  *"SELECT version FROM _schema_migrations"*)
+  *"SELECT version, name FROM _schema_migrations"*)
     if [ "${D1_MIGRATE_TEST_APPLIED:-false}" = "true" ]; then
-      printf '[{"results":[{"version":"0047"}]}]\n'
+      printf '[{"results":[{"version":"%s","name":"%s"}]}]\n' \
+        "$TEST_VERSION" \
+        "${D1_MIGRATE_TEST_RECORDED_NAME:-$TEST_FILENAME}"
     else
       printf '[{"results":[]}]\n'
     fi
     ;;
-  *"0047_terminal_browser_auth_status.sql"*)
+  *"_status.sql"*)
     printf '[{"results":[{"status":"%s"}]}]\n' "${D1_MIGRATE_TEST_STATUS:?}"
     ;;
-  *"0047_terminal_browser_auth_preflight.sql"*)
+  *"_preflight.sql"*)
     printf '[{"results":[{"status":"%s","invalid_email_count":1,"duplicate_email_user_count":2,"invalid_user_ids":"blank-user","duplicate_user_ids":"duplicate-a,duplicate-b"}]}]\n' \
       "${D1_MIGRATE_TEST_PREFLIGHT_STATUS:-ready}"
     ;;
@@ -30,9 +34,9 @@ case "$*" in
     ;;
   *"SELECT name FROM _schema_migrations"*)
     printf '[{"results":[{"name":"%s"}]}]\n' \
-      "${D1_MIGRATE_TEST_RECORDED_NAME:-0047_terminal_browser_auth.sql}"
+      "${D1_MIGRATE_TEST_RECORDED_NAME:-$TEST_FILENAME}"
     ;;
-  *"--file "*"0047_terminal_browser_auth.sql"*)
+  *"--file "*"${TEST_FILENAME}"*)
     if [ "$D1_MIGRATE_TEST_STATUS" = "complete" ]; then
       echo "Complete schema must repair the ledger without replaying DDL" >&2
       exit 99

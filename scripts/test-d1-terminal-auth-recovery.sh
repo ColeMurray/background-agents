@@ -107,34 +107,47 @@ sqlite3 "$COMPLETE_DATABASE" \
 assert_status "$COMPLETE_DATABASE" "partial"
 
 RECOVERY_MIGRATIONS="$TEST_DIR/recovery-migrations"
+RECOVERY_CHECKS="$TEST_DIR/recovery-checks"
 mkdir "$RECOVERY_MIGRATIONS"
-cp "$MIGRATIONS_DIR/0047_terminal_browser_auth.sql" "$RECOVERY_MIGRATIONS/"
+mkdir "$RECOVERY_CHECKS"
+cp "$MIGRATIONS_DIR/0047_terminal_browser_auth.sql" \
+  "$RECOVERY_MIGRATIONS/0099_terminal_browser_auth.sql"
+cp "$VERIFIER" "$RECOVERY_CHECKS/0099_terminal_browser_auth_status.sql"
+cp "$PREFLIGHT" "$RECOVERY_CHECKS/0099_terminal_browser_auth_preflight.sql"
 RECOVERY_LOG="$TEST_DIR/recovery.log"
 touch "$RECOVERY_LOG"
 
 PATH="$SCRIPT_DIR/test-fixtures/d1-migrate:$PATH" \
   D1_MIGRATE_TEST_LOG="$RECOVERY_LOG" \
   D1_MIGRATE_TEST_STATUS="complete" \
-  bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS"
+  D1_MIGRATE_TEST_VERSION="0099" \
+  D1_MIGRATE_TEST_FILENAME="0099_terminal_browser_auth.sql" \
+  bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS" \
+  "$RECOVERY_CHECKS"
 
-if grep -F -- "--file $RECOVERY_MIGRATIONS/0047_terminal_browser_auth.sql" "$RECOVERY_LOG"; then
+if grep -F -- "--file $RECOVERY_MIGRATIONS/0099_terminal_browser_auth.sql" "$RECOVERY_LOG"; then
   echo "Migration DDL was replayed after the verifier reported a complete schema" >&2
   exit 1
 fi
+grep -F -- "--file $RECOVERY_CHECKS/0099_terminal_browser_auth_status.sql" \
+  "$RECOVERY_LOG" >/dev/null
 grep -F "INSERT INTO _schema_migrations" "$RECOVERY_LOG" >/dev/null
 
 touch "$TEST_DIR/partial-recovery.log"
 if PATH="$SCRIPT_DIR/test-fixtures/d1-migrate:$PATH" \
   D1_MIGRATE_TEST_LOG="$TEST_DIR/partial-recovery.log" \
   D1_MIGRATE_TEST_STATUS="partial" \
+  D1_MIGRATE_TEST_VERSION="0099" \
+  D1_MIGRATE_TEST_FILENAME="0099_terminal_browser_auth.sql" \
   bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS" \
+  "$RECOVERY_CHECKS" \
   >"$TEST_DIR/partial-recovery.out" 2>&1; then
   echo "A partially applied migration must block automatic recovery" >&2
   exit 1
 fi
 grep -F "is partially applied; refusing to replay DDL" \
   "$TEST_DIR/partial-recovery.out" >/dev/null
-if grep -F -- "--file $RECOVERY_MIGRATIONS/0047_terminal_browser_auth.sql" \
+if grep -F -- "--file $RECOVERY_MIGRATIONS/0099_terminal_browser_auth.sql" \
   "$TEST_DIR/partial-recovery.log"; then
   echo "Partially applied migration DDL was replayed" >&2
   exit 1
@@ -144,8 +157,11 @@ touch "$TEST_DIR/not-applied-recovery.log"
 PATH="$SCRIPT_DIR/test-fixtures/d1-migrate:$PATH" \
   D1_MIGRATE_TEST_LOG="$TEST_DIR/not-applied-recovery.log" \
   D1_MIGRATE_TEST_STATUS="not_applied" \
-  bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS"
-grep -F -- "--file $RECOVERY_MIGRATIONS/0047_terminal_browser_auth.sql" \
+  D1_MIGRATE_TEST_VERSION="0099" \
+  D1_MIGRATE_TEST_FILENAME="0099_terminal_browser_auth.sql" \
+  bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS" \
+  "$RECOVERY_CHECKS"
+grep -F -- "--file $RECOVERY_MIGRATIONS/0099_terminal_browser_auth.sql" \
   "$TEST_DIR/not-applied-recovery.log" >/dev/null
 
 touch "$TEST_DIR/version-collision.log"
@@ -153,13 +169,16 @@ if PATH="$SCRIPT_DIR/test-fixtures/d1-migrate:$PATH" \
   D1_MIGRATE_TEST_LOG="$TEST_DIR/version-collision.log" \
   D1_MIGRATE_TEST_STATUS="complete" \
   D1_MIGRATE_TEST_APPLIED="true" \
-  D1_MIGRATE_TEST_RECORDED_NAME="0047_downstream_custom.sql" \
+  D1_MIGRATE_TEST_VERSION="0099" \
+  D1_MIGRATE_TEST_FILENAME="0099_terminal_browser_auth.sql" \
+  D1_MIGRATE_TEST_RECORDED_NAME="0099_downstream_custom.sql" \
   bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS" \
+  "$RECOVERY_CHECKS" \
   >"$TEST_DIR/version-collision.out" 2>&1; then
-  echo "A conflicting applied migration name must block version 0047" >&2
+  echo "A conflicting applied migration name must block every migration version" >&2
   exit 1
 fi
-grep -F "version 0047 is already recorded as 0047_downstream_custom.sql" \
+grep -F "version 0099 is already recorded as 0099_downstream_custom.sql" \
   "$TEST_DIR/version-collision.out" >/dev/null
 
 touch "$TEST_DIR/preflight-block.log"
@@ -167,14 +186,17 @@ if PATH="$SCRIPT_DIR/test-fixtures/d1-migrate:$PATH" \
   D1_MIGRATE_TEST_LOG="$TEST_DIR/preflight-block.log" \
   D1_MIGRATE_TEST_STATUS="not_applied" \
   D1_MIGRATE_TEST_PREFLIGHT_STATUS="blocked" \
+  D1_MIGRATE_TEST_VERSION="0099" \
+  D1_MIGRATE_TEST_FILENAME="0099_terminal_browser_auth.sql" \
   bash "$SCRIPT_DIR/d1-migrate.sh" "recovery-test" "$RECOVERY_MIGRATIONS" \
+  "$RECOVERY_CHECKS" \
   >"$TEST_DIR/preflight-block.out" 2>&1; then
   echo "Invalid legacy emails must block migration before DDL" >&2
   exit 1
 fi
-grep -F "legacy email preflight blocked migration" \
+grep -F "preflight blocked migration" \
   "$TEST_DIR/preflight-block.out" >/dev/null
-if grep -F -- "--file $RECOVERY_MIGRATIONS/0047_terminal_browser_auth.sql" \
+if grep -F -- "--file $RECOVERY_MIGRATIONS/0099_terminal_browser_auth.sql" \
   "$TEST_DIR/preflight-block.log"; then
   echo "Migration DDL ran after the legacy email preflight failed" >&2
   exit 1
