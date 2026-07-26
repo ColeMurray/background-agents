@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { SWRConfig } from "swr";
 
-import { WebSessionGate } from "@/components/web-session-gate";
-import { AuthSessionProvider } from "@/lib/auth-session";
 import { Providers } from "./providers";
 
 function findByType(node: ReactNode, type: unknown): ReactElement | undefined {
@@ -19,18 +18,11 @@ function findByType(node: ReactNode, type: unknown): ReactElement | undefined {
 }
 
 describe("Providers", () => {
-  it("nests the application gate and children inside the authentication provider", () => {
+  it("nests application children inside the shared SWR provider", () => {
     const child = <div>Protected application</div>;
-    const authProvider = findByType(Providers({ children: child }), AuthSessionProvider);
+    const provider = findByType(Providers({ children: child }), SWRConfig);
 
-    expect(authProvider).toBeDefined();
-
-    const gate = findByType(
-      (authProvider as ReactElement<{ children?: ReactNode }>).props.children,
-      WebSessionGate
-    );
-
-    expect(gate).toBeDefined();
-    expect((gate as ReactElement<{ children?: ReactNode }>).props.children).toBe(child);
+    expect(provider).toBeDefined();
+    expect((provider as ReactElement<{ children?: ReactNode }>).props.children).toContain(child);
   });
 });

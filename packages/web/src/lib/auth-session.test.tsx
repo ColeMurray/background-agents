@@ -1,24 +1,19 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-vi.mock("next-auth/react", () => ({
-  SessionProvider: vi.fn(({ children }: { children?: ReactNode }) => children),
-  signIn: vi.fn(),
-  signOut: vi.fn(),
-  useSession: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  mutate: vi.fn(),
+  useSWR: vi.fn(),
+}));
+
+vi.mock("swr", () => ({
+  default: mocks.useSWR,
+  mutate: mocks.mutate,
 }));
 
 import {
-  SessionProvider,
-  signIn as nextAuthSignIn,
-  signOut as nextAuthSignOut,
-  useSession,
-} from "next-auth/react";
-import {
-  AuthSessionProvider,
   signIn,
   signOut,
   useAuthSession,
@@ -29,6 +24,7 @@ import {
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("useAuthSession", () => {
@@ -45,7 +41,7 @@ describe("useAuthSession", () => {
     assertState({ status: "loading", data: null });
   });
 
-  it("exposes the current NextAuth session through the app-owned hook", () => {
+  it("exposes the Better Auth session through the app-owned hook", () => {
     const data = {
       user: {
         id: "user-1",
@@ -53,12 +49,16 @@ describe("useAuthSession", () => {
         email: "ada@example.com",
         image: null,
       },
-      expires: "2099-01-01",
+      session: {
+        id: "session-1",
+        userId: "user-1",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      },
     };
-    vi.mocked(useSession).mockReturnValue({
+    mocks.useSWR.mockReturnValue({
       data,
-      status: "authenticated",
-      update: vi.fn(),
+      error: undefined,
+      isLoading: false,
     });
 
     const { result } = renderHook(() => useAuthSession());
@@ -69,11 +69,11 @@ describe("useAuthSession", () => {
     });
   });
 
-  it("exposes no session data while NextAuth is loading", () => {
-    vi.mocked(useSession).mockReturnValue({
-      data: null,
-      status: "loading",
-      update: vi.fn(),
+  it("exposes no session data while Better Auth is loading", () => {
+    mocks.useSWR.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: true,
     });
 
     const { result } = renderHook(() => useAuthSession());
@@ -83,39 +83,88 @@ describe("useAuthSession", () => {
       status: "loading",
     });
   });
-});
 
-describe("AuthSessionProvider", () => {
-  it("preserves the disabled NextAuth focus refetch behavior", () => {
-    render(
-      <AuthSessionProvider>
-        <div>Application</div>
-      </AuthSessionProvider>
-    );
+  it("treats a completed empty response as unauthenticated", () => {
+    mocks.useSWR.mockReturnValue({
+      data: null,
+      error: undefined,
+      isLoading: false,
+    });
 
-    expect(screen.getByText("Application")).toBeTruthy();
-    expect(vi.mocked(SessionProvider).mock.calls[0]?.[0]).toMatchObject({
-      refetchOnWindowFocus: false,
+    const { result } = renderHook(() => useAuthSession());
+
+    expect(result.current).toEqual({
+      data: null,
+      status: "unauthenticated",
     });
   });
 });
 
 describe("signIn", () => {
-  it("starts the existing NextAuth provider flow", async () => {
-    vi.mocked(nextAuthSignIn).mockResolvedValue(undefined);
+  it("starts a proxied Better Auth provider flow", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        url: "https://github.com/login/oauth/authorize?state=state",
+        redirect: true,
+      })
+    );
+    const assign = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("location", {
+      origin: "https://app.example",
+      assign,
+    });
 
     await signIn("github");
 
-    expect(nextAuthSignIn).toHaveBeenCalledWith("github");
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/sign-in/social", {
+      method: "POST",
+      mode: "same-origin",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "github",
+        callbackURL: "/",
+        disableRedirect: true,
+      }),
+    });
+    expect(assign).toHaveBeenCalledWith("https://github.com/login/oauth/authorize?state=state");
+  });
+
+  it("throws instead of navigating when sign-in fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ error: "Unavailable" }, { status: 503 }))
+    );
+    vi.stubGlobal("location", { origin: "https://app.example", assign: vi.fn() });
+
+    await expect(signIn("google")).rejects.toThrow("Sign-in failed with status 503");
+    expect(location.assign).not.toHaveBeenCalled();
   });
 });
 
 describe("signOut", () => {
-  it("ends the existing NextAuth session", async () => {
-    vi.mocked(nextAuthSignOut).mockResolvedValue(undefined);
+  it("ends the Better Auth session and clears the session cache", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ success: true }));
+    vi.stubGlobal("fetch", fetchMock);
 
     await signOut();
 
-    expect(nextAuthSignOut).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/sign-out", {
+      method: "POST",
+      mode: "same-origin",
+      credentials: "same-origin",
+    });
+    expect(mocks.mutate).toHaveBeenCalledWith("/api/auth/get-session", null, false);
+  });
+
+  it("does not clear local state when server-side sign-out fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ error: "Unavailable" }, { status: 503 }))
+    );
+
+    await expect(signOut()).rejects.toThrow("Sign-out failed with status 503");
+    expect(mocks.mutate).not.toHaveBeenCalled();
   });
 });

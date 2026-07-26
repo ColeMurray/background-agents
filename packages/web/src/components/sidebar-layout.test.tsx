@@ -38,7 +38,7 @@ afterEach(cleanup);
 describe("CollapsedSidebarControls", () => {
   it("renders the sidebar, search, and new session actions inline", () => {
     vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { name: "Test User" } },
+      data: { user: { id: "user-1", name: "Test User" } },
       status: "authenticated",
     });
     const push = vi.fn();
