@@ -5,7 +5,7 @@ import {
 } from "../auth/provider-credential-cipher";
 import type { ProviderCredentialInput, ProviderCredentialKind } from "../auth/provider-credential";
 import type { Clock } from "./browser-auth-sessions";
-import { isUniqueConstraintError } from "./errors";
+import { isCheckConstraintError, isUniqueConstraintError } from "./errors";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export const CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION = 1;
@@ -259,6 +259,70 @@ export class ProviderCredentialStore {
       rowVersion,
       updatedAt
     );
+  }
+
+  /**
+   * Prepares a sign-in upsert for a caller-owned batch. A concurrent version
+   * change deliberately violates the row-version check, aborting the entire
+   * batch instead of committing the caller's related writes partially.
+   */
+  async prepareSignInUpsert(
+    providerIdentityId: string,
+    credential: ProviderCredentialInput,
+    updatedAt = this.clock.now()
+  ): Promise<SqlStatement> {
+    validateInput(providerIdentityId, credential);
+    if (!isFiniteInteger(updatedAt)) {
+      throw new InvalidProviderCredentialInputError(
+        "Provider credential update time must be an integer"
+      );
+    }
+
+    const previousVersion = await this.readRowVersion(providerIdentityId);
+    if (previousVersion === null) {
+      return await this.prepareInitialInsert(providerIdentityId, credential, updatedAt);
+    }
+
+    const rowVersion = previousVersion + 1;
+    const encrypted = await this.encryptCredential(providerIdentityId, credential, rowVersion);
+    return this.db
+      .prepare(
+        `INSERT INTO provider_credentials (
+           provider_identity_id, credential_kind,
+           access_token_ciphertext, access_expires_at,
+           refresh_token_ciphertext, refresh_expires_at,
+           encryption_key_version, row_version, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(provider_identity_id) DO UPDATE SET
+           credential_kind = excluded.credential_kind,
+           access_token_ciphertext = excluded.access_token_ciphertext,
+           access_expires_at = excluded.access_expires_at,
+           refresh_token_ciphertext = excluded.refresh_token_ciphertext,
+           refresh_expires_at = excluded.refresh_expires_at,
+           encryption_key_version = excluded.encryption_key_version,
+           row_version = CASE
+             WHEN provider_credentials.row_version = ?
+               THEN excluded.row_version
+             ELSE 0
+           END,
+           updated_at = excluded.updated_at`
+      )
+      .bind(
+        providerIdentityId,
+        credential.kind,
+        encrypted.accessTokenCiphertext,
+        encrypted.accessExpiresAt,
+        encrypted.refreshTokenCiphertext,
+        encrypted.refreshExpiresAt,
+        CURRENT_PROVIDER_CREDENTIAL_ENCRYPTION_KEY_VERSION,
+        rowVersion,
+        updatedAt,
+        previousVersion
+      );
+  }
+
+  isSignInVersionConflict(error: unknown): boolean {
+    return isCheckConstraintError(error, "row_version >= 1");
   }
 
   async upsertFromSignIn(

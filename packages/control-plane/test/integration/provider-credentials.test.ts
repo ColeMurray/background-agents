@@ -234,6 +234,41 @@ describe("ProviderCredentialStore", () => {
     });
   });
 
+  it("makes a stale prepared sign-in mutation fail its caller-owned batch atomically", async () => {
+    await store.upsertFromSignIn("identity-1", {
+      kind: "access_only_nonexpiring",
+      accessToken: "initial-access-token",
+    });
+    const staleCredentialMutation = await store.prepareSignInUpsert("identity-1", {
+      kind: "access_only_nonexpiring",
+      accessToken: "stale-sign-in-token",
+    });
+    await store.upsertFromSignIn("identity-1", {
+      kind: "access_only_nonexpiring",
+      accessToken: "concurrent-sign-in-token",
+    });
+
+    let rejection: unknown;
+    try {
+      await env.DB.batch([
+        env.DB.prepare("UPDATE users SET display_name = 'must-roll-back' WHERE id = 'user-1'"),
+        staleCredentialMutation,
+      ]);
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(store.isSignInVersionConflict(rejection)).toBe(true);
+    await expect(
+      env.DB.prepare("SELECT display_name FROM users WHERE id = 'user-1'").first()
+    ).resolves.toEqual({ display_name: null });
+    await expect(store.get("identity-1")).resolves.toMatchObject({
+      accessToken: "concurrent-sign-in-token",
+      rowVersion: 2,
+    });
+  });
+
   it("fails closed when authenticated ciphertext decodes to an empty token", async () => {
     const emptyPlaintextCipher: ProviderCredentialCipherPort = {
       encrypt: async () => "authenticated-ciphertext",

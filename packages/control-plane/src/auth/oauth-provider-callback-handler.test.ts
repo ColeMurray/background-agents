@@ -7,6 +7,59 @@ const STATE = "s".repeat(43);
 const PROVIDER_VERIFIER = "v".repeat(43);
 
 describe("createOAuthProviderCallbackHandlers", () => {
+  it("keeps GitHub callback mechanics behind the selected provider handler", async () => {
+    const consume = vi.fn(async () => ({
+      flowId: "flow-github",
+      provider: "github" as const,
+      clientId: "web" as const,
+      redirectUri: "https://web.example/api/auth/callback",
+      clientCodeChallenge: "c".repeat(43),
+      providerPkceVerifier: PROVIDER_VERIFIER,
+      oidcNonceHash: null,
+    }));
+    const exchangeAuthorizationCode = vi.fn(async () => ({
+      identity: {
+        provider: "github" as const,
+        issuer: "https://github.com",
+        subject: "github-subject",
+        verifiedEmails: ["person@example.com"],
+        primaryEmail: "person@example.com",
+      },
+      credential: {
+        kind: "access_only_nonexpiring" as const,
+        accessToken: "ghu_access",
+      },
+    }));
+    const providers = {
+      github: {
+        provider: "github" as const,
+        createAuthorizationUrl: vi.fn(),
+        exchangeAuthorizationCode,
+      },
+      google: {
+        provider: "google" as const,
+        createAuthorizationUrl: vi.fn(),
+        exchangeAuthorizationCode: vi.fn(),
+      },
+    } satisfies OAuthSignInProviderRegistry;
+
+    const handlers = createOAuthProviderCallbackHandlers({
+      flowStateStore: { consume } as unknown as OAuthFlowStateReader,
+      providers,
+    });
+    const callback = await handlers.github.consume(STATE);
+
+    expect(consume).toHaveBeenCalledWith(STATE, "github");
+    await expect(callback.exchange("provider-code")).resolves.toMatchObject({
+      identity: { provider: "github", subject: "github-subject" },
+      credential: { accessToken: "ghu_access" },
+    });
+    expect(exchangeAuthorizationCode).toHaveBeenCalledWith({
+      code: "provider-code",
+      codeVerifier: PROVIDER_VERIFIER,
+    });
+  });
+
   it("keeps Google callback mechanics behind the selected provider handler", async () => {
     const consume = vi.fn(async () => ({
       flowId: "flow-google",

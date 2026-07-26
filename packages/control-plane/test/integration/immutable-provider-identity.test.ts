@@ -1,23 +1,52 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import {
   AccountLinkRequiredError,
   ImmutableProviderIdentityService,
   InvalidProviderIdentityEvidenceError,
   ProviderIdentityAdapterMismatchError,
-  type ProviderIdentityEvidence,
+  type ImmutableProviderIdentityDependencies,
+  type ProviderCredentialStorePort,
 } from "../../src/auth/immutable-provider-identity";
 import { ProviderCredentialStore } from "../../src/db/provider-credentials";
 import { cleanD1Tables } from "./cleanup";
 
 const NOW_MS = 1_800_000_000_000;
+const GITHUB_CREDENTIAL = {
+  kind: "access_only_nonexpiring" as const,
+  accessToken: "ghu_test_access",
+};
+
+function createProviderCredentialStore(now = NOW_MS): ProviderCredentialStore {
+  return new ProviderCredentialStore(
+    env.DB,
+    {
+      encrypt: async (plaintext, context) => btoa(JSON.stringify({ plaintext, context })),
+      decrypt: async (encrypted) =>
+        (JSON.parse(atob(encrypted)) as { plaintext: string }).plaintext,
+    },
+    { now: () => now }
+  );
+}
+
+function createIdentityService(
+  dependencies: Omit<ImmutableProviderIdentityDependencies, "providerCredentialStore"> & {
+    providerCredentialStore?: ProviderCredentialStorePort;
+  }
+): ImmutableProviderIdentityService {
+  return new ImmutableProviderIdentityService(env.DB, {
+    ...dependencies,
+    providerCredentialStore:
+      dependencies.providerCredentialStore ?? createProviderCredentialStore(),
+  });
+}
 
 describe("ImmutableProviderIdentityService", () => {
   beforeEach(cleanD1Tables);
 
   it("creates an issuer-qualified canonical identity without requiring email evidence", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: {
         generate: () => ids.shift() ?? "unexpected-id",
@@ -36,6 +65,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: [],
           primaryEmail: null,
         },
+        credential: GITHUB_CREDENTIAL,
       })
     ).resolves.toEqual({
       userId: "user-1",
@@ -63,7 +93,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("fails closed without creating a user when a new subject collides", async () => {
     const ids = ["existing-user", "existing-identity", "rejected-user", "rejected-identity"];
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -75,6 +105,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: ["person@example.com"],
         primaryEmail: "person@example.com",
       },
+      credential: GITHUB_CREDENTIAL,
     });
 
     let rejection: unknown;
@@ -87,6 +118,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: ["person@example.com"],
           primaryEmail: "person@example.com",
         },
+        credential: null,
       });
     } catch (error) {
       rejection = error;
@@ -108,7 +140,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("preserves an established subject while maintaining its unclaimed email evidence", async () => {
     const ids = ["github-user", "github-identity", "google-user", "google-identity"];
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -120,6 +152,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: ["github@example.com"],
         primaryEmail: "github@example.com",
       },
+      credential: GITHUB_CREDENTIAL,
     });
     await service.resolve({
       identity: {
@@ -129,6 +162,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: ["google@example.com"],
         primaryEmail: "google@example.com",
       },
+      credential: null,
     });
 
     await expect(
@@ -141,6 +175,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: ["google@example.com", "new@example.com", "github@example.com"],
           primaryEmail: "google@example.com",
         },
+        credential: null,
       })
     ).resolves.toEqual({
       userId: "google-user",
@@ -169,8 +204,49 @@ describe("ImmutableProviderIdentityService", () => {
     ).resolves.toEqual({ user_id: "google-user" });
   });
 
+  it("keeps canonical users.email stable while refreshing provider email metadata", async () => {
+    const ids = ["user-1", "identity-1"];
+    const service = createIdentityService({
+      clock: { now: () => NOW_MS },
+      idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
+    });
+    await service.resolve({
+      identity: {
+        provider: "google",
+        issuer: "https://accounts.google.com",
+        subject: "google-subject",
+        verifiedEmails: ["original@example.com"],
+        primaryEmail: "original@example.com",
+      },
+      credential: null,
+    });
+
+    await service.resolve({
+      identity: {
+        provider: "google",
+        issuer: "https://accounts.google.com",
+        subject: "google-subject",
+        verifiedEmails: ["current@example.com"],
+        primaryEmail: "current@example.com",
+      },
+      credential: null,
+    });
+
+    await expect(
+      env.DB.prepare(
+        `SELECT users.email, user_identities.provider_email
+         FROM users
+         JOIN user_identities ON user_identities.user_id = users.id
+         WHERE users.id = 'user-1'`
+      ).first()
+    ).resolves.toEqual({
+      email: "original@example.com",
+      provider_email: "current@example.com",
+    });
+  });
+
   it("uses claim uniqueness as the concurrency authority", async () => {
-    const github = new ImmutableProviderIdentityService(env.DB, {
+    const github = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: {
         generate: (() => {
@@ -179,7 +255,7 @@ describe("ImmutableProviderIdentityService", () => {
         })(),
       },
     });
-    const google = new ImmutableProviderIdentityService(env.DB, {
+    const google = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: {
         generate: (() => {
@@ -198,6 +274,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: ["same@example.com"],
           primaryEmail: "same@example.com",
         },
+        credential: GITHUB_CREDENTIAL,
       }),
       google.resolve({
         identity: {
@@ -207,6 +284,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: ["same@example.com"],
           primaryEmail: "same@example.com",
         },
+        credential: null,
       }),
     ]);
 
@@ -251,7 +329,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: ["person@example.com"],
         primaryEmail: "person@example.com",
       },
-      providerCredential: {
+      credential: {
         kind: "refreshable",
         accessToken: "ghu_access",
         accessExpiresAt: NOW_MS + 10_000,
@@ -269,7 +347,88 @@ describe("ImmutableProviderIdentityService", () => {
     });
   });
 
-  it("rolls back identity creation when credential preparation fails", async () => {
+  it("retries an atomic identity refresh when the prepared credential version becomes stale", async () => {
+    const credentialStore = createProviderCredentialStore();
+    const ids = ["user-1", "identity-1"];
+    const initial = createIdentityService({
+      clock: { now: () => NOW_MS },
+      idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
+      providerCredentialStore: credentialStore,
+    });
+    await initial.resolve({
+      identity: {
+        provider: "github",
+        issuer: "https://github.com",
+        subject: "github-subject",
+        displayName: "Original Name",
+        verifiedEmails: ["original@example.com"],
+        primaryEmail: "original@example.com",
+      },
+      credential: GITHUB_CREDENTIAL,
+    });
+
+    const staleMutation = await credentialStore.prepareSignInUpsert("identity-1", {
+      kind: "access_only_nonexpiring",
+      accessToken: "stale-access-token",
+    });
+    await credentialStore.upsertFromSignIn("identity-1", {
+      kind: "access_only_nonexpiring",
+      accessToken: "concurrent-access-token",
+    });
+    const prepareSignInUpsert = vi
+      .fn<ProviderCredentialStorePort["prepareSignInUpsert"]>()
+      .mockResolvedValueOnce(staleMutation)
+      .mockImplementation((providerIdentityId, credential, updatedAt) =>
+        credentialStore.prepareSignInUpsert(providerIdentityId, credential, updatedAt)
+      );
+    const retryingStore: ProviderCredentialStorePort = {
+      prepareInitialInsert: (...args) => credentialStore.prepareInitialInsert(...args),
+      prepareSignInUpsert,
+      isSignInVersionConflict: (error) => credentialStore.isSignInVersionConflict(error),
+    };
+    const service = createIdentityService({
+      clock: { now: () => NOW_MS + 1_000 },
+      idGenerator: { generate: () => "must-not-generate" },
+      providerCredentialStore: retryingStore,
+    });
+
+    await expect(
+      service.resolve({
+        identity: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "github-subject",
+          displayName: "Updated Name",
+          verifiedEmails: ["original@example.com", "new@example.com"],
+          primaryEmail: "new@example.com",
+        },
+        credential: {
+          kind: "access_only_nonexpiring",
+          accessToken: "final-access-token",
+        },
+      })
+    ).resolves.toMatchObject({
+      userId: "user-1",
+      providerIdentityId: "identity-1",
+      isNewUser: false,
+    });
+
+    expect(prepareSignInUpsert).toHaveBeenCalledTimes(2);
+    await expect(
+      env.DB.prepare("SELECT display_name FROM users WHERE id = 'user-1'").first()
+    ).resolves.toEqual({ display_name: "Updated Name" });
+    await expect(
+      env.DB.prepare(
+        "SELECT user_id FROM verified_email_claims WHERE email = 'new@example.com'"
+      ).first()
+    ).resolves.toEqual({ user_id: "user-1" });
+    await expect(credentialStore.get("identity-1")).resolves.toMatchObject({
+      accessToken: "final-access-token",
+      rowVersion: 3,
+    });
+  });
+
+  it("does not start identity creation when credential preparation fails", async () => {
     const credentialStore = new ProviderCredentialStore(
       env.DB,
       {
@@ -297,7 +456,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: ["person@example.com"],
           primaryEmail: "person@example.com",
         },
-        providerCredential: {
+        credential: {
           kind: "access_only_nonexpiring",
           accessToken: "ghu_access",
         },
@@ -308,8 +467,55 @@ describe("ImmutableProviderIdentityService", () => {
     });
   });
 
+  it("rolls back user, identity, and claims when credential execution fails in the batch", async () => {
+    const failingCredentialStore: ProviderCredentialStorePort = {
+      prepareInitialInsert: async () =>
+        env.DB.prepare(
+          `INSERT INTO provider_credentials (
+               provider_identity_id, credential_kind,
+               access_token_ciphertext, access_expires_at,
+               refresh_token_ciphertext, refresh_expires_at,
+               encryption_key_version, row_version, updated_at
+             ) VALUES (?, 'invalid-kind', 'ciphertext', NULL, NULL, NULL, 1, 1, ?)`
+        ).bind("identity-1", NOW_MS),
+      prepareSignInUpsert: async () => {
+        throw new Error("not reached");
+      },
+      isSignInVersionConflict: () => false,
+    };
+    const ids = ["user-1", "identity-1"];
+    const service = createIdentityService({
+      clock: { now: () => NOW_MS },
+      idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
+      providerCredentialStore: failingCredentialStore,
+    });
+
+    await expect(
+      service.resolve({
+        identity: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "github-subject",
+          verifiedEmails: ["person@example.com"],
+          primaryEmail: "person@example.com",
+        },
+        credential: GITHUB_CREDENTIAL,
+      })
+    ).rejects.toThrow();
+
+    await expect(
+      env.DB.prepare(
+        `SELECT
+           (SELECT count(*) FROM users) AS users,
+           (SELECT count(*) FROM user_identities) AS identities,
+           (SELECT count(*) FROM verified_email_claims) AS claims,
+           (SELECT count(*) FROM provider_credentials) AS credentials`
+      ).first()
+    ).resolves.toEqual({ users: 0, identities: 0, claims: 0, credentials: 0 });
+  });
+
   it("rejects an issuer that was not selected by the configured provider adapter", async () => {
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => crypto.randomUUID() },
     });
@@ -323,13 +529,14 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails: [],
           primaryEmail: null,
         },
+        credential: null,
       })
     ).rejects.toBeInstanceOf(InvalidProviderIdentityEvidenceError);
   });
 
   it("preserves the provider subject exactly", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -342,6 +549,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: [],
         primaryEmail: null,
       },
+      credential: null,
     });
 
     await expect(
@@ -357,7 +565,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("resolves a bounded provider email set without one D1 binding or statement per email", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -372,6 +580,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails,
           primaryEmail: verifiedEmails[0],
         },
+        credential: null,
       })
     ).resolves.toMatchObject({
       userId: "user-1",
@@ -389,6 +598,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails,
           primaryEmail: verifiedEmails[0],
         },
+        credential: null,
       })
     ).resolves.toMatchObject({
       userId: "user-1",
@@ -403,7 +613,7 @@ describe("ImmutableProviderIdentityService", () => {
   });
 
   it("rejects an unbounded provider email set before writing identity state", async () => {
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => crypto.randomUUID() },
     });
@@ -421,6 +631,7 @@ describe("ImmutableProviderIdentityService", () => {
           verifiedEmails,
           primaryEmail: verifiedEmails[0],
         },
+        credential: null,
       })
     ).rejects.toBeInstanceOf(InvalidProviderIdentityEvidenceError);
 
@@ -434,34 +645,10 @@ describe("ImmutableProviderIdentityService", () => {
     ).resolves.toEqual({ users: 0, identities: 0, claims: 0 });
   });
 
-  it("rejects provider credentials attached to a Google identity at runtime", async () => {
-    const service = new ImmutableProviderIdentityService(env.DB, {
-      clock: { now: () => NOW_MS },
-      idGenerator: { generate: () => crypto.randomUUID() },
-    });
-    const malformedEvidence = {
-      identity: {
-        provider: "google",
-        issuer: "https://accounts.google.com",
-        subject: "google-subject",
-        verifiedEmails: ["person@example.com"],
-        primaryEmail: "person@example.com",
-      },
-      providerCredential: {
-        kind: "access_only_nonexpiring",
-        accessToken: "must-not-store",
-      },
-    } as unknown as ProviderIdentityEvidence;
-
-    await expect(service.resolve(malformedEvidence)).rejects.toBeInstanceOf(
-      InvalidProviderIdentityEvidenceError
-    );
-  });
-
   it("converges concurrent callbacks for the same immutable subject", async () => {
     function service(userId: string, identityId: string) {
       const ids = [userId, identityId];
-      return new ImmutableProviderIdentityService(env.DB, {
+      return createIdentityService({
         clock: { now: () => NOW_MS },
         idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
       });
@@ -474,6 +661,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: [],
         primaryEmail: null,
       },
+      credential: null,
     };
 
     const [first, second] = await Promise.all([
@@ -494,7 +682,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("advances verification time without rewriting claim provenance", async () => {
     const ids = ["user-1", "identity-1"];
-    const initial = new ImmutableProviderIdentityService(env.DB, {
+    const initial = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -506,10 +694,11 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: ["person@example.com"],
         primaryEmail: "person@example.com",
       },
+      credential: null,
     };
     await initial.resolve(evidence);
 
-    const later = new ImmutableProviderIdentityService(env.DB, {
+    const later = createIdentityService({
       clock: { now: () => NOW_MS + 1_000 },
       idGenerator: { generate: () => "must-not-generate" },
     });
@@ -532,7 +721,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("preserves a legacy canonical reservation when the same user verifies it", async () => {
     const ids = ["user-1", "identity-1"];
-    const initial = new ImmutableProviderIdentityService(env.DB, {
+    const initial = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -544,6 +733,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: ["person@example.com"],
         primaryEmail: "person@example.com",
       },
+      credential: null,
     };
     await initial.resolve(evidence);
     await env.DB.prepare(
@@ -554,7 +744,7 @@ describe("ImmutableProviderIdentityService", () => {
        WHERE email = 'person@example.com'`
     ).run();
 
-    const later = new ImmutableProviderIdentityService(env.DB, {
+    const later = createIdentityService({
       clock: { now: () => NOW_MS + 1_000 },
       idGenerator: { generate: () => "must-not-generate" },
     });
@@ -580,7 +770,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("rejects a stored adapter mismatch without reparenting the subject", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityService({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -592,6 +782,7 @@ describe("ImmutableProviderIdentityService", () => {
         verifiedEmails: [],
         primaryEmail: null,
       },
+      credential: null,
     };
     await service.resolve(evidence);
     await env.DB.prepare(

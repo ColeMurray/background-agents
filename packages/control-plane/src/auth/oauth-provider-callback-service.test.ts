@@ -111,6 +111,26 @@ describe("OAuthProviderCallbackService", () => {
     expect(consumeFlow).not.toHaveBeenCalled();
   });
 
+  it("rejects an oversized provider code before consuming transaction state", async () => {
+    const consumeFlow = vi.fn();
+    const providers = providerRegistry();
+    const flowStateStore = {
+      consume: consumeFlow,
+    } as unknown as OAuthFlowStateReader;
+    const service = new OAuthProviderCallbackService({
+      clients: { accepts: vi.fn(() => true) },
+      providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
+      admissionPolicy: { requireAdmission: vi.fn() },
+      identityService: { resolve: vi.fn() },
+      authorizationCodeStore: { issue: vi.fn() },
+    });
+
+    await expect(
+      service.completeAuthorization("github", { state: STATE, code: "x".repeat(4_097) })
+    ).rejects.toEqual(expect.objectContaining({ name: "OAuthProviderCallbackRequestError" }));
+    expect(consumeFlow).not.toHaveBeenCalled();
+  });
+
   it("turns a verified provider callback into a client-bound authorization code", async () => {
     const providers = providerRegistry();
     const consumeFlow = vi.fn(async () => ({
@@ -173,7 +193,7 @@ describe("OAuthProviderCallbackService", () => {
         issuer: "https://github.com",
         subject: "github-subject",
       }),
-      providerCredential: expect.objectContaining({ accessToken: "ghu_token" }),
+      credential: expect.objectContaining({ accessToken: "ghu_token" }),
     });
     expect(authorizationCodeStore.issue).toHaveBeenCalledWith({
       userId: "user-1",
@@ -353,6 +373,7 @@ describe("OAuthProviderCallbackService", () => {
         provider: "google",
         subject: "google-subject",
       }),
+      credential: null,
     });
   });
 

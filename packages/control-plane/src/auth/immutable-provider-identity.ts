@@ -1,5 +1,5 @@
 import type { ProviderCredentialInput } from "./provider-credential";
-import type { VerifiedProviderIdentity } from "./providers/types";
+import type { ProviderCodeExchangeResult, VerifiedProviderIdentity } from "./providers/types";
 import type { SignInProvider } from "./sign-in-provider";
 import { isUniqueConstraintError } from "../db/errors";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
@@ -11,16 +11,6 @@ const CANONICAL_ISSUERS: Readonly<Record<SignInProvider, string>> = {
 const MAX_RESOLUTION_ATTEMPTS = 3;
 const MAX_VERIFIED_EMAIL_CLAIMS = 1_000;
 
-export type ProviderIdentityEvidence =
-  | {
-      readonly identity: VerifiedProviderIdentity<"github">;
-      readonly providerCredential?: ProviderCredentialInput;
-    }
-  | {
-      readonly identity: VerifiedProviderIdentity<"google">;
-      readonly providerCredential?: never;
-    };
-
 export interface ResolvedImmutableProviderIdentity {
   readonly userId: string;
   readonly providerIdentityId: string;
@@ -31,7 +21,7 @@ export interface ResolvedImmutableProviderIdentity {
 export interface ImmutableProviderIdentityDependencies {
   readonly clock: { now(): number };
   readonly idGenerator: { generate(): string };
-  readonly providerCredentialStore?: ProviderCredentialStorePort;
+  readonly providerCredentialStore: ProviderCredentialStorePort;
 }
 
 export interface ProviderCredentialStorePort {
@@ -40,15 +30,12 @@ export interface ProviderCredentialStorePort {
     credential: ProviderCredentialInput,
     updatedAt: number
   ): Promise<SqlStatement>;
-  upsertFromSignIn(
+  prepareSignInUpsert(
     providerIdentityId: string,
-    credential: ProviderCredentialInput
-  ): Promise<number>;
-}
-
-interface ProviderCredentialWrite {
-  readonly credential: ProviderCredentialInput;
-  readonly store: ProviderCredentialStorePort;
+    credential: ProviderCredentialInput,
+    updatedAt: number
+  ): Promise<SqlStatement>;
+  isSignInVersionConflict(error: unknown): boolean;
 }
 
 export class InvalidProviderIdentityEvidenceError extends Error {
@@ -150,19 +137,27 @@ export class ImmutableProviderIdentityService {
     private readonly dependencies: ImmutableProviderIdentityDependencies
   ) {}
 
-  async resolve(evidence: ProviderIdentityEvidence): Promise<ResolvedImmutableProviderIdentity> {
-    const identity = normalizeIdentityEvidence(evidence.identity);
-    if (identity.provider === "google" && evidence.providerCredential !== undefined) {
-      throw new InvalidProviderIdentityEvidenceError(
-        "Google sign-in identities cannot persist provider credentials"
-      );
-    }
-    const credentialWrite = this.providerCredentialWrite(evidence.providerCredential);
+  async resolve(
+    signIn: ProviderCodeExchangeResult<SignInProvider>
+  ): Promise<ResolvedImmutableProviderIdentity> {
+    const identity = normalizeIdentityEvidence(signIn.identity);
+    const credential = signIn.credential;
 
     for (let attempt = 1; attempt <= MAX_RESOLUTION_ATTEMPTS; attempt += 1) {
       const existing = await this.findIdentity(identity.issuer, identity.subject);
       if (existing) {
-        return await this.refreshExisting(existing, identity, credentialWrite);
+        try {
+          return await this.refreshExisting(existing, identity, credential);
+        } catch (error) {
+          if (
+            attempt === MAX_RESOLUTION_ATTEMPTS ||
+            (!isUniqueConstraintError(error) &&
+              !this.dependencies.providerCredentialStore.isSignInVersionConflict(error))
+          ) {
+            throw error;
+          }
+          continue;
+        }
       }
 
       const conflictingEmails = await this.findConflictingEmails(identity.verifiedEmails, null);
@@ -171,7 +166,7 @@ export class ImmutableProviderIdentityService {
       }
 
       try {
-        return await this.createIdentity(identity, credentialWrite);
+        return await this.createIdentity(identity, credential);
       } catch (error) {
         if (!isUniqueConstraintError(error) || attempt === MAX_RESOLUTION_ATTEMPTS) {
           throw error;
@@ -184,7 +179,7 @@ export class ImmutableProviderIdentityService {
 
   private async createIdentity(
     identity: NormalizedIdentityEvidence,
-    credentialWrite: ProviderCredentialWrite | null
+    credential: ProviderCredentialInput | null
   ): Promise<ResolvedImmutableProviderIdentity> {
     const now = this.dependencies.clock.now();
     const userId = requireGeneratedId(this.dependencies.idGenerator.generate(), "user id");
@@ -233,11 +228,11 @@ export class ImmutableProviderIdentityService {
           .bind(userId, providerIdentityId, now, now, JSON.stringify(identity.verifiedEmails))
       );
     }
-    if (credentialWrite) {
+    if (credential) {
       statements.push(
-        await credentialWrite.store.prepareInitialInsert(
+        await this.dependencies.providerCredentialStore.prepareInitialInsert(
           providerIdentityId,
-          credentialWrite.credential,
+          credential,
           now
         )
       );
@@ -276,7 +271,7 @@ export class ImmutableProviderIdentityService {
   private async refreshExisting(
     existing: IdentityRow,
     identity: NormalizedIdentityEvidence,
-    credentialWrite: ProviderCredentialWrite | null
+    credential: ProviderCredentialInput | null
   ): Promise<ResolvedImmutableProviderIdentity> {
     if (existing.provider !== identity.provider) {
       throw new ProviderIdentityAdapterMismatchError();
@@ -291,6 +286,9 @@ export class ImmutableProviderIdentityService {
            WHERE id = ? AND user_id = ?`
         )
         .bind(identity.login, identity.primaryEmail, existing.id, existing.user_id),
+      // users.email is stable canonical account metadata, not a mirror of a
+      // provider's mutable primary email. Current provider display metadata
+      // lives on user_identities; verified ownership evidence lives in claims.
       this.db
         .prepare(
           `UPDATE users
@@ -323,11 +321,17 @@ export class ImmutableProviderIdentityService {
           .bind(existing.user_id, existing.id, now, now, serializedEmails)
       );
     }
+    if (credential) {
+      statements.push(
+        await this.dependencies.providerCredentialStore.prepareSignInUpsert(
+          existing.id,
+          credential,
+          now
+        )
+      );
+    }
 
     await this.db.batch(statements);
-    if (credentialWrite) {
-      await credentialWrite.store.upsertFromSignIn(existing.id, credentialWrite.credential);
-    }
     return {
       userId: existing.user_id,
       providerIdentityId: existing.id,
@@ -335,17 +339,6 @@ export class ImmutableProviderIdentityService {
       collisionCount: (await this.findConflictingEmails(identity.verifiedEmails, existing.user_id))
         .length,
     };
-  }
-
-  private providerCredentialWrite(
-    credential: ProviderCredentialInput | undefined
-  ): ProviderCredentialWrite | null {
-    if (!credential) return null;
-    const store = this.dependencies.providerCredentialStore;
-    if (!store) {
-      throw new Error("Provider credential store is not configured");
-    }
-    return { credential, store };
   }
 
   private async findClaims(emails: readonly string[]): Promise<EmailClaimRow[]> {

@@ -152,5 +152,16 @@ describe("AdmissionPolicy", () => {
       }
     );
     await expect(denied.requireAdmission(signIn)).rejects.toBeInstanceOf(AdmissionDeniedError);
+
+    const pending = new AdmissionPolicy(
+      {
+        ...BASE_CONFIG,
+        allowedGitHubOrganizations: ["open-inspect"],
+      },
+      {
+        fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ state: "pending" })),
+      }
+    );
+    await expect(pending.requireAdmission(signIn)).rejects.toBeInstanceOf(AdmissionDeniedError);
   });
 });

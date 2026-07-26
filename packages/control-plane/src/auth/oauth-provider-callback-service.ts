@@ -3,10 +3,7 @@ import {
   AdmissionUnavailableError,
   type VerifiedProviderSignIn,
 } from "./admission-policy";
-import type {
-  ProviderIdentityEvidence,
-  ResolvedImmutableProviderIdentity,
-} from "./immutable-provider-identity";
+import type { ResolvedImmutableProviderIdentity } from "./immutable-provider-identity";
 import { AccountLinkRequiredError } from "./immutable-provider-identity";
 import type { OAuthProviderCallbackHandlerRegistry } from "./oauth-provider-callback-handler";
 import type { ConsumedOAuthFlowState } from "./oauth-flow-state";
@@ -25,7 +22,7 @@ export interface AdmissionPolicyPort {
 }
 
 export interface ImmutableProviderIdentityPort {
-  resolve(evidence: ProviderIdentityEvidence): Promise<ResolvedImmutableProviderIdentity>;
+  resolve(signIn: VerifiedProviderSignIn): Promise<ResolvedImmutableProviderIdentity>;
 }
 
 export interface OAuthAuthorizationCodeIssuer {
@@ -139,14 +136,7 @@ export class OAuthProviderCallbackService {
     state: string
   ): Promise<URL> {
     await this.dependencies.admissionPolicy.requireAdmission(signIn);
-    const evidence: ProviderIdentityEvidence =
-      signIn.credential === null
-        ? { identity: signIn.identity }
-        : {
-            identity: signIn.identity,
-            providerCredential: signIn.credential,
-          };
-    const resolved = await this.dependencies.identityService.resolve(evidence);
+    const resolved = await this.dependencies.identityService.resolve(signIn);
     const authorizationCode = await this.dependencies.authorizationCodeStore.issue({
       userId: resolved.userId,
       providerIdentityId: resolved.providerIdentityId,
