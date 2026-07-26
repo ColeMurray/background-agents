@@ -56,4 +56,37 @@ describe("ProviderPkceFlowCipher", () => {
       cipher.decrypt(encrypted, { ...context, provider: "github" })
     ).rejects.toBeInstanceOf(OAuthFlowVerifierIntegrityError);
   });
+
+  it("uses an injected initialization vector and preserves round-trip decryption", async () => {
+    const initializationVector = Uint8Array.from({ length: 12 }, (_, index) => index);
+    const cipher = new ProviderPkceFlowCipher(ROOT_KEY_BASE64, {
+      ivGenerator: { generate: () => initializationVector },
+    });
+    const context = {
+      flowId: "flow-1",
+      provider: "google" as const,
+      keyVersion: 1,
+    };
+
+    const encrypted = await cipher.encrypt("provider-pkce-verifier", context);
+
+    expect(Buffer.from(encrypted, "base64").subarray(0, initializationVector.byteLength)).toEqual(
+      Buffer.from(initializationVector)
+    );
+    await expect(cipher.decrypt(encrypted, context)).resolves.toBe("provider-pkce-verifier");
+  });
+
+  it("rejects an invalid initialization-vector length", async () => {
+    const cipher = new ProviderPkceFlowCipher(ROOT_KEY_BASE64, {
+      ivGenerator: { generate: () => new Uint8Array(11) },
+    });
+
+    await expect(
+      cipher.encrypt("provider-pkce-verifier", {
+        flowId: "flow-1",
+        provider: "google",
+        keyVersion: 1,
+      })
+    ).rejects.toThrow("Provider PKCE flow IV generator returned an invalid IV");
+  });
 });
