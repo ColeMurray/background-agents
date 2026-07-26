@@ -117,6 +117,39 @@ describe("proxyBrowserAuthRequest", () => {
     expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
   });
 
+  it("does not advertise upstream compression after fetch decodes the response body", async () => {
+    mocks.dispatchControlPlaneFetch.mockResolvedValue(
+      new Response(JSON.stringify({ url: "https://github.example/authorize" }), {
+        status: 200,
+        headers: {
+          "Content-Encoding": "br",
+          "Content-Length": "999",
+          "Content-Type": "application/json",
+        },
+      })
+    );
+
+    const response = await proxyBrowserAuthRequest(
+      new Request("https://web.example/api/auth/sign-in/social", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: "github",
+          callbackURL: "/",
+          disableRedirect: true,
+        }),
+      })
+    );
+
+    expect(response.headers.get("Content-Encoding")).toBeNull();
+    expect(response.headers.get("Content-Length")).toBeNull();
+    await expect(response.json()).resolves.toEqual({
+      url: "https://github.example/authorize",
+    });
+  });
+
   it("fails closed when the web signing secret is unavailable", async () => {
     delete process.env.SERVICE_AUTH_SECRET;
 

@@ -23,6 +23,8 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "upgrade",
 ]);
 
+const DECODED_BODY_RESPONSE_HEADERS = new Set(["content-encoding", "content-length"]);
+
 function copyRequestHeaders(request: Request): Headers {
   const headers = new Headers();
   for (const name of REQUEST_HEADERS) {
@@ -46,7 +48,11 @@ function copyResponseHeaders(upstream: Headers): Headers {
   const headers = new Headers();
   upstream.forEach((value, name) => {
     const normalizedName = name.toLowerCase();
-    if (normalizedName !== "set-cookie" && !HOP_BY_HOP_RESPONSE_HEADERS.has(normalizedName)) {
+    if (
+      normalizedName !== "set-cookie" &&
+      !HOP_BY_HOP_RESPONSE_HEADERS.has(normalizedName) &&
+      !DECODED_BODY_RESPONSE_HEADERS.has(normalizedName)
+    ) {
       headers.append(name, value);
     }
   });
