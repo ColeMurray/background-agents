@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AdmissionDeniedError, AdmissionUnavailableError } from "./admission-policy";
-import { AccountLinkRequiredError } from "./immutable-provider-identity";
+import { AccountLinkRequiredError } from "./browser-sign-in-identity";
 import { createOAuthProviderCallbackHandlers } from "./oauth-provider-callback-handler";
 import { OAuthProviderCallbackService } from "./oauth-provider-callback-service";
 import type { OAuthFlowStateReader } from "./oauth-flow-state";
@@ -69,7 +69,7 @@ describe("OAuthProviderCallbackService", () => {
         google: { consume },
       },
       admissionPolicy: { requireAdmission: vi.fn() },
-      identityService: {
+      identityResolver: {
         resolve: vi.fn(async () => ({
           userId: "user-1",
           providerIdentityId: "identity-1",
@@ -101,7 +101,7 @@ describe("OAuthProviderCallbackService", () => {
       clients: { accepts: vi.fn(() => true) },
       providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: { requireAdmission: vi.fn() },
-      identityService: { resolve: vi.fn() },
+      identityResolver: { resolve: vi.fn() },
       authorizationCodeStore: { issue: vi.fn() },
     });
 
@@ -121,7 +121,7 @@ describe("OAuthProviderCallbackService", () => {
       clients: { accepts: vi.fn(() => true) },
       providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: { requireAdmission: vi.fn() },
-      identityService: { resolve: vi.fn() },
+      identityResolver: { resolve: vi.fn() },
       authorizationCodeStore: { issue: vi.fn() },
     });
 
@@ -148,7 +148,7 @@ describe("OAuthProviderCallbackService", () => {
     const admissionPolicy = {
       requireAdmission: vi.fn(async () => ({ reason: "email_allowlist" as const })),
     };
-    const identityService = {
+    const identityResolver = {
       resolve: vi.fn(async () => ({
         userId: "user-1",
         providerIdentityId: "identity-1",
@@ -166,7 +166,7 @@ describe("OAuthProviderCallbackService", () => {
       clients: { accepts: vi.fn(() => true) },
       providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy,
-      identityService,
+      identityResolver,
       authorizationCodeStore,
     });
 
@@ -187,7 +187,7 @@ describe("OAuthProviderCallbackService", () => {
         identity: expect.objectContaining({ subject: "github-subject" }),
       })
     );
-    expect(identityService.resolve).toHaveBeenCalledWith({
+    expect(identityResolver.resolve).toHaveBeenCalledWith({
       identity: expect.objectContaining({
         provider: "github",
         issuer: "https://github.com",
@@ -222,7 +222,7 @@ describe("OAuthProviderCallbackService", () => {
       clients: { accepts: vi.fn(() => true) },
       providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: { requireAdmission: vi.fn() },
-      identityService: { resolve: vi.fn() },
+      identityResolver: { resolve: vi.fn() },
       authorizationCodeStore: { issue: vi.fn() },
     });
 
@@ -253,7 +253,7 @@ describe("OAuthProviderCallbackService", () => {
       admissionPolicy: {
         requireAdmission: vi.fn(async () => ({ reason: "email_allowlist" })),
       },
-      identityService: {
+      identityResolver: {
         resolve: vi.fn(async () => {
           throw new AccountLinkRequiredError(1);
         }),
@@ -299,7 +299,7 @@ describe("OAuthProviderCallbackService", () => {
       clients: { accepts: vi.fn(() => false) },
       providerHandlers: createOAuthProviderCallbackHandlers({ providers, flowStateStore }),
       admissionPolicy: { requireAdmission: vi.fn() },
-      identityService: { resolve: vi.fn() },
+      identityResolver: { resolve: vi.fn() },
       authorizationCodeStore: { issue: vi.fn() },
     });
 
@@ -324,7 +324,7 @@ describe("OAuthProviderCallbackService", () => {
       },
       credential: null,
     });
-    const identityService = {
+    const identityResolver = {
       resolve: vi.fn(async () => ({
         userId: "user-1",
         providerIdentityId: "identity-1",
@@ -349,7 +349,7 @@ describe("OAuthProviderCallbackService", () => {
       admissionPolicy: {
         requireAdmission: vi.fn(async () => ({ reason: "email_allowlist" })),
       },
-      identityService,
+      identityResolver,
       authorizationCodeStore: {
         issue: vi.fn(async () => ({
           code: `oi_code_${"a".repeat(43)}`,
@@ -368,7 +368,7 @@ describe("OAuthProviderCallbackService", () => {
       codeVerifier: PROVIDER_VERIFIER,
       oidcNonceHash: "f".repeat(64),
     });
-    expect(identityService.resolve).toHaveBeenCalledWith({
+    expect(identityResolver.resolve).toHaveBeenCalledWith({
       identity: expect.objectContaining({
         provider: "google",
         subject: "google-subject",
@@ -411,7 +411,7 @@ describe("OAuthProviderCallbackService", () => {
             if (!(cause instanceof OAuthProviderError)) throw cause;
           }),
         },
-        identityService: { resolve: vi.fn() },
+        identityResolver: { resolve: vi.fn() },
         authorizationCodeStore: { issue: vi.fn() },
       });
 

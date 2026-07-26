@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import { AdmissionPolicy } from "../../src/auth/admission-policy";
 import { hashToken } from "../../src/auth/crypto";
-import { ImmutableProviderIdentityService } from "../../src/auth/immutable-provider-identity";
+import { BrowserSignInIdentityResolver } from "../../src/auth/browser-sign-in-identity";
 import { StaticOAuthClientRegistry } from "../../src/auth/oauth-authorization-service";
 import { createOAuthProviderCallbackHandlers } from "../../src/auth/oauth-provider-callback-handler";
 import { OAuthProviderCallbackService } from "../../src/auth/oauth-provider-callback-service";
@@ -17,6 +17,7 @@ import type {
 } from "../../src/auth/provider-credential-cipher";
 import type { OAuthSignInProviderRegistry } from "../../src/auth/providers/types";
 import { BrowserAuthSessionStore } from "../../src/db/browser-auth-sessions";
+import { BrowserSignInIdentityStore } from "../../src/db/browser-sign-in-identities";
 import { OAuthAuthorizationCodeStore } from "../../src/db/oauth-authorization-codes";
 import { OAuthFlowStateStore } from "../../src/db/oauth-flow-state";
 import { ProviderCredentialStore } from "../../src/db/provider-credentials";
@@ -65,12 +66,12 @@ describe("OAuth provider callback transaction", () => {
       clock
     );
     const identityIds = ["user-1", "identity-1"];
-    const identityService = new ImmutableProviderIdentityService(env.DB, {
+    const identityResolver = new BrowserSignInIdentityResolver({
       clock,
       idGenerator: {
         generate: () => identityIds.shift() ?? "unexpected-identity-id",
       },
-      providerCredentialStore,
+      store: new BrowserSignInIdentityStore(env.DB, providerCredentialStore),
     });
     const authorizationCodeIds = ["authorization-code-1", "browser-session-1"];
     const authorizationCodeStore = new OAuthAuthorizationCodeStore(env.DB, {
@@ -126,7 +127,7 @@ describe("OAuth provider callback transaction", () => {
         allowedGitHubOrganizations: [],
         unsafeAllowAllUsers: false,
       }),
-      identityService,
+      identityResolver,
       authorizationCodeStore,
     });
 

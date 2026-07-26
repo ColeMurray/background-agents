@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import {
   AccountLinkRequiredError,
-  ImmutableProviderIdentityService,
+  BrowserSignInIdentityResolver,
   InvalidProviderIdentityEvidenceError,
   ProviderIdentityAdapterMismatchError,
-  type ImmutableProviderIdentityDependencies,
-  type ProviderCredentialStorePort,
-} from "../../src/auth/immutable-provider-identity";
+  type BrowserSignInIdentityResolverDependencies,
+} from "../../src/auth/browser-sign-in-identity";
+import {
+  BrowserSignInIdentityStore,
+  type ProviderCredentialWriteStorePort,
+} from "../../src/db/browser-sign-in-identities";
 import { ProviderCredentialStore } from "../../src/db/provider-credentials";
 import { cleanD1Tables } from "./cleanup";
 
@@ -29,24 +32,25 @@ function createProviderCredentialStore(now = NOW_MS): ProviderCredentialStore {
   );
 }
 
-function createIdentityService(
-  dependencies: Omit<ImmutableProviderIdentityDependencies, "providerCredentialStore"> & {
-    providerCredentialStore?: ProviderCredentialStorePort;
+function createIdentityResolver(
+  dependencies: Omit<BrowserSignInIdentityResolverDependencies, "store"> & {
+    providerCredentialStore?: ProviderCredentialWriteStorePort;
   }
-): ImmutableProviderIdentityService {
-  return new ImmutableProviderIdentityService(env.DB, {
-    ...dependencies,
-    providerCredentialStore:
-      dependencies.providerCredentialStore ?? createProviderCredentialStore(),
+): BrowserSignInIdentityResolver {
+  const { providerCredentialStore = createProviderCredentialStore(), ...serviceDependencies } =
+    dependencies;
+  return new BrowserSignInIdentityResolver({
+    ...serviceDependencies,
+    store: new BrowserSignInIdentityStore(env.DB, providerCredentialStore),
   });
 }
 
-describe("ImmutableProviderIdentityService", () => {
+describe("BrowserSignInIdentityResolver", () => {
   beforeEach(cleanD1Tables);
 
   it("creates an issuer-qualified canonical identity without requiring email evidence", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: {
         generate: () => ids.shift() ?? "unexpected-id",
@@ -93,7 +97,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("fails closed without creating a user when a new subject collides", async () => {
     const ids = ["existing-user", "existing-identity", "rejected-user", "rejected-identity"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -140,7 +144,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("preserves an established subject while maintaining its unclaimed email evidence", async () => {
     const ids = ["github-user", "github-identity", "google-user", "google-identity"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -206,7 +210,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("keeps canonical users.email stable while refreshing provider email metadata", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -246,7 +250,7 @@ describe("ImmutableProviderIdentityService", () => {
   });
 
   it("uses claim uniqueness as the concurrency authority", async () => {
-    const github = createIdentityService({
+    const github = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: {
         generate: (() => {
@@ -255,7 +259,7 @@ describe("ImmutableProviderIdentityService", () => {
         })(),
       },
     });
-    const google = createIdentityService({
+    const google = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: {
         generate: (() => {
@@ -315,7 +319,7 @@ describe("ImmutableProviderIdentityService", () => {
       { now: () => NOW_MS }
     );
     const ids = ["user-1", "identity-1"];
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
       providerCredentialStore: credentialStore,
@@ -350,7 +354,7 @@ describe("ImmutableProviderIdentityService", () => {
   it("retries an atomic identity refresh when the prepared credential version becomes stale", async () => {
     const credentialStore = createProviderCredentialStore();
     const ids = ["user-1", "identity-1"];
-    const initial = createIdentityService({
+    const initial = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
       providerCredentialStore: credentialStore,
@@ -376,17 +380,17 @@ describe("ImmutableProviderIdentityService", () => {
       accessToken: "concurrent-access-token",
     });
     const prepareSignInUpsert = vi
-      .fn<ProviderCredentialStorePort["prepareSignInUpsert"]>()
+      .fn<ProviderCredentialWriteStorePort["prepareSignInUpsert"]>()
       .mockResolvedValueOnce(staleMutation)
       .mockImplementation((providerIdentityId, credential, updatedAt) =>
         credentialStore.prepareSignInUpsert(providerIdentityId, credential, updatedAt)
       );
-    const retryingStore: ProviderCredentialStorePort = {
+    const retryingStore: ProviderCredentialWriteStorePort = {
       prepareInitialInsert: (...args) => credentialStore.prepareInitialInsert(...args),
       prepareSignInUpsert,
       isSignInVersionConflict: (error) => credentialStore.isSignInVersionConflict(error),
     };
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS + 1_000 },
       idGenerator: { generate: () => "must-not-generate" },
       providerCredentialStore: retryingStore,
@@ -441,7 +445,7 @@ describe("ImmutableProviderIdentityService", () => {
       },
       { now: () => NOW_MS }
     );
-    const service = new ImmutableProviderIdentityService(env.DB, {
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => crypto.randomUUID() },
       providerCredentialStore: credentialStore,
@@ -468,7 +472,7 @@ describe("ImmutableProviderIdentityService", () => {
   });
 
   it("rolls back user, identity, and claims when credential execution fails in the batch", async () => {
-    const failingCredentialStore: ProviderCredentialStorePort = {
+    const failingCredentialStore: ProviderCredentialWriteStorePort = {
       prepareInitialInsert: async () =>
         env.DB.prepare(
           `INSERT INTO provider_credentials (
@@ -484,7 +488,7 @@ describe("ImmutableProviderIdentityService", () => {
       isSignInVersionConflict: () => false,
     };
     const ids = ["user-1", "identity-1"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
       providerCredentialStore: failingCredentialStore,
@@ -515,7 +519,7 @@ describe("ImmutableProviderIdentityService", () => {
   });
 
   it("rejects an issuer that was not selected by the configured provider adapter", async () => {
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => crypto.randomUUID() },
     });
@@ -536,7 +540,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("preserves the provider subject exactly", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -565,7 +569,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("resolves a bounded provider email set without one D1 binding or statement per email", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -613,7 +617,7 @@ describe("ImmutableProviderIdentityService", () => {
   });
 
   it("rejects an unbounded provider email set before writing identity state", async () => {
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => crypto.randomUUID() },
     });
@@ -648,7 +652,7 @@ describe("ImmutableProviderIdentityService", () => {
   it("converges concurrent callbacks for the same immutable subject", async () => {
     function service(userId: string, identityId: string) {
       const ids = [userId, identityId];
-      return createIdentityService({
+      return createIdentityResolver({
         clock: { now: () => NOW_MS },
         idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
       });
@@ -682,7 +686,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("advances verification time without rewriting claim provenance", async () => {
     const ids = ["user-1", "identity-1"];
-    const initial = createIdentityService({
+    const initial = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -698,7 +702,7 @@ describe("ImmutableProviderIdentityService", () => {
     };
     await initial.resolve(evidence);
 
-    const later = createIdentityService({
+    const later = createIdentityResolver({
       clock: { now: () => NOW_MS + 1_000 },
       idGenerator: { generate: () => "must-not-generate" },
     });
@@ -721,7 +725,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("preserves a legacy canonical reservation when the same user verifies it", async () => {
     const ids = ["user-1", "identity-1"];
-    const initial = createIdentityService({
+    const initial = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });
@@ -744,7 +748,7 @@ describe("ImmutableProviderIdentityService", () => {
        WHERE email = 'person@example.com'`
     ).run();
 
-    const later = createIdentityService({
+    const later = createIdentityResolver({
       clock: { now: () => NOW_MS + 1_000 },
       idGenerator: { generate: () => "must-not-generate" },
     });
@@ -770,7 +774,7 @@ describe("ImmutableProviderIdentityService", () => {
 
   it("rejects a stored adapter mismatch without reparenting the subject", async () => {
     const ids = ["user-1", "identity-1"];
-    const service = createIdentityService({
+    const service = createIdentityResolver({
       clock: { now: () => NOW_MS },
       idGenerator: { generate: () => ids.shift() ?? "unexpected-id" },
     });

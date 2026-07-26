@@ -3,8 +3,10 @@ import {
   AdmissionUnavailableError,
   type VerifiedProviderSignIn,
 } from "./admission-policy";
-import type { ResolvedImmutableProviderIdentity } from "./immutable-provider-identity";
-import { AccountLinkRequiredError } from "./immutable-provider-identity";
+import {
+  AccountLinkRequiredError,
+  type ResolvedBrowserSignInIdentity,
+} from "./browser-sign-in-identity";
 import type { OAuthProviderCallbackHandlerRegistry } from "./oauth-provider-callback-handler";
 import type { ConsumedOAuthFlowState } from "./oauth-flow-state";
 import { OAuthProviderError } from "./providers/types";
@@ -21,8 +23,8 @@ export interface AdmissionPolicyPort {
   requireAdmission(signIn: VerifiedProviderSignIn): Promise<unknown>;
 }
 
-export interface ImmutableProviderIdentityPort {
-  resolve(signIn: VerifiedProviderSignIn): Promise<ResolvedImmutableProviderIdentity>;
+export interface BrowserSignInIdentityResolverPort {
+  resolve(signIn: VerifiedProviderSignIn): Promise<ResolvedBrowserSignInIdentity>;
 }
 
 export interface OAuthAuthorizationCodeIssuer {
@@ -43,7 +45,7 @@ export interface OAuthProviderCallbackServiceDependencies {
   readonly clients: OAuthClientRegistryPort;
   readonly providerHandlers: OAuthProviderCallbackHandlerRegistry;
   readonly admissionPolicy: AdmissionPolicyPort;
-  readonly identityService: ImmutableProviderIdentityPort;
+  readonly identityResolver: BrowserSignInIdentityResolverPort;
   readonly authorizationCodeStore: OAuthAuthorizationCodeIssuer;
 }
 
@@ -136,7 +138,7 @@ export class OAuthProviderCallbackService {
     state: string
   ): Promise<URL> {
     await this.dependencies.admissionPolicy.requireAdmission(signIn);
-    const resolved = await this.dependencies.identityService.resolve(signIn);
+    const resolved = await this.dependencies.identityResolver.resolve(signIn);
     const authorizationCode = await this.dependencies.authorizationCodeStore.issue({
       userId: resolved.userId,
       providerIdentityId: resolved.providerIdentityId,
