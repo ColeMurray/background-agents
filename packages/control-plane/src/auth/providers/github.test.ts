@@ -64,16 +64,22 @@ describe("GitHubOAuthProvider", () => {
       .mockResolvedValueOnce(
         Response.json([
           {
-            email: "secondary@example.com",
+            email: "Secondary@Example.com",
             primary: false,
             verified: true,
             visibility: null,
           },
           {
-            email: "primary@example.com",
+            email: "Primary@Example.com",
             primary: true,
             verified: true,
             visibility: "private",
+          },
+          {
+            email: "PRIMARY@example.com",
+            primary: false,
+            verified: true,
+            visibility: null,
           },
           {
             email: "unverified@example.com",
@@ -201,6 +207,39 @@ describe("GitHubOAuthProvider", () => {
       .mockResolvedValueOnce(
         Response.json([], {
           headers: { Link: "this is not a valid Link header" },
+        })
+      );
+    const provider = new GitHubOAuthProvider(config, { fetch });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        code: "github-code",
+        codeVerifier: "v".repeat(43),
+      })
+    ).rejects.toMatchObject({
+      name: "OAuthProviderError",
+      failure: "malformed_response",
+    });
+  });
+
+  it("maps a malformed GitHub email pagination URL to a bounded provider error", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: "ghu-access",
+          token_type: "bearer",
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          id: 583_231,
+          login: "octocat",
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json([], {
+          headers: { Link: '<not a url>; rel="next"' },
         })
       );
     const provider = new GitHubOAuthProvider(config, { fetch });

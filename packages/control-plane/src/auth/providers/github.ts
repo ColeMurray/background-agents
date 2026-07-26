@@ -118,7 +118,10 @@ export class GitHubOAuthProvider implements OAuthSignInProvider {
       this.fetchGitHubUser(token.access_token),
       this.fetchVerifiedEmails(token.access_token),
     ]);
-    const verifiedEmails = emailEntries.filter((entry) => entry.verified);
+    const verifiedEmailEntries = emailEntries.filter((entry) => entry.verified);
+    const verifiedEmails = [
+      ...new Set(verifiedEmailEntries.map((entry) => entry.email.toLowerCase())),
+    ];
     return {
       identity: {
         provider: this.provider,
@@ -127,8 +130,9 @@ export class GitHubOAuthProvider implements OAuthSignInProvider {
         login: user.login,
         displayName: user.name ?? user.login,
         ...(user.avatar_url ? { avatarUrl: user.avatar_url } : {}),
-        verifiedEmails: verifiedEmails.map((entry) => entry.email),
-        primaryEmail: verifiedEmails.find((entry) => entry.primary)?.email.toLowerCase() ?? null,
+        verifiedEmails,
+        primaryEmail:
+          verifiedEmailEntries.find((entry) => entry.primary)?.email.toLowerCase() ?? null,
       },
       credential: this.toCredential(token),
     };
@@ -248,7 +252,15 @@ export class GitHubOAuthProvider implements OAuthSignInProvider {
       );
     }
 
-    const url = new URL(nextLinks[0][1]);
+    let url: URL;
+    try {
+      url = new URL(nextLinks[0][1]);
+    } catch {
+      throw new OAuthProviderError(
+        "malformed_response",
+        "GitHub returned invalid email pagination"
+      );
+    }
     if (
       url.origin !== GITHUB_API_URL ||
       url.pathname !== "/user/emails" ||
