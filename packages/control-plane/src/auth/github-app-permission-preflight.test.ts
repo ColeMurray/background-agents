@@ -67,6 +67,48 @@ describe("GitHub App permission preflight", () => {
     );
   });
 
+  it("ignores unrelated permissions with other GitHub access levels", async () => {
+    const permissions = {
+      contents: "write",
+      pull_requests: "write",
+      metadata: "read",
+      email_addresses: "read",
+      organization_projects: "admin",
+    };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ id: 123, permissions }))
+      .mockResolvedValueOnce(
+        Response.json({
+          id: 456,
+          app_id: 123,
+          permissions,
+          suspended_at: null,
+        })
+      );
+
+    await expect(
+      preflightGitHubAppPermissions(
+        config,
+        {
+          requireOrganizationMembers: false,
+          requireIssues: false,
+        },
+        {
+          fetcher,
+          generateAppJwt: vi.fn(async () => "app-jwt"),
+        }
+      )
+    ).resolves.toEqual({
+      appId: "123",
+      installationId: "456",
+      permissions: buildGitHubAppPermissionRequirements({
+        requireOrganizationMembers: false,
+        requireIssues: false,
+      }),
+    });
+  });
+
   it("always requires access to the provider email evidence used by sign-in", () => {
     expect(
       buildGitHubAppPermissionRequirements({

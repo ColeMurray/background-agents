@@ -2,8 +2,8 @@ import { z } from "zod";
 import { fetchWithTimeout, generateAppJwt, type GitHubAppConfig } from "./github-app";
 
 const GITHUB_API_VERSION = "2022-11-28";
-const permissionLevelSchema = z.enum(["read", "write"]);
-const permissionsSchema = z.record(z.string(), permissionLevelSchema);
+const grantedPermissionLevelSchema = z.enum(["read", "write", "admin"]);
+const permissionsSchema = z.record(z.string(), grantedPermissionLevelSchema);
 const appSchema = z.object({
   id: z.number().int().positive(),
   permissions: permissionsSchema,
@@ -15,8 +15,9 @@ const installationSchema = z.object({
   suspended_at: z.string().nullable(),
 });
 
-export type GitHubAppPermissionLevel = z.infer<typeof permissionLevelSchema>;
+export type GitHubAppPermissionLevel = "read" | "write";
 export type GitHubAppPermissionRequirements = Readonly<Record<string, GitHubAppPermissionLevel>>;
+type GitHubAppGrantedPermissionLevel = z.infer<typeof grantedPermissionLevelSchema>;
 
 export interface GitHubAppPermissionOptions {
   readonly requireOrganizationMembers: boolean;
@@ -60,10 +61,10 @@ export function buildGitHubAppPermissionRequirements(
 }
 
 function permissionSatisfies(
-  actual: GitHubAppPermissionLevel | undefined,
+  actual: GitHubAppGrantedPermissionLevel | undefined,
   required: GitHubAppPermissionLevel
 ): boolean {
-  return actual === "write" || actual === required;
+  return actual === "admin" || actual === "write" || actual === required;
 }
 
 async function fetchJson(
@@ -103,7 +104,7 @@ async function fetchJson(
 
 function assertPermissions(
   boundary: "registration" | "installation",
-  actual: Record<string, GitHubAppPermissionLevel>,
+  actual: Record<string, GitHubAppGrantedPermissionLevel>,
   requirements: GitHubAppPermissionRequirements
 ): void {
   for (const [permission, required] of Object.entries(requirements)) {
