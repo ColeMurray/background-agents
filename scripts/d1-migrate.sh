@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DATABASE_NAME="${1:?Usage: d1-migrate.sh <database-name> [migrations-dir] [checks-dir]}"
+DATABASE_NAME="${1:?Usage: d1-migrate.sh <database-name> [migrations-dir]}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MIGRATIONS_DIR="${2:-$SCRIPT_DIR/../terraform/d1/migrations}"
-CHECKS_DIR="${3:-$SCRIPT_DIR/d1}"
 
 WRANGLER="npx wrangler"
 
@@ -49,12 +48,6 @@ $WRANGLER d1 execute "$DATABASE_NAME" --remote \
     version TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS _schema_migration_markers (
-    version TEXT NOT NULL PRIMARY KEY,
-    name TEXT NOT NULL,
-    schema_fingerprint TEXT NOT NULL,
-    completed_at TEXT NOT NULL DEFAULT (datetime('now'))
   )"
 
 # 2. Get the applied versions and their exact filenames. A numeric prefix is
@@ -68,6 +61,15 @@ APPLIED_JSON=$(
 printf '%s' "$APPLIED_JSON" |
   jq -e '.[0].results | type == "array"' >/dev/null
 
+# Each migration and its ledger row are submitted in one SQL file. D1 executes
+# the file atomically, so a failed migration rolls back and a lost client
+# response is safe to retry: a committed migration always has its ledger row.
+MIGRATION_BATCH_DIR="$(mktemp -d)"
+cleanup() {
+  rm -r -- "$MIGRATION_BATCH_DIR"
+}
+trap cleanup EXIT
+
 # 3. Apply pending migrations in order
 COUNT=0
 for file in "$MIGRATIONS_DIR"/*.sql; do
@@ -75,9 +77,6 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
   FILENAME=$(basename "$file")
   VERSION=$(echo "$FILENAME" | grep -oE '^[0-9]+')
   SAFE_FILENAME=$(echo "$FILENAME" | sed "s/'/''/g")
-  MIGRATION_STEM="${FILENAME%.sql}"
-  STATUS_FILE="$CHECKS_DIR/${MIGRATION_STEM}_status.sql"
-  PREFLIGHT_FILE="$CHECKS_DIR/${MIGRATION_STEM}_preflight.sql"
 
   RECORDED_NAME=$(
     printf '%s' "$APPLIED_JSON" |
@@ -94,79 +93,12 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
     continue
   fi
 
-  # A migration with additive but non-idempotent DDL may provide a companion
-  # verifier named <migration-stem>_status.sql. D1 applies the SQL file and
-  # records the migration ledger in separate remote calls, so the verifier
-  # distinguishes a complete-but-unrecorded migration from unsafe partial DDL.
-  if [ -f "$STATUS_FILE" ]; then
-    RECOVERY_STATUS=$(
-      $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-        --file "$STATUS_FILE" \
-        --json |
-        jq -er '.[0].results[0].status'
-    )
-
-    case "$RECOVERY_STATUS" in
-      complete)
-        echo "Repairing missing migration ledger: $FILENAME"
-        $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-          --command "INSERT INTO _schema_migrations (version, name) VALUES ('$VERSION', '$SAFE_FILENAME')"
-        RECORDED_NAME=$(
-          $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-            --command "SELECT name FROM _schema_migrations WHERE version = '$VERSION'" \
-            --json |
-            jq -er '.[0].results[0].name'
-        )
-        if [ "$RECORDED_NAME" != "$FILENAME" ]; then
-          echo "ERROR: migration $VERSION ledger repair recorded an unexpected name." >&2
-          exit 1
-        fi
-        echo "Repaired migration ledger: $FILENAME"
-        continue
-        ;;
-      not_applied)
-        ;;
-      partial)
-        echo "ERROR: migration $FILENAME is partially applied; refusing to replay DDL." >&2
-        echo "Inspect or restore the database before retrying; do not record the ledger manually." >&2
-        exit 1
-        ;;
-      *)
-        echo "ERROR: migration $FILENAME verifier returned '$RECOVERY_STATUS'." >&2
-        exit 1
-        ;;
-    esac
-  fi
-
-  # A migration may also provide <migration-stem>_preflight.sql. Its first row
-  # must return status=ready before any migration DDL is attempted. Other
-  # columns are emitted as operator diagnostics and must not contain secrets.
-  if [ -f "$PREFLIGHT_FILE" ]; then
-    PREFLIGHT_JSON=$(
-      $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-        --file "$PREFLIGHT_FILE" \
-        --json
-    )
-    PREFLIGHT_STATUS=$(printf '%s' "$PREFLIGHT_JSON" | jq -er '.[0].results[0].status')
-    if [ "$PREFLIGHT_STATUS" != "ready" ]; then
-      PREFLIGHT_DETAILS=$(
-        printf '%s' "$PREFLIGHT_JSON" |
-          jq -c '.[0].results[0] | del(.status)'
-      )
-      echo "ERROR: preflight blocked migration $FILENAME." >&2
-      if [ "$PREFLIGHT_DETAILS" != "{}" ]; then
-        echo "Details: $PREFLIGHT_DETAILS" >&2
-      fi
-      echo "Repair the reported state before retrying; no migration DDL was applied." >&2
-      exit 1
-    fi
-  fi
-
   echo "Applying: $FILENAME"
-  $WRANGLER d1 execute "$DATABASE_NAME" --remote --file "$file"
-
-  $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-    --command "INSERT INTO _schema_migrations (version, name) VALUES ('$VERSION', '$SAFE_FILENAME')"
+  MIGRATION_BATCH="$MIGRATION_BATCH_DIR/$FILENAME"
+  cp "$file" "$MIGRATION_BATCH"
+  printf "\n\nINSERT INTO _schema_migrations (version, name) VALUES ('%s', '%s');\n" \
+    "$VERSION" "$SAFE_FILENAME" >>"$MIGRATION_BATCH"
+  $WRANGLER d1 execute "$DATABASE_NAME" --remote --file "$MIGRATION_BATCH"
 
   COUNT=$((COUNT + 1))
 done
