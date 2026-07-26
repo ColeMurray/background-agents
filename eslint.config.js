@@ -113,15 +113,10 @@ export default tseslint.config(
     },
   },
 
-  // Web BFF routes depend on the server-auth seam, not directly on the
-  // current authentication framework. The auth endpoints own the framework
-  // integration and are intentionally excluded.
+  // Web code depends on app-owned auth and request seams. OAuth and session
+  // protocol code is owned by the control plane.
   {
-    files: [
-      "packages/web/src/app/api/**/*.{ts,tsx}",
-      "packages/web/src/lib/integration-settings-proxy.ts",
-    ],
-    ignores: ["packages/web/src/app/api/auth/**"],
+    files: ["packages/web/src/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -129,38 +124,17 @@ export default tseslint.config(
           paths: [
             {
               name: "next-auth",
-              message: "Use getServerAuthSession from @/lib/server-auth-session.",
+              message: "Use the app-owned browser authentication seams.",
             },
           ],
           patterns: [
             {
+              group: ["next-auth/*"],
+              message: "Use the app-owned browser authentication seams.",
+            },
+            {
               regex: "(?:^|/)lib/auth$",
               message: "Use getServerAuthSession from @/lib/server-auth-session.",
-            },
-          ],
-        },
-      ],
-    },
-  },
-
-  // Web code depends on app-owned auth and request seams so the terminal
-  // browser-auth implementation can replace NextAuth and add its request
-  // contract without another consumer migration.
-  {
-    files: ["packages/web/src/**/*.{ts,tsx}"],
-    ignores: [
-      "packages/web/src/app/api/**",
-      "packages/web/src/lib/auth-session.tsx",
-      "packages/web/src/lib/auth-session.test.tsx",
-    ],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "next-auth/react",
-              message: "Use the app-owned boundary from @/lib/auth-session.",
             },
           ],
         },

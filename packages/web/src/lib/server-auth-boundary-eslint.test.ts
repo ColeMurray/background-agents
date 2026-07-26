@@ -38,9 +38,9 @@ describe("server authentication import boundary", () => {
     ).resolves.toHaveLength(0);
   });
 
-  it("allows auth endpoints to own the framework integration", async () => {
+  it("rejects framework imports from auth proxy endpoints", async () => {
     await expect(
       restrictedImportMessages('import NextAuth from "next-auth";', authRoutePath)
-    ).resolves.toHaveLength(0);
+    ).resolves.toHaveLength(1);
   });
 });
