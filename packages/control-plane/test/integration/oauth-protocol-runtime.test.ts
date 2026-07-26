@@ -4,6 +4,8 @@ import { hashToken } from "../../src/auth/crypto";
 import { createPkceS256Challenge } from "../../src/auth/pkce";
 import { createOAuthProtocolRuntime } from "../../src/auth/oauth-runtime-composition";
 import {
+  BROWSER_SESSION_ABSOLUTE_LIFETIME_MS,
+  BROWSER_SESSION_IDLE_LIFETIME_MS,
   BrowserAuthSessionStore,
   parseBrowserSessionCredential,
 } from "../../src/db/browser-auth-sessions";
@@ -65,8 +67,8 @@ describe("OAuth protocol runtime", () => {
 
     expect(redeemed).toEqual({
       accessToken: expect.stringMatching(/^oi_bsess_[A-Za-z0-9_-]{43}$/),
-      expiresIn: 30 * 24 * 60 * 60,
-      idleExpiresIn: 7 * 24 * 60 * 60,
+      expiresIn: BROWSER_SESSION_ABSOLUTE_LIFETIME_MS / 1000,
+      idleExpiresIn: BROWSER_SESSION_IDLE_LIFETIME_MS / 1000,
     });
     const sessionStore = new BrowserAuthSessionStore(env.DB, {
       clock: { now: () => Date.now() },

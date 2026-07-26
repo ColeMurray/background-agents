@@ -55,6 +55,7 @@ export interface Env {
 
   // Edge abuse control for public OAuth protocol endpoints.
   AUTH_RATE_LIMITER?: RateLimit;
+  AUTH_RATE_LIMIT_WINDOW_SECONDS?: string;
 
   // R2 buckets
   MEDIA_BUCKET: R2Bucket;

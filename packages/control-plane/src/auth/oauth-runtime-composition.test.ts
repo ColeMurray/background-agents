@@ -16,6 +16,15 @@ function configuredEnv(overrides: Partial<Env> = {}): Env {
 }
 
 const db = {} as SqlDatabase;
+const authorizationRequest = {
+  responseType: "code",
+  clientId: "web",
+  redirectUri: "https://web.example.com/api/auth/callback",
+  state: "s".repeat(43),
+  codeChallenge: "c".repeat(43),
+  codeChallengeMethod: "S256",
+  provider: "github",
+};
 
 describe("createOAuthProtocolRuntime", () => {
   it("composes the executable OAuth use cases for a GitHub-only deployment", () => {
@@ -30,29 +39,54 @@ describe("createOAuthProtocolRuntime", () => {
     });
   });
 
-  it("rejects a partially configured optional Google provider", () => {
-    expect(() =>
-      createOAuthProtocolRuntime(configuredEnv({ GOOGLE_CLIENT_ID: "google-client" }), db)
-    ).toThrow(
+  it("rejects a partially configured optional Google provider", async () => {
+    const runtime = createOAuthProtocolRuntime(
+      configuredEnv({ GOOGLE_CLIENT_ID: "google-client" }),
+      db
+    );
+
+    await expect(runtime.authorize(authorizationRequest)).rejects.toEqual(
       expect.objectContaining({
-        name: "OAuthRuntimeConfigurationError",
+        name: "OAuthProtocolUnavailableError",
         setting: "GOOGLE_CLIENT_SECRET",
       })
     );
   });
 
-  it("rejects a malformed encryption root before starting an OAuth flow", () => {
-    expect(() =>
-      createOAuthProtocolRuntime(
-        configuredEnv({ TOKEN_ENCRYPTION_KEY: "not-a-32-byte-base64-key" }),
-        db
-      )
-    ).toThrow(
+  it("rejects a malformed encryption root before starting an OAuth flow", async () => {
+    const runtime = createOAuthProtocolRuntime(
+      configuredEnv({ TOKEN_ENCRYPTION_KEY: "not-a-32-byte-base64-key" }),
+      db
+    );
+
+    await expect(runtime.authorize(authorizationRequest)).rejects.toEqual(
       expect.objectContaining({
-        name: "OAuthRuntimeConfigurationError",
+        name: "OAuthProtocolUnavailableError",
         setting: "TOKEN_ENCRYPTION_KEY",
       })
     );
+  });
+
+  it("revokes independently of provider and authorization configuration", async () => {
+    const runtime = createOAuthProtocolRuntime({} as Env, db);
+
+    await expect(runtime.revokeBrowserSession("not-a-browser-session")).resolves.toBe(false);
+  });
+
+  it("redeems independently of provider and authorization configuration", async () => {
+    const runtime = createOAuthProtocolRuntime({} as Env, db);
+
+    await expect(
+      runtime.redeemAuthorizationCode({
+        code: "not-an-authorization-code",
+        clientId: "web",
+        redirectUri: "https://web.example.com/api/auth/callback",
+        codeVerifier: "v".repeat(43),
+      })
+    ).rejects.toMatchObject({
+      name: "OAuthProtocolGrantError",
+      rejection: "malformed",
+    });
   });
 
   it("preserves the exact configured redirect URI instead of URL-normalizing it", async () => {

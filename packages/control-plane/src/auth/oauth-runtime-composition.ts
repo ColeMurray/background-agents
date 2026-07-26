@@ -12,13 +12,28 @@ import {
 import { BrowserSignInIdentityResolver } from "./browser-sign-in-identity";
 import { hashToken } from "./crypto";
 import {
+  OAuthAuthorizationRequestError,
   OAuthAuthorizationService,
   StaticOAuthClientRegistry,
   WebCryptoOpaqueValueGenerator,
 } from "./oauth-authorization-service";
-import { createOAuthProviderCallbackHandlers } from "./oauth-provider-callback-handler";
-import { OAuthProviderCallbackService } from "./oauth-provider-callback-service";
-import type { OAuthProtocolRuntime } from "./oauth-runtime";
+import {
+  createOAuthProviderCallbackHandlers,
+  OAuthProviderDisabledError,
+} from "./oauth-provider-callback-handler";
+import {
+  OAuthProviderCallbackBindingError,
+  OAuthProviderCallbackError,
+  OAuthProviderCallbackRequestError,
+  OAuthProviderCallbackService,
+} from "./oauth-provider-callback-service";
+import {
+  OAuthProtocolCallbackRedirectError,
+  OAuthProtocolGrantError,
+  OAuthProtocolRequestError,
+  type OAuthProtocolRuntime,
+  OAuthProtocolUnavailableError,
+} from "./oauth-runtime";
 import { GitHubOAuthProvider } from "./providers/github";
 import { GoogleOidcProvider } from "./providers/google";
 import type { ConfiguredOAuthSignInProviderRegistry } from "./providers/types";
@@ -32,8 +47,11 @@ import {
   parseBrowserSessionCredential,
 } from "../db/browser-auth-sessions";
 import { BrowserSignInIdentityStore } from "../db/browser-sign-in-identities";
-import { OAuthAuthorizationCodeStore } from "../db/oauth-authorization-codes";
-import { OAuthFlowStateStore } from "../db/oauth-flow-state";
+import {
+  OAuthAuthorizationCodeRedemptionError,
+  OAuthAuthorizationCodeStore,
+} from "../db/oauth-authorization-codes";
+import { OAuthFlowStateConsumptionError, OAuthFlowStateStore } from "../db/oauth-flow-state";
 import { ProviderCredentialStore } from "../db/provider-credentials";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
@@ -124,14 +142,25 @@ function encryptionRoot(value: string | undefined): string {
   return rootKey;
 }
 
-export function createOAuthProtocolRuntime(env: Env, db: SqlDatabase): OAuthProtocolRuntime {
+interface ProviderRuntimeConfiguration {
+  readonly clients: StaticOAuthClientRegistry;
+  readonly providers: ConfiguredOAuthSignInProviderRegistry;
+  readonly providerCredentialCipher: ProviderCredentialCipher;
+  readonly providerPkceFlowCipher: ProviderPkceFlowCipher;
+}
+
+const providerConfigurations = new WeakMap<Env, ProviderRuntimeConfiguration>();
+const clock = { now: () => Date.now() };
+const idGenerator = { generate: () => crypto.randomUUID() };
+const tokenHasher = { hash: hashToken };
+
+function providerConfiguration(env: Env): ProviderRuntimeConfiguration {
+  const cached = providerConfigurations.get(env);
+  if (cached) return cached;
+
   const rootKey = encryptionRoot(env.TOKEN_ENCRYPTION_KEY);
   const controlPlaneBaseUrl = workerBaseUrl(env.WORKER_URL);
   const clients = new StaticOAuthClientRegistry(webRedirectUris(env.OAUTH_WEB_REDIRECT_URIS));
-  const clock = { now: () => Date.now() };
-  const idGenerator = { generate: () => crypto.randomUUID() };
-  const tokenHasher = { hash: hashToken };
-
   const github = new GitHubOAuthProvider({
     clientId: required(env.GITHUB_CLIENT_ID, "GITHUB_CLIENT_ID"),
     clientSecret: required(env.GITHUB_CLIENT_SECRET, "GITHUB_CLIENT_SECRET"),
@@ -153,22 +182,29 @@ export function createOAuthProtocolRuntime(env: Env, db: SqlDatabase): OAuthProt
       : {}),
   };
 
-  const providerCredentialStore = new ProviderCredentialStore(
-    db,
-    new ProviderCredentialCipher(rootKey),
-    clock
-  );
-  const identityResolver = new BrowserSignInIdentityResolver({
-    clock,
-    idGenerator,
-    store: new BrowserSignInIdentityStore(db, providerCredentialStore),
-  });
-  const flowStateStore = new OAuthFlowStateStore(db, new ProviderPkceFlowCipher(rootKey), {
+  const configuration = {
+    clients,
+    providers,
+    providerCredentialCipher: new ProviderCredentialCipher(rootKey),
+    providerPkceFlowCipher: new ProviderPkceFlowCipher(rootKey),
+  };
+  providerConfigurations.set(env, configuration);
+  return configuration;
+}
+
+function createFlowStateStore(
+  db: SqlDatabase,
+  configuration: ProviderRuntimeConfiguration
+): OAuthFlowStateStore {
+  return new OAuthFlowStateStore(db, configuration.providerPkceFlowCipher, {
     clock,
     idGenerator,
     tokenHasher,
   });
-  const authorizationCodeStore = new OAuthAuthorizationCodeStore(db, {
+}
+
+function createAuthorizationCodeStore(db: SqlDatabase): OAuthAuthorizationCodeStore {
+  return new OAuthAuthorizationCodeStore(db, {
     clock,
     tokenHasher,
     authorizationCodeGenerator: {
@@ -179,22 +215,36 @@ export function createOAuthProtocolRuntime(env: Env, db: SqlDatabase): OAuthProt
     },
     idGenerator,
   });
-  const browserSessionStore = new BrowserAuthSessionStore(db, {
-    ...defaultBrowserAuthSessionStoreDependencies,
-    clock,
-    tokenHasher,
-  });
-  const authorization = new OAuthAuthorizationService({
-    clients,
-    providers,
-    flowStateStore,
+}
+
+function createAuthorizationService(env: Env, db: SqlDatabase): OAuthAuthorizationService {
+  const configuration = providerConfiguration(env);
+  return new OAuthAuthorizationService({
+    clients: configuration.clients,
+    providers: configuration.providers,
+    flowStateStore: createFlowStateStore(db, configuration),
     opaqueValueGenerator: new WebCryptoOpaqueValueGenerator(),
   });
-  const callbacks = new OAuthProviderCallbackService({
-    clients,
+}
+
+function createCallbackService(env: Env, db: SqlDatabase): OAuthProviderCallbackService {
+  const configuration = providerConfiguration(env);
+  const providerCredentialStore = new ProviderCredentialStore(
+    db,
+    configuration.providerCredentialCipher,
+    clock
+  );
+  const identityResolver = new BrowserSignInIdentityResolver({
+    clock,
+    idGenerator,
+    store: new BrowserSignInIdentityStore(db, providerCredentialStore),
+  });
+  const flowStateStore = createFlowStateStore(db, configuration);
+  return new OAuthProviderCallbackService({
+    clients: configuration.clients,
     providerHandlers: createOAuthProviderCallbackHandlers({
       flowStateStore,
-      providers,
+      providers: configuration.providers,
     }),
     admissionPolicy: new AdmissionPolicy({
       allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
@@ -204,23 +254,83 @@ export function createOAuthProtocolRuntime(env: Env, db: SqlDatabase): OAuthProt
       unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
     }),
     identityResolver,
-    authorizationCodeStore,
+    authorizationCodeStore: createAuthorizationCodeStore(db),
   });
+}
 
+async function authorize(
+  env: Env,
+  db: SqlDatabase,
+  request: Parameters<OAuthProtocolRuntime["authorize"]>[0]
+): Promise<URL> {
+  try {
+    return await createAuthorizationService(env, db).authorize(request);
+  } catch (error) {
+    if (error instanceof OAuthAuthorizationRequestError) {
+      throw new OAuthProtocolRequestError(error.code);
+    }
+    if (error instanceof OAuthRuntimeConfigurationError) {
+      throw new OAuthProtocolUnavailableError(error.setting);
+    }
+    throw error;
+  }
+}
+
+async function completeCallback<T>(
+  env: Env,
+  db: SqlDatabase,
+  operation: (service: OAuthProviderCallbackService) => Promise<T>
+): Promise<T> {
+  try {
+    return await operation(createCallbackService(env, db));
+  } catch (error) {
+    if (error instanceof OAuthProviderCallbackError) {
+      throw new OAuthProtocolCallbackRedirectError(error.failure, error.redirectUri);
+    }
+    if (error instanceof OAuthRuntimeConfigurationError) {
+      throw new OAuthProtocolUnavailableError(error.setting);
+    }
+    if (
+      error instanceof OAuthFlowStateConsumptionError ||
+      error instanceof OAuthProviderCallbackBindingError ||
+      error instanceof OAuthProviderCallbackRequestError ||
+      error instanceof OAuthProviderDisabledError
+    ) {
+      throw new OAuthProtocolRequestError("invalid_request");
+    }
+    throw error;
+  }
+}
+
+export function createOAuthProtocolRuntime(env: Env, db: SqlDatabase): OAuthProtocolRuntime {
   return {
-    authorize: (request) => authorization.authorize(request),
-    completeAuthorization: (provider, input) => callbacks.completeAuthorization(provider, input),
-    completeDenial: (provider, state) => callbacks.completeDenial(provider, state),
+    authorize: (request) => authorize(env, db, request),
+    completeAuthorization: async (provider, input) =>
+      completeCallback(env, db, (service) => service.completeAuthorization(provider, input)),
+    completeDenial: async (provider, state) =>
+      completeCallback(env, db, (service) => service.completeDenial(provider, state)),
     redeemAuthorizationCode: async (input) => {
-      const created = await authorizationCodeStore.redeem(input);
-      return {
-        accessToken: created.credential,
-        expiresIn: BROWSER_SESSION_ABSOLUTE_LIFETIME_MS / 1000,
-        idleExpiresIn: BROWSER_SESSION_IDLE_LIFETIME_MS / 1000,
-      };
+      try {
+        const created = await createAuthorizationCodeStore(db).redeem(input);
+        return {
+          accessToken: created.credential,
+          expiresIn: BROWSER_SESSION_ABSOLUTE_LIFETIME_MS / 1000,
+          idleExpiresIn: BROWSER_SESSION_IDLE_LIFETIME_MS / 1000,
+        };
+      } catch (error) {
+        if (error instanceof OAuthAuthorizationCodeRedemptionError) {
+          throw new OAuthProtocolGrantError(error.rejection);
+        }
+        throw error;
+      }
     },
     revokeBrowserSession: async (token) => {
       try {
+        const browserSessionStore = new BrowserAuthSessionStore(db, {
+          ...defaultBrowserAuthSessionStoreDependencies,
+          clock,
+          tokenHasher,
+        });
         return await browserSessionStore.revoke(parseBrowserSessionCredential(token), "logout");
       } catch (error) {
         if (error instanceof BrowserSessionAuthenticationError) {

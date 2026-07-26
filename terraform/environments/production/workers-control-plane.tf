@@ -52,7 +52,7 @@ module "control_plane_worker" {
       # the deployment name keeps counters isolated between deployments.
       namespace_id = tostring(parseint(substr(md5("openinspect-auth-${var.deployment_name}"), 0, 8), 16) + 1)
       limit        = 60
-      period       = 60
+      period       = local.oauth_rate_limit_window_seconds
     }
   ]
 
@@ -80,6 +80,7 @@ module "control_plane_worker" {
       { name = "WEB_APP_URL", value = local.web_app_url },
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "OAUTH_WEB_REDIRECT_URIS", value = "${local.web_app_url}/api/auth/callback" },
+      { name = "AUTH_RATE_LIMIT_WINDOW_SECONDS", value = tostring(local.oauth_rate_limit_window_seconds) },
       { name = "ALLOWED_USERS", value = var.allowed_users },
       { name = "ALLOWED_EMAILS", value = var.allowed_emails },
       { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },

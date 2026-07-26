@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { oauthProtocolRoutes } from "./oauth-registration";
+import { oauthProtocolRoutes } from "./oauth-route-composition";
 
-describe("OAuth protocol route registration", () => {
+describe("OAuth protocol route composition", () => {
   it("assembles only the four executable first-party OAuth endpoints", () => {
     expect(
       oauthProtocolRoutes.map((route) => [

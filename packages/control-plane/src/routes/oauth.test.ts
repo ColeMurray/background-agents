@@ -1,14 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { OAuthAuthorizationRequestError } from "../auth/oauth-authorization-service";
 import {
-  OAuthProviderCallbackBindingError,
-  OAuthProviderCallbackError,
-} from "../auth/oauth-provider-callback-service";
-import { OAuthProviderDisabledError } from "../auth/oauth-provider-callback-handler";
-import type { OAuthProtocolRuntime } from "../auth/oauth-runtime";
-import { OAuthRuntimeConfigurationError } from "../auth/oauth-runtime-composition";
-import { OAuthAuthorizationCodeRedemptionError } from "../db/oauth-authorization-codes";
-import { OAuthFlowStateConsumptionError } from "../db/oauth-flow-state";
+  OAuthProtocolCallbackRedirectError,
+  OAuthProtocolGrantError,
+  OAuthProtocolRequestError,
+  type OAuthProtocolRuntime,
+  OAuthProtocolUnavailableError,
+} from "../auth/oauth-runtime";
 import type { Env } from "../types";
 import {
   createOAuthProtocolRoutes,
@@ -25,6 +22,28 @@ const CORRELATION_FIELDS = {
   request_id: "request-1",
   trace_id: "trace-1",
 } as const;
+const MISMATCHED_CLIENT_REQUESTS: ReadonlyArray<{
+  path: string;
+  parameters: Record<string, string>;
+}> = [
+  {
+    path: "/oauth/token",
+    parameters: {
+      grant_type: "authorization_code",
+      code: `oi_code_${"b".repeat(43)}`,
+      redirect_uri: REDIRECT_URI,
+      client_id: "other",
+      code_verifier: "v".repeat(43),
+    },
+  },
+  {
+    path: "/oauth/revoke",
+    parameters: {
+      token: `oi_bsess_${"a".repeat(43)}`,
+      client_id: "other",
+    },
+  },
+];
 
 function routeContext(): RequestContext {
   return {
@@ -251,6 +270,24 @@ describe("OAuth protocol routes", () => {
     expect(createRuntime).not.toHaveBeenCalled();
   });
 
+  it.each(MISMATCHED_CLIENT_REQUESTS)(
+    "rejects a mismatched client_id on $path",
+    async ({ path, parameters }) => {
+      const createRuntime = vi.fn();
+      const { routes, requireAllowance } = harness({ createRuntime });
+      const route = findRoute(routes, "POST", path);
+
+      const response = await dispatch(route, formRequest(path, parameters), webServiceContext());
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({ error: "invalid_client" });
+      expect(requireAllowance).toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: "unknown" })
+      );
+      expect(createRuntime).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([
     {
       name: "non-form content",
@@ -269,6 +306,16 @@ describe("OAuth protocol routes", () => {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: "client_id=web&client_id=other",
+        }),
+      status: 400,
+    },
+    {
+      name: "malformed percent-encoded form input",
+      request: () =>
+        new Request("https://cp.example.com/oauth/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "client_id=web&code=%FF",
         }),
       status: 400,
     },
@@ -329,6 +376,36 @@ describe("OAuth protocol routes", () => {
     });
   });
 
+  it("rejects an unknown callback provider without runtime work", async () => {
+    const createRuntime = vi.fn();
+    const { routes } = harness({ createRuntime });
+    const route = findRoute(routes, "GET", "/oauth/callback/oidc");
+
+    const response = await dispatch(
+      route,
+      new Request(`https://cp.example.com/oauth/callback/oidc?state=${STATE}&code=provider-code`)
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_request" });
+    expect(createRuntime).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed percent-encoded callback input before runtime work", async () => {
+    const createRuntime = vi.fn();
+    const { routes } = harness({ createRuntime });
+    const route = findRoute(routes, "GET", "/oauth/callback/github");
+    const request = new Request(
+      `https://cp.example.com/oauth/callback/github?state=${STATE}&code=%FF`
+    );
+
+    const response = await dispatch(route, request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_request" });
+    expect(createRuntime).not.toHaveBeenCalled();
+  });
+
   it("consumes a provider denial and returns a bounded client error redirect", async () => {
     const completeDenial = vi.fn(async () => {
       const redirect = new URL(REDIRECT_URI);
@@ -368,7 +445,7 @@ describe("OAuth protocol routes", () => {
 
   it("maps a trusted callback failure to the registered redirect without leaking details", async () => {
     const completeAuthorization = vi.fn(async () => {
-      throw new OAuthProviderCallbackError("account_link_required", REDIRECT_URI);
+      throw new OAuthProtocolCallbackRedirectError("account_link_required", REDIRECT_URI);
     });
     const { routes, events } = harness({
       runtime: runtime({ completeAuthorization }),
@@ -427,6 +504,26 @@ describe("OAuth protocol routes", () => {
     });
   });
 
+  it("rejects an unsupported revocation token type before runtime work", async () => {
+    const createRuntime = vi.fn();
+    const { routes } = harness({ createRuntime });
+    const route = findRoute(routes, "POST", "/oauth/revoke");
+
+    const response = await dispatch(
+      route,
+      formRequest("/oauth/revoke", {
+        token: `oi_bsess_${"a".repeat(43)}`,
+        token_type_hint: "refresh_token",
+        client_id: "web",
+      }),
+      webServiceContext()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "unsupported_token_type" });
+    expect(createRuntime).not.toHaveBeenCalled();
+  });
+
   it("returns retry guidance when the OAuth request limit is exhausted", async () => {
     const createRuntime = vi.fn();
     const { routes } = harness({
@@ -450,7 +547,7 @@ describe("OAuth protocol routes", () => {
     const { routes, requireAllowance } = harness({
       runtime: runtime({
         authorize: vi.fn(async () => {
-          throw new OAuthAuthorizationRequestError("invalid_client");
+          throw new OAuthProtocolRequestError("invalid_client");
         }),
       }),
     });
@@ -477,7 +574,7 @@ describe("OAuth protocol routes", () => {
     const { routes, events } = harness({
       runtime: runtime({
         redeemAuthorizationCode: vi.fn(async () => {
-          throw new OAuthAuthorizationCodeRedemptionError("already_consumed");
+          throw new OAuthProtocolGrantError("already_consumed");
         }),
       }),
     });
@@ -512,7 +609,7 @@ describe("OAuth protocol routes", () => {
   it("fails closed when the OAuth runtime is not configured", async () => {
     const { routes } = harness({
       createRuntime: vi.fn(() => {
-        throw new OAuthRuntimeConfigurationError("OAUTH_WEB_REDIRECT_URIS");
+        throw new OAuthProtocolUnavailableError("OAUTH_WEB_REDIRECT_URIS");
       }),
     });
     const route = findRoute(routes, "GET", "/oauth/authorize");
@@ -528,7 +625,7 @@ describe("OAuth protocol routes", () => {
     const { routes } = harness({
       runtime: runtime({
         completeAuthorization: vi.fn(async () => {
-          throw new OAuthFlowStateConsumptionError("unknown");
+          throw new OAuthProtocolRequestError("invalid_request");
         }),
       }),
     });
@@ -551,7 +648,7 @@ describe("OAuth protocol routes", () => {
     const { routes } = harness({
       runtime: runtime({
         completeAuthorization: vi.fn(async () => {
-          throw new OAuthProviderCallbackBindingError();
+          throw new OAuthProtocolRequestError("invalid_request");
         }),
       }),
     });
@@ -573,7 +670,7 @@ describe("OAuth protocol routes", () => {
     const { routes } = harness({
       runtime: runtime({
         completeAuthorization: vi.fn(async () => {
-          throw new OAuthProviderDisabledError("google");
+          throw new OAuthProtocolRequestError("invalid_request");
         }),
       }),
     });

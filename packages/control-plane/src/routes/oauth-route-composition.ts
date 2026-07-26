@@ -12,7 +12,7 @@ const events: OAuthProtocolEventSink = {
 };
 
 /**
- * Fully composed OAuth protocol routes. They remain unregistered until the
+ * Fully composed OAuth protocol routes. They remain inactive until the
  * router gains the final closed, per-route authentication declarations; the
  * legacy path classifier cannot safely express these mixed public/service
  * endpoints.

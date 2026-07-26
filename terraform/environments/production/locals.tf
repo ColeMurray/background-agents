@@ -11,6 +11,8 @@ locals {
   # mirrors the server-side conditional GoogleProvider in packages/web/src/lib/auth.ts.
   google_enabled = trimspace(var.google_client_id) != "" && trimspace(var.google_client_secret) != ""
 
+  oauth_rate_limit_window_seconds = 60
+
   # URLs for cross-service configuration
   control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
   control_plane_url  = "https://${local.control_plane_host}"

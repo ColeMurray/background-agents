@@ -1,16 +1,12 @@
 import { readBodyCapped } from "@open-inspect/shared";
-import { OAuthAuthorizationRequestError } from "../auth/oauth-authorization-service";
-import { OAuthProviderDisabledError } from "../auth/oauth-provider-callback-handler";
 import {
-  OAuthProviderCallbackBindingError,
-  OAuthProviderCallbackError,
-  OAuthProviderCallbackRequestError,
-} from "../auth/oauth-provider-callback-service";
-import type { OAuthProtocolRuntime } from "../auth/oauth-runtime";
-import { OAuthRuntimeConfigurationError } from "../auth/oauth-runtime-composition";
+  OAuthProtocolCallbackRedirectError,
+  OAuthProtocolGrantError,
+  OAuthProtocolRequestError,
+  type OAuthProtocolRuntime,
+  OAuthProtocolUnavailableError,
+} from "../auth/oauth-runtime";
 import { isSignInProvider } from "../auth/sign-in-provider";
-import { OAuthAuthorizationCodeRedemptionError } from "../db/oauth-authorization-codes";
-import { OAuthFlowStateConsumptionError } from "../db/oauth-flow-state";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { HttpError, json, parsePattern, type RequestContext, type Route } from "./shared";
@@ -87,6 +83,18 @@ function uniqueParameters(
   return result;
 }
 
+function parseUrlEncoded(
+  input: string,
+  allowedParameters: readonly string[]
+): Record<string, string> {
+  try {
+    decodeURIComponent(input);
+  } catch {
+    throw new HttpError("invalid_request", 400);
+  }
+  return uniqueParameters(new URLSearchParams(input), allowedParameters);
+}
+
 function requireParameter(parameters: Record<string, string>, name: string): string {
   const value = parameters[name];
   if (!value) {
@@ -129,7 +137,7 @@ async function parseForm(
   } catch {
     throw new HttpError("invalid_request", 400);
   }
-  return uniqueParameters(new URLSearchParams(text), allowedParameters);
+  return parseUrlEncoded(text, allowedParameters);
 }
 
 function requireWebService(context: RequestContext): void {
@@ -186,10 +194,10 @@ function withOAuthProtocolResponse(
       if (error instanceof OAuthRateLimitExceededError) {
         return rateLimitResponse(error);
       }
-      if (error instanceof OAuthAuthorizationRequestError) {
+      if (error instanceof OAuthProtocolRequestError) {
         return oauthErrorResponse(error.code, 400);
       }
-      if (error instanceof OAuthAuthorizationCodeRedemptionError) {
+      if (error instanceof OAuthProtocolGrantError) {
         events.emit(
           "auth.oauth.code_rejected",
           eventFields(context, { client_id: "web", failure: error.rejection }),
@@ -197,18 +205,8 @@ function withOAuthProtocolResponse(
         );
         return oauthErrorResponse("invalid_grant", 400);
       }
-      if (error instanceof OAuthRuntimeConfigurationError) {
+      if (error instanceof OAuthProtocolUnavailableError) {
         return oauthErrorResponse("temporarily_unavailable", 503);
-      }
-      if (error instanceof OAuthFlowStateConsumptionError) {
-        return oauthErrorResponse("invalid_request", 400);
-      }
-      if (
-        error instanceof OAuthProviderCallbackBindingError ||
-        error instanceof OAuthProviderCallbackRequestError ||
-        error instanceof OAuthProviderDisabledError
-      ) {
-        return oauthErrorResponse("invalid_request", 400);
       }
       if (error instanceof HttpError) {
         return oauthErrorResponse(error.message, error.status);
@@ -236,7 +234,10 @@ export function createOAuthProtocolRoutes(dependencies: OAuthProtocolRouteDepend
             requestId: context.request_id,
             traceId: context.trace_id,
           });
-          const parameters = uniqueParameters(searchParameters, AUTHORIZATION_PARAMETERS);
+          const parameters = parseUrlEncoded(
+            new URL(request.url).search.slice(1),
+            AUTHORIZATION_PARAMETERS
+          );
           const provider = requireParameter(parameters, "provider");
           const redirect = await dependencies.createRuntime(env, context.db).authorize({
             responseType: requireParameter(parameters, "response_type"),
@@ -276,7 +277,7 @@ export function createOAuthProtocolRoutes(dependencies: OAuthProtocolRouteDepend
           if (!isSignInProvider(provider)) {
             throw new HttpError("invalid_request", 404);
           }
-          const parameters = uniqueParameters(new URL(request.url).searchParams, [
+          const parameters = parseUrlEncoded(new URL(request.url).search.slice(1), [
             "state",
             "code",
             "error",
@@ -318,7 +319,7 @@ export function createOAuthProtocolRoutes(dependencies: OAuthProtocolRouteDepend
             );
             return redirectNoStore(redirect);
           } catch (error) {
-            if (!(error instanceof OAuthProviderCallbackError)) {
+            if (!(error instanceof OAuthProtocolCallbackRedirectError)) {
               throw error;
             }
             dependencies.events.emit(
