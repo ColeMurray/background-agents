@@ -9,7 +9,11 @@ import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
-import { parseAuthorId, resolveGitHubEnrichment, type GitHubEnrichment } from "../session/identity";
+import {
+  parseAuthorId,
+  resolveGitHubEnrichmentForRequest,
+  type GitHubEnrichment,
+} from "../session/identity";
 import type { Env } from "../types";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -85,7 +89,9 @@ async function handleSessionPrompt(
         userId = (await userStore.getUserById(authorId))?.id;
       }
       if (userId) {
-        enrichment = (await resolveGitHubEnrichment(env, ctx.db, userStore, userId)) ?? undefined;
+        enrichment =
+          (await resolveGitHubEnrichmentForRequest(env, ctx.db, userStore, userId, ctx)) ??
+          undefined;
       }
     } catch (e) {
       logger.warn("Failed to enrich prompt with GitHub identity", {

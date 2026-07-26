@@ -1,7 +1,11 @@
 import { env } from "cloudflare:test";
 import { buildServiceAuthHeaders, isCanonicalUserId } from "@open-inspect/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getBrowserAuth } from "../../src/auth/browser-auth-runtime";
+import { decryptToken } from "../../src/auth/crypto";
+import { UserStore } from "../../src/db/user-store";
 import { handleRequest } from "../../src/router";
+import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
@@ -75,6 +79,24 @@ describe("browser auth callback", () => {
             visibility: "private",
           },
         ])
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          id: 583_231,
+          login: "octocat",
+          name: "The Octocat",
+          avatar_url: "https://avatars.example/octocat",
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            email: "octocat@example.com",
+            primary: true,
+            verified: true,
+            visibility: "private",
+          },
+        ])
       );
 
     const initiationBody = JSON.stringify({
@@ -121,7 +143,7 @@ describe("browser auth callback", () => {
     expect(sessionResponse.status).toBe(200);
     const session = await sessionResponse.json<{
       user: { id: string; name: string; email: string };
-      session: { userId: string };
+      session: { id: string; userId: string };
     }>();
     expect(isCanonicalUserId(session.user.id)).toBe(true);
     expect(session).toMatchObject({
@@ -134,6 +156,44 @@ describe("browser auth callback", () => {
         userId: expect.any(String),
       },
     });
+
+    const account = await env.DB.prepare(
+      `SELECT id, providerId, accountId
+       FROM auth_accounts
+       WHERE userId = ?`
+    )
+      .bind(session.user.id)
+      .first<{ id: string; providerId: string; accountId: string }>();
+    expect(account).not.toBeNull();
+
+    const enrichment = await resolveGitHubEnrichmentForRequest(
+      env,
+      env.DB,
+      new UserStore(env.DB),
+      session.user.id,
+      {
+        authentication: {
+          mechanism: "browser_session",
+          credentialId: session.session.id,
+          providerAccount: {
+            id: account?.id ?? "",
+            provider: account?.providerId ?? "",
+            subject: account?.accountId ?? "",
+          },
+          channel: { kind: "sig1", service: "web" },
+        },
+        getBrowserAuth: () => getBrowserAuth(env, env.DB),
+      }
+    );
+    expect(enrichment).toMatchObject({
+      scmUserId: "583231",
+      scmLogin: "octocat",
+      email: "583231+octocat@users.noreply.github.com",
+      accessTokenEncrypted: expect.any(String),
+    });
+    await expect(
+      decryptToken(enrichment?.accessTokenEncrypted ?? "", env.TOKEN_ENCRYPTION_KEY)
+    ).resolves.toBe("github-access-token");
 
     await expect(
       env.DB.prepare(
