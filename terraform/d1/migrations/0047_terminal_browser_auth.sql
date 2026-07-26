@@ -4,6 +4,13 @@
 -- intact for pre-terminal-write recovery, but terminal stores never project
 -- browser credentials into them.
 
+CREATE TABLE IF NOT EXISTS _schema_migration_markers (
+  version            TEXT NOT NULL PRIMARY KEY,
+  name               TEXT NOT NULL,
+  schema_fingerprint TEXT NOT NULL,
+  completed_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 ALTER TABLE user_identities ADD COLUMN provider_issuer TEXT;
 
 UPDATE user_identities
@@ -230,4 +237,22 @@ CREATE TABLE provider_credentials (
       AND refresh_expires_at IS NULL
     )
   )
+);
+
+INSERT INTO _schema_migration_markers (
+  version,
+  name,
+  schema_fingerprint
+)
+SELECT
+  '0047',
+  '0047_terminal_browser_auth.sql',
+  group_concat(schema_entry, char(10))
+FROM (
+  SELECT
+    type || ':' || name || ':' || coalesce(sql, '') AS schema_entry
+  FROM sqlite_master
+  WHERE name NOT LIKE 'sqlite_%'
+    AND name NOT IN ('_schema_migrations', '_schema_migration_markers')
+  ORDER BY type, name
 );

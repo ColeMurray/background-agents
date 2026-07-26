@@ -28,6 +28,13 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   fi
   sqlite3 "$BASE_DATABASE" < "$migration_file"
 done
+sqlite3 "$BASE_DATABASE" \
+  "CREATE TABLE IF NOT EXISTS _schema_migration_markers (
+     version TEXT NOT NULL PRIMARY KEY,
+     name TEXT NOT NULL,
+     schema_fingerprint TEXT NOT NULL,
+     completed_at TEXT NOT NULL DEFAULT (datetime('now'))
+   );"
 assert_status "$BASE_DATABASE" "not_applied"
 if [ "$(sqlite3 -separator '|' "$BASE_DATABASE" < "$PREFLIGHT")" \
   != "ready|0|0||" ]; then
@@ -68,6 +75,12 @@ sqlite3 "$COMPLETE_DATABASE" \
 sqlite3 "$COMPLETE_DATABASE" < "$MIGRATIONS_DIR/0047_terminal_browser_auth.sql"
 assert_status "$COMPLETE_DATABASE" "complete"
 if [ "$(sqlite3 "$COMPLETE_DATABASE" \
+  "SELECT name FROM _schema_migration_markers WHERE version = '0047';")" \
+  != "0047_terminal_browser_auth.sql" ]; then
+  echo "Migration 0047 did not record its completion marker" >&2
+  exit 1
+fi
+if [ "$(sqlite3 "$COMPLETE_DATABASE" \
   "SELECT provider_issuer FROM user_identities WHERE id = 'github-identity';")" \
   != "https://github.com" ]; then
   echo "GitHub identity issuer backfill did not match the configured authority" >&2
@@ -87,6 +100,10 @@ if [ "$(sqlite3 "$COMPLETE_DATABASE" \
 fi
 
 sqlite3 "$COMPLETE_DATABASE" "DROP INDEX idx_browser_auth_sessions_retention;"
+assert_status "$COMPLETE_DATABASE" "partial"
+sqlite3 "$COMPLETE_DATABASE" \
+  "CREATE INDEX idx_browser_auth_sessions_retention
+   ON browser_auth_sessions(user_id);"
 assert_status "$COMPLETE_DATABASE" "partial"
 
 RECOVERY_MIGRATIONS="$TEST_DIR/recovery-migrations"

@@ -29,15 +29,40 @@ WITH
     LEFT JOIN sqlite_master AS actual
       ON actual.name = required.name
      AND actual.type = required.type
+  ),
+  current_fingerprint(value) AS (
+    SELECT group_concat(schema_entry, char(10))
+    FROM (
+      SELECT
+        type || ':' || name || ':' || coalesce(sql, '') AS schema_entry
+      FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%'
+        AND name NOT IN ('_schema_migrations', '_schema_migration_markers')
+      ORDER BY type, name
+    )
+  ),
+  completion_marker AS (
+    SELECT
+      name,
+      schema_fingerprint
+    FROM _schema_migration_markers
+    WHERE version = '0047'
   )
 SELECT CASE
   WHEN
     (SELECT present FROM schema_state) = 0
     AND NOT (SELECT has_provider_issuer FROM schema_state)
+    AND NOT EXISTS(SELECT 1 FROM completion_marker)
     THEN 'not_applied'
   WHEN
     (SELECT present = required FROM schema_state)
     AND (SELECT has_provider_issuer FROM schema_state)
+    AND (
+      SELECT
+        name = '0047_terminal_browser_auth.sql'
+        AND schema_fingerprint = (SELECT value FROM current_fingerprint)
+      FROM completion_marker
+    )
     AND NOT EXISTS(SELECT 1 FROM pragma_foreign_key_check)
     AND (SELECT count(*) FROM pragma_quick_check) = 1
     AND EXISTS(SELECT 1 FROM pragma_quick_check WHERE quick_check = 'ok')

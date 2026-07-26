@@ -48,6 +48,12 @@ $WRANGLER d1 execute "$DATABASE_NAME" --remote \
     version TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS _schema_migration_markers (
+    version TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    schema_fingerprint TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT (datetime('now'))
   )"
 
 # 2. Get applied versions (parse JSON output)
