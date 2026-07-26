@@ -9,6 +9,17 @@ export const BROWSER_SESSION_TOUCH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const BROWSER_SESSION_CREDENTIAL_PATTERN = /^oi_bsess_[A-Za-z0-9_-]{43}$/;
 
+declare const browserSessionCredentialBrand: unique symbol;
+declare const browserSessionIdBrand: unique symbol;
+
+export type BrowserSessionCredential = string & {
+  readonly [browserSessionCredentialBrand]: true;
+};
+
+export type BrowserSessionId = string & {
+  readonly [browserSessionIdBrand]: true;
+};
+
 export interface Clock {
   now(): number;
 }
@@ -26,10 +37,10 @@ export interface TokenHasher {
 }
 
 export interface BrowserAuthSessionStoreDependencies {
-  clock: Clock;
-  credentialGenerator: BrowserSessionCredentialGenerator;
-  idGenerator: BrowserSessionIdGenerator;
-  tokenHasher?: TokenHasher;
+  readonly clock: Clock;
+  readonly credentialGenerator: BrowserSessionCredentialGenerator;
+  readonly idGenerator: BrowserSessionIdGenerator;
+  readonly tokenHasher: TokenHasher;
 }
 
 export interface CreateBrowserAuthSessionInput {
@@ -38,14 +49,14 @@ export interface CreateBrowserAuthSessionInput {
 }
 
 export interface CreatedBrowserAuthSession {
-  credential: string;
-  credentialId: string;
+  credential: BrowserSessionCredential;
+  credentialId: BrowserSessionId;
   expiresAt: number;
   absoluteExpiresAt: number;
 }
 
 export interface AuthenticatedBrowserSession {
-  credentialId: string;
+  credentialId: BrowserSessionId;
   userId: string;
   providerIdentityId: string;
   lastUsedAt: number;
@@ -93,6 +104,20 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+export function parseBrowserSessionCredential(value: string): BrowserSessionCredential {
+  if (!BROWSER_SESSION_CREDENTIAL_PATTERN.test(value)) {
+    throw new BrowserSessionAuthenticationError("malformed");
+  }
+  return value as BrowserSessionCredential;
+}
+
+export function parseBrowserSessionId(value: string): BrowserSessionId {
+  if (!isNonEmptyString(value)) {
+    throw new BrowserSessionAuthenticationError("malformed");
+  }
+  return value as BrowserSessionId;
+}
+
 function decodeBrowserAuthSessionRow(row: BrowserAuthSessionRow): AuthenticatedBrowserSession {
   if (
     !isNonEmptyString(row.id) ||
@@ -108,7 +133,7 @@ function decodeBrowserAuthSessionRow(row: BrowserAuthSessionRow): AuthenticatedB
   }
 
   return {
-    credentialId: row.id,
+    credentialId: row.id as BrowserSessionId,
     userId: row.user_id,
     providerIdentityId: row.provider_identity_id,
     lastUsedAt: row.last_used_at,
@@ -118,14 +143,10 @@ function decodeBrowserAuthSessionRow(row: BrowserAuthSessionRow): AuthenticatedB
 }
 
 export class BrowserAuthSessionStore {
-  private readonly tokenHasher: TokenHasher;
-
   constructor(
     private readonly db: SqlDatabase,
     private readonly dependencies: BrowserAuthSessionStoreDependencies
-  ) {
-    this.tokenHasher = dependencies.tokenHasher ?? { hash: hashToken };
-  }
+  ) {}
 
   async create(input: CreateBrowserAuthSessionInput): Promise<CreatedBrowserAuthSession> {
     if (!isNonEmptyString(input.userId) || !isNonEmptyString(input.providerIdentityId)) {
@@ -133,16 +154,18 @@ export class BrowserAuthSessionStore {
     }
 
     const now = this.dependencies.clock.now();
-    const credential = this.dependencies.credentialGenerator.generate();
-    if (!BROWSER_SESSION_CREDENTIAL_PATTERN.test(credential)) {
+    const generatedCredential = this.dependencies.credentialGenerator.generate();
+    if (!BROWSER_SESSION_CREDENTIAL_PATTERN.test(generatedCredential)) {
       throw new Error("Browser session credential generator returned an invalid credential");
     }
+    const credential = generatedCredential as BrowserSessionCredential;
 
-    const credentialId = this.dependencies.idGenerator.generate();
-    if (!isNonEmptyString(credentialId)) {
+    const generatedCredentialId = this.dependencies.idGenerator.generate();
+    if (!isNonEmptyString(generatedCredentialId)) {
       throw new Error("Browser session id generator returned an invalid id");
     }
-    const tokenHash = await this.tokenHasher.hash(credential);
+    const credentialId = generatedCredentialId as BrowserSessionId;
+    const tokenHash = await this.dependencies.tokenHasher.hash(credential);
     const expiresAt = now + BROWSER_SESSION_IDLE_LIFETIME_MS;
     const absoluteExpiresAt = now + BROWSER_SESSION_ABSOLUTE_LIFETIME_MS;
 
@@ -173,12 +196,8 @@ export class BrowserAuthSessionStore {
     return { credential, credentialId, expiresAt, absoluteExpiresAt };
   }
 
-  async authenticate(credential: string): Promise<AuthenticatedBrowserSession> {
-    if (!BROWSER_SESSION_CREDENTIAL_PATTERN.test(credential)) {
-      throw new BrowserSessionAuthenticationError("malformed");
-    }
-
-    const tokenHash = await this.tokenHasher.hash(credential);
+  async authenticate(credential: BrowserSessionCredential): Promise<AuthenticatedBrowserSession> {
+    const tokenHash = await this.dependencies.tokenHasher.hash(credential);
     const row = await this.db
       .prepare(
         `SELECT
@@ -197,7 +216,7 @@ export class BrowserAuthSessionStore {
    * Revalidates a derived credential's parent without retaining or replaying
    * the raw browser bearer.
    */
-  async authenticateById(credentialId: string): Promise<AuthenticatedBrowserSession> {
+  async authenticateById(credentialId: BrowserSessionId): Promise<AuthenticatedBrowserSession> {
     const row = await this.db
       .prepare(
         `SELECT
@@ -212,10 +231,11 @@ export class BrowserAuthSessionStore {
     return this.validateAuthenticatedRow(row);
   }
 
-  async revoke(credential: string, reason: BrowserSessionRevocationReason): Promise<boolean> {
-    if (!BROWSER_SESSION_CREDENTIAL_PATTERN.test(credential)) return false;
-
-    const tokenHash = await this.tokenHasher.hash(credential);
+  async revoke(
+    credential: BrowserSessionCredential,
+    reason: BrowserSessionRevocationReason
+  ): Promise<boolean> {
+    const tokenHash = await this.dependencies.tokenHasher.hash(credential);
     const result = await this.db
       .prepare(
         `UPDATE browser_auth_sessions
@@ -228,7 +248,10 @@ export class BrowserAuthSessionStore {
     return result.meta.changes === 1;
   }
 
-  async revokeById(credentialId: string, reason: BrowserSessionRevocationReason): Promise<boolean> {
+  async revokeById(
+    credentialId: BrowserSessionId,
+    reason: BrowserSessionRevocationReason
+  ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE browser_auth_sessions
@@ -241,7 +264,7 @@ export class BrowserAuthSessionStore {
     return result.meta.changes === 1;
   }
 
-  async touchQualifyingActivity(credentialId: string): Promise<void> {
+  async touchQualifyingActivity(credentialId: BrowserSessionId): Promise<void> {
     const now = this.dependencies.clock.now();
     await this.db
       .prepare(
@@ -284,4 +307,5 @@ export const defaultBrowserAuthSessionStoreDependencies: BrowserAuthSessionStore
   clock: { now: () => Date.now() },
   credentialGenerator: { generate: defaultCredential },
   idGenerator: { generate: () => crypto.randomUUID() },
+  tokenHasher: { hash: hashToken },
 };

@@ -5,13 +5,17 @@ import {
   BROWSER_SESSION_IDLE_LIFETIME_MS,
   BROWSER_SESSION_TOUCH_INTERVAL_MS,
   BrowserAuthSessionStore,
+  parseBrowserSessionCredential,
+  parseBrowserSessionId,
 } from "../../src/db/browser-auth-sessions";
 import type { BrowserSessionAuthenticationError } from "../../src/db/browser-auth-sessions";
 import { hashToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
 
 const NOW_MS = 1_800_000_000_000;
-const CREDENTIAL = `oi_bsess_${"a".repeat(43)}`;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const CREDENTIAL = parseBrowserSessionCredential(`oi_bsess_${"a".repeat(43)}`);
+const TOKEN_HASHER = { hash: hashToken };
 
 describe("BrowserAuthSessionStore", () => {
   beforeEach(async () => {
@@ -31,6 +35,12 @@ describe("BrowserAuthSessionStore", () => {
          )`
       ).bind(NOW_MS),
     ]);
+  });
+
+  it("locks the browser-session lifetime policy", () => {
+    expect(BROWSER_SESSION_IDLE_LIFETIME_MS).toBe(7 * DAY_MS);
+    expect(BROWSER_SESSION_ABSOLUTE_LIFETIME_MS).toBe(30 * DAY_MS);
+    expect(BROWSER_SESSION_TOUCH_INTERVAL_MS).toBe(DAY_MS);
   });
 
   it("returns an opaque credential once and authenticates it without persisting the raw value", async () => {
@@ -74,6 +84,7 @@ describe("BrowserAuthSessionStore", () => {
       clock: { now: () => NOW_MS },
       credentialGenerator: { generate: () => CREDENTIAL },
       idGenerator: { generate: () => "" },
+      tokenHasher: TOKEN_HASHER,
     });
 
     await expect(store.create({ userId: "", providerIdentityId: "identity-1" })).rejects.toThrow(
@@ -93,6 +104,7 @@ describe("BrowserAuthSessionStore", () => {
       clock: { now: () => NOW_MS },
       credentialGenerator: { generate: () => CREDENTIAL },
       idGenerator: { generate: () => "browser-session-1" },
+      tokenHasher: TOKEN_HASHER,
     });
     await store.create({
       userId: "user-1",
@@ -114,31 +126,39 @@ describe("BrowserAuthSessionStore", () => {
       clock: { now: () => now },
       credentialGenerator: { generate: () => CREDENTIAL },
       idGenerator: { generate: () => "browser-session-1" },
+      tokenHasher: TOKEN_HASHER,
     });
     await store.create({
       userId: "user-1",
       providerIdentityId: "identity-1",
     });
 
-    await expect(store.authenticate("not-a-browser-session")).rejects.toEqual(
+    expect(() => parseBrowserSessionCredential("not-a-browser-session")).toThrow(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "malformed",
       })
     );
-    await expect(store.authenticate(`oi_bsess_${"b".repeat(43)}`)).rejects.toEqual(
+    expect(() => parseBrowserSessionId("")).toThrow(
+      expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
+        rejection: "malformed",
+      })
+    );
+    await expect(
+      store.authenticate(parseBrowserSessionCredential(`oi_bsess_${"b".repeat(43)}`))
+    ).rejects.toEqual(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "unknown",
       })
     );
 
-    now += BROWSER_SESSION_IDLE_LIFETIME_MS + 1;
+    now += BROWSER_SESSION_IDLE_LIFETIME_MS;
     await expect(store.authenticate(CREDENTIAL)).rejects.toEqual(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "idle_expired",
       })
     );
 
-    now = NOW_MS + BROWSER_SESSION_ABSOLUTE_LIFETIME_MS + 1;
+    now = NOW_MS + BROWSER_SESSION_ABSOLUTE_LIFETIME_MS;
     await expect(store.authenticate(CREDENTIAL)).rejects.toEqual(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "absolute_expired",
@@ -151,18 +171,19 @@ describe("BrowserAuthSessionStore", () => {
       clock: { now: () => NOW_MS },
       credentialGenerator: { generate: () => CREDENTIAL },
       idGenerator: { generate: () => "browser-session-1" },
+      tokenHasher: TOKEN_HASHER,
     });
-    await store.create({
+    const created = await store.create({
       userId: "user-1",
       providerIdentityId: "identity-1",
     });
 
-    await expect(store.authenticateById("browser-session-1")).resolves.toMatchObject({
+    await expect(store.authenticateById(created.credentialId)).resolves.toMatchObject({
       credentialId: "browser-session-1",
       userId: "user-1",
       providerIdentityId: "identity-1",
     });
-    await expect(store.authenticateById("missing")).rejects.toEqual(
+    await expect(store.authenticateById(parseBrowserSessionId("missing"))).rejects.toEqual(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "unknown",
       })
@@ -174,15 +195,16 @@ describe("BrowserAuthSessionStore", () => {
       clock: { now: () => NOW_MS },
       credentialGenerator: { generate: () => CREDENTIAL },
       idGenerator: { generate: () => "browser-session-1" },
+      tokenHasher: TOKEN_HASHER,
     });
-    await store.create({
+    const created = await store.create({
       userId: "user-1",
       providerIdentityId: "identity-1",
     });
 
-    await expect(store.revokeById("browser-session-1", "operator")).resolves.toBe(true);
-    await expect(store.revokeById("browser-session-1", "operator")).resolves.toBe(false);
-    await expect(store.authenticateById("browser-session-1")).rejects.toEqual(
+    await expect(store.revokeById(created.credentialId, "operator")).resolves.toBe(true);
+    await expect(store.revokeById(created.credentialId, "operator")).resolves.toBe(false);
+    await expect(store.authenticateById(created.credentialId)).rejects.toEqual(
       expect.objectContaining<Partial<BrowserSessionAuthenticationError>>({
         rejection: "revoked",
       })
@@ -195,6 +217,7 @@ describe("BrowserAuthSessionStore", () => {
       clock: { now: () => now },
       credentialGenerator: { generate: () => CREDENTIAL },
       idGenerator: { generate: () => "browser-session-1" },
+      tokenHasher: TOKEN_HASHER,
     });
     const created = await store.create({
       userId: "user-1",
@@ -211,6 +234,18 @@ describe("BrowserAuthSessionStore", () => {
     expect(row).toEqual({
       last_used_at: NOW_MS,
       expires_at: NOW_MS + BROWSER_SESSION_IDLE_LIFETIME_MS,
+    });
+
+    now = NOW_MS + BROWSER_SESSION_TOUCH_INTERVAL_MS;
+    await store.touchQualifyingActivity(created.credentialId);
+    row = await env.DB.prepare(
+      "SELECT last_used_at, expires_at FROM browser_auth_sessions WHERE id = ?"
+    )
+      .bind(created.credentialId)
+      .first<{ last_used_at: number; expires_at: number }>();
+    expect(row).toEqual({
+      last_used_at: now,
+      expires_at: now + BROWSER_SESSION_IDLE_LIFETIME_MS,
     });
 
     for (const day of [6, 12, 18, 24, 28]) {
@@ -239,6 +274,7 @@ describe("BrowserAuthSessionStore", () => {
           `oi_bsess_${String.fromCharCode("a".charCodeAt(0) + credentialSequence++).repeat(43)}`,
       },
       idGenerator: { generate: () => `browser-session-${++idSequence}` },
+      tokenHasher: TOKEN_HASHER,
     });
     const revoked = await store.create({
       userId: "user-1",
@@ -250,7 +286,7 @@ describe("BrowserAuthSessionStore", () => {
     });
     await store.revoke(revoked.credential, "operator");
 
-    now += BROWSER_SESSION_IDLE_LIFETIME_MS + 1;
+    now += BROWSER_SESSION_IDLE_LIFETIME_MS;
     await store.touchQualifyingActivity(revoked.credentialId);
     await store.touchQualifyingActivity(expired.credentialId);
 
