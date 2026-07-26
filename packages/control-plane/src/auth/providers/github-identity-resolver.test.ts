@@ -65,6 +65,46 @@ describe("GitHubProviderIdentityResolver", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves the Workers receiver when using the default global fetch", async () => {
+    const runtimeFetch = vi.fn(async function (
+      this: unknown,
+      input: RequestInfo | URL
+    ): Promise<Response> {
+      if (this !== globalThis) {
+        throw new TypeError("Illegal invocation");
+      }
+      if (String(input) === "https://api.github.com/user") {
+        return Response.json({
+          id: 583_231,
+          login: "octocat",
+          name: "The Octocat",
+          avatar_url: null,
+        });
+      }
+      return Response.json([
+        {
+          email: "octocat@example.com",
+          primary: true,
+          verified: true,
+          visibility: null,
+        },
+      ]);
+    });
+    vi.stubGlobal("fetch", runtimeFetch);
+
+    try {
+      const resolver = new GitHubProviderIdentityResolver(config);
+
+      await expect(resolver.resolveIdentity("ghu-access")).resolves.toMatchObject({
+        subject: "583231",
+        primaryEmail: "octocat@example.com",
+      });
+      expect(runtimeFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("retries one transient GitHub network failure", async () => {
     let userAttempts = 0;
     const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {

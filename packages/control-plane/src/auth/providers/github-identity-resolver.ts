@@ -51,7 +51,7 @@ export class GitHubProviderIdentityResolver {
     dependencies: GitHubProviderIdentityResolverDependencies = {}
   ) {
     assertCanonicalIssuer(config.issuer, GITHUB_ISSUER);
-    this.fetchImpl = dependencies.fetch ?? globalThis.fetch;
+    this.fetchImpl = dependencies.fetch ?? globalThis.fetch.bind(globalThis);
     this.requestTimeoutMs = dependencies.requestTimeoutMs ?? DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
     this.logger = dependencies.logger ?? createLogger("github-provider-identity");
   }
