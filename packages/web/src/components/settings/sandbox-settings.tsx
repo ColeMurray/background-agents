@@ -68,6 +68,25 @@ function isValidBuildTimeout(value: string): boolean {
   return n >= 1 && n <= MAX_BUILD_TIMEOUT_SECONDS;
 }
 
+/** Trim, filter empty, validate, parse to number, dedupe. */
+function normalizePorts(input: string[]): { ports: number[]; invalid: string[] } {
+  const ports = new Set<number>();
+  const invalid: string[] = [];
+
+  for (const value of input) {
+    const trimmed = value.trim();
+    if (trimmed === "") continue;
+
+    if (isValidPort(trimmed)) {
+      ports.add(Number(trimmed));
+    } else {
+      invalid.push(value);
+    }
+  }
+
+  return { ports: [...ports], invalid };
+}
+
 const numOrUndef = (v: number | null | undefined): number | undefined =>
   typeof v === "number" ? v : undefined;
 
@@ -288,16 +307,6 @@ export function SandboxSettingsEditor({
   const handleRemoveRow = (index: number) => {
     const updated = rows.filter((_, i) => i !== index);
     setPortRows(updated);
-  };
-
-  /** Trim, filter empty, validate, parse to number, dedupe. */
-  const normalizePorts = (input: string[]): { ports: number[]; invalid: string[] } => {
-    const nonEmpty = input.filter((r) => r.trim() !== "");
-    const invalid = nonEmpty.filter((r) => !isValidPort(r.trim()));
-    const ports = [
-      ...new Set(nonEmpty.filter((r) => isValidPort(r.trim())).map((r) => Number(r.trim()))),
-    ];
-    return { ports, invalid };
   };
 
   const handleSave = useCallback(async () => {
@@ -546,12 +555,18 @@ export function SandboxSettingsEditor({
       <div className="max-w-sm">
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-foreground">Web Terminal</label>
+            <label
+              htmlFor="web-terminal-enabled"
+              className="block text-sm font-medium text-foreground"
+            >
+              Web Terminal
+            </label>
             <p className="text-xs text-muted-foreground">
               Enable a browser-based terminal in sandbox sessions.
             </p>
           </div>
           <button
+            id="web-terminal-enabled"
             type="button"
             role="switch"
             aria-checked={resolvedTerminalEnabled}

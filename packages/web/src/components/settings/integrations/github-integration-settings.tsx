@@ -438,7 +438,10 @@ function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
-        <label className="block text-sm font-medium text-foreground mb-1">
+        <label
+          htmlFor="github-code-review-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
           Code Review Instructions
         </label>
         <p className="text-xs text-muted-foreground mb-2">
@@ -446,6 +449,7 @@ function GlobalSettingsSection({
           areas or coding standards.
         </p>
         <Textarea
+          id="github-code-review-instructions"
           value={codeReviewInstructions}
           onChange={(e) => {
             setCodeReviewInstructions(e.target.value);
@@ -459,7 +463,10 @@ function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
-        <label className="block text-sm font-medium text-foreground mb-1">
+        <label
+          htmlFor="github-comment-action-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
           Comment Action Instructions
         </label>
         <p className="text-xs text-muted-foreground mb-2">
@@ -467,6 +474,7 @@ function GlobalSettingsSection({
           guide how the bot responds to comments.
         </p>
         <Textarea
+          id="github-comment-action-instructions"
           value={commentActionInstructions}
           onChange={(e) => {
             setCommentActionInstructions(e.target.value);
