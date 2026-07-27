@@ -6,7 +6,7 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 **Better Auth browser authentication.** Browser sign-in now uses control-plane-owned Better Auth
 sessions with GitHub and optional Google providers. The web app forwards an exact allowlist of
-authentication routes through a signed proxy, and application requests require both that signed
+authentication routes through a signed proxy, and browser resource requests require both that signed
 web-service channel and the browser session. Legacy browser tokens are retired during migration, so
 existing users must sign in again after upgrading.
 
