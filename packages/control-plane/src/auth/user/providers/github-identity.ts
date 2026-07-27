@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createLogger, type Logger } from "../../logger";
+import { createLogger, type Logger } from "../../../logger";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./constants";
 import { assertCanonicalIssuer, OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 

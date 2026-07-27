@@ -3,27 +3,27 @@ import {
   parseAdmissionAllowlist,
   parseAdmissionBoolean,
 } from "./admission-policy";
-import { createBrowserAuth } from "./browser-auth";
-import { GitHubBrowserAuthProfileResolver } from "./github-browser-auth-profile";
-import { GoogleBrowserAuthProfileResolver } from "./google-browser-auth-profile";
-import { GitHubProviderIdentityResolver } from "./providers/github-identity-resolver";
-import { D1BrowserAuthUserProjection } from "../db/browser-auth-users";
-import type { Env } from "../types";
+import { createUserAuth } from "./better-auth";
+import { GitHubProviderIdentityResolver } from "./providers/github-identity";
+import { GitHubSignInProfileResolver } from "./providers/github-profile";
+import { GoogleSignInProfileResolver } from "./providers/google-profile";
+import { D1CanonicalUserProjection } from "../../db/canonical-user-projection";
+import type { Env } from "../../types";
 
 const GITHUB_ISSUER = "https://github.com";
 const MINIMUM_SECRET_LENGTH = 32;
 
-export class BrowserAuthConfigurationError extends Error {
+export class UserAuthConfigurationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "BrowserAuthConfigurationError";
+    this.name = "UserAuthConfigurationError";
   }
 }
 
 function requireConfig(value: string | undefined, name: string): string {
   const normalized = value?.trim();
   if (!normalized) {
-    throw new BrowserAuthConfigurationError(`${name} is not configured`);
+    throw new UserAuthConfigurationError(`${name} is not configured`);
   }
   return normalized;
 }
@@ -38,7 +38,7 @@ export function parsePublicWebOrigin(value: string | undefined): string {
   try {
     url = new URL(configured);
   } catch {
-    throw new BrowserAuthConfigurationError("WEB_APP_URL is invalid");
+    throw new UserAuthConfigurationError("WEB_APP_URL is invalid");
   }
 
   const isOriginOnly =
@@ -50,7 +50,7 @@ export function parsePublicWebOrigin(value: string | undefined): string {
   const isSecure = url.protocol === "https:";
   const isLocalDevelopment = url.protocol === "http:" && isLoopbackHost(url.hostname);
   if (!isOriginOnly || (!isSecure && !isLocalDevelopment)) {
-    throw new BrowserAuthConfigurationError(
+    throw new UserAuthConfigurationError(
       "WEB_APP_URL must be an HTTPS origin or an HTTP loopback origin"
     );
   }
@@ -67,11 +67,11 @@ function createAdmissionPolicy(env: Env): AdmissionPolicy {
   });
 }
 
-export function createBrowserAuthFromEnv(env: Env, database: D1Database) {
+export function createUserAuthFromEnv(env: Env, database: D1Database) {
   const publicWebOrigin = parsePublicWebOrigin(env.WEB_APP_URL);
   const secret = requireConfig(env.BROWSER_AUTH_SECRET, "BROWSER_AUTH_SECRET");
   if (secret.length < MINIMUM_SECRET_LENGTH) {
-    throw new BrowserAuthConfigurationError(
+    throw new UserAuthConfigurationError(
       `BROWSER_AUTH_SECRET must be at least ${MINIMUM_SECRET_LENGTH} characters`
     );
   }
@@ -83,7 +83,7 @@ export function createBrowserAuthFromEnv(env: Env, database: D1Database) {
     issuer: GITHUB_ISSUER,
     userAgent: `${env.APP_NAME?.trim() || "Open-Inspect"} Control Plane`,
   });
-  const githubProfile = new GitHubBrowserAuthProfileResolver({
+  const githubProfile = new GitHubSignInProfileResolver({
     identityResolver: githubIdentityResolver,
     admissionPolicy,
   });
@@ -91,24 +91,24 @@ export function createBrowserAuthFromEnv(env: Env, database: D1Database) {
   const googleClientId = env.GOOGLE_CLIENT_ID?.trim();
   const googleClientSecret = env.GOOGLE_CLIENT_SECRET?.trim();
   if (Boolean(googleClientId) !== Boolean(googleClientSecret)) {
-    throw new BrowserAuthConfigurationError(
+    throw new UserAuthConfigurationError(
       "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together"
     );
   }
 
   const googleProfile =
     googleClientId && googleClientSecret
-      ? new GoogleBrowserAuthProfileResolver({
+      ? new GoogleSignInProfileResolver({
           clientId: googleClientId,
           admissionPolicy,
         })
       : null;
 
-  return createBrowserAuth({
+  return createUserAuth({
     database,
     publicWebOrigin,
     secret,
-    userProjection: new D1BrowserAuthUserProjection(database),
+    userProjection: new D1CanonicalUserProjection(database),
     github: {
       clientId: githubClientId,
       clientSecret: githubClientSecret,
@@ -126,14 +126,14 @@ export function createBrowserAuthFromEnv(env: Env, database: D1Database) {
   });
 }
 
-type BrowserAuth = ReturnType<typeof createBrowserAuthFromEnv>;
+type BetterAuthInstance = ReturnType<typeof createUserAuthFromEnv>;
 
-interface CachedBrowserAuth {
+interface CachedUserAuth {
   readonly fingerprint: string;
-  readonly auth: BrowserAuth;
+  readonly auth: BetterAuthInstance;
 }
 
-const browserAuthByDatabase = new WeakMap<D1Database, CachedBrowserAuth>();
+const userAuthByDatabase = new WeakMap<D1Database, CachedUserAuth>();
 
 function configurationFingerprint(env: Env): string {
   return [
@@ -151,15 +151,15 @@ function configurationFingerprint(env: Env): string {
   ].join("\u0000");
 }
 
-export function getBrowserAuth(env: Env, database: D1Database): BrowserAuth {
+export function getUserAuth(env: Env, database: D1Database): BetterAuthInstance {
   const fingerprint = configurationFingerprint(env);
-  const cached = browserAuthByDatabase.get(database);
+  const cached = userAuthByDatabase.get(database);
   if (cached?.fingerprint === fingerprint) {
     return cached.auth;
   }
-  const auth = createBrowserAuthFromEnv(env, database);
-  browserAuthByDatabase.set(database, { fingerprint, auth });
+  const auth = createUserAuthFromEnv(env, database);
+  userAuthByDatabase.set(database, { fingerprint, auth });
   return auth;
 }
 
-export type BrowserAuthRuntime = BrowserAuth;
+export type BetterAuthRuntime = BetterAuthInstance;

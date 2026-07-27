@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { BrowserAuthRuntime } from "./browser-auth-runtime";
-import type { AuthenticationContext, Principal } from "./principal";
+import type { AuthenticationContext, Principal } from "../auth/principal";
 
 const providerAccountSchema = z.object({
   providerId: z.string().min(1),
@@ -12,10 +11,22 @@ export interface GitHubAccountSelection {
   readonly subject: string;
 }
 
+interface ProviderAccountSelection {
+  readonly providerId: "github";
+  readonly accountId: string;
+  readonly userId: string;
+}
+
+export interface ProviderAccountClient {
+  listUserAccounts(input: { readonly headers: Headers }): Promise<unknown>;
+  getAccessToken(input: { readonly body: ProviderAccountSelection }): Promise<unknown>;
+  accountInfo(input: { readonly query: ProviderAccountSelection }): Promise<unknown>;
+}
+
 export type GitHubCredentialAuthority =
   | {
       readonly kind: "browser_session";
-      readonly runtime: BrowserAuthRuntime;
+      readonly accountClient: ProviderAccountClient;
       readonly githubAccount: GitHubAccountSelection | null;
     }
   | {
@@ -25,7 +36,7 @@ export type GitHubCredentialAuthority =
 export interface GitHubCredentialAuthorityContext {
   readonly principal?: Principal;
   readonly authentication?: AuthenticationContext;
-  readonly getBrowserAuth?: () => BrowserAuthRuntime;
+  readonly getUserAuth?: () => { readonly api: ProviderAccountClient };
 }
 
 /**
@@ -50,26 +61,26 @@ export async function resolveGitHubCredentialAuthority(
     if (!context.authentication) {
       throw new Error("User principal is missing browser-session provenance");
     }
-    if (!context.getBrowserAuth) {
-      throw new Error("Browser authentication runtime is unavailable");
+    if (!context.getUserAuth) {
+      throw new Error("User authentication runtime is unavailable");
     }
-    const runtime = context.getBrowserAuth();
+    const accountClient = context.getUserAuth().api;
     const parsedAccounts = z
       .array(providerAccountSchema)
-      .safeParse(await runtime.api.listUserAccounts({ headers }));
+      .safeParse(await accountClient.listUserAccounts({ headers }));
     if (
       !parsedAccounts.success ||
       parsedAccounts.data.some((account) => account.userId !== userId)
     ) {
-      throw new Error("Browser GitHub account authority is corrupt");
+      throw new Error("GitHub account authority is corrupt");
     }
     const githubAccounts = parsedAccounts.data.filter((account) => account.providerId === "github");
     if (githubAccounts.length > 1) {
-      throw new Error("Browser user resolves to multiple GitHub provider accounts");
+      throw new Error("User resolves to multiple GitHub provider accounts");
     }
     return {
       kind: "browser_session",
-      runtime,
+      accountClient,
       githubAccount: githubAccounts[0] ? { subject: githubAccounts[0].accountId } : null,
     };
   }

@@ -5,7 +5,7 @@ import {
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
-import { resolveGitHubCredentialAuthority } from "../auth/github-credential-authority";
+import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";

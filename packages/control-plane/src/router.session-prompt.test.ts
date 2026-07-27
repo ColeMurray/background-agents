@@ -17,8 +17,8 @@ vi.mock("./session/identity", async (importOriginal) => {
   };
 });
 
-vi.mock("./auth/browser-auth-runtime", () => ({
-  getBrowserAuth: vi.fn(() => ({
+vi.mock("./auth/user/runtime", () => ({
+  getUserAuth: vi.fn(() => ({
     api: {
       listUserAccounts: vi.fn(async () => [
         {
@@ -31,9 +31,9 @@ vi.mock("./auth/browser-auth-runtime", () => ({
   })),
 }));
 
-vi.mock("./auth/browser-session-authenticator", () => ({
-  BrowserSessionIntegrityError: class BrowserSessionIntegrityError extends Error {},
-  authenticateBrowserSession: vi.fn(async () => ({
+vi.mock("./auth/user/session-authenticator", () => ({
+  SessionIntegrityError: class SessionIntegrityError extends Error {},
+  authenticateSession: vi.fn(async () => ({
     userId: "user-1",
     authentication: {
       mechanism: "browser_session",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePublicWebOrigin } from "./browser-auth-runtime";
+import { parsePublicWebOrigin } from "./runtime";
 
 describe("parsePublicWebOrigin", () => {
   it.each([

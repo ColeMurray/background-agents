@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubBrowserAuthProfileResolver } from "./github-browser-auth-profile";
+import { GitHubSignInProfileResolver } from "./github-profile";
 
-describe("GitHubBrowserAuthProfileResolver", () => {
+describe("GitHubSignInProfileResolver", () => {
   it("resolves verified GitHub evidence before admission and profile mapping", async () => {
     const resolveIdentity = vi.fn(async () => ({
       provider: "github" as const,
@@ -16,7 +16,7 @@ describe("GitHubBrowserAuthProfileResolver", () => {
     const requireAdmission = vi.fn(async () => ({
       reason: "github_user_allowlist" as const,
     }));
-    const resolver = new GitHubBrowserAuthProfileResolver({
+    const resolver = new GitHubSignInProfileResolver({
       identityResolver: { resolveIdentity },
       admissionPolicy: { requireAdmission },
     });
@@ -62,7 +62,7 @@ describe("GitHubBrowserAuthProfileResolver", () => {
   it("rejects missing access-token evidence before lookup or admission", async () => {
     const resolveIdentity = vi.fn();
     const requireAdmission = vi.fn();
-    const resolver = new GitHubBrowserAuthProfileResolver({
+    const resolver = new GitHubSignInProfileResolver({
       identityResolver: { resolveIdentity },
       admissionPolicy: { requireAdmission },
     });
@@ -77,7 +77,7 @@ describe("GitHubBrowserAuthProfileResolver", () => {
 
   it("rejects an identity without a verified email before admission", async () => {
     const requireAdmission = vi.fn();
-    const resolver = new GitHubBrowserAuthProfileResolver({
+    const resolver = new GitHubSignInProfileResolver({
       identityResolver: {
         resolveIdentity: vi.fn(async () => ({
           provider: "github" as const,

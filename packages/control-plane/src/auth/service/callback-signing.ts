@@ -6,7 +6,7 @@
  * with its own.
  */
 
-import { serviceAuthSecret, type ServiceKeyEnv } from "./authenticate";
+import { serviceAuthSecret, type ServiceKeyEnv } from "./config";
 
 /** The bots the CP delivers callbacks to — also the only services that may attach a `callbackContext`. */
 export const CALLBACK_DESTINATIONS = ["slack-bot", "linear-bot"] as const;

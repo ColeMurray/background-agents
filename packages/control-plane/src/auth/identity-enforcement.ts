@@ -12,7 +12,7 @@
 import type { AutomationEventSource, ServiceName, SpawnSource } from "@open-inspect/shared";
 
 import { createLogger } from "./../logger";
-import { CALLBACK_DESTINATIONS } from "./callback-signing";
+import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
 import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
 import { error, type RequestContext } from "../routes/shared";

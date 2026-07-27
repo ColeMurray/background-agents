@@ -1,30 +1,25 @@
-import type { AdmissionPolicy } from "./admission-policy";
-import type {
-  BrowserAuthProviderProfile,
-  BrowserAuthProviderTokens,
-} from "./browser-auth-provider-profile";
-import type { ProviderCredentialInput } from "./provider-credential";
+import type { AdmissionPolicy } from "../admission-policy";
+import type { ProviderProfile, ProviderTokens } from "../provider-profile";
+import type { ProviderCredentialInput } from "../provider-credential";
 import {
   OAuthProviderError,
   type ProviderSignInResult,
   type VerifiedProviderIdentity,
-} from "./providers/types";
+} from "./types";
 
 export interface GitHubIdentityResolver {
   resolveIdentity(accessToken: string): Promise<VerifiedProviderIdentity<"github">>;
 }
 
-export interface GitHubBrowserAuthProfileResolverConfig {
+export interface GitHubSignInProfileResolverConfig {
   readonly identityResolver: GitHubIdentityResolver;
   readonly admissionPolicy: Pick<AdmissionPolicy, "requireAdmission">;
 }
 
-export class GitHubBrowserAuthProfileResolver {
-  constructor(private readonly config: GitHubBrowserAuthProfileResolverConfig) {}
+export class GitHubSignInProfileResolver {
+  constructor(private readonly config: GitHubSignInProfileResolverConfig) {}
 
-  readonly getUserInfo = async (
-    tokens: BrowserAuthProviderTokens
-  ): Promise<BrowserAuthProviderProfile> => {
+  readonly getUserInfo = async (tokens: ProviderTokens): Promise<ProviderProfile> => {
     if (!tokens.accessToken) {
       throw new OAuthProviderError("malformed_response", "GitHub did not return an access token");
     }
@@ -54,7 +49,7 @@ export class GitHubBrowserAuthProfileResolver {
   };
 }
 
-function toProviderCredential(tokens: BrowserAuthProviderTokens): ProviderCredentialInput {
+function toProviderCredential(tokens: ProviderTokens): ProviderCredentialInput {
   const accessToken = tokens.accessToken;
   if (!accessToken) {
     throw new OAuthProviderError("malformed_response", "GitHub did not return an access token");

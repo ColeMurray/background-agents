@@ -6,7 +6,7 @@ import type { Env } from "./types";
 import { isBrowserAuthProxyRoute } from "@open-inspect/shared";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
-import { getBrowserAuth } from "./auth/browser-auth-runtime";
+import { getUserAuth } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
   SourceControlProviderError,
@@ -396,7 +396,7 @@ export async function handleRequest(
     // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
     db: instrumentD1(env.DB, metrics),
     // eslint-disable-next-line no-restricted-syntax -- composition root injects the raw D1 adapter required by Better Auth
-    getBrowserAuth: () => getBrowserAuth(env, env.DB),
+    getUserAuth: () => getUserAuth(env, env.DB),
     executionCtx,
   };
 
@@ -439,7 +439,7 @@ export async function handleRequest(
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService: isBrowserAuthProxyRoute(method, path) ? "service" : "browser",
+        webService: isBrowserAuthProxyRoute(method, path) ? "service" : "user",
       });
 
       if (isAuthError(authResult)) {

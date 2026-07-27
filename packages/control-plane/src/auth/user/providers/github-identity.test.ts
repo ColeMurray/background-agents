@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubProviderIdentityResolver } from "./github-identity-resolver";
+import { GitHubProviderIdentityResolver } from "./github-identity";
 
 describe("GitHubProviderIdentityResolver", () => {
   const config = {

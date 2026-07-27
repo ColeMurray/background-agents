@@ -1,11 +1,8 @@
 import { verifyGoogleIdToken } from "better-auth/social-providers";
 import { z } from "zod";
-import type { AdmissionPolicy } from "./admission-policy";
-import type {
-  BrowserAuthProviderProfile,
-  BrowserAuthProviderTokens,
-} from "./browser-auth-provider-profile";
-import { OAuthProviderError, type ProviderSignInResult } from "./providers/types";
+import type { AdmissionPolicy } from "../admission-policy";
+import type { ProviderProfile, ProviderTokens } from "../provider-profile";
+import { OAuthProviderError, type ProviderSignInResult } from "./types";
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
 
@@ -20,28 +17,26 @@ const googleClaimsSchema = z.object({
 
 type VerifyGoogleIdToken = typeof verifyGoogleIdToken;
 
-export interface GoogleBrowserAuthProfileResolverConfig {
+export interface GoogleSignInProfileResolverConfig {
   readonly clientId: string;
   readonly admissionPolicy: Pick<AdmissionPolicy, "requireAdmission">;
 }
 
-export interface GoogleBrowserAuthProfileResolverDependencies {
+export interface GoogleSignInProfileResolverDependencies {
   readonly verifyIdToken?: VerifyGoogleIdToken;
 }
 
-export class GoogleBrowserAuthProfileResolver {
+export class GoogleSignInProfileResolver {
   private readonly verifyIdToken: VerifyGoogleIdToken;
 
   constructor(
-    private readonly config: GoogleBrowserAuthProfileResolverConfig,
-    dependencies: GoogleBrowserAuthProfileResolverDependencies = {}
+    private readonly config: GoogleSignInProfileResolverConfig,
+    dependencies: GoogleSignInProfileResolverDependencies = {}
   ) {
     this.verifyIdToken = dependencies.verifyIdToken ?? verifyGoogleIdToken;
   }
 
-  readonly getUserInfo = async (
-    tokens: BrowserAuthProviderTokens
-  ): Promise<BrowserAuthProviderProfile> => {
+  readonly getUserInfo = async (tokens: ProviderTokens): Promise<ProviderProfile> => {
     if (!tokens.idToken) {
       throw new OAuthProviderError("malformed_response", "Google did not return an ID token");
     }

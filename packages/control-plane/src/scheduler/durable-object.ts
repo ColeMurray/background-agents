@@ -22,7 +22,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared";
 import { z } from "zod";
-import { callbackSigningSecret } from "../auth/callback-signing";
+import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
   toAutomationRun,

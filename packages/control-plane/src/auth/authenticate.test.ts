@@ -310,14 +310,14 @@ describe("authenticate — service credentials", () => {
 });
 
 describe("authenticate — compound browser credentials", () => {
-  function createBrowserCtx(
+  function createUserAuthContext(
     session: {
       session: { id: string; userId: string };
       user: { id: string };
     } | null
   ): RequestContext {
     const ctx = createCtx();
-    ctx.getBrowserAuth = () =>
+    ctx.getUserAuth = () =>
       ({
         api: {
           getSession: vi.fn(async () => session),
@@ -335,13 +335,13 @@ describe("authenticate — compound browser credentials", () => {
         headers.Cookie = "__Secure-openinspect.session_token=signed-session-token";
       },
     });
-    const ctx = createBrowserCtx({
+    const ctx = createUserAuthContext({
       session: { id: "session-1", userId: "user-1" },
       user: { id: "user-1" },
     });
 
     const result = await authenticate(request, createEnv(), ctx, {
-      webService: "browser",
+      webService: "user",
     });
 
     expect(isAuthError(result)).toBe(false);
@@ -361,8 +361,8 @@ describe("authenticate — compound browser credentials", () => {
       url: "https://cp.test.local/sessions",
     });
 
-    const result = await authenticate(request, createEnv(), createBrowserCtx(null), {
-      webService: "browser",
+    const result = await authenticate(request, createEnv(), createUserAuthContext(null), {
+      webService: "user",
     });
 
     expect(result).toEqual({

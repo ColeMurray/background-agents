@@ -1,8 +1,8 @@
 import { env } from "cloudflare:test";
 import { buildServiceAuthHeaders, isCanonicalUserId } from "@open-inspect/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getBrowserAuth } from "../../src/auth/browser-auth-runtime";
-import { resolveGitHubCredentialAuthority } from "../../src/auth/github-credential-authority";
+import { getUserAuth } from "../../src/auth/user/runtime";
+import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";
 import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
 import { handleRequest } from "../../src/router";
@@ -175,7 +175,7 @@ describe("browser auth callback", () => {
             credentialId: session.session.id,
             channel: { kind: "sig1", service: "web" },
           },
-          getBrowserAuth: () => getBrowserAuth(env, env.DB),
+          getUserAuth: () => getUserAuth(env, env.DB),
         },
         new Headers({ Cookie: sessionCookie })
       )

@@ -1,8 +1,5 @@
 import { BROWSER_AUTH_PROXY_ROUTES } from "@open-inspect/shared";
-import {
-  BrowserAuthConfigurationError,
-  type BrowserAuthRuntime,
-} from "../auth/browser-auth-runtime";
+import { type BetterAuthRuntime, UserAuthConfigurationError } from "../auth/user/runtime";
 import { createLogger } from "../logger";
 import { error, parsePattern, type Route } from "./shared";
 
@@ -33,7 +30,7 @@ function copyBrowserAuthResponseHeaders(upstream: Headers): Headers {
  * handler's AsyncLocalStorage state before session-refresh policy is read.
  */
 export async function forwardBrowserAuthRequest(
-  auth: BrowserAuthRuntime,
+  auth: BetterAuthRuntime,
   request: Request
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -57,10 +54,10 @@ function requireWebService(route: Route["handler"]): Route["handler"] {
 
 const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) => {
   try {
-    if (!ctx.getBrowserAuth) {
-      throw new BrowserAuthConfigurationError("Browser authentication runtime is unavailable");
+    if (!ctx.getUserAuth) {
+      throw new UserAuthConfigurationError("User authentication runtime is unavailable");
     }
-    const response = await forwardBrowserAuthRequest(ctx.getBrowserAuth(), request);
+    const response = await forwardBrowserAuthRequest(ctx.getUserAuth(), request);
     const headers = copyBrowserAuthResponseHeaders(response.headers);
     headers.set("Cache-Control", "no-store");
     headers.set("Referrer-Policy", "no-referrer");
@@ -70,7 +67,7 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
       headers,
     });
   } catch (cause) {
-    if (cause instanceof BrowserAuthConfigurationError) {
+    if (cause instanceof UserAuthConfigurationError) {
       logger.error("Browser authentication is not configured", {
         event: "auth.browser.misconfigured",
         error: cause,

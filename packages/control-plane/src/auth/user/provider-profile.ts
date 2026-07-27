@@ -1,4 +1,4 @@
-export interface BrowserAuthProviderTokens {
+export interface ProviderTokens {
   readonly accessToken?: string;
   readonly refreshToken?: string;
   readonly accessTokenExpiresAt?: Date;
@@ -7,7 +7,7 @@ export interface BrowserAuthProviderTokens {
   readonly scopes?: readonly string[];
 }
 
-export interface BrowserAuthProviderProfile {
+export interface ProviderProfile {
   readonly user: {
     readonly id: string;
     readonly name?: string;
@@ -18,6 +18,4 @@ export interface BrowserAuthProviderProfile {
   readonly data: unknown;
 }
 
-export type BrowserAuthProviderProfileResolver = (
-  tokens: BrowserAuthProviderTokens
-) => Promise<BrowserAuthProviderProfile | null>;
+export type ProviderProfileResolver = (tokens: ProviderTokens) => Promise<ProviderProfile | null>;

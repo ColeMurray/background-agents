@@ -3,10 +3,10 @@ import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared";
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it } from "vitest";
 import {
-  BROWSER_AUTH_SESSION_EXPIRES_IN_MS,
-  BROWSER_AUTH_SESSION_UPDATE_AGE_MS,
-  createBrowserAuth,
-} from "../../src/auth/browser-auth";
+  SESSION_EXPIRES_IN_MS,
+  SESSION_UPDATE_AGE_MS,
+  createUserAuth,
+} from "../../src/auth/user/better-auth";
 
 const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
@@ -60,7 +60,7 @@ const EXPECTED_COLUMNS = {
 } as const;
 
 function createTestAuth() {
-  return createBrowserAuth({
+  return createUserAuth({
     database: env.DB,
     publicWebOrigin: PUBLIC_WEB_ORIGIN,
     secret: SECRET,
@@ -103,7 +103,7 @@ describe("browser authentication", () => {
   });
 
   it("initiates GitHub App sign-in with PKCE and no classic OAuth scopes", async () => {
-    const auth = createBrowserAuth({
+    const auth = createUserAuth({
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
@@ -153,7 +153,7 @@ describe("browser authentication", () => {
   });
 
   it("rate limits repeated browser sign-in attempts by the trusted client IP", async () => {
-    const auth = createBrowserAuth({
+    const auth = createUserAuth({
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
@@ -192,7 +192,7 @@ describe("browser authentication", () => {
 
   it("uses a non-Secure host-only cookie only for loopback HTTP development", async () => {
     const localOrigin = "http://localhost:3000";
-    const auth = createBrowserAuth({
+    const auth = createUserAuth({
       database: env.DB,
       publicWebOrigin: localOrigin,
       secret: SECRET,
@@ -228,7 +228,7 @@ describe("browser authentication", () => {
   });
 
   it("initiates Google OIDC sign-in with PKCE and minimum identity scopes", async () => {
-    const auth = createBrowserAuth({
+    const auth = createUserAuth({
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
@@ -281,11 +281,7 @@ describe("browser authentication", () => {
       throw new Error("Better Auth canonical ID generator is not configured");
     }
     expect(generateId({ model: "user" })).toMatch(/^[a-f0-9]{32}$/);
-    expect(auth.options.session?.expiresIn).toBe(
-      BROWSER_AUTH_SESSION_EXPIRES_IN_MS / MS_PER_SECOND
-    );
-    expect(auth.options.session?.updateAge).toBe(
-      BROWSER_AUTH_SESSION_UPDATE_AGE_MS / MS_PER_SECOND
-    );
+    expect(auth.options.session?.expiresIn).toBe(SESSION_EXPIRES_IN_MS / MS_PER_SECOND);
+    expect(auth.options.session?.updateAge).toBe(SESSION_UPDATE_AGE_MS / MS_PER_SECOND);
   });
 });

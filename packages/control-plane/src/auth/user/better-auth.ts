@@ -1,39 +1,39 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared";
 import { betterAuth } from "better-auth";
-import type { BrowserAuthProviderProfileResolver } from "./browser-auth-provider-profile";
-import type { BrowserAuthUserProjection } from "./browser-auth-user-projection";
-import { generateId } from "./crypto";
+import { generateId } from "../crypto";
+import type { CanonicalUserProjection } from "./canonical-user-projection";
+import type { ProviderProfileResolver } from "./provider-profile";
 
 const MS_PER_SECOND = 1000;
 
-export const BROWSER_AUTH_SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
-export const BROWSER_AUTH_SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
+export const SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
+export const SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
 
-export interface BrowserAuthConfig {
+export interface UserAuthConfig {
   readonly database: D1Database;
   readonly publicWebOrigin: string;
   readonly secret: string;
-  readonly userProjection: BrowserAuthUserProjection;
+  readonly userProjection: CanonicalUserProjection;
   readonly github?: {
     readonly clientId: string;
     readonly clientSecret: string;
-    readonly getUserInfo: BrowserAuthProviderProfileResolver;
+    readonly getUserInfo: ProviderProfileResolver;
   };
   readonly google?: {
     readonly clientId: string;
     readonly clientSecret: string;
-    readonly getUserInfo: BrowserAuthProviderProfileResolver;
+    readonly getUserInfo: ProviderProfileResolver;
   };
 }
 
 /**
- * Creates the control plane's browser-authentication authority.
+ * Creates the control plane's user-authentication authority.
  *
  * `publicWebOrigin` is deliberately the browser-visible web origin rather than
  * the control-plane origin. The web transparently proxies this handler, so all
  * redirects and host-only cookies remain scoped to the web application.
  */
-export function createBrowserAuth(config: BrowserAuthConfig) {
+export function createUserAuth(config: UserAuthConfig) {
   return betterAuth({
     baseURL: config.publicWebOrigin,
     database: config.database,
@@ -79,8 +79,8 @@ export function createBrowserAuth(config: BrowserAuthConfig) {
     },
     session: {
       modelName: "auth_sessions",
-      expiresIn: BROWSER_AUTH_SESSION_EXPIRES_IN_MS / MS_PER_SECOND,
-      updateAge: BROWSER_AUTH_SESSION_UPDATE_AGE_MS / MS_PER_SECOND,
+      expiresIn: SESSION_EXPIRES_IN_MS / MS_PER_SECOND,
+      updateAge: SESSION_UPDATE_AGE_MS / MS_PER_SECOND,
     },
     account: {
       modelName: "auth_accounts",

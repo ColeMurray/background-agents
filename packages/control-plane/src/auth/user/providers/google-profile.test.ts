@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { GoogleBrowserAuthProfileResolver } from "./google-browser-auth-profile";
+import { GoogleSignInProfileResolver } from "./google-profile";
 
-describe("GoogleBrowserAuthProfileResolver", () => {
+describe("GoogleSignInProfileResolver", () => {
   it("verifies Google claims before admission and profile mapping", async () => {
     const verifyIdToken = vi.fn(async () => ({
       iss: "https://accounts.google.com",
@@ -12,7 +12,7 @@ describe("GoogleBrowserAuthProfileResolver", () => {
       picture: "https://example.com/avatar.png",
     }));
     const requireAdmission = vi.fn(async () => ({ reason: "email_allowlist" as const }));
-    const resolver = new GoogleBrowserAuthProfileResolver(
+    const resolver = new GoogleSignInProfileResolver(
       {
         clientId: "google-client-id",
         admissionPolicy: { requireAdmission },
@@ -49,7 +49,7 @@ describe("GoogleBrowserAuthProfileResolver", () => {
 
   it("rejects an unverifiable ID token before admission", async () => {
     const requireAdmission = vi.fn();
-    const resolver = new GoogleBrowserAuthProfileResolver(
+    const resolver = new GoogleSignInProfileResolver(
       {
         clientId: "google-client-id",
         admissionPolicy: { requireAdmission },
@@ -66,7 +66,7 @@ describe("GoogleBrowserAuthProfileResolver", () => {
 
   it("rejects an unverified provider email before admission", async () => {
     const requireAdmission = vi.fn();
-    const resolver = new GoogleBrowserAuthProfileResolver(
+    const resolver = new GoogleSignInProfileResolver(
       {
         clientId: "google-client-id",
         admissionPolicy: { requireAdmission },

@@ -8,7 +8,7 @@
  */
 
 import { computeHmacHex } from "@open-inspect/shared";
-import { callbackSigningSecret, type CallbackDestination } from "../auth/callback-signing";
+import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";

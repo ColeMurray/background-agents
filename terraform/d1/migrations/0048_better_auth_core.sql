@@ -1,7 +1,7 @@
 -- Better Auth browser identity, account, and session authority.
 --
 -- This schema is generated from the exact-pinned Better Auth 1.6.25 core
--- configuration in packages/control-plane/src/auth/browser-auth.ts. It is
+-- configuration in packages/control-plane/src/auth/user/better-auth.ts. It is
 -- additive and inert until the final browser-auth routes are activated.
 --
 -- At activation, auth_users.id is projected unchanged into canonical users.id.

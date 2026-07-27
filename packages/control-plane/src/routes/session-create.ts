@@ -4,7 +4,7 @@ import {
   type RepositoryRef,
 } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
-import { resolveGitHubCredentialAuthority } from "../auth/github-credential-authority";
+import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { resolveScmProviderFromEnv } from "../source-control";

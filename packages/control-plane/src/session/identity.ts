@@ -4,7 +4,7 @@ import { encryptToken } from "../auth/crypto";
 import type {
   GitHubAccountSelection,
   GitHubCredentialAuthority,
-} from "../auth/github-credential-authority";
+} from "../source-control/github-credential-authority";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
@@ -208,12 +208,12 @@ export async function resolveGitHubEnrichmentForRequest(
     return resolveGitHubEnrichment(env, db, userStore, userId);
   }
 
-  const auth = authority.runtime;
+  const accountClient = authority.accountClient;
   const githubAccount = authority.githubAccount;
   if (!githubAccount) return null;
   return resolveBrowserGitHubEnrichment(userId, githubAccount, {
-    getAccessToken: (selection) => auth.api.getAccessToken({ body: selection }),
-    getAccountInfo: (selection) => auth.api.accountInfo({ query: selection }),
+    getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
+    getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
     encryptAccessToken: (accessToken) => encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY),
   });
 }

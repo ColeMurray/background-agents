@@ -1,14 +1,14 @@
 import { isCanonicalUserId } from "@open-inspect/shared";
 import type {
-  BrowserAuthUser,
-  BrowserAuthUserProjection,
-} from "../auth/browser-auth-user-projection";
+  CanonicalUserProjection,
+  UserProjectionInput,
+} from "../auth/user/canonical-user-projection";
 import type { SqlDatabase } from "./sql-database";
 
 function requireNonEmpty(value: string, field: string): string {
   const normalized = value.trim();
   if (!normalized) {
-    throw new Error(`Browser auth user ${field} is empty`);
+    throw new Error(`Canonical user projection ${field} is empty`);
   }
   return normalized;
 }
@@ -16,18 +16,18 @@ function requireNonEmpty(value: string, field: string): string {
 function requireTimestamp(value: Date, field: string): number {
   const timestamp = value.getTime();
   if (!Number.isFinite(timestamp)) {
-    throw new Error(`Browser auth user ${field} is invalid`);
+    throw new Error(`Canonical user projection ${field} is invalid`);
   }
   return timestamp;
 }
 
-export class D1BrowserAuthUserProjection implements BrowserAuthUserProjection {
+export class D1CanonicalUserProjection implements CanonicalUserProjection {
   constructor(private readonly db: SqlDatabase) {}
 
-  async project(user: BrowserAuthUser): Promise<void> {
+  async project(user: UserProjectionInput): Promise<void> {
     const id = requireNonEmpty(user.id, "id");
     if (!isCanonicalUserId(id)) {
-      throw new Error("Browser auth user id is not canonical");
+      throw new Error("Projected user id is not canonical");
     }
     const email = requireNonEmpty(user.email, "email").toLowerCase();
     const createdAt = requireTimestamp(user.createdAt, "createdAt");

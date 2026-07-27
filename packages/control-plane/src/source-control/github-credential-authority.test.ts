@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   resolveGitHubCredentialAuthority,
   type GitHubCredentialAuthorityContext,
+  type ProviderAccountClient,
 } from "./github-credential-authority";
-import type { AuthenticationContext } from "./principal";
+import type { AuthenticationContext } from "../auth/principal";
 
 const BROWSER_AUTHENTICATION: AuthenticationContext = {
   mechanism: "browser_session",
@@ -31,25 +32,30 @@ function createContext(
   };
 }
 
-function createBrowserContext(accounts: unknown[]) {
+function createUserContext(accounts: unknown[]) {
   const listUserAccounts = vi.fn(async () => accounts);
+  const accountClient: ProviderAccountClient = {
+    listUserAccounts,
+    getAccessToken: vi.fn(async () => null),
+    accountInfo: vi.fn(async () => null),
+  };
   const runtime = {
-    api: { listUserAccounts },
-  } as never;
+    api: accountClient,
+  };
   return {
     context: createContext({
       principal: { kind: "user", userId: "user-1" },
       authentication: BROWSER_AUTHENTICATION,
-      getBrowserAuth: () => runtime,
+      getUserAuth: () => runtime,
     }),
     listUserAccounts,
-    runtime,
+    accountClient,
   };
 }
 
 describe("resolveGitHubCredentialAuthority", () => {
   it("selects a linked GitHub account only when credential authority is requested", async () => {
-    const { context, listUserAccounts, runtime } = createBrowserContext([
+    const { context, listUserAccounts, accountClient } = createUserContext([
       {
         providerId: "github",
         accountId: "583231",
@@ -64,14 +70,14 @@ describe("resolveGitHubCredentialAuthority", () => {
 
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).resolves.toEqual({
       kind: "browser_session",
-      runtime,
+      accountClient,
       githubAccount: { subject: "583231" },
     });
     expect(listUserAccounts).toHaveBeenCalledWith({ headers: BROWSER_HEADERS });
   });
 
   it("allows browser users without a linked GitHub account", async () => {
-    const { context, runtime } = createBrowserContext([
+    const { context, accountClient } = createUserContext([
       {
         providerId: "google",
         accountId: "google-subject",
@@ -81,13 +87,13 @@ describe("resolveGitHubCredentialAuthority", () => {
 
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).resolves.toEqual({
       kind: "browser_session",
-      runtime,
+      accountClient,
       githubAccount: null,
     });
   });
 
   it("rejects cross-user GitHub account authority", async () => {
-    const { context } = createBrowserContext([
+    const { context } = createUserContext([
       {
         providerId: "github",
         accountId: "583231",
@@ -96,17 +102,17 @@ describe("resolveGitHubCredentialAuthority", () => {
     ]);
 
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).rejects.toThrow(
-      "Browser GitHub account authority is corrupt"
+      "GitHub account authority is corrupt"
     );
   });
 
   it("rejects multiple linked GitHub accounts", async () => {
-    const { context } = createBrowserContext([
+    const { context } = createUserContext([
       { providerId: "github", accountId: "583231", userId: "user-1" },
       { providerId: "github", accountId: "987654", userId: "user-1" },
     ]);
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).rejects.toThrow(
-      "Browser user resolves to multiple GitHub provider accounts"
+      "User resolves to multiple GitHub provider accounts"
     );
   });
 
