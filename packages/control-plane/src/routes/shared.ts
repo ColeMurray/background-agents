@@ -31,7 +31,7 @@ export type RequestContext = CorrelationContext & {
   db: SqlDatabase;
   /** Worker ExecutionContext for waitUntil (background tasks). */
   executionCtx?: ExecutionContext;
-  /** Lazy runtime dependency; only browser-auth routes construct it. */
+  /** Lazy runtime dependency used by browser-session authentication and credential access. */
   getBrowserAuth?: () => BrowserAuthRuntime;
   /**
    * The request's verified principal. Absent only on public routes and CORS

@@ -105,7 +105,7 @@ export async function resolveBrowserGitHubEnrichment(
   userId: string,
   account: BrowserGitHubAccount,
   dependencies: BrowserGitHubEnrichmentDependencies
-): Promise<GitHubEnrichment | null> {
+): Promise<GitHubEnrichment> {
   const selection = {
     providerId: "github" as const,
     accountId: account.subject,

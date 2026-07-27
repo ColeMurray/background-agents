@@ -220,7 +220,7 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
-# GitHub OAuth App
+# GitHub App OAuth credentials
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET
 
