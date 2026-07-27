@@ -273,7 +273,11 @@ describe("handlePullRequestOpened", () => {
     expect(log.debug).toHaveBeenCalledWith("handler.draft_pr_skipped", expect.anything());
   });
 
-  it("returns early if PR is from the bot (loop prevention)", async () => {
+  it("reviews a bot-authored PR when the bot is an allowed trigger user", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["test-bot[bot]"],
+    });
     const env = createMockEnv();
     const log = createMockLogger();
     const payload: PullRequestOpenedPayload = {
@@ -282,13 +286,50 @@ describe("handlePullRequestOpened", () => {
         ...pullRequestOpenedPayload.pull_request,
         user: { login: "test-bot[bot]" },
       },
+      sender: {
+        login: "test-bot[bot]",
+        id: 1004,
+        avatar_url: "https://avatars.githubusercontent.com/u/1004",
+      },
     };
 
     const result = await handlePullRequestOpened(env, log, payload, "trace-0");
 
-    expect(result).toEqual({ outcome: "skipped", skip_reason: "self_pr" });
+    expect(result).toEqual({
+      outcome: "processed",
+      session_id: "session-123",
+      message_id: "msg-456",
+      handler_action: "auto_review",
+    });
+    expect(sessionCreateBody(getControlPlaneFetch(env)).scmLogin).toBe("test-bot[bot]");
+    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('-f event="COMMENT"');
+  });
+
+  it("rejects a bot-authored PR when the bot is not an allowed trigger user", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["alice"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestOpenedPayload = {
+      ...pullRequestOpenedPayload,
+      pull_request: {
+        ...pullRequestOpenedPayload.pull_request,
+        user: { login: "test-bot[bot]" },
+      },
+      sender: {
+        login: "test-bot[bot]",
+        id: 1004,
+        avatar_url: "https://avatars.githubusercontent.com/u/1004",
+      },
+    };
+
+    const result = await handlePullRequestOpened(env, log, payload, "trace-0");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "sender_not_allowed" });
     expect(generateInstallationToken).not.toHaveBeenCalled();
-    expect(log.debug).toHaveBeenCalledWith("handler.self_pr_ignored", expect.anything());
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
   });
 
   it("returns early when autoReviewOnOpen is false", async () => {

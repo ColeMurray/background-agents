@@ -123,10 +123,12 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 **Pull Request Opened (Auto-Review):**
 
 1. Check `pull_request.draft` — skip draft PRs
-2. Check `pull_request.user.login !== GITHUB_BOT_USERNAME` — prevent loops on bot-created PRs
+2. Apply the configured trigger-user gate — bot-created PRs are reviewed when the bot login is
+   explicitly listed in `allowedTriggerUsers`
 3. Post eyes reaction on the PR (fire-and-forget)
 4. Create session via control plane
-5. Send code review prompt (includes PR metadata + `gh` CLI instructions)
+5. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
+   PRs use `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
 
 **Review Requested (compatibility path):**
 
