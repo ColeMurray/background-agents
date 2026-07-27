@@ -35,7 +35,6 @@ function createTestHarness() {
 
   const deps: PresenceServiceDeps = {
     getAuthenticatedClients: vi.fn(() => clients.values()),
-    getClientInfo: vi.fn(() => null),
     messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
     send: vi.fn(() => true),
     getSandboxSocket: vi.fn(() => null),
@@ -227,23 +226,12 @@ describe("PresenceService", () => {
   describe("updatePresence", () => {
     it("updates client status/lastSeen and broadcasts", () => {
       const client = createMockClient({ status: "active", lastSeen: 1000 });
-      vi.mocked(harness.deps.getClientInfo).mockReturnValue(client);
-      const ws = {} as WebSocket;
 
-      harness.service.updatePresence(ws, { status: "idle" });
+      harness.service.updatePresence(client, { status: "idle" });
 
       expect(client.status).toBe("idle");
       expect(client.lastSeen).toBeGreaterThan(1000);
       expect(harness.deps.messenger.broadcast).toHaveBeenCalled();
-    });
-
-    it("skips when client not found (no broadcast)", () => {
-      vi.mocked(harness.deps.getClientInfo).mockReturnValue(null);
-      const ws = {} as WebSocket;
-
-      harness.service.updatePresence(ws, { status: "idle" });
-
-      expect(harness.deps.messenger.broadcast).not.toHaveBeenCalled();
     });
   });
 
