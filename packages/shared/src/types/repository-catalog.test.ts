@@ -40,6 +40,43 @@ describe("controlPlaneReposResponseSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("rejects repo entries missing canonical repository fields", () => {
+    const result = controlPlaneReposResponseSchema.safeParse({
+      repos: [
+        {
+          owner: "Open-Inspect",
+          name: "Background-Agents",
+          description: null,
+          private: true,
+          defaultBranch: "main",
+        },
+      ],
+      cached: false,
+      cachedAt: "2026-07-27T00:00:00.000Z",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects responses missing cache metadata", () => {
+    const result = controlPlaneReposResponseSchema.safeParse({
+      repos: [
+        {
+          id: 123,
+          owner: "Open-Inspect",
+          name: "Background-Agents",
+          fullName: "Open-Inspect/Background-Agents",
+          description: null,
+          private: true,
+          defaultBranch: "main",
+          archived: false,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("repoConfigSchema", () => {

@@ -400,7 +400,9 @@ export async function postIssueComment(
   });
 
   if (!response.ok) return { success: false };
-  const result = linearCommentCreateResponseSchema.safeParse(await response.json());
+  const result = linearCommentCreateResponseSchema.safeParse(
+    await response.json().catch(() => null)
+  );
   if (!result.success) return { success: false };
   return { success: result.data.data?.commentCreate?.success ?? false };
 }
