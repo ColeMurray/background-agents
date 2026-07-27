@@ -16,14 +16,19 @@ describe("authenticateBrowserSession", () => {
         listUserAccounts,
       },
     } as unknown as BrowserAuthRuntime;
+    const headers = new Headers({ Cookie: "openinspect.session_token=session.signature" });
 
-    await expect(authenticateBrowserSession(auth, new Headers())).resolves.toEqual({
+    await expect(authenticateBrowserSession(auth, headers)).resolves.toEqual({
       userId: "user-1",
       authentication: {
         mechanism: "browser_session",
         credentialId: "session-1",
         channel: { kind: "sig1", service: "web" },
       },
+    });
+    expect(auth.api.getSession).toHaveBeenCalledWith({
+      headers,
+      query: { disableRefresh: true },
     });
     expect(listUserAccounts).not.toHaveBeenCalled();
   });
