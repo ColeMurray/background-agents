@@ -1,7 +1,10 @@
 import { betterAuth } from "better-auth";
+import { generateId } from "./crypto";
 
-export const BROWSER_AUTH_SESSION_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
-export const BROWSER_AUTH_SESSION_UPDATE_AGE_SECONDS = 24 * 60 * 60;
+const MS_PER_SECOND = 1000;
+
+export const BROWSER_AUTH_SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
+export const BROWSER_AUTH_SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
 
 export interface BrowserAuthConfig {
   readonly database: D1Database;
@@ -26,14 +29,20 @@ export function createBrowserAuth(config: BrowserAuthConfig) {
     advanced: {
       cookiePrefix: "openinspect",
       useSecureCookies: true,
+      // Browser authentication and application authorization share the same
+      // canonical user ID. The activation layer projects this ID into users.id
+      // before any Better Auth route is exposed.
+      database: {
+        generateId: () => generateId(),
+      },
     },
     user: {
       modelName: "auth_users",
     },
     session: {
       modelName: "auth_sessions",
-      expiresIn: BROWSER_AUTH_SESSION_EXPIRES_IN_SECONDS,
-      updateAge: BROWSER_AUTH_SESSION_UPDATE_AGE_SECONDS,
+      expiresIn: BROWSER_AUTH_SESSION_EXPIRES_IN_MS / MS_PER_SECOND,
+      updateAge: BROWSER_AUTH_SESSION_UPDATE_AGE_MS / MS_PER_SECOND,
     },
     account: {
       modelName: "auth_accounts",

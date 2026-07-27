@@ -3,6 +3,10 @@
 -- This schema is generated from the exact-pinned Better Auth 1.6.25 core
 -- configuration in packages/control-plane/src/auth/browser-auth.ts. It is
 -- additive and inert until the final browser-auth routes are activated.
+--
+-- At activation, auth_users.id is projected unchanged into canonical users.id.
+-- auth_accounts then owns browser-provider credentials; the legacy
+-- provider_credentials table is not dual-written by this runtime.
 
 CREATE TABLE auth_users (
   id              TEXT NOT NULL PRIMARY KEY,
