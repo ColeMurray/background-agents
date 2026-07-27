@@ -62,6 +62,13 @@ export type {
   RepositoryPair,
 } from "./repositories";
 
+export {
+  installationRepositorySchema,
+  repoMetadataSchema,
+  enrichedRepositorySchema,
+  repoConfigSchema,
+  controlPlaneReposResponseSchema,
+} from "./repository-catalog";
 export type {
   InstallationRepository,
   RepoMetadata,

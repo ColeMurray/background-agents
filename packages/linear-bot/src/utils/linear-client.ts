@@ -17,6 +17,7 @@ import {
   LINEAR_CLIENT_CREDENTIALS_SCOPE,
   LinearAuthError,
 } from "./linear-credentials";
+import { z } from "zod";
 
 export {
   completeLinearOAuthInstallation,
@@ -29,6 +30,20 @@ export {
 const log = createLogger("linear-client");
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
+
+const linearCommentCreateResponseSchema = z.object({
+  data: z
+    .object({
+      commentCreate: z
+        .object({
+          success: z.boolean(),
+        })
+        .nullable()
+        .optional(),
+    })
+    .nullable()
+    .optional(),
+});
 
 // ─── OAuth Helpers ───────────────────────────────────────────────────────────
 
@@ -385,8 +400,7 @@ export async function postIssueComment(
   });
 
   if (!response.ok) return { success: false };
-  const result = (await response.json()) as {
-    data?: { commentCreate?: { success: boolean } };
-  };
-  return { success: result.data?.commentCreate?.success ?? false };
+  const result = linearCommentCreateResponseSchema.safeParse(await response.json());
+  if (!result.success) return { success: false };
+  return { success: result.data.data?.commentCreate?.success ?? false };
 }
