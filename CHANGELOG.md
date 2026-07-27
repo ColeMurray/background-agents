@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## July 26, 2026
+
+**Better Auth browser authentication.** Browser sign-in now uses control-plane-owned Better Auth
+sessions with GitHub and optional Google providers. The web app forwards an exact allowlist of
+authentication routes through a signed proxy, and application requests require both that signed
+web-service channel and the browser session. Legacy browser tokens are retired during migration, so
+existing users must sign in again after upgrading.
+
 ## July 24, 2026
 
 **Claude Opus 5.** Adds `claude-opus-5` to the model picker and integrations, with adaptive thinking
