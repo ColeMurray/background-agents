@@ -99,6 +99,14 @@ NEXT_PUBLIC_APP_ICON_URL=
 
 Do not commit `packages/web/.env.local`.
 
+OAuth provider credentials are not web environment variables. Better Auth runs in the control plane,
+so configure `github_client_id` and `github_client_secret`—and, when enabled, `google_client_id` and
+`google_client_secret`—on the development control plane through Terraform. See
+[Create GitHub App](GETTING_STARTED.md#step-3-create-github-app) and
+[Enable Google Login](GETTING_STARTED.md#enable-google-login-optional) for the complete provider
+setup. `NEXT_PUBLIC_GOOGLE_ENABLED` only controls whether the web UI offers Google sign-in and must
+match the providers configured on the control plane.
+
 If you are using someone else's deployed backend, do not generate your own `SERVICE_AUTH_SECRET`.
 Use the web service secret configured in that backend deployment (the control plane only accepts
 signatures under its own copy). That backend must also be configured with
