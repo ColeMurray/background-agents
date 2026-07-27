@@ -10,7 +10,7 @@ vi.mock("./control-plane-transport", () => ({
   getControlPlaneUrl: () => "https://control-plane.example",
 }));
 
-import { proxyBrowserAuthRequest } from "./browser-auth-proxy";
+import { dispatchBrowserAuthRequest, proxyBrowserAuthRequest } from "./browser-auth-proxy";
 
 describe("proxyBrowserAuthRequest", () => {
   const originalEnv = { ...process.env };
@@ -107,6 +107,55 @@ describe("proxyBrowserAuthRequest", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.getSetCookie()).toHaveLength(2);
     expect(await response.text()).toBe("redirecting");
+  });
+
+  it("dispatches server-side auth calls without requiring a synthetic request origin", async () => {
+    mocks.dispatchControlPlaneFetch.mockResolvedValue(Response.json({ user: { id: "user-1" } }));
+
+    const response = await dispatchBrowserAuthRequest({
+      method: "GET",
+      pathname: "/api/auth/get-session",
+      headers: {
+        Cookie: "__Secure-openinspect.session_token=session.signature",
+        "X-Trace-Id": "trace-1",
+      },
+    });
+
+    const [url, init, metadata] = mocks.dispatchControlPlaneFetch.mock.calls[0] ?? [];
+    expect(url).toBe("https://control-plane.example/api/auth/get-session");
+    expect(init).toMatchObject({
+      method: "GET",
+      redirect: "manual",
+      cache: "no-store",
+    });
+    expect(metadata).toEqual({});
+
+    const sentHeaders = new Headers(init?.headers);
+    expect(sentHeaders.get("Cookie")).toBe("__Secure-openinspect.session_token=session.signature");
+    expect(sentHeaders.get("X-Trace-Id")).toBe("trace-1");
+    expect(sentHeaders.get("X-OpenInspect-Service")).toBe("web");
+
+    const verification = await verifyServiceSignature({
+      signatureHeader: sentHeaders.get("X-OpenInspect-Service-Signature") ?? "",
+      service: "web",
+      secret: "web-service-secret",
+      method: "GET",
+      url: String(url),
+      bodySha256Hex: await sha256Hex(""),
+      actor: "",
+    });
+    expect(verification.ok).toBe(true);
+    expect(response.status).toBe(200);
+  });
+
+  it("rejects typed dispatches outside the positive proxy allowlist", async () => {
+    const response = await dispatchBrowserAuthRequest({
+      method: "GET",
+      pathname: "/api/auth/list-sessions",
+    });
+
+    expect(response.status).toBe(404);
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
   });
 
   it("forwards Vercel's trusted client IP header on Vercel", async () => {

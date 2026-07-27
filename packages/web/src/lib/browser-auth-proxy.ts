@@ -27,22 +27,36 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
 
 const DECODED_BODY_RESPONSE_HEADERS = new Set(["content-encoding", "content-length"]);
 
-function copyRequestHeaders(request: Request): Headers {
+/**
+ * A logical browser-auth request for server code that has no incoming URL.
+ * The dispatcher resolves the configured control-plane origin before signing.
+ */
+export interface BrowserAuthDispatchRequest {
+  readonly method: string;
+  readonly pathname: string;
+  readonly search?: string;
+  readonly headers?: HeadersInit;
+  readonly body?: Uint8Array<ArrayBuffer>;
+  readonly clientIp?: string | null;
+}
+
+function copyRequestHeaders(source: Headers, clientIp?: string | null): Headers {
   const headers = new Headers();
   for (const name of REQUEST_HEADERS) {
-    const value = request.headers.get(name);
+    const value = source.get(name);
     if (value !== null) headers.set(name, value);
   }
-  const clientIp =
-    process.env.VERCEL === "1"
-      ? request.headers.get("X-Vercel-Forwarded-For")
-      : "cf" in request
-        ? request.headers.get("CF-Connecting-IP")
-        : null;
-  if (clientIp !== null) {
+  if (clientIp != null) {
     headers.set(BROWSER_AUTH_CLIENT_IP_HEADER, clientIp);
   }
   return headers;
+}
+
+function trustedClientIp(request: Request): string | null {
+  if (process.env.VERCEL === "1") {
+    return request.headers.get("X-Vercel-Forwarded-For");
+  }
+  return "cf" in request ? request.headers.get("CF-Connecting-IP") : null;
 }
 
 function getSetCookieValues(headers: Headers): string[] {
@@ -75,29 +89,25 @@ function copyResponseHeaders(upstream: Headers): Headers {
   return headers;
 }
 
-export async function proxyBrowserAuthRequest(request: Request): Promise<Response> {
-  const incomingUrl = new URL(request.url);
-  const method = request.method.toUpperCase();
-  if (!isBrowserAuthProxyRoute(method, incomingUrl.pathname)) {
-    return Response.json({ error: "Not found" }, { status: 404 });
-  }
-
+async function dispatchAllowedBrowserAuthRequest(
+  request: BrowserAuthDispatchRequest
+): Promise<Response> {
+  const method = request.method;
   const secret = process.env.SERVICE_AUTH_SECRET;
   if (!secret) {
     throw new Error("SERVICE_AUTH_SECRET not configured");
   }
 
-  const upstreamUrl = `${getControlPlaneUrl()}${incomingUrl.pathname}` + incomingUrl.search;
-  const body =
-    method === "GET" || method === "HEAD" ? undefined : new Uint8Array(await request.arrayBuffer());
-  const headers = copyRequestHeaders(request);
+  const upstreamUrl = `${getControlPlaneUrl()}${request.pathname}${request.search ?? ""}`;
+  const sourceHeaders = new Headers(request.headers);
+  const headers = copyRequestHeaders(sourceHeaders, request.clientIp);
   const serviceHeaders = await buildServiceAuthHeaders({
     service: "web",
     secret,
     method,
     url: upstreamUrl,
-    body,
-    traceId: request.headers.get("x-trace-id") ?? undefined,
+    body: request.body,
+    traceId: sourceHeaders.get("x-trace-id") ?? undefined,
   });
   for (const [name, value] of Object.entries(serviceHeaders)) {
     headers.set(name, value);
@@ -108,7 +118,7 @@ export async function proxyBrowserAuthRequest(request: Request): Promise<Respons
     {
       method,
       headers,
-      body,
+      body: request.body,
       redirect: "manual",
       cache: "no-store",
     },
@@ -119,5 +129,34 @@ export async function proxyBrowserAuthRequest(request: Request): Promise<Respons
     status: upstream.status,
     statusText: upstream.statusText,
     headers: copyResponseHeaders(upstream.headers),
+  });
+}
+
+export async function dispatchBrowserAuthRequest(
+  request: BrowserAuthDispatchRequest
+): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (!isBrowserAuthProxyRoute(method, request.pathname)) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  return dispatchAllowedBrowserAuthRequest({ ...request, method });
+}
+
+export async function proxyBrowserAuthRequest(request: Request): Promise<Response> {
+  const incomingUrl = new URL(request.url);
+  const method = request.method.toUpperCase();
+  if (!isBrowserAuthProxyRoute(method, incomingUrl.pathname)) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const body =
+    method === "GET" || method === "HEAD" ? undefined : new Uint8Array(await request.arrayBuffer());
+  return dispatchAllowedBrowserAuthRequest({
+    method,
+    pathname: incomingUrl.pathname,
+    search: incomingUrl.search,
+    headers: request.headers,
+    body,
+    clientIp: trustedClientIp(request),
   });
 }

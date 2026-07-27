@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { proxyBrowserAuthRequest } from "./browser-auth-proxy";
+import { dispatchBrowserAuthRequest } from "./browser-auth-proxy";
 import {
   browserAuthSessionResponseSchema,
   type BrowserAuthSessionUser,
@@ -29,11 +29,11 @@ export async function getServerAuthSession(): Promise<ServerAuthSession | null> 
   const cookieStore = await cookies();
   const cookieHeader = serializeBrowserSessionCookies(cookieStore.getAll());
   if (!cookieHeader) return null;
-  const response = await proxyBrowserAuthRequest(
-    new Request("https://browser-auth.internal/api/auth/get-session", {
-      headers: { Cookie: cookieHeader },
-    })
-  );
+  const response = await dispatchBrowserAuthRequest({
+    method: "GET",
+    pathname: "/api/auth/get-session",
+    headers: { Cookie: cookieHeader },
+  });
 
   if (response.status === 401) return null;
   if (!response.ok) {

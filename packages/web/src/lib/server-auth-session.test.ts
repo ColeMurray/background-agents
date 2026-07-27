@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   cookies: vi.fn(),
-  proxyBrowserAuthRequest: vi.fn(),
+  dispatchBrowserAuthRequest: vi.fn(),
 }));
 
 vi.mock("next/headers", () => ({
@@ -10,7 +10,7 @@ vi.mock("next/headers", () => ({
 }));
 
 vi.mock("./browser-auth-proxy", () => ({
-  proxyBrowserAuthRequest: mocks.proxyBrowserAuthRequest,
+  dispatchBrowserAuthRequest: mocks.dispatchBrowserAuthRequest,
 }));
 
 import { getServerAuthSession, type ServerAuthSession } from "./server-auth-session";
@@ -41,16 +41,17 @@ describe("getServerAuthSession", () => {
         expiresAt: "2099-01-01T00:00:00.000Z",
       },
     };
-    mocks.proxyBrowserAuthRequest.mockResolvedValue(Response.json(session));
+    mocks.dispatchBrowserAuthRequest.mockResolvedValue(Response.json(session));
 
     await expect(getServerAuthSession()).resolves.toEqual({ user: session.user });
 
-    const request = mocks.proxyBrowserAuthRequest.mock.calls[0]?.[0] as Request;
-    expect(request.method).toBe("GET");
-    expect(new URL(request.url).pathname).toBe("/api/auth/get-session");
-    expect(request.headers.get("Cookie")).toBe(
-      "__Secure-openinspect.session_token=session.signature"
-    );
+    expect(mocks.dispatchBrowserAuthRequest).toHaveBeenCalledWith({
+      method: "GET",
+      pathname: "/api/auth/get-session",
+      headers: {
+        Cookie: "__Secure-openinspect.session_token=session.signature",
+      },
+    });
   });
 
   it("returns null without dispatching when the browser session cookie is absent", async () => {
@@ -59,11 +60,11 @@ describe("getServerAuthSession", () => {
     });
 
     await expect(getServerAuthSession()).resolves.toBeNull();
-    expect(mocks.proxyBrowserAuthRequest).not.toHaveBeenCalled();
+    expect(mocks.dispatchBrowserAuthRequest).not.toHaveBeenCalled();
   });
 
   it("returns null when Better Auth rejects the browser session", async () => {
-    mocks.proxyBrowserAuthRequest.mockResolvedValue(
+    mocks.dispatchBrowserAuthRequest.mockResolvedValue(
       Response.json({ error: "Unauthorized" }, { status: 401 })
     );
 
@@ -71,13 +72,13 @@ describe("getServerAuthSession", () => {
   });
 
   it("returns null when Better Auth reports no current session", async () => {
-    mocks.proxyBrowserAuthRequest.mockResolvedValue(Response.json(null));
+    mocks.dispatchBrowserAuthRequest.mockResolvedValue(Response.json(null));
 
     await expect(getServerAuthSession()).resolves.toBeNull();
   });
 
   it("throws when the auth service fails instead of treating failure as logout", async () => {
-    mocks.proxyBrowserAuthRequest.mockResolvedValue(
+    mocks.dispatchBrowserAuthRequest.mockResolvedValue(
       Response.json({ error: "Unavailable" }, { status: 503 })
     );
 
@@ -87,7 +88,7 @@ describe("getServerAuthSession", () => {
   });
 
   it("rejects malformed successful session responses", async () => {
-    mocks.proxyBrowserAuthRequest.mockResolvedValue(
+    mocks.dispatchBrowserAuthRequest.mockResolvedValue(
       Response.json({ user: { id: 42 }, session: { userId: "user-1" } })
     );
 
@@ -95,7 +96,7 @@ describe("getServerAuthSession", () => {
   });
 
   it("rejects a noncanonical browser user id", async () => {
-    mocks.proxyBrowserAuthRequest.mockResolvedValue(
+    mocks.dispatchBrowserAuthRequest.mockResolvedValue(
       Response.json({
         user: { id: "better-auth-default-id" },
         session: {
