@@ -11,13 +11,11 @@ export const browserAuthSessionUserSchema = z.object({
 export const browserAuthSessionResponseSchema = z
   .object({
     user: browserAuthSessionUserSchema,
-    session: z
-      .object({
-        id: z.string().min(1),
-        userId: z.string().min(1),
-        expiresAt: z.string().min(1),
-      })
-      .passthrough(),
+    session: z.looseObject({
+      id: z.string().min(1),
+      userId: z.string().min(1),
+      expiresAt: z.string().min(1),
+    }),
   })
   .refine(({ session, user }) => session.userId === user.id, {
     message: "Browser session user does not match its principal",
