@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared";
 import { describe, expect, it } from "vitest";
 import { handleRequest } from "../../src/router";
+import type { Env } from "../../src/types";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
@@ -49,6 +50,21 @@ describe("browser auth router", () => {
     expect(providerUrl.searchParams.get("redirect_uri")).toBe(
       `${PUBLIC_WEB_ORIGIN}/api/auth/callback/github`
     );
+  });
+
+  it("keeps browser authentication available on GitLab deployments", async () => {
+    const request = await signedServiceRequest("/api/auth/sign-in/social", {
+      provider: "github",
+      callbackURL: "/",
+      disableRedirect: true,
+    });
+
+    const response = await handleRequest(request, {
+      ...env,
+      SCM_PROVIDER: "gitlab",
+    } as Env);
+
+    expect(response.status).toBe(200);
   });
 
   it("rejects a direct browser request without the web channel", async () => {

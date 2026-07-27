@@ -1,9 +1,9 @@
 import { formatGitHubNoreplyEmail, githubLoginSchema } from "@open-inspect/shared";
 import { z } from "zod";
 import { encryptToken } from "../auth/crypto";
+import type { GitHubCredentialAuthority } from "../auth/github-credential-authority";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import type { UserStore } from "../db/user-store";
-import type { RequestContext } from "../routes/shared";
 import type { SourceControlProviderName } from "../source-control";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -204,17 +204,14 @@ export async function resolveGitHubEnrichmentForRequest(
   db: SqlDatabase,
   userStore: UserStore,
   userId: string,
-  ctx: Pick<RequestContext, "authentication" | "getBrowserAuth">
+  authority: GitHubCredentialAuthority
 ): Promise<GitHubEnrichment | null> {
-  if (ctx.authentication?.mechanism !== "browser_session") {
+  if (authority.kind === "legacy") {
     return resolveGitHubEnrichment(env, db, userStore, userId);
   }
-  if (!ctx.getBrowserAuth) {
-    throw new Error("Browser authentication runtime is unavailable");
-  }
 
-  const auth = ctx.getBrowserAuth();
-  const githubAccount = ctx.authentication.githubAccount;
+  const auth = authority.runtime;
+  const githubAccount = authority.githubAccount;
   if (!githubAccount) return null;
   return resolveBrowserGitHubEnrichment(userId, githubAccount, {
     getAccessToken: (selection) => auth.api.getAccessToken({ body: selection }),

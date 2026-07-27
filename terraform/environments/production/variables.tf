@@ -491,7 +491,7 @@ variable "nextauth_secret" {
   sensitive   = true
 
   validation {
-    condition     = length(trimspace(var.nextauth_secret)) >= 32
+    condition     = length(regexall("\\S", var.nextauth_secret)) >= 32
     error_message = "nextauth_secret must contain at least 32 non-whitespace characters."
   }
 }

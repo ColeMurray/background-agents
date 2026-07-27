@@ -13,6 +13,7 @@
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("control-plane-transport");
+export const CONTROL_PLANE_FETCH_TIMEOUT_MS = 15_000;
 
 /**
  * Get the control plane base URL (no trailing slash) from environment.
@@ -86,12 +87,21 @@ export async function dispatchControlPlaneFetch(
   fetchOptions: RequestInit,
   correlationFields: Record<string, string>
 ): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(CONTROL_PLANE_FETCH_TIMEOUT_MS);
+  const signal = fetchOptions.signal
+    ? AbortSignal.any([fetchOptions.signal, timeoutSignal])
+    : timeoutSignal;
+  const boundedFetchOptions = {
+    ...fetchOptions,
+    signal,
+  };
+
   // On Cloudflare Workers, use the service binding to call the control plane
   const binding = await getServiceBinding(correlationFields);
   if (binding) {
-    return binding.fetch(url, fetchOptions);
+    return binding.fetch(url, boundedFetchOptions);
   }
 
   // Fallback: direct fetch (works on Vercel / local dev)
-  return fetch(url, fetchOptions);
+  return fetch(url, boundedFetchOptions);
 }

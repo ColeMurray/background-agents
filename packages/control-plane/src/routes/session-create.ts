@@ -4,6 +4,7 @@ import {
   type RepositoryRef,
 } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
+import { resolveGitHubCredentialAuthority } from "../auth/github-credential-authority";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { resolveScmProviderFromEnv } from "../source-control";
@@ -147,7 +148,7 @@ async function handleCreateSession(
         ctx.db,
         userStore,
         resolvedUserId,
-        ctx
+        resolveGitHubCredentialAuthority(ctx)
       );
       if (enrichment) {
         scmUserId = enrichment.scmUserId;

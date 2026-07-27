@@ -8,6 +8,25 @@ import { error, parsePattern, type Route } from "./shared";
 
 const logger = createLogger("browser-auth");
 
+function copyBrowserAuthResponseHeaders(upstream: Headers): Headers {
+  const headers = new Headers();
+  upstream.forEach((value, name) => {
+    if (name.toLowerCase() !== "set-cookie") {
+      headers.append(name, value);
+    }
+  });
+  const getSetCookie = (upstream as Headers & { getSetCookie?: () => string[] }).getSetCookie;
+  const setCookieValues = getSetCookie?.call(upstream) ?? [];
+  if (setCookieValues.length === 0) {
+    const value = upstream.get("Set-Cookie");
+    if (value) setCookieValues.push(value);
+  }
+  for (const value of setCookieValues) {
+    headers.append("Set-Cookie", value);
+  }
+  return headers;
+}
+
 /**
  * Better Auth's direct API establishes its request-state context explicitly.
  * Use it for session reads because Cloudflare Workers can lose the HTTP
@@ -42,7 +61,7 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
       throw new BrowserAuthConfigurationError("Browser authentication runtime is unavailable");
     }
     const response = await forwardBrowserAuthRequest(ctx.getBrowserAuth(), request);
-    const headers = new Headers(response.headers);
+    const headers = copyBrowserAuthResponseHeaders(response.headers);
     headers.set("Cache-Control", "no-store");
     headers.set("Referrer-Policy", "no-referrer");
     return new Response(response.body, {

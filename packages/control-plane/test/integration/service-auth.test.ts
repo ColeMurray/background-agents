@@ -107,19 +107,27 @@ describe("sig1 service-credential authentication", () => {
 
   it("rejects a body tampered after signing", async () => {
     const url = "https://test.local/secrets";
+    const intactBody = JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } });
     const headers = await buildServiceAuthHeaders({
-      service: "web",
-      secret: SERVICE_SECRET.web,
+      service: "modal",
+      secret: SERVICE_SECRET.modal,
       method: "PUT",
       url,
-      body: JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } }),
+      body: intactBody,
     });
-    const response = await SELF.fetch(url, {
+    const intact = await SELF.fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: intactBody,
+    });
+    expect(intact.status).toBe(200);
+
+    const tampered = await SELF.fetch(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({ secrets: { SIGNED_BODY_TEST: "tampered" } }),
     });
-    expect(response.status).toBe(401);
+    expect(tampered.status).toBe(401);
   });
 
   it("rejects a signature replayed against a different method or path", async () => {

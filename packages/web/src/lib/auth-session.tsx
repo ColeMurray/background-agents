@@ -83,10 +83,12 @@ export function useAuthSession(): AuthSessionState {
     }
   );
 
-  if (error) throw error;
+  if (data) return { data, status: "authenticated" };
+  if (error) {
+    return { data: null, status: "unauthenticated" };
+  }
   if (isLoading || data === undefined) {
     return { data: null, status: "loading" };
   }
-  if (data) return { data, status: "authenticated" };
   return { data: null, status: "unauthenticated" };
 }

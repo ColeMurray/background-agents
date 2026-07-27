@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { buildServiceAuthHeaders, isCanonicalUserId } from "@open-inspect/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBrowserAuth } from "../../src/auth/browser-auth-runtime";
+import { resolveGitHubCredentialAuthority } from "../../src/auth/github-credential-authority";
 import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
 import { handleRequest } from "../../src/router";
@@ -120,6 +121,11 @@ describe("browser auth callback", () => {
 
     expect(callbackResponse.status).toBe(302);
     expect(callbackResponse.headers.get("Location")).toBe("/after-sign-in");
+    expect(
+      callbackResponse.headers
+        .getSetCookie()
+        .some((cookie) => cookie.startsWith("__Secure-openinspect.state="))
+    ).toBe(true);
     const sessionCookie = cookiePair(callbackResponse, "__Secure-openinspect.session_token");
 
     const sessionResponse = await handleRequest(
@@ -161,7 +167,8 @@ describe("browser auth callback", () => {
       env.DB,
       new UserStore(env.DB),
       session.user.id,
-      {
+      resolveGitHubCredentialAuthority({
+        principal: { kind: "user", userId: session.user.id },
         authentication: {
           mechanism: "browser_session",
           credentialId: session.session.id,
@@ -172,7 +179,7 @@ describe("browser auth callback", () => {
           channel: { kind: "sig1", service: "web" },
         },
         getBrowserAuth: () => getBrowserAuth(env, env.DB),
-      }
+      })
     );
     expect(enrichment).toMatchObject({
       scmUserId: "583231",

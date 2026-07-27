@@ -158,8 +158,9 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function isScmAgnosticRoute(path: string): boolean {
+function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
+    isBrowserAuthProxyRoute(method, path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
@@ -172,6 +173,7 @@ function isProviderImplementedRoute(provider: SourceControlProviderName, path: s
 }
 
 function enforceImplementedScmProvider(
+  method: string,
   path: string,
   env: Env,
   ctx: RequestContext
@@ -181,7 +183,7 @@ function enforceImplementedScmProvider(
     if (
       !isProviderImplementedRoute(provider, path) &&
       !isPublicRoute(path) &&
-      !isScmAgnosticRoute(path)
+      !isScmAgnosticRoute(method, path)
     ) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
@@ -470,7 +472,7 @@ export async function handleRequest(
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
+  const providerCheck = enforceImplementedScmProvider(method, path, env, ctx);
   if (providerCheck) {
     return providerCheck;
   }

@@ -5,8 +5,6 @@ import {
 } from "@open-inspect/shared";
 import { dispatchControlPlaneFetch, getControlPlaneUrl } from "./control-plane-transport";
 
-const AUTH_PROXY_TIMEOUT_MS = 15_000;
-
 const REQUEST_HEADERS = [
   "Accept",
   "Accept-Language",
@@ -36,7 +34,11 @@ function copyRequestHeaders(request: Request): Headers {
     if (value !== null) headers.set(name, value);
   }
   const clientIp =
-    request.headers.get("X-Vercel-Forwarded-For") ?? request.headers.get("X-Forwarded-For");
+    process.env.VERCEL === "1"
+      ? request.headers.get("X-Vercel-Forwarded-For")
+      : "cf" in request
+        ? request.headers.get("CF-Connecting-IP")
+        : null;
   if (clientIp !== null) {
     headers.set(BROWSER_AUTH_CLIENT_IP_HEADER, clientIp);
   }
@@ -109,7 +111,6 @@ export async function proxyBrowserAuthRequest(request: Request): Promise<Respons
       body,
       redirect: "manual",
       cache: "no-store",
-      signal: AbortSignal.timeout(AUTH_PROXY_TIMEOUT_MS),
     },
     {}
   );

@@ -96,6 +96,22 @@ describe("controlPlaneUserFetch", () => {
     expect(sentHeaders.get("x-trace-id")).toBe("trace-123");
   });
 
+  it("preserves caller cancellation while enforcing the transport timeout", async () => {
+    const caller = new AbortController();
+
+    await controlPlaneUserFetch("/sessions", { signal: caller.signal });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal).not.toBe(caller.signal);
+    expect(init?.signal?.aborted).toBe(false);
+
+    caller.abort("caller disconnected");
+
+    expect(init?.signal?.aborted).toBe(true);
+    expect(init?.signal?.reason).toBe("caller disconnected");
+  });
+
   it("generates a fresh trace id when the inbound one is invalid", async () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({

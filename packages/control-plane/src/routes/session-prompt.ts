@@ -5,6 +5,7 @@ import {
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
+import { resolveGitHubCredentialAuthority } from "../auth/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -90,8 +91,13 @@ async function handleSessionPrompt(
       }
       if (userId) {
         enrichment =
-          (await resolveGitHubEnrichmentForRequest(env, ctx.db, userStore, userId, ctx)) ??
-          undefined;
+          (await resolveGitHubEnrichmentForRequest(
+            env,
+            ctx.db,
+            userStore,
+            userId,
+            resolveGitHubCredentialAuthority(ctx)
+          )) ?? undefined;
       }
     } catch (e) {
       logger.warn("Failed to enrich prompt with GitHub identity", {

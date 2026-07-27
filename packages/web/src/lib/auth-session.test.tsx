@@ -98,6 +98,44 @@ describe("useAuthSession", () => {
       status: "unauthenticated",
     });
   });
+
+  it("fails closed without crashing when the session lookup fails", () => {
+    mocks.useSWR.mockReturnValue({
+      data: undefined,
+      error: new Error("control plane unavailable"),
+      isLoading: false,
+    });
+
+    const { result } = renderHook(() => useAuthSession());
+
+    expect(result.current).toEqual({
+      data: null,
+      status: "unauthenticated",
+    });
+  });
+
+  it("retains a cached authenticated session during a failed revalidation", () => {
+    const data: AuthSession = {
+      user: {
+        id: "user-1",
+        name: "Ada",
+        email: "ada@example.com",
+        image: null,
+      },
+    };
+    mocks.useSWR.mockReturnValue({
+      data,
+      error: new Error("transient revalidation failure"),
+      isLoading: false,
+    });
+
+    const { result } = renderHook(() => useAuthSession());
+
+    expect(result.current).toEqual({
+      data,
+      status: "authenticated",
+    });
+  });
 });
 
 describe("signIn", () => {

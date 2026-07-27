@@ -85,7 +85,7 @@ describe("proxyBrowserAuthRequest", () => {
     expect(sentHeaders.get("Content-Type")).toBe("application/json");
     expect(sentHeaders.get("Origin")).toBe("https://web.example");
     expect(sentHeaders.get("User-Agent")).toBe("Test Browser");
-    expect(sentHeaders.get("X-OpenInspect-Client-IP")).toBe("203.0.113.42");
+    expect(sentHeaders.get("X-OpenInspect-Client-IP")).toBeNull();
     expect(sentHeaders.get("Authorization")).toBeNull();
     expect(sentHeaders.get("Connection")).toBeNull();
     expect(sentHeaders.get("X-OpenInspect-Service")).toBe("web");
@@ -107,6 +107,39 @@ describe("proxyBrowserAuthRequest", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.getSetCookie()).toHaveLength(2);
     expect(await response.text()).toBe("redirecting");
+  });
+
+  it("forwards Vercel's trusted client IP header on Vercel", async () => {
+    process.env.VERCEL = "1";
+    mocks.dispatchControlPlaneFetch.mockResolvedValue(Response.json({ ok: true }));
+
+    await proxyBrowserAuthRequest(
+      new Request("https://web.example/api/auth/get-session", {
+        headers: {
+          "X-Vercel-Forwarded-For": "203.0.113.42",
+          "X-Forwarded-For": "192.0.2.55",
+        },
+      })
+    );
+
+    const [, init] = mocks.dispatchControlPlaneFetch.mock.calls[0] ?? [];
+    expect(new Headers(init?.headers).get("X-OpenInspect-Client-IP")).toBe("203.0.113.42");
+  });
+
+  it("forwards Cloudflare's trusted client IP header on Cloudflare", async () => {
+    mocks.dispatchControlPlaneFetch.mockResolvedValue(Response.json({ ok: true }));
+    const request = new Request("https://web.example/api/auth/get-session", {
+      headers: {
+        "CF-Connecting-IP": "198.51.100.24",
+        "X-Forwarded-For": "192.0.2.55",
+      },
+    });
+    Object.defineProperty(request, "cf", { value: {} });
+
+    await proxyBrowserAuthRequest(request);
+
+    const [, init] = mocks.dispatchControlPlaneFetch.mock.calls[0] ?? [];
+    expect(new Headers(init?.headers).get("X-OpenInspect-Client-IP")).toBe("198.51.100.24");
   });
 
   it("rejects endpoints outside the positive proxy allowlist", async () => {
